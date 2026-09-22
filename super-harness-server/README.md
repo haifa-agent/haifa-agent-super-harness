@@ -20,6 +20,11 @@ frontend at `e545c28ac301e6f9feae247c513d8ea8f83df294`:
 - `GET /api/threads/{thread_id}/runs/{run_id}/stream` with `Last-Event-ID`
 - `GET /api/threads/{thread_id}/runs/{run_id}`
 - `POST /api/threads/{thread_id}/runs/{run_id}/cancel`
+- `POST /api/threads/{thread_id}/uploads` with frozen multipart field `files`
+- `GET /api/threads/{thread_id}/uploads/limits` and
+  `GET /api/threads/{thread_id}/uploads/list`
+- `GET /api/threads/{thread_id}/artifacts/mnt/user-data/{uploads|workspace|outputs}/{path}`
+  with a single HTTP byte Range and explicit download support
 
 The run endpoint calls the public `haifa-agent-sdk-starter:0.1.1-SNAPSHOT` JAR. Its SSE IDs are
 derived from the durable public `AgentRunEvent.sequence`, not a process-local counter. The server
@@ -61,7 +66,8 @@ in-memory Haifa Conversation remains coherent; after a model revision changes, t
 create a new thread. The controlled loopback provider remains L2 protocol evidence; real-provider
 evidence must be reported separately from an explicitly enabled live test using an OS credential.
 Process-restart reconstruction, `updates` and `custom` event
-projection, HTTP interaction submission/card projection, full history, files, same-UI differential
+projection, HTTP interaction submission/card projection, full history, Project/archive/conversion/upload
+deletion, same-UI differential
 verification, and account authentication are **NOT_RUN**. Unsupported Interaction projection fails
 closed instead of manufacturing a card. Cancel currently implements the frozen UI's actual
 `wait=false&action=interrupt` request; blocking wait and rollback are rejected rather than
@@ -79,8 +85,9 @@ upstream branch:
 - `frontend/src/core/threads/api.ts`
 - `frontend/src/core/threads/hooks.ts`
 - `frontend/src/core/api/api-client.ts` and `frontend/src/core/api/stream-mode.ts`
+- `frontend/src/core/uploads/api.ts` and `frontend/src/core/artifacts/{utils,loader}.ts`
 - `backend/app/gateway/run_models.py`
-- `backend/app/gateway/routers/threads.py` and `thread_runs.py`
+- `backend/app/gateway/routers/threads.py`, `thread_runs.py`, `uploads.py`, and `artifacts.py`
 - `backend/app/gateway/services.py` (`format_sse` and `sse_consumer`)
 
 The server accepts only the `local` profile and resolves the listener to a loopback address before

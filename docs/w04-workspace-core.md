@@ -73,12 +73,32 @@ hunks, exact UTF-8 output boundaries, duplicate/missing run baselines, and tampe
 Project document id/project/hash/size/name/timestamp metadata corruption also fails as content-integrity
 errors instead of leaking parser or path exceptions.
 
+The third slice wires the restricted Workspace into the compatibility server without introducing a
+second thread or owner registry. An existing server-owned thread can use the frozen client's
+`files` multipart upload, limits, and listing routes. Returned `artifact_url` values resolve through
+the frozen `/api/threads/{thread}/artifacts/mnt/user-data/...` shape. Full reads and one RFC 9110 byte
+range return verified Workspace bytes with real `Content-Length`, `Content-Range`, `ETag`, MIME, and
+download disposition. Invalid or multiple ranges return 416; unknown threads, other path roots,
+traversal, links, non-files, size drift, or hash drift fail closed. Multipart request bytes, headers,
+file count, individual file bytes, and total bytes are bounded before storage. Active HTML/XML/SVG
+content is always an attachment.
+
+This HTTP slice still uses the server-selected local owner `default`; client input cannot choose an
+owner. It asks the existing Thread API whether the thread exists and keeps all file identity below
+the already persisted owner/thread Workspace binding. Its Java adapter is materially smaller than
+the frozen DeerFlow upload, ingestion, conversion, artifact, and sandbox layers and adds no product
+domain record, state machine, or separate persistence authority.
+
 ## Frozen source anchors
 
 - `frontend/src/core/projects/api.ts` and `types.ts`: multipart field `file`, optional `name`,
   `thread_id`/`kind`/`name`/`shelf_name`, content preview Range request, and project document fields.
 - `frontend/src/core/workspace-changes/api.ts` and `types.ts`: thread+run endpoint, status/summary/file
   model, and `include_files`/`include_diff` query flags.
+- `frontend/src/core/uploads/api.ts` and `frontend/src/core/artifacts/{utils,loader}.ts`: multipart
+  `files`, limits/list routes, artifact URL projection, download, and bounded Range behavior.
+- `backend/app/gateway/routers/uploads.py` and `artifacts.py`: response fields, limits, content
+  disposition, active-content policy, ETag, and Range semantics.
 - `backend/app/gateway/routers/project_documents.py`: immutable snapshot, first-writer deduplication,
   plain-name confinement, source provenance, content integrity, and attach semantics.
 - `backend/app/gateway/routers/thread_runs.py`: workspace-changes route registration and run ownership.
@@ -87,13 +107,12 @@ These anchors are from detached `bytedance/deer-flow@e545c28ac301e6f9feae247c513
 
 ## Deliberately remaining in W04
 
-- frozen DeerFlow multipart/REST/download/Range adapters and browser-visible UI validation
-  (`NOT_RUN`; this slice does not modify `super-harness-server`);
+- browser-visible frozen-UI validation remains `NOT_RUN`; the HTTP contract has automated real-socket
+  coverage but this slice does not claim a browser run;
 - Project conversion, archive/trash, attach-to-thread ingestion, HTTP diff/change response projection,
-  and content preview active-content policy;
+  and upload deletion;
 - execution-provider mounting so exec and this workspace demonstrably see the same file identity;
-- server wiring of the already root-reactor-integrated workspace module;
 - full W04 differential evidence and customer flow.
 
-These omissions keep W04 `in_progress`; this module does not expose HTTP and does not claim W04
-complete.
+These omissions keep W04 `in_progress`; the new server adapter is a bounded vertical slice and does
+not claim W04 complete.
