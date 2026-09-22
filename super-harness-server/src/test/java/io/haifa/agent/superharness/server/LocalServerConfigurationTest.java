@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.net.InetAddress;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -64,6 +65,18 @@ class LocalServerConfigurationTest {
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("forbidden");
         }
+    }
+
+    @Test
+    void resolvesAnExplicitWorkPackageDataDirectory() {
+        LocalServerConfiguration configuration =
+                LocalServerConfiguration.fromEnvironment(localEnvironment());
+        Map<String, String> environment = new HashMap<>(localEnvironment());
+        environment.put(LocalServerConfiguration.DATA_DIR_ENV, "target/w03-data");
+
+        Path resolved = configuration.dataDirectory(environment);
+        assertThat(resolved).isAbsolute();
+        assertThat(resolved.toString()).endsWith(Path.of("target", "w03-data").toString());
     }
 
     private static Map<String, String> localEnvironment() {

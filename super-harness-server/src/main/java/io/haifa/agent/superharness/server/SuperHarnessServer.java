@@ -9,7 +9,8 @@ public final class SuperHarnessServer {
     public static void main(String[] args) throws Exception {
         LocalServerConfiguration configuration =
                 LocalServerConfiguration.fromEnvironment(System.getenv());
-        DeerFlowBootstrapApi api = DeerFlowBootstrapApi.create(configuration);
+        DeerFlowBootstrapApi api = DeerFlowBootstrapApi.create(
+                configuration, configuration.dataDirectory(System.getenv()));
         Runtime.getRuntime().addShutdownHook(new Thread(api::close, "super-harness-shutdown"));
         api.start();
         System.out.printf(

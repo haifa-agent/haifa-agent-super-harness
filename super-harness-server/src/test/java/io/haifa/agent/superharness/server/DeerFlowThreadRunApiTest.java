@@ -11,6 +11,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,19 +20,23 @@ import java.util.regex.Pattern;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class DeerFlowThreadRunApiTest {
     private final ObjectMapper json = new ObjectMapper();
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .build();
+    @TempDir
+    Path dataDirectory;
     private DeerFlowBootstrapApi api;
     private URI baseUri;
 
     @BeforeEach
     void startServer() throws Exception {
         api = DeerFlowBootstrapApi.create(
-                new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0));
+                new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
+                dataDirectory);
         api.start();
         baseUri = URI.create("http://127.0.0.1:" + api.address().getPort());
     }

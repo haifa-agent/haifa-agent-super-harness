@@ -8,6 +8,10 @@ frontend at `e545c28ac301e6f9feae247c513d8ea8f83df294`:
 - `GET /api/v1/auth/me`
 - `GET /api/features`
 - `GET /api/models`
+- `GET /api/managed-models`, `PUT /api/managed-models`, and
+  `POST /api/managed-models/test`
+- `GET /api/agents`, `GET /api/agents/check`, and custom-agent
+  `GET`/`POST`/`PUT`/`DELETE`
 - `GET /health` for local process readiness
 - `POST /api/threads`, `GET /api/threads/{thread_id}` and
   `GET /api/threads/{thread_id}/state`
@@ -26,10 +30,19 @@ API. `Last-Event-ID` replays the bounded tail idempotently. An expired cursor em
 durable messages before the client rejoins at the retained tail. Creator disconnect obeys
 `cancel|continue`, while an observer join disconnect never cancels the run.
 
-This is still an in-progress compatibility slice. It deliberately reports catalog models and
-not-yet-implemented capabilities as unavailable. The SDK bridge currently uses a bounded local
-probe model so the runtime/event/cancel path can be tested without a credential. Configured model
-catalog/provider execution, process-restart reconstruction, `updates` and `custom` event
+W03 now persists owner-scoped managed-model and custom-agent configuration under the repository-
+local data directory. Writes are serialized and atomically replaced, model updates require the
+frozen `expected_revision`, credentials are AES-GCM encrypted at rest and never returned, and
+SOUL plus `null`/`[]`/`false` values round-trip without erasing omitted fields. The model test route
+uses Haifa's public OpenAI-compatible model API for a bounded streaming tool-call probe. Missing
+credentials, unknown providers, unsupported modes, and unbound Run models fail closed.
+
+This is still an in-progress compatibility slice. It deliberately reports the executable model
+catalog as empty because saving a credential or passing a one-shot probe does not bind that model
+to the Run bridge. The SDK bridge currently uses a bounded, non-selectable local probe model so the
+runtime/event/cancel path can be tested without a credential. Configured provider Run execution,
+the real external-provider probe (no credential was supplied in this work package),
+process-restart reconstruction, `updates` and `custom` event
 projection, HTTP interaction submission/card projection, full history, files, same-UI differential
 verification, and account authentication are **NOT_RUN**. Unsupported Interaction projection fails
 closed instead of manufacturing a card. Cancel currently implements the frozen UI's actual
@@ -66,6 +79,7 @@ Configuration variables and defaults:
 | `DEER_FLOW_AUTH_DISABLED` | required: `1` |
 | `SUPER_HARNESS_BIND_ADDRESS` | `127.0.0.1` |
 | `SUPER_HARNESS_PORT` | `8001` |
+| `SUPER_HARNESS_DATA_DIR` | `.super-harness/data` under the launch directory |
 
 Run the contract and real-socket integration tests with:
 
