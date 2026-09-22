@@ -1,7 +1,6 @@
 package io.haifa.agent.superharness.events;
 
 import io.haifa.agent.core.run.AgentRunId;
-import io.haifa.agent.core.run.AgentRunStatus;
 import io.haifa.agent.runtime.api.AgentRunEvent;
 import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
 import io.haifa.agent.runtime.api.InteractionKind;
@@ -29,6 +28,7 @@ public final class BoundedRunEventProjector {
     private final Map<StableEventKey, ProjectedRunEvent> retainedByKey = new HashMap<>();
     private long lastSourceSequence;
     private long projectionSequence;
+    private long retentionFloorSequence;
     private RunTerminalKind terminalKind = RunTerminalKind.ACTIVE;
 
     public BoundedRunEventProjector(
@@ -51,6 +51,11 @@ public final class BoundedRunEventProjector {
         this.capacity = capacity;
         this.authoritativeViews = Objects.requireNonNull(authoritativeViews, "authoritativeViews");
         this.lastSourceSequence = startingExclusiveSourceSequence;
+        // The public Haifa feed sequence is durable and is therefore also the
+        // network projection cursor.  A process-local counter would make an
+        // SSE Last-Event-ID unsafe after reconstructing a projector.
+        this.projectionSequence = startingExclusiveSourceSequence;
+        this.retentionFloorSequence = startingExclusiveSourceSequence;
     }
 
     public synchronized AppendResult append(AgentRunEvent source) {
@@ -66,23 +71,18 @@ public final class BoundedRunEventProjector {
         if (terminalKind.terminal()) {
             throw new EventProjectionException("new event arrived after terminal state " + terminalKind);
         }
-        long expected = lastSourceSequence + 1;
-        if (source.sequence() > expected) {
-            ProjectionGap gap = new ProjectionGap(
-                    ProjectionGap.Reason.SOURCE_SEQUENCE_GAP,
-                    expected,
-                    earliestAvailableSequence(),
-                    projectionSequence);
-            return new AppendResult.Gap(gap, requireAuthoritativeView());
-        }
-        if (source.sequence() < expected) {
+        // Public client events retain their committed journal sequence. Internal events that are
+        // not on the public allowlist therefore create legitimate numeric holes; only ordering,
+        // not contiguity, is guaranteed by AgentRuns.events.
+        if (source.sequence() <= lastSourceSequence) {
             throw new EventProjectionException(
-                    "non-monotonic source sequence " + source.sequence() + ", expected " + expected);
+                    "non-monotonic source sequence " + source.sequence()
+                            + ", last accepted " + lastSourceSequence);
         }
 
         RunTerminalKind eventTerminal = terminalKind(source);
         Optional<ProjectedInteraction> interaction = interaction(source);
-        projectionSequence++;
+        projectionSequence = source.sequence();
         ProjectedRunEvent projected = new ProjectedRunEvent(
                 key,
                 new ProjectionCursor(runId.value(), projectionSequence),
@@ -98,6 +98,7 @@ public final class BoundedRunEventProjector {
         while (retained.size() > capacity) {
             ProjectedRunEvent removed = retained.removeFirst();
             retainedByKey.remove(removed.key());
+            retentionFloorSequence = removed.cursor().sequence();
         }
         return new AppendResult.Accepted(projected, false);
     }
@@ -111,7 +112,7 @@ public final class BoundedRunEventProjector {
             throw new EventProjectionException("cursor is ahead of the projection head");
         }
         long earliest = earliestAvailableSequence();
-        if (cursor.sequence() < earliest - 1) {
+        if (cursor.sequence() < retentionFloorSequence) {
             ProjectionGap gap = new ProjectionGap(
                     ProjectionGap.Reason.RETENTION_WINDOW_EXCEEDED,
                     cursor.sequence(),
@@ -177,12 +178,17 @@ public final class BoundedRunEventProjector {
         if (!(source.payload() instanceof RunEventPayloads.RunLifecycle lifecycle)) {
             return RunTerminalKind.ACTIVE;
         }
-        try {
-            AgentRunStatus status = AgentRunStatus.valueOf(lifecycle.status().toUpperCase(Locale.ROOT));
-            return RunTerminalKind.from(status);
-        } catch (IllegalArgumentException exception) {
-            throw new EventProjectionException("unknown run lifecycle status: " + lifecycle.status());
-        }
+        return switch (lifecycle.status()) {
+            case "COMPLETED" -> RunTerminalKind.COMPLETED;
+            case "FAILED" -> RunTerminalKind.FAILED;
+            case "CANCELLED" -> RunTerminalKind.CANCELLED;
+            case "TIMEOUT" -> RunTerminalKind.TIMEOUT;
+            case "ACCEPTED", "STARTED", "PENDING", "QUEUED", "RUNNING", "SUSPENDING",
+                    "COMPLETING", "SUSPENDED", "WAITING_INTERACTION", "WAITING_APPROVAL" ->
+                RunTerminalKind.ACTIVE;
+            default -> throw new EventProjectionException(
+                    "unknown run lifecycle status: " + lifecycle.status());
+        };
     }
 
     private static Optional<ProjectedInteraction> interaction(AgentRunEvent source) {

@@ -56,7 +56,7 @@ class BoundedRunEventProjectorTest {
     }
 
     @Test
-    void sourceGapReturnsAuthoritativeViewWithoutAdvancingHead() {
+    void acceptsSparseCommittedSequencesWithoutInventingASourceGap() {
         AtomicInteger loads = new AtomicInteger();
         AgentRunViewSnapshot view = view(AgentRunStatus.RUNNING);
         BoundedRunEventProjector projector = new BoundedRunEventProjector(RUN_ID, 8, ignored -> {
@@ -65,13 +65,12 @@ class BoundedRunEventProjectorTest {
         });
         projector.append(lifecycle(1, "event-1", "RUNNING"));
 
-        AppendResult.Gap result = (AppendResult.Gap) projector.append(lifecycle(3, "event-3", "RUNNING"));
+        AppendResult.Accepted result =
+                (AppendResult.Accepted) projector.append(lifecycle(3, "event-3", "RUNNING"));
 
-        assertThat(result.gap().reason()).isEqualTo(ProjectionGap.Reason.SOURCE_SEQUENCE_GAP);
-        assertThat(result.gap().requestedSequence()).isEqualTo(2);
-        assertThat(result.authoritativeView()).isSameAs(view);
-        assertThat(projector.head().sequence()).isEqualTo(1);
-        assertThat(loads).hasValue(1);
+        assertThat(result.event().cursor()).isEqualTo(new ProjectionCursor(RUN_ID.value(), 3));
+        assertThat(projector.head().sequence()).isEqualTo(3);
+        assertThat(loads).hasValue(0);
     }
 
     @Test
@@ -99,8 +98,9 @@ class BoundedRunEventProjectorTest {
         BoundedRunEventProjector missing =
                 new BoundedRunEventProjector(RUN_ID, 1, ignored -> Optional.empty());
         missing.append(lifecycle(1, "event-1", "RUNNING"));
+        missing.append(lifecycle(3, "event-3", "RUNNING"));
 
-        assertThatThrownBy(() -> missing.append(lifecycle(3, "event-3", "RUNNING")))
+        assertThatThrownBy(() -> missing.replayAfter(new ProjectionCursor(RUN_ID.value(), 0)))
                 .isInstanceOf(EventProjectionException.class)
                 .hasMessageContaining("authoritative run view is unavailable");
 
@@ -108,7 +108,8 @@ class BoundedRunEventProjectorTest {
         BoundedRunEventProjector mismatched =
                 new BoundedRunEventProjector(RUN_ID, 1, ignored -> Optional.of(view(other, AgentRunStatus.RUNNING)));
         mismatched.append(lifecycle(1, "event-1", "RUNNING"));
-        assertThatThrownBy(() -> mismatched.append(lifecycle(3, "event-3", "RUNNING")))
+        mismatched.append(lifecycle(3, "event-3", "RUNNING"));
+        assertThatThrownBy(() -> mismatched.replayAfter(new ProjectionCursor(RUN_ID.value(), 0)))
                 .isInstanceOf(EventProjectionException.class)
                 .hasMessageContaining("another run");
     }

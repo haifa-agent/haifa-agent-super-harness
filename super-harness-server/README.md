@@ -13,20 +13,26 @@ frontend at `e545c28ac301e6f9feae247c513d8ea8f83df294`:
   `GET /api/threads/{thread_id}/state`
 - `POST /api/threads/search`
 - `POST /api/threads/{thread_id}/runs/stream`
+- `GET /api/threads/{thread_id}/runs/{run_id}/stream` with `Last-Event-ID`
 - `GET /api/threads/{thread_id}/runs/{run_id}`
 - `POST /api/threads/{thread_id}/runs/{run_id}/cancel`
 
-The run endpoint calls the public `haifa-agent-sdk-starter:0.1.1-SNAPSHOT` JAR, streams its durable
-assistant output as LangGraph-compatible `messages-tuple` frames, projects safe SDK failures as an
-`error` frame, and invokes the public `AgentRunHandle.cancel()` API. The `Content-Location`,
-`metadata`, `messages-tuple`, and terminal `end` frame shapes follow the frozen gateway.
+The run endpoint calls the public `haifa-agent-sdk-starter:0.1.1-SNAPSHOT` JAR. Its SSE IDs are
+derived from the durable public `AgentRunEvent.sequence`, not a process-local counter. The server
+projects the authoritative completed output as a LangGraph-compatible `messages-tuple`, preserves
+distinct terminal status through the run resource, and invokes the public `AgentRunHandle.cancel()`
+API. `Last-Event-ID` replays the bounded tail idempotently. An expired cursor emits the frozen
+`stream_replay_gap` signal together with a bounded authoritative run view; `/state` supplies the
+durable messages before the client rejoins at the retained tail. Creator disconnect obeys
+`cancel|continue`, while an observer join disconnect never cancels the run.
 
 This is still an in-progress compatibility slice. It deliberately reports catalog models and
 not-yet-implemented capabilities as unavailable. The SDK bridge currently uses a bounded local
 probe model so the runtime/event/cancel path can be tested without a credential. Configured model
-catalog/provider execution, durable restart/reconnect/gap recovery, `updates` and `custom` event
-projection, interaction, full history, files, same-UI differential verification, and account
-authentication are **NOT_RUN**. Cancel currently implements the frozen UI's actual
+catalog/provider execution, process-restart reconstruction, `updates` and `custom` event
+projection, HTTP interaction submission/card projection, full history, files, same-UI differential
+verification, and account authentication are **NOT_RUN**. Unsupported Interaction projection fails
+closed instead of manufacturing a card. Cancel currently implements the frozen UI's actual
 `wait=false&action=interrupt` request; blocking wait and rollback are rejected rather than
 silently approximated. No request falls back to the DeerFlow backend.
 
