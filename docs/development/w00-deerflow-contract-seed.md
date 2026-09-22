@@ -16,8 +16,10 @@ matrix has run.
   source evidence, registration/configuration condition, static status, and
   runtime status.
 - `contracts/upstream/deerflow/resource-seed.json` freezes a small first set of
-  frontend build inputs and auth fixtures/oracles by SHA-256. `intended_local_path`
-  is planning metadata only; nothing has been imported.
+  frontend build inputs and auth fixtures/oracles by SHA-256. It cross-checks the
+  W18 provenance manifest: package, lockfile, Next routing, and root license are
+  `IMPORTED`; dedicated parity fixture/oracle copies that do not exist remain
+  `NOT_RUN`. Import status never implies runtime parity.
 - `scripts/verify-deerflow-contracts.ps1` rejects a wrong checkout SHA, a changed
   manifest SHA, a missing critical surface, missing source evidence, invalid
   status claims, and drifted resource hashes.
@@ -53,7 +55,8 @@ isolated worktree layout.
 - Next routing: conditional `/api/langgraph/*` and `/api/*` rewrites, internal
   Gateway target, and the Memory Route Handler/BFF surface.
 - Resource seed: root license, package/lockfile, Next routing config, auth-disabled
-  fixture, and browser/backend auth oracle files.
+  fixture, and browser/backend auth oracle files. Existing W18 imports are verified
+  against the same frozen source hashes without duplicating their files.
 
 ## Intentionally not covered yet
 
@@ -64,7 +67,6 @@ event IDs/gap recovery, and dynamic registration branches still need incremental
 expansion. The root MIT license does not finish nested dependency, font, image,
 brand, or asset-specific licensing review.
 
-W01 may import the frozen frontend only after its own provenance/license record;
-W02 and later packages must attach real Run/Tool/Artifact and network evidence.
+W18 has imported the frozen frontend with its own provenance/license record;
+W02 and later packages must still attach real Run/Tool/Artifact and network evidence.
 Static source verification must never be promoted to parity `PASS`.
-

@@ -104,6 +104,14 @@ Assert-Equal $manifest.runtime_status 'NOT_RUN' 'Static extraction must not clai
 Assert-Equal $manifest.source.source_sha $ExpectedSourceSha 'Contract manifest source SHA drifted'
 Assert-Equal $resourceManifest.source.source_sha $ExpectedSourceSha 'Resource manifest source SHA drifted'
 Assert-Equal $resourceManifest.runtime_status 'NOT_RUN' 'Resource seed must not claim runtime PASS'
+Assert-Equal $resourceManifest.repository_import.status 'IMPORTED' 'Frozen W18 frontend import must be recorded separately from runtime status'
+Assert-Equal $resourceManifest.repository_import.runtime_status 'NOT_RUN' 'Imported source must not claim runtime parity PASS'
+
+$w18ManifestPath = Join-Path $RepositoryRoot ([string]$resourceManifest.repository_import.manifest_path)
+$w18Manifest = Read-JsonFile -Path $w18ManifestPath
+Assert-Equal $w18Manifest.upstream.commit $ExpectedSourceSha 'W18 import manifest is not bound to the frozen DeerFlow SHA'
+Assert-Equal $w18Manifest.upstream.sourceTree $resourceManifest.repository_import.source_tree 'W18 import source tree drifted from the W00 seed'
+Assert-Equal $w18Manifest.import.localPath $resourceManifest.repository_import.frontend_local_path 'W18 frontend import path drifted from the W00 seed'
 
 $gitHead = (& git -C $resolvedDeerFlowRoot rev-parse HEAD 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) {
@@ -176,13 +184,24 @@ foreach ($requiredFrame in @('url', 'tabs', 'nav_rejected')) {
 
 foreach ($resource in @($resourceManifest.resources)) {
     Assert-Equal $resource.status 'SOURCE_VERIFIED' "Resource '$($resource.id)' has an invalid static status"
-    Assert-Equal $resource.import_status 'NOT_RUN' "Resource '$($resource.id)' must not claim import completion"
+    $allowedImportStatuses = @('IMPORTED', 'NOT_RUN')
+    if ($allowedImportStatuses -notcontains [string]$resource.import_status) {
+        throw "Resource '$($resource.id)' has invalid import_status '$($resource.import_status)'; parity PASS is never a resource import status."
+    }
     $resourcePath = Join-Path $resolvedDeerFlowRoot ([string]$resource.source_path)
     if (-not (Test-Path -LiteralPath $resourcePath -PathType Leaf)) {
         throw "Resource '$($resource.id)' source is missing: $($resource.source_path)"
     }
     $actualHash = (Get-FileHash -LiteralPath $resourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
     Assert-Equal $actualHash ([string]$resource.sha256).ToLowerInvariant() "Resource '$($resource.id)' hash drifted"
+    if ($resource.import_status -eq 'IMPORTED') {
+        $importedPath = Join-Path $RepositoryRoot ([string]$resource.intended_local_path)
+        if (-not (Test-Path -LiteralPath $importedPath -PathType Leaf)) {
+            throw "Resource '$($resource.id)' claims IMPORTED but local file is missing: $($resource.intended_local_path)"
+        }
+        $importedHash = (Get-FileHash -LiteralPath $importedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        Assert-Equal $importedHash $actualHash "Resource '$($resource.id)' imported content differs from frozen source"
+    }
 }
 
 $surfaceSummary = $surfaces | Group-Object consumer | Sort-Object Name | ForEach-Object {
@@ -190,5 +209,5 @@ $surfaceSummary = $surfaces | Group-Object consumer | Sort-Object Name | ForEach
 }
 Write-Host "Verified DeerFlow W00 contract seed at $ExpectedSourceSha"
 Write-Host "Surfaces: $($surfaces.Count) ($($surfaceSummary -join ', '))"
-Write-Host "Resources: $(@($resourceManifest.resources).Count); runtime_status=NOT_RUN"
-
+$importedCount = @($resourceManifest.resources | Where-Object import_status -eq 'IMPORTED').Count
+Write-Host "Resources: $(@($resourceManifest.resources).Count) (IMPORTED=$importedCount, NOT_RUN=$(@($resourceManifest.resources).Count - $importedCount)); runtime_status=NOT_RUN"

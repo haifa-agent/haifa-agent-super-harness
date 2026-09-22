@@ -1,6 +1,6 @@
 window.WORK_PACKAGES_DATA = {
   "schemaVersion": 3,
-  "updatedAt": "2026-09-22T17:47:00+08:00",
+  "updatedAt": "2026-09-22T18:37:27+08:00",
   "source": "private-docs/roadmap/35-super-harness-deerflow-parity.md",
   "baseline": {
     "phase": "Wave A",
@@ -12,7 +12,7 @@ window.WORK_PACKAGES_DATA = {
     "evidenceGatePassed": 1
   },
   "worktrees": [
-    { "workPackage": "W00", "branch": "codex/w00-protocol-seed", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w00-protocol", "head": "e1cbad5" },
+    { "workPackage": "W00", "branch": "codex/w00-protocol-seed", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w00-protocol", "head": "213a4be" },
     { "workPackage": "W01", "branch": "codex/w01-foundation", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w01-foundation", "head": "2784282" },
     { "workPackage": "W18", "branch": "codex/w18-frontend-import", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w18-frontend", "head": "3b7099f" },
     { "workPackage": "W02", "branch": "codex/w02-local-api", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w02-local-api", "head": "b0b9ddc" },
@@ -22,14 +22,15 @@ window.WORK_PACKAGES_DATA = {
     { "at": "2026-09-22T15:05:42+08:00", "title": "建立仓库基线", "detail": "创建首个提交 e1cbad5，主分支命名为 main。" },
     { "at": "2026-09-22T15:05:24+08:00", "title": "冻结上游快照", "detail": "原有两处修改进入 stash；DeerFlow 切换至目标 SHA。" },
     { "at": "2026-09-22T15:11:34+08:00", "title": "创建三条开发 lane", "detail": "W00、W01、W18 worktree 就绪。" },
-    { "at": "2026-09-22T15:18:36+08:00", "title": "派发 W00", "detail": "启动 /root/w00_protocol；当前尚无开发提交证据。" },
+    { "at": "2026-09-22T15:18:36+08:00", "title": "派发 W00", "detail": "启动 /root/w00_protocol；进入冻结协议与资源种子实现。" },
+    { "at": "2026-09-22T18:37:27+08:00", "title": "W00 协议种子通过门禁", "detail": "19 个分层消费面与 7 个资源记录绑定冻结 SHA；有效清单、错误 SHA、缺关键 SSE 面和缺源码证据均有自动校验。运行互通仍为 NOT_RUN。" },
     { "at": "2026-09-22T16:39:59+08:00", "title": "W01 底座通过门禁", "detail": "分支提交 2784282；主线集成 f0759b9。离线 Maven 7/7 通过，真实 Run→Tool→Artifact 与 fail-closed Harness 有证据。" },
     { "at": "2026-09-22T16:38:08+08:00", "title": "W18 冻结前端导入", "detail": "分支提交 3b7099f；主线集成 59c78e9。980 文件与冻结 tree 一致，构建及 1894 个单测通过；双后端联调仍为 NOT_RUN。" },
     { "at": "2026-09-22T17:47:00+08:00", "title": "W02 本地启动协议", "detail": "分支提交 b0b9ddc；实现本地身份、能力和模型启动接口，18 项测试及真实 loopback socket 验证通过；Thread/Run/SSE 仍待后续。" },
     { "at": "2026-09-22T17:47:00+08:00", "title": "W04 受限文件核心", "detail": "独立模块实现持久 owner/thread Workspace、不可变上传与 Haifa Artifact 发布；6 个临时目录集成测试通过，HTTP/multipart 与 UI 联调仍待后续。" }
   ],
   "workPackages": [
-    { "id": "W00", "title": "固定快照、前端消费协议与资源种子", "wave": "A", "lane": "G · 协议/Verifier", "state": "in_progress", "prerequisites": [], "branch": "codex/w00-protocol-seed", "owner": "/root/w00_protocol", "summary": "智能体已启动，尚无开发提交。", "evidence": [], "exit": "固定同 SHA 前后端；形成 REST/SSE/WS/文件/auth/SSR 调用清单、来源许可与首批 Oracle。" },
+    { "id": "W00", "title": "固定快照、前端消费协议与资源种子", "wave": "A", "lane": "G · 协议/Verifier", "state": "in_progress", "prerequisites": [], "branch": "codex/w00-protocol-seed", "owner": "/root/w00_protocol", "summary": "已形成绑定冻结 SHA 的增量协议/资源种子与失败门禁；完整 REST/Error/Event Schema 及真实双后端运行证据仍待展开。", "evidence": ["branch f901baf + 213a4be", "19 surfaces: browser fetch / Next SSR+BFF / LangGraph SDK SSE / Browser WS / file+auth / rewrites", "7 resources: SOURCE_VERIFIED; W18 imported assets split from dedicated parity fixtures", "verify-deerflow-contracts: valid PASS; wrong SHA / missing SSE surface / missing source evidence rejected", "runtime and differential parity: NOT_RUN"], "exit": "固定同 SHA 前后端；形成 REST/SSE/WS/文件/auth/SSR 调用清单、来源许可与首批 Oracle。" },
     { "id": "W01", "title": "独立仓、JAR、上游 UI 与 Harness v0", "wave": "A", "lane": "底座/发布/Verifier", "state": "complete", "prerequisites": ["W00"], "branch": "codex/w01-foundation", "owner": "/root/w01_foundation", "summary": "独立 Java 21 Parent/BOM、公开 JAR 消费、真实 Run→Tool→Artifact smoke 与最小 fail-closed Harness 已完成。冻结前端导入由 W18 切片提供。", "evidence": ["branch 2784282 / main f0759b9", "mvn -o -ntp verify: 7 tests PASS", "empty consumer cache verify: PASS", "Run 01a0c863-56fb-7cee-b2c9-7cb5bb7368e8 / Tool artifact_render / Artifact w01-artifact-1 / SHA-256 8c2487ab..."], "exit": "独立 Parent/BOM；空缓存解析公开 JAR；最小 Harness 能识别故意失败与缺证据。" },
     { "id": "W02", "title": "本地身份、上游主协议与基础聊天", "wave": "A", "lane": "后端/联调", "state": "in_progress", "prerequisites": ["W01"], "branch": "codex/w02-local-api", "owner": "/root/w02_local_api", "summary": "首个本地 HTTP 垂直切片已实现冻结上游启动契约与安全边界；Thread、Run、SSE、取消及同 UI 真实联调仍待后续切片。", "evidence": ["GET /api/v1/auth/setup-status, /api/v1/auth/me, /api/features, /api/models real socket responses PASS", "mvn -o -ntp clean verify: 18 tests PASS", "empty consumer cache verification: PASS", "forged identity headers ignored; implicit/non-local profile, disabled auth flag, non-loopback bind and production markers fail closed", "executable JAR SHA-256 a0e50f30988e0679e8bc755be879b86a18a017e3cf5a0c978251d115d362b509"], "exit": "auth/me、模型目录、Thread、Run、SSE、取消；同一 UI 真实运行且阻断 DeerFlow 回落。" },
     { "id": "W03", "title": "Agent、Model、模式与配置后端", "wave": "B", "lane": "E · 后端", "state": "pending", "prerequisites": ["W02"], "summary": "等待前置契约。", "evidence": [], "exit": "复用上游页面，提供 SOUL/config/probe/模式/默认值及实际模型合约。" },
