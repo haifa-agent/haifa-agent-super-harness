@@ -1,10 +1,9 @@
 import type { NextRequest } from "next/server";
 
-const BACKEND_BASE_URL =
-  process.env.NEXT_PUBLIC_BACKEND_BASE_URL ?? "http://127.0.0.1:8001";
+import { getGatewayConfig } from "@/core/auth/gateway-config";
 
 function buildBackendUrl(pathname: string) {
-  return new URL(pathname, BACKEND_BASE_URL);
+  return new URL(pathname, getGatewayConfig().internalGatewayUrl);
 }
 
 async function proxyRequest(request: NextRequest, pathname: string) {
