@@ -26,6 +26,13 @@ frontend at `e545c28ac301e6f9feae247c513d8ea8f83df294`:
 - `GET /api/threads/{thread_id}/artifacts/mnt/user-data/{uploads|workspace|outputs}/{path}`
   with a single HTTP byte Range and explicit download support
 
+The upload adapter deliberately advertises a stricter 25 MiB per-request/per-file limit than frozen
+DeerFlow's configurable default. It retains at most one bounded multipart upload request at a time,
+fully parses it before storage, and compensates earlier new files if a later member fails. Artifact
+full/Range responses use one bounded verified file snapshot and one SHA-256 pass; Range output is
+written from that snapshot without a second range-sized copy. Unknown filename types use DeerFlow's
+8 KiB no-NUL content sniff so extensionless text remains previewable.
+
 The run endpoint calls the public `haifa-agent-sdk-starter:0.1.1-SNAPSHOT` JAR. Its SSE IDs are
 derived from the durable public `AgentRunEvent.sequence`, not a process-local counter. The server
 projects the authoritative completed output as a LangGraph-compatible `messages-tuple`, preserves

@@ -72,8 +72,9 @@ class DeerFlowWorkspaceApiTest {
         JsonNode limits = json.readTree(get("/api/threads/thread-files/uploads/limits").body());
         assertThat(limits.path("max_files").asInt()).isEqualTo(10);
         assertThat(limits.path("max_file_size").asLong()).isPositive();
+        assertThat(limits.path("max_total_size").asLong()).isEqualTo(25L * 1024 * 1024);
         assertThat(limits.path("max_total_size").asLong())
-                .isGreaterThanOrEqualTo(limits.path("max_file_size").asLong());
+                .isEqualTo(limits.path("max_file_size").asLong());
 
         JsonNode listing = json.readTree(get("/api/threads/thread-files/uploads/list").body());
         assertThat(listing.path("count").asInt()).isEqualTo(1);
@@ -179,6 +180,67 @@ class DeerFlowWorkspaceApiTest {
         assertThat(getBytes(firstUrl, null).headers().firstValue("content-disposition"))
                 .hasValueSatisfying(value -> assertThat(value).startsWith("attachment;"));
         assertThat(getBytes(secondUrl, null).body()).isEqualTo(changed);
+    }
+
+    @Test
+    void failedLaterMultipartMemberRollsBackEarlierNewUpload() throws Exception {
+        createThread("thread-atomic-upload");
+
+        HttpResponse<String> failed = upload(
+                "thread-atomic-upload",
+                "atomic-upload",
+                List.of(
+                        new TestFile("first.txt", "text/plain", "first".getBytes(StandardCharsets.UTF_8)),
+                        new TestFile("../escape.txt", "text/plain", "second".getBytes(StandardCharsets.UTF_8))),
+                false);
+
+        assertThat(failed.statusCode()).isEqualTo(422);
+        JsonNode listing = json.readTree(get("/api/threads/thread-atomic-upload/uploads/list").body());
+        assertThat(listing.path("count").asInt()).isZero();
+        assertThat(listing.path("files").size()).isZero();
+    }
+
+    @Test
+    void extensionlessTextAndLargeContentUseFrozenPreviewTypesAndVerifiedRange() throws Exception {
+        createThread("thread-preview");
+        byte[] text = "extensionless text\n".getBytes(StandardCharsets.UTF_8);
+        JsonNode textUpload = json.readTree(upload(
+                "thread-preview", "extensionless", List.of(
+                        new TestFile("README", "application/octet-stream", text)), false).body());
+        String textUrl = textUpload.path("files").get(0).path("artifact_url").asText();
+        HttpResponse<byte[]> textResponse = getBytes(textUrl, null);
+        assertThat(textResponse.statusCode()).isEqualTo(200);
+        assertThat(textResponse.headers().firstValue("content-type"))
+                .hasValueSatisfying(value -> assertThat(value).startsWith("text/plain"));
+        assertThat(textResponse.body()).isEqualTo(text);
+
+        byte[] binary = new byte[] {(byte) 0x80, 0, 1};
+        JsonNode binaryUpload = json.readTree(upload(
+                "thread-preview", "extensionless-binary", List.of(
+                        new TestFile("BINARY", "application/octet-stream", binary)), false).body());
+        HttpResponse<byte[]> binaryResponse = getBytes(
+                binaryUpload.path("files").get(0).path("artifact_url").asText(), null);
+        assertThat(binaryResponse.statusCode()).isEqualTo(200);
+        assertThat(binaryResponse.headers().firstValue("content-type"))
+                .hasValueSatisfying(value -> assertThat(value).startsWith("application/octet-stream"));
+        assertThat(binaryResponse.body()).isEqualTo(binary);
+
+        byte[] large = new byte[3 * 1024 * 1024 + 17];
+        java.util.Arrays.fill(large, (byte) 'x');
+        JsonNode largeUpload = json.readTree(upload(
+                "thread-preview", "large", List.of(
+                        new TestFile("large.bin", "application/octet-stream", large)), false).body());
+        String largeUrl = largeUpload.path("files").get(0).path("artifact_url").asText();
+        HttpResponse<byte[]> full = getBytes(largeUrl, null);
+        assertThat(full.statusCode()).isEqualTo(200);
+        assertThat(full.body()).isEqualTo(large);
+        assertThat(full.headers().firstValue("etag")).contains("\"" + sha256(large) + "\"");
+
+        HttpResponse<byte[]> range = getBytes(largeUrl, "bytes=1048570-1048590");
+        assertThat(range.statusCode()).isEqualTo(206);
+        assertThat(range.body()).containsOnly((byte) 'x').hasSize(21);
+        assertThat(range.headers().firstValue("content-range"))
+                .contains("bytes 1048570-1048590/" + large.length);
     }
 
     private void assertUnsatisfied(String path, String range, long total) throws Exception {
