@@ -31,6 +31,7 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.function.Function;
 
 /** Frozen DeerFlow thread/run compatibility routes backed by the public Haifa Agent SDK. */
 final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
@@ -50,12 +51,21 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private final ObjectMapper json;
     private final HaifaRunBridge bridge;
+    private final Function<JsonNode, Optional<String>> runConfigurationValidator;
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
     private final Map<String, RunRecord> runs = new ConcurrentHashMap<>();
 
     DeerFlowThreadRunApi(ObjectMapper json, HaifaRunBridge bridge) {
+        this(json, bridge, ignored -> Optional.empty());
+    }
+
+    DeerFlowThreadRunApi(
+            ObjectMapper json,
+            HaifaRunBridge bridge,
+            Function<JsonNode, Optional<String>> runConfigurationValidator) {
         this.json = json;
         this.bridge = bridge;
+        this.runConfigurationValidator = runConfigurationValidator;
     }
 
     @Override
@@ -598,7 +608,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         if (!multitask.equals("reject")) {
             return Optional.of("Only multitask_strategy='reject' is implemented");
         }
-        return Optional.empty();
+        return runConfigurationValidator.apply(body);
     }
 
     private Optional<String> queryValue(HttpExchange exchange, String name) {

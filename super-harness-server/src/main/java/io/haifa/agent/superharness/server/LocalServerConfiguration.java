@@ -3,6 +3,7 @@ package io.haifa.agent.superharness.server;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
+import java.nio.file.Path;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -19,6 +20,7 @@ public record LocalServerConfiguration(String profile, InetAddress bindAddress, 
     public static final String BIND_ENV = "SUPER_HARNESS_BIND_ADDRESS";
     public static final String PORT_ENV = "SUPER_HARNESS_PORT";
     public static final String AUTH_DISABLED_ENV = "DEER_FLOW_AUTH_DISABLED";
+    public static final String DATA_DIR_ENV = "SUPER_HARNESS_DATA_DIR";
 
     private static final String LOCAL_PROFILE = "local";
 
@@ -40,6 +42,15 @@ public record LocalServerConfiguration(String profile, InetAddress bindAddress, 
 
     public InetSocketAddress socketAddress() {
         return new InetSocketAddress(bindAddress, port);
+    }
+
+    /** Repository-local by default; work packages set an explicit isolated directory. */
+    public Path dataDirectory(Map<String, String> environment) {
+        String configured = environment.get(DATA_DIR_ENV);
+        Path path = configured == null || configured.isBlank()
+                ? Path.of(".super-harness", "data")
+                : Path.of(configured);
+        return path.toAbsolutePath().normalize();
     }
 
     public static LocalServerConfiguration fromEnvironment(Map<String, String> environment) {

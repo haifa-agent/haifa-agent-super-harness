@@ -6,6 +6,7 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,21 +33,30 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final ExecutorService executor;
     private final ObjectMapper objectMapper;
     private final DeerFlowThreadRunApi threadRunApi;
+    private final DeerFlowConfigurationApi configurationApi;
 
-    private DeerFlowBootstrapApi(HttpServer server, ExecutorService executor) {
+    private DeerFlowBootstrapApi(HttpServer server, ExecutorService executor, Path dataDirectory)
+            throws IOException {
         this.server = server;
         this.executor = executor;
         this.objectMapper = new ObjectMapper();
-        this.threadRunApi = new DeerFlowThreadRunApi(objectMapper, HaifaRunBridge.localProbe());
+        this.configurationApi = new DeerFlowConfigurationApi(objectMapper, dataDirectory);
+        this.threadRunApi = new DeerFlowThreadRunApi(
+                objectMapper, HaifaRunBridge.localProbe(), configurationApi::validateRunContext);
         registerRoutes();
     }
 
     public static DeerFlowBootstrapApi create(LocalServerConfiguration configuration)
             throws IOException {
+        return create(configuration, Path.of(".super-harness", "data").toAbsolutePath());
+    }
+
+    static DeerFlowBootstrapApi create(LocalServerConfiguration configuration, Path dataDirectory)
+            throws IOException {
         HttpServer server = HttpServer.create(configuration.socketAddress(), 0);
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         server.setExecutor(executor);
-        return new DeerFlowBootstrapApi(server, executor);
+        return new DeerFlowBootstrapApi(server, executor, dataDirectory);
     }
 
     public void start() {
@@ -88,7 +98,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 "/api/features",
                 orderedMap(
                         "agents_api",
-                        Map.of("enabled", false),
+                        Map.of("enabled", true),
                         "browser_control",
                         Map.of("enabled", false),
                         "mcp_tasks",
@@ -107,10 +117,9 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                         orderedMap("enabled", false, "max_references", 3),
                         "knowledge_base",
                         Map.of("scope_selection_enabled", false)));
-        get(
-                "/api/models",
-                orderedMap(
-                        "models", List.of(), "token_usage", Map.of("enabled", false)));
+        server.createContext("/api/models", configurationApi);
+        server.createContext("/api/managed-models", configurationApi);
+        server.createContext("/api/agents", configurationApi);
         server.createContext("/api/threads", threadRunApi);
         server.createContext("/", this::notFound);
     }

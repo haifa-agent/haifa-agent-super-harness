@@ -9,13 +9,17 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Path;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class DeerFlowBootstrapApiTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final HttpClient client = HttpClient.newHttpClient();
+    @TempDir
+    Path dataDirectory;
     private DeerFlowBootstrapApi api;
     private URI baseUri;
 
@@ -24,7 +28,8 @@ class DeerFlowBootstrapApiTest {
         api =
                 DeerFlowBootstrapApi.create(
                         new LocalServerConfiguration(
-                                "local", InetAddress.getByName("127.0.0.1"), 0));
+                                "local", InetAddress.getByName("127.0.0.1"), 0),
+                        dataDirectory);
         api.start();
         baseUri = URI.create("http://127.0.0.1:" + api.address().getPort());
     }
@@ -83,7 +88,7 @@ class DeerFlowBootstrapApiTest {
                 "/api/features",
                 """
                 {
-                  "agents_api":{"enabled":false},
+                  "agents_api":{"enabled":true},
                   "browser_control":{"enabled":false},
                   "mcp_tasks":{"enabled":false},
                   "subagent_batches":{
