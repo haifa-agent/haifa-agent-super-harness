@@ -6,8 +6,18 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import io.haifa.agent.core.run.AgentRunId;
 import io.haifa.agent.core.run.AgentRunStatus;
-import io.haifa.agent.runtime.api.AgentRunOutputEventType;
+import io.haifa.agent.runtime.api.AgentRunEvent;
+import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
 import io.haifa.agent.runtime.api.AgentRunSnapshot;
+import io.haifa.agent.runtime.api.RunEventPayloads;
+import io.haifa.agent.superharness.events.AppendResult;
+import io.haifa.agent.superharness.events.BoundedRunEventProjector;
+import io.haifa.agent.superharness.events.EventProjectionException;
+import io.haifa.agent.superharness.events.ProjectedRunEvent;
+import io.haifa.agent.superharness.events.ProjectionCursor;
+import io.haifa.agent.superharness.events.ProjectionGap;
+import io.haifa.agent.superharness.events.ReplayResult;
+import io.haifa.agent.superharness.events.RunTerminalKind;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
@@ -27,11 +37,16 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final Pattern THREAD = Pattern.compile("^/api/threads/([^/]+)$");
     private static final Pattern THREAD_STATE = Pattern.compile("^/api/threads/([^/]+)/state$");
     private static final Pattern STREAM = Pattern.compile("^/api/threads/([^/]+)/runs/stream$");
+    private static final Pattern JOIN_STREAM =
+            Pattern.compile("^/api/threads/([^/]+)/runs/([^/]+)/stream$");
     private static final Pattern RUN = Pattern.compile("^/api/threads/([^/]+)/runs/([^/]+)$");
     private static final Pattern CANCEL =
             Pattern.compile("^/api/threads/([^/]+)/runs/([^/]+)/cancel$");
     private static final List<String> SUPPORTED_STREAM_MODES =
             List.of("messages-tuple", "updates", "custom");
+    private static final Pattern SSE_CURSOR = Pattern.compile("^(\\d+)-0$");
+    private static final int EVENT_RETENTION_CAPACITY = 8;
+    private static final int EVENT_PAGE_SIZE = 4;
 
     private final ObjectMapper json;
     private final HaifaRunBridge bridge;
@@ -72,6 +87,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             match = STREAM.matcher(path);
             if (match.matches() && exchange.getRequestMethod().equals("POST")) {
                 streamRun(exchange, match.group(1));
+                return;
+            }
+            match = JOIN_STREAM.matcher(path);
+            if (match.matches() && exchange.getRequestMethod().equals("GET")) {
+                joinRun(exchange, match.group(1), match.group(2));
                 return;
             }
             match = CANCEL.matcher(path);
@@ -117,12 +137,23 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private void getThreadState(HttpExchange exchange, String threadId) throws IOException {
-        if (!threads.containsKey(threadId)) {
+        ThreadRecord thread = threads.get(threadId);
+        if (thread == null) {
             sendJson(exchange, 404, Map.of("detail", "Thread not found"));
             return;
         }
+        List<Map<String, Object>> messages = new ArrayList<>();
+        if (thread.latestRunId != null) {
+            RunRecord run = runs.get(thread.latestRunId);
+            if (run != null) {
+                messages.add(message("human-" + run.runId.value(), "human", run.humanMessage));
+                AgentRunSnapshot snapshot = bridge.snapshot(run.runId);
+                snapshot.output().ifPresent(output -> messages.add(
+                        message("assistant-" + run.runId.value(), "ai", output)));
+            }
+        }
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("values", Map.of());
+        response.put("values", Map.of("messages", messages));
         response.put("next", List.of());
         response.put("metadata", Map.of());
         response.put("checkpoint", Map.of());
@@ -194,55 +225,121 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             thread.session = started.session();
             thread.updatedAt = Instant.now();
             thread.activeRunId = started.runId().value();
+            thread.latestRunId = started.runId().value();
             run = new RunRecord(
                     started.runId(),
                     threadId,
                     text(body, "assistant_id").orElse(null),
+                    message,
+                    bridge,
                     Instant.now());
             runs.put(run.runId.value(), run);
         }
 
+        streamRunEvents(
+                exchange,
+                thread,
+                run,
+                new ProjectionCursor(run.runId.value(), 0),
+                true,
+                text(body, "on_disconnect").orElse("cancel"),
+                true);
+    }
+
+    private void joinRun(HttpExchange exchange, String threadId, String runId) throws IOException {
+        if (queryValue(exchange, "action").isPresent()) {
+            exchange.getResponseHeaders().set("Allow", "POST");
+            sendJson(exchange, 405, Map.of("detail", "`action` is only supported on POST requests"));
+            return;
+        }
+        ThreadRecord thread = threads.get(threadId);
+        RunRecord run = runs.get(runId);
+        if (thread == null || run == null || !run.threadId.equals(threadId)) {
+            sendJson(exchange, 404, Map.of("detail", "Run " + runId + " not found"));
+            return;
+        }
+        String rawCursor = exchange.getRequestHeaders().getFirst("Last-Event-ID");
+        ProjectionCursor cursor;
+        try {
+            cursor = parseSseCursor(runId, rawCursor);
+            synchronizeAllAvailable(run);
+            run.projector.replayAfter(cursor);
+        } catch (IllegalArgumentException | EventProjectionException invalid) {
+            sendJson(exchange, 409, Map.of("detail", invalid.getMessage()));
+            return;
+        }
+        streamRunEvents(exchange, thread, run, cursor, false, "continue", false);
+    }
+
+    private void streamRunEvents(
+            HttpExchange exchange,
+            ThreadRecord thread,
+            RunRecord run,
+            ProjectionCursor initialCursor,
+            boolean creator,
+            String onDisconnect,
+            boolean includeMetadata)
+            throws IOException {
         exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
         exchange.getResponseHeaders().set("Cache-Control", "no-cache");
         exchange.getResponseHeaders().set("Connection", "keep-alive");
         exchange.getResponseHeaders().set("X-Accel-Buffering", "no");
-        exchange.getResponseHeaders().set(
-                "Content-Location", "/api/threads/" + threadId + "/runs/" + run.runId.value());
+        if (creator) {
+            exchange.getResponseHeaders().set(
+                    "Content-Location",
+                    "/api/threads/" + run.threadId + "/runs/" + run.runId.value());
+        }
         exchange.sendResponseHeaders(200, 0);
 
         try (OutputStream output = exchange.getResponseBody()) {
-            writeSse(output, "metadata", Map.of("run_id", run.runId.value(), "thread_id", threadId), null);
-            long sequence = 0;
-            StringBuilder emittedText = new StringBuilder();
+            if (includeMetadata) {
+                writeSse(
+                        output,
+                        "metadata",
+                        Map.of("run_id", run.runId.value(), "thread_id", run.threadId),
+                        null);
+            }
+            ProjectionCursor delivered = initialCursor;
+            long nextHeartbeat = System.nanoTime() + java.time.Duration.ofMillis(100).toNanos();
             while (true) {
-                for (var event : bridge.outputAfter(run.runId, sequence)) {
-                    sequence = Math.max(sequence, event.sequence());
-                    if (event.type() == AgentRunOutputEventType.ASSISTANT_TEXT_DELTA) {
-                        emittedText.append(event.textDelta());
-                        writeMessageDelta(output, run, event.textDelta(), Long.toString(event.sequence()));
+                ReplayResult replay = run.projector.replayAfter(delivered);
+                if (replay instanceof ReplayResult.Gap gap) {
+                    writeReplayGap(output, run, gap.gap(), gap.authoritativeView(), delivered);
+                    return;
+                }
+                ReplayResult.Events events = (ReplayResult.Events) replay;
+                for (ProjectedRunEvent event : events.events()) {
+                    delivered = event.cursor();
+                    if (writeProjectedEvent(output, run, event)) {
+                        return;
                     }
                 }
-                AgentRunSnapshot snapshot = bridge.snapshot(run.runId);
-                if (snapshot.status().isTerminal()) {
-                    if (snapshot.status() == AgentRunStatus.COMPLETED && snapshot.output().isPresent()) {
-                        String finalOutput = snapshot.output().orElseThrow();
-                        String streamed = emittedText.toString();
-                        if (finalOutput.startsWith(streamed) && finalOutput.length() > streamed.length()) {
-                            writeMessageDelta(
-                                    output,
-                                    run,
-                                    finalOutput.substring(streamed.length()),
-                                    "final");
-                        } else if (streamed.isEmpty()) {
-                            writeMessageDelta(output, run, finalOutput, "final");
-                        }
+                Optional<AppendResult.Gap> sourceGap = synchronizeOnePage(run);
+                if (sourceGap.isPresent()) {
+                    AppendResult.Gap gap = sourceGap.orElseThrow();
+                    writeReplayGap(output, run, gap.gap(), gap.authoritativeView(), delivered);
+                    return;
+                }
+                if (run.projector.head().equals(delivered)
+                        && bridge.snapshot(run.runId).status().isTerminal()) {
+                    if (!creator && delivered.sequence() == initialCursor.sequence()) {
+                        // The observer already acknowledged the durable terminal cursor. Match
+                        // DeerFlow's terminal rejoin behavior with an id-less end sentinel.
+                        writeSse(output, "end", null, null);
+                        return;
                     }
-                    if (snapshot.status() == AgentRunStatus.FAILED) {
-                        String error = snapshot.error().map(value -> value.message()).orElse("Run failed");
-                        writeSse(output, "error", Map.of("message", error), null);
-                    }
-                    writeSse(output, "end", null, null);
-                    break;
+                    // A public terminal snapshot without the matching durable lifecycle event
+                    // would make resume ambiguous. Fail closed instead of inventing an end id.
+                    writeSse(
+                            output,
+                            "error",
+                            Map.of("message", "Durable terminal event is unavailable"),
+                            null);
+                    return;
+                }
+                if (System.nanoTime() >= nextHeartbeat) {
+                    writeHeartbeat(output);
+                    nextHeartbeat = System.nanoTime() + java.time.Duration.ofMillis(100).toNanos();
                 }
                 try {
                     Thread.sleep(10);
@@ -253,7 +350,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 }
             }
         } catch (IOException disconnected) {
-            if ("cancel".equals(text(body, "on_disconnect").orElse("cancel"))) {
+            if (creator && "cancel".equals(onDisconnect)) {
                 bridge.cancel(run.runId);
             }
         } finally {
@@ -265,6 +362,147 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 thread.updatedAt = Instant.now();
             }
         }
+    }
+
+    private Optional<AppendResult.Gap> synchronizeOnePage(RunRecord run) {
+        synchronized (run) {
+            var page = bridge.events(run.runId, run.sdkCursor, EVENT_PAGE_SIZE);
+            for (AgentRunEvent source : page.items()) {
+                AppendResult append = run.projector.append(source);
+                if (append instanceof AppendResult.Gap gap) {
+                    return Optional.of(gap);
+                }
+            }
+            run.sdkCursor = page.nextCursor();
+            return Optional.empty();
+        }
+    }
+
+    private void synchronizeAllAvailable(RunRecord run) {
+        synchronized (run) {
+            while (true) {
+                var page = bridge.events(run.runId, run.sdkCursor, EVENT_PAGE_SIZE);
+                for (AgentRunEvent source : page.items()) {
+                    AppendResult append = run.projector.append(source);
+                    if (append instanceof AppendResult.Gap gap) {
+                        throw new EventProjectionException(
+                                "durable event feed has a source gap at "
+                                        + gap.gap().requestedSequence());
+                    }
+                }
+                run.sdkCursor = page.nextCursor();
+                if (!page.hasMore()) {
+                    return;
+                }
+            }
+        }
+    }
+
+    private ProjectionCursor parseSseCursor(String runId, String rawCursor) {
+        if (rawCursor == null || rawCursor.isBlank()) {
+            return new ProjectionCursor(runId, 0);
+        }
+        Matcher matcher = SSE_CURSOR.matcher(rawCursor);
+        if (!matcher.matches()) {
+            throw new IllegalArgumentException("Invalid Last-Event-ID");
+        }
+        try {
+            return new ProjectionCursor(runId, Long.parseLong(matcher.group(1)));
+        } catch (NumberFormatException overflow) {
+            throw new IllegalArgumentException("Invalid Last-Event-ID", overflow);
+        }
+    }
+
+    private boolean writeProjectedEvent(OutputStream output, RunRecord run, ProjectedRunEvent event)
+            throws IOException {
+        String cursor = sseCursor(event.cursor());
+        if (event.interaction().isPresent()) {
+            // The frozen human-input card requires a richer request payload than the public
+            // lifecycle event exposes. Never invent labels/options or claim support.
+            writeSse(
+                    output,
+                    "error",
+                    Map.of(
+                            "code", "unsupported_interaction_projection",
+                            "request_id", event.interaction().orElseThrow().requestId(),
+                            "message", "Interaction SSE projection is not implemented"),
+                    cursor);
+            return true;
+        }
+        if (event.source().payload() instanceof RunEventPayloads.ToolLifecycle
+                || event.source().payload() instanceof RunEventPayloads.ResourceAvailable
+                || event.source().payload() instanceof RunEventPayloads.DeliveryLifecycle
+                || event.source().payload() instanceof RunEventPayloads.RunInputLifecycle) {
+            writeSse(
+                    output,
+                    "error",
+                    Map.of(
+                            "code", "unsupported_event_projection",
+                            "event_type", event.source().eventType(),
+                            "message", "This durable event has no frozen DeerFlow wire mapping"),
+                    cursor);
+            return true;
+        }
+        if (!event.terminalKind().terminal()) {
+            return false;
+        }
+        AgentRunSnapshot terminalSnapshot = bridge.snapshot(run.runId);
+        if (event.terminalKind() == RunTerminalKind.COMPLETED
+                && terminalSnapshot.output().isPresent()) {
+            writeMessageDelta(output, run, terminalSnapshot.output().orElseThrow(), cursor);
+        }
+        if (event.terminalKind() == RunTerminalKind.FAILED) {
+            String message = terminalSnapshot
+                    .error()
+                    .map(value -> value.message())
+                    .orElse("Run failed");
+            writeSse(output, "error", Map.of("message", message), null);
+        }
+        writeSse(output, "end", null, cursor);
+        return true;
+    }
+
+    private void writeReplayGap(
+            OutputStream output,
+            RunRecord run,
+            ProjectionGap gap,
+            AgentRunViewSnapshot authoritativeView,
+            ProjectionCursor requested)
+            throws IOException {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("code", "stream_replay_gap");
+        payload.put("run_id", run.runId.value());
+        payload.put("requested_event_id", sseCursor(requested));
+        payload.put(
+                "earliest_available_event_id",
+                gap.earliestAvailableSequence() <= gap.latestSequence()
+                        ? sseCursor(gap.earliestAvailableSequence())
+                        : null);
+        payload.put(
+                "latest_available_event_id",
+                gap.latestSequence() > 0 ? sseCursor(gap.latestSequence()) : null);
+        payload.put("recovery", "reload_durable_state");
+        payload.put("authoritative_run_view", authoritativeView(authoritativeView));
+        writeSse(output, "gap", payload, null);
+    }
+
+    private Map<String, Object> authoritativeView(AgentRunViewSnapshot view) {
+        AgentRunSnapshot snapshot = view.snapshot();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("run_id", snapshot.runId().value());
+        result.put("status", deerFlowStatus(snapshot.status()));
+        result.put("version", snapshot.version());
+        result.put("updated_at", snapshot.updatedAt().toString());
+        result.put("output", snapshot.output().orElse(null));
+        return result;
+    }
+
+    private String sseCursor(ProjectionCursor cursor) {
+        return sseCursor(cursor.sequence());
+    }
+
+    private String sseCursor(long sequence) {
+        return sequence + "-0";
     }
 
     private void cancelRun(HttpExchange exchange, String threadId, String runId) throws IOException {
@@ -306,7 +544,16 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         response.put("assistant_id", run.assistantId);
         response.put("status", deerFlowStatus(snapshot.status()));
         response.put("metadata", Map.of());
-        response.put("kwargs", Map.of());
+        response.put(
+                "kwargs",
+                Map.of(
+                        "input",
+                        Map.of(
+                                "messages",
+                                List.of(message(
+                                        "human-" + run.runId.value(),
+                                        "human",
+                                        run.humanMessage)))));
         response.put("multitask_strategy", "reject");
         response.put("created_at", run.createdAt.toString());
         response.put("updated_at", snapshot.updatedAt().toString());
@@ -450,6 +697,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         output.flush();
     }
 
+    private void writeHeartbeat(OutputStream output) throws IOException {
+        output.write(": heartbeat\n\n".getBytes(StandardCharsets.UTF_8));
+        output.flush();
+    }
+
     private void writeMessageDelta(OutputStream output, RunRecord run, String delta, String id)
             throws IOException {
         if (delta.isEmpty()) {
@@ -466,6 +718,16 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 "messages-tuple",
                 List.of(messagePayload, Map.of("langgraph_node", "agent")),
                 id);
+    }
+
+    private Map<String, Object> message(String id, String type, String content) {
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("id", id);
+        message.put("type", type);
+        message.put("content", content);
+        message.put("tool_calls", List.of());
+        message.put("additional_kwargs", Map.of());
+        return message;
     }
 
     private void sendJson(HttpExchange exchange, int status, Object body) throws IOException {
@@ -511,6 +773,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private volatile Instant updatedAt;
         private volatile HaifaRunBridge.SessionState session;
         private volatile String activeRunId;
+        private volatile String latestRunId;
 
         private ThreadRecord(String threadId, Map<String, Object> metadata, Instant now) {
             this.threadId = threadId;
@@ -524,11 +787,27 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private final AgentRunId runId;
         private final String threadId;
         private final String assistantId;
+        private final String humanMessage;
+        private final BoundedRunEventProjector projector;
         private final Instant createdAt;
-        private RunRecord(AgentRunId runId, String threadId, String assistantId, Instant createdAt) {
+        private io.haifa.agent.runtime.api.RunEventCursor sdkCursor;
+
+        private RunRecord(
+                AgentRunId runId,
+                String threadId,
+                String assistantId,
+                String humanMessage,
+                HaifaRunBridge bridge,
+                Instant createdAt) {
             this.runId = runId;
             this.threadId = threadId;
             this.assistantId = assistantId;
+            this.humanMessage = humanMessage;
+            this.projector = new BoundedRunEventProjector(
+                    runId,
+                    EVENT_RETENTION_CAPACITY,
+                    requestedRunId -> Optional.of(bridge.authoritativeView(requestedRunId)));
+            this.sdkCursor = bridge.beforeFirstEvent(runId);
             this.createdAt = createdAt;
         }
     }

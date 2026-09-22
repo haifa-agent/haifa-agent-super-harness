@@ -1,8 +1,8 @@
 # W05 event projection core evidence
 
-This slice is intentionally transport-neutral. It consumes the public Haifa Agent
-`0.1.1-SNAPSHOT` event/run API and proves the local ordering, replay, gap, terminal,
-and Interaction-correlation rules before the compatibility server owns an SSE socket.
+The first slice was transport-neutral. The current slice connects that projection to the local
+compatibility server using only the public Haifa Agent `0.1.1-SNAPSHOT` event/run API and proves
+ordering, replay, gap, terminal, and disconnect behavior through a real loopback SSE socket.
 
 ## Frozen DeerFlow evidence
 
@@ -62,13 +62,13 @@ product JAR is used.
 `BoundedRunEventProjector` is single-process and synchronized. It:
 
 - derives a stable key from the public `(runId, eventId)` pair;
-- assigns an ordered local `ProjectionCursor` while requiring contiguous positive
-  source sequences;
+- uses the durable public event sequence as `ProjectionCursor`; public allowlist filtering may
+  create legitimate numeric holes, so sequences must be strictly increasing rather than contiguous;
 - treats an exact duplicate as idempotent, but fails closed if a key is reused with
   different content or an unknown event arrives at an old sequence;
 - bounds retained events, detects replay outside that retention window, and returns
   a gap together with a run-matching authoritative view;
-- detects source-feed sequence gaps without advancing the head;
+- rejects non-monotonic or conflicting events without advancing the head;
 - fails closed when the authoritative view is missing or belongs to another run;
 - projects only known public Interaction kinds/states and preserves `requestId`;
 - preserves completion, failure, cancellation, and timeout as different terminal
@@ -82,15 +82,24 @@ Verified offline:
 mvn -o -ntp -f super-harness-events/pom.xml clean verify
 Tests run: 7, Failures: 0, Errors: 0, Skipped: 0
 BUILD SUCCESS
+
+mvn -o -ntp -pl super-harness-server -am clean verify
+Tests run: 31, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+
+mvn -o -ntp clean verify
+Tests run: 42, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
 ```
 
-The tests cover ordered cursors, exact duplicates, conflicting duplicates,
-non-monotonic and cross-run inputs, source gaps, retention gaps, missing/mismatched
+The tests cover durable ordered cursors, exact duplicates, conflicting duplicates,
+non-monotonic and cross-run inputs, sparse public sequences, retention gaps, missing/mismatched
 authoritative views, Interaction validation, all four terminal outcomes, and late
 events.
 
-`NOT_RUN`: real SSE socket serialization, `Last-Event-ID` reconnect, creator versus
-join disconnect behavior, HTTP Interaction submission, frozen frontend integration,
-and differential DeerFlow/Haifa verification. The compatibility server must map the
-internal gap result to the exact upstream payload documented above; this module does
-not fabricate that network envelope.
+The compatibility server now covers real loopback SSE serialization, stable IDs,
+`Last-Event-ID` replay, duplicate replay, retention gap plus authoritative run view,
+durable `/state` recovery, distinct creator/join disconnect behavior, and terminal outcomes.
+The unsupported Interaction card projection fails closed. `NOT_RUN`: process-restart reconstruction,
+HTTP Interaction submission/card rendering, real `updates`/`custom` payload projection, frozen
+frontend execution, configured provider execution, and differential DeerFlow/Haifa verification.
