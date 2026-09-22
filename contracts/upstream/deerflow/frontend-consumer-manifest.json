@@ -3,6 +3,7 @@
   "scope": "incremental_seed",
   "status": "SOURCE_VERIFIED",
   "runtime_status": "NOT_RUN",
+  "core_protocol_oracle": "contracts/upstream/deerflow/core-protocol-oracle.json",
   "source": {
     "repository": "https://github.com/bytedance/deer-flow.git",
     "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
@@ -375,7 +376,7 @@
   ],
   "known_not_covered": [
     "The remaining frontend REST inventory (agents, projects, skills, MCP, schedules, channels, console, trash, batches and all mutations) is not yet enumerated here.",
-    "Exact request/response JSON schemas, status/error branches, pagination defaults, SSE payload schemas and reconnect IDs remain incremental W00/W02 work.",
+    "Core auth/run request-response, FastAPI/auth error and SSE envelope/replay-gap schemas are linked from core_protocol_oracle; remaining routes, pagination defaults and message payload schemas remain incremental W00/W02 work.",
     "No reference DeerFlow backend, Haifa backend, browser, SSE, WS, upload, Range, or differential execution has run in this seed.",
     "No frontend files, backend implementation, third-party assets, prompts or skills are imported by this change."
   ]

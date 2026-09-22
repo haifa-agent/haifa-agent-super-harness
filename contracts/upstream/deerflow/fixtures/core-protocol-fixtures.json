@@ -1,0 +1,94 @@
+{
+  "schema_version": "w00.core-protocol-fixtures/v1",
+  "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+  "source_status": "SOURCE_VERIFIED",
+  "contract_status": "STATIC_CONTRACT_VERIFIED",
+  "implementation_status": "NOT_ASSESSED",
+  "runtime_status": "NOT_RUN",
+  "fixtures": [
+    {
+      "id": "auth.setup-status.initial",
+      "contract_id": "rest.auth.setup-status.response",
+      "schema_path": "contracts/upstream/deerflow/schemas/auth-setup-status-response.schema.json",
+      "payload": {"needs_setup": true, "registration_enabled": true}
+    },
+    {
+      "id": "auth.me.disabled-local",
+      "contract_id": "rest.auth.me.response",
+      "schema_path": "contracts/upstream/deerflow/schemas/auth-me-response.schema.json",
+      "payload": {
+        "id": "default",
+        "email": "default@test.local",
+        "system_role": "admin",
+        "needs_setup": false,
+        "oauth_provider": null,
+        "permissions": [
+          "threads:read",
+          "threads:write",
+          "threads:delete",
+          "runs:create",
+          "runs:read",
+          "runs:cancel",
+          "projects:read",
+          "projects:write",
+          "projects:delete"
+        ]
+      }
+    },
+    {
+      "id": "run.create.frontend-core",
+      "contract_id": "rest.run.create.request",
+      "schema_path": "contracts/upstream/deerflow/schemas/run-create-request.schema.json",
+      "payload": {
+        "input": {"messages": [{"role": "user", "content": "hello"}]},
+        "stream_mode": ["messages-tuple", "updates", "custom"],
+        "stream_resumable": false,
+        "on_disconnect": "cancel",
+        "multitask_strategy": "reject",
+        "if_not_exists": "create"
+      }
+    },
+    {
+      "id": "error.authentication-required",
+      "contract_id": "error.fastapi.detail",
+      "schema_path": "contracts/upstream/deerflow/schemas/http-error-response.schema.json",
+      "payload": {"detail": "Authentication required"}
+    },
+    {
+      "id": "error.system-already-initialized",
+      "contract_id": "error.auth.structured-detail",
+      "schema_path": "contracts/upstream/deerflow/schemas/http-error-response.schema.json",
+      "payload": {
+        "detail": {
+          "code": "system_already_initialized",
+          "message": "System already initialized"
+        }
+      }
+    },
+    {
+      "id": "event.metadata",
+      "contract_id": "event.sse.frame",
+      "schema_path": "contracts/upstream/deerflow/schemas/sse-frame.schema.json",
+      "payload": {"event": "metadata", "data": {"run_id": "abc"}, "id": "123-0"}
+    },
+    {
+      "id": "event.end",
+      "contract_id": "event.sse.frame",
+      "schema_path": "contracts/upstream/deerflow/schemas/sse-frame.schema.json",
+      "payload": {"event": "end", "data": null}
+    },
+    {
+      "id": "event.stream-replay-gap",
+      "contract_id": "event.sse.replay-gap-data",
+      "schema_path": "contracts/upstream/deerflow/schemas/stream-replay-gap-data.schema.json",
+      "payload": {
+        "code": "stream_replay_gap",
+        "run_id": "run-123",
+        "requested_event_id": "1718000000000-1",
+        "earliest_available_event_id": "1718000000100-42",
+        "latest_available_event_id": "1718000000200-84",
+        "recovery": "reload_durable_state"
+      }
+    }
+  ]
+}

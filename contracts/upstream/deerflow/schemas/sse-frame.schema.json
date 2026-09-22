@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "w00://deerflow/sse-frame",
+  "type": "object",
+  "required": ["event", "data"],
+  "properties": {
+    "event": {
+      "enum": ["metadata", "values", "messages-tuple", "updates", "debug", "tasks", "checkpoints", "custom", "gap", "end"]
+    },
+    "data": {},
+    "id": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": false
+}

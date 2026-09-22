@@ -22,9 +22,27 @@ matrix has run.
   `NOT_RUN`. Import status never implies runtime parity.
 - `scripts/verify-deerflow-contracts.ps1` rejects a wrong checkout SHA, a changed
   manifest SHA, a missing critical surface, missing source evidence, invalid
-  status claims, and drifted resource hashes.
+  status claims, schema-invalid fixtures, and drifted resource hashes.
 - `tests/contracts/verify-deerflow-contracts.ps1` proves the positive case and
-  three negative gates without changing the read-only upstream checkout.
+  six negative gates without changing the read-only upstream checkout.
+
+The incremental core Oracle is split into deliberately small, reviewable files:
+
+- `contracts/upstream/deerflow/core-protocol-oracle.json` binds each REST,
+  error, and event contract to exact frozen source evidence and keeps four
+  independent dimensions: `SOURCE_VERIFIED`, `STATIC_CONTRACT_VERIFIED`,
+  implementation status, and runtime `PASS`/`FAIL`/`NOT_RUN`.
+- `contracts/upstream/deerflow/schemas/*.schema.json` freezes the first exact
+  JSON boundaries: setup status, `/auth/me`, run creation, HTTP errors, SSE
+  envelopes, and replay-gap control data.
+- `contracts/upstream/deerflow/fixtures/core-protocol-fixtures.json` contains
+  source-derived positive fixtures. The auth-disabled user and permissions are
+  taken from the upstream real-backend browser test; SSE metadata/end/gap
+  examples are tied to the upstream formatter and consumer tests.
+
+All fixtures in this change remain `implementation_status=NOT_ASSESSED` and
+`runtime_status=NOT_RUN`. A verifier success proves source and static schema
+integrity only; it cannot be reported as Haifa implementation or runtime parity.
 
 ## Run
 
@@ -50,6 +68,11 @@ isolated worktree layout.
   browser navigation.
 - LangGraph SDK: thread create/search/state, run create stream, join stream, and
   cancel; chat stream modes are `messages-tuple`, `updates`, and `custom`.
+- Core JSON Oracle: exact current setup-status and auth-disabled `/auth/me`
+  bodies, the forbidden-extra-field run request surface and its accepted stream
+  options/defaults, FastAPI string/validation and structured auth error envelopes.
+- SSE Oracle: wire field ordering (`event`, `data`, optional `id`), metadata/end
+  fixtures, id-less replay-gap shape, and durable-state recovery instruction.
 - Browser WS: URL construction, binary JPEG frames, JSON status/navigation frames,
   user input frame names, ownership/auth/origin/browser-capability conditions.
 - Next routing: conditional `/api/langgraph/*` and `/api/*` rewrites, internal
@@ -61,11 +84,12 @@ isolated worktree layout.
 ## Intentionally not covered yet
 
 This is not the full frontend consumer inventory. Agents, projects, skills, MCP,
-schedules, channels, console, trash, persistent batches, all mutations, exact
-request/response/error schemas, Range/download behavior, SSE payload schemas,
-event IDs/gap recovery, and dynamic registration branches still need incremental
-expansion. The root MIT license does not finish nested dependency, font, image,
-brand, or asset-specific licensing review.
+schedules, channels, console, trash, persistent batches, all mutations,
+non-core request/response/error schemas, Range/download behavior,
+message/tool/custom SSE payload schemas, and dynamic registration branches still
+need incremental expansion. The core replay-gap contract is now frozen, but no
+live reconnect has run in this slice. The root MIT license does not finish nested
+dependency, font, image, brand, or asset-specific licensing review.
 
 W18 has imported the frozen frontend with its own provenance/license record;
 W02 and later packages must still attach real Run/Tool/Artifact and network evidence.
