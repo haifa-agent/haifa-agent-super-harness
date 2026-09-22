@@ -1,0 +1,382 @@
+{
+  "schema_version": "w00.frontend-consumer-contract/v1",
+  "scope": "incremental_seed",
+  "status": "SOURCE_VERIFIED",
+  "runtime_status": "NOT_RUN",
+  "source": {
+    "repository": "https://github.com/bytedance/deer-flow.git",
+    "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+    "license_path": "LICENSE",
+    "license_conclusion": "Root MIT license is source-verified; nested dependency and asset licensing remains a W01 import review item."
+  },
+  "status_policy": {
+    "SOURCE_VERIFIED": "The named source and registration/configuration evidence exists at source_sha.",
+    "NOT_RUN": "No live browser, reference-backend, Haifa-backend, or differential assertion is claimed by this seed."
+  },
+  "routing": {
+    "browser_rest_base": {
+      "default": "same-origin empty base",
+      "override": "NEXT_PUBLIC_BACKEND_BASE_URL",
+      "source_path": "frontend/src/core/config/index.ts"
+    },
+    "langgraph_sdk_base": {
+      "default": "/api/langgraph",
+      "override": "NEXT_PUBLIC_LANGGRAPH_BASE_URL",
+      "source_path": "frontend/src/core/config/index.ts"
+    },
+    "next_gateway_target": {
+      "default": "http://127.0.0.1:8001",
+      "override": "DEER_FLOW_INTERNAL_GATEWAY_BASE_URL",
+      "source_path": "frontend/next.config.js"
+    },
+    "browser_auth": {
+      "credentials": "include",
+      "csrf_cookie": "csrf_token",
+      "csrf_header": "X-CSRF-Token",
+      "csrf_methods": ["POST", "PUT", "DELETE", "PATCH"],
+      "source_path": "frontend/src/core/api/fetcher.ts"
+    }
+  },
+  "required_surface_ids": [
+    "auth.setup-status.browser",
+    "auth.me.browser",
+    "auth.me.next-ssr",
+    "catalog.features.browser",
+    "catalog.models.browser",
+    "thread.create.sdk-rest",
+    "thread.search.sdk-rest",
+    "thread.state.sdk-rest",
+    "run.create.sdk-sse",
+    "run.join.sdk-sse",
+    "run.cancel.sdk-rest",
+    "file.upload.browser",
+    "file.artifact.browser",
+    "browser.navigate.browser",
+    "browser.live.browser-ws",
+    "memory.root.next-bff",
+    "memory.path.next-bff",
+    "routing.langgraph.next-rewrite",
+    "routing.gateway.next-rewrite"
+  ],
+  "surfaces": [
+    {
+      "id": "auth.setup-status.browser",
+      "category": "auth",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["GET"],
+      "public_path": "/api/v1/auth/setup-status",
+      "gateway_path": "/api/v1/auth/setup-status",
+      "registration_condition": "Registered whenever the auth router is included; browser and SSR use it when setup state is needed.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/auth/setup.ts", "must_contain": ["fetch(\"/api/v1/auth/setup-status\"", "cache: \"no-store\""]},
+        {"source_path": "backend/app/gateway/routers/auth.py", "must_contain": ["@router.get(\"/setup-status\")"]},
+        {"source_path": "backend/app/gateway/app.py", "must_contain": ["app.include_router(auth.router)"]}
+      ]
+    },
+    {
+      "id": "auth.me.browser",
+      "category": "auth",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["GET"],
+      "public_path": "/api/v1/auth/me",
+      "gateway_path": "/api/v1/auth/me",
+      "registration_condition": "Always registered. Auth-disabled mode still returns a server-selected default user and effective permissions; it does not trust a client owner.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/auth/AuthProvider.tsx", "must_contain": ["fetch(\"/api/v1/auth/me\"", "credentials: \"include\""]},
+        {"source_path": "frontend/tests/e2e-real-backend/auth-disabled-contract.spec.ts", "must_contain": ["gateway /auth/me returns the frontend synthetic user without a cookie", "AUTH_DISABLED_PERMISSIONS"]},
+        {"source_path": "backend/app/gateway/routers/auth.py", "must_contain": ["@router.get(\"/me\", response_model=UserResponse)"]}
+      ]
+    },
+    {
+      "id": "auth.me.next-ssr",
+      "category": "auth",
+      "consumer": "next_ssr",
+      "transport": "REST",
+      "methods": ["GET"],
+      "public_path": "server-side guard (no browser URL)",
+      "gateway_path": "/api/v1/auth/me",
+      "registration_condition": "When static mode is off, auth-disabled mode is off, and an access_token cookie exists, Next SSR calls the internal gateway with cache=no-store and a bounded timeout.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/auth/server.ts", "must_contain": ["getServerSideUser", "`${internalGatewayUrl}/api/v1/auth/me`", "cache: \"no-store\""]},
+        {"source_path": "frontend/src/core/auth/gateway-config.ts", "must_contain": ["DEER_FLOW_INTERNAL_GATEWAY_BASE_URL", "http://127.0.0.1:8001"]},
+        {"source_path": "frontend/src/core/auth/auth-disabled-user.ts", "must_contain": ["process.env.DEER_FLOW_AUTH_DISABLED === \"1\"", "PRODUCTION_ENV_VALUES"]}
+      ]
+    },
+    {
+      "id": "catalog.features.browser",
+      "category": "rest",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["GET"],
+      "public_path": "/api/features",
+      "gateway_path": "/api/features",
+      "registration_condition": "Always registered; individual capabilities report enabled/available independently.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/features/api.ts", "must_contain": ["/api/features"]},
+        {"source_path": "backend/app/gateway/routers/features.py", "must_contain": ["\"/features\"", "response_model=FeaturesResponse"]},
+        {"source_path": "backend/app/gateway/app.py", "must_contain": ["app.include_router(features.router)"]}
+      ]
+    },
+    {
+      "id": "catalog.models.browser",
+      "category": "rest",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["GET"],
+      "public_path": "/api/models",
+      "gateway_path": "/api/models",
+      "registration_condition": "Always registered; usable catalog contents depend on configured model providers.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/models/api.ts", "must_contain": ["/api/models"]},
+        {"source_path": "backend/app/gateway/routers/models.py", "must_contain": ["\"/models\"", "response_model=ModelsListResponse"]},
+        {"source_path": "backend/app/gateway/app.py", "must_contain": ["app.include_router(models.router)"]}
+      ]
+    },
+    {
+      "id": "thread.create.sdk-rest",
+      "category": "rest",
+      "consumer": "langgraph_sdk",
+      "transport": "REST",
+      "methods": ["POST"],
+      "public_path": "/api/langgraph/threads",
+      "gateway_path": "/api/threads",
+      "registration_condition": "SDK base defaults to /api/langgraph; Next rewrites that prefix to Gateway /api unless NEXT_PUBLIC_LANGGRAPH_BASE_URL is set.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/api/api-client.ts", "must_contain": ["new LangGraphClient", "getLangGraphBaseURL"]},
+        {"source_path": "backend/app/gateway/routers/threads.py", "must_contain": ["@router.post(\"\", response_model=ThreadResponse)"]},
+        {"source_path": "frontend/next.config.js", "must_contain": ["source: \"/api/langgraph/:path*\"", "destination: `${gatewayURL}/api/:path*`"]}
+      ]
+    },
+    {
+      "id": "thread.search.sdk-rest",
+      "category": "rest",
+      "consumer": "langgraph_sdk",
+      "transport": "REST",
+      "methods": ["POST"],
+      "public_path": "/api/langgraph/threads/search",
+      "gateway_path": "/api/threads/search",
+      "registration_condition": "Used by thread list/search hooks; authenticated route ownership filtering remains authoritative.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/threads/hooks.ts", "must_contain": ["apiClient.threads.search<AgentThreadState>"]},
+        {"source_path": "backend/app/gateway/routers/threads.py", "must_contain": ["@router.post(\"/search\", response_model=list[ThreadResponse])"]}
+      ]
+    },
+    {
+      "id": "thread.state.sdk-rest",
+      "category": "rest",
+      "consumer": "langgraph_sdk",
+      "transport": "REST",
+      "methods": ["GET"],
+      "public_path": "/api/langgraph/threads/{thread_id}/state",
+      "gateway_path": "/api/threads/{thread_id}/state",
+      "registration_condition": "Used for durable state hydration and stream-gap recovery; thread read permission and ownership apply.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/api/api-client.ts", "must_contain": ["client.threads.getState(threadId"]},
+        {"source_path": "backend/app/gateway/routers/threads.py", "must_contain": ["@router.get(\"/{thread_id}/state\", response_model=ThreadStateResponse)"]}
+      ]
+    },
+    {
+      "id": "run.create.sdk-sse",
+      "category": "sse",
+      "consumer": "langgraph_sdk",
+      "transport": "SSE",
+      "methods": ["POST"],
+      "public_path": "/api/langgraph/threads/{thread_id}/runs/stream",
+      "gateway_path": "/api/threads/{thread_id}/runs/stream",
+      "registration_condition": "Run create permission and existing thread ownership required. Response is text/event-stream with no-cache, no buffering, and canonical Content-Location.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "stream_modes": ["messages-tuple", "updates", "custom"],
+      "evidence": [
+        {"source_path": "frontend/src/core/api/api-client.ts", "must_contain": ["client.runs.stream = async function*", "forceChatRunStreamOptions"]},
+        {"source_path": "frontend/src/core/api/stream-mode.ts", "must_contain": ["\"messages-tuple\"", "\"updates\"", "\"custom\"", "streamModes.delete(\"values\")"]},
+        {"source_path": "backend/app/gateway/routers/thread_runs.py", "must_contain": ["@router.post(\"/{thread_id}/runs/stream\")", "media_type=\"text/event-stream\"", "\"Content-Location\""]}
+      ]
+    },
+    {
+      "id": "run.join.sdk-sse",
+      "category": "sse",
+      "consumer": "langgraph_sdk",
+      "transport": "SSE",
+      "methods": ["GET"],
+      "public_path": "/api/langgraph/threads/{thread_id}/runs/{run_id}/stream",
+      "gateway_path": "/api/threads/{thread_id}/runs/{run_id}/stream",
+      "registration_condition": "Read/owner permission required. Action-less join is observation-only and uses apply_on_disconnect=false; terminal runs are short-circuited client-side.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/api/api-client.ts", "must_contain": ["client.runs.joinStream = async function*", "TERMINAL_RUN_STATUSES"]},
+        {"source_path": "backend/app/gateway/routers/thread_runs.py", "must_contain": ["\"/{thread_id}/runs/{run_id}/stream\"", "apply_on_disconnect=False"]}
+      ]
+    },
+    {
+      "id": "run.cancel.sdk-rest",
+      "category": "rest",
+      "consumer": "langgraph_sdk",
+      "transport": "REST",
+      "methods": ["POST"],
+      "public_path": "/api/langgraph/threads/{thread_id}/runs/{run_id}/cancel",
+      "gateway_path": "/api/threads/{thread_id}/runs/{run_id}/cancel",
+      "registration_condition": "Run cancel permission and ownership required; wait/action query semantics are not normalized away.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/api/api-client.ts", "must_contain": ["client.runs.cancel =", "originalCancel(threadId, runId, wait, action, options)"]},
+        {"source_path": "backend/app/gateway/routers/thread_runs.py", "must_contain": ["@router.post(\"/{thread_id}/runs/{run_id}/cancel\")", "action: Literal[\"interrupt\", \"rollback\"]"]}
+      ]
+    },
+    {
+      "id": "file.upload.browser",
+      "category": "file",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["POST", "GET", "DELETE"],
+      "public_path": "/api/threads/{thread_id}/uploads[/{limits|list|filename}]",
+      "gateway_path": "/api/threads/{thread_id}/uploads[/{limits|list|filename}]",
+      "registration_condition": "Existing owned thread; multipart field name is files. Gateway limits and conversion outcomes remain observable.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/uploads/api.ts", "must_contain": ["formData.append(\"files\", file)", "/uploads/limits", "/uploads/list"]},
+        {"source_path": "backend/app/gateway/routers/uploads.py", "must_contain": ["@router.post(\"\", response_model=UploadResponse)", "@router.get(\"/limits\"", "@router.delete(\"/{filename}\")"]}
+      ]
+    },
+    {
+      "id": "file.artifact.browser",
+      "category": "file",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["GET", "PUT"],
+      "public_path": "/api/threads/{thread_id}/artifacts/{path}?download={bool}",
+      "gateway_path": "/api/threads/{thread_id}/artifacts/{path}",
+      "registration_condition": "Thread read/write ownership applies; path segments are encoded by the frontend. Update uses expected_sha256 CAS.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/artifacts/utils.ts", "must_contain": ["/api/threads/${encodedThreadId}/artifacts", "download=true"]},
+        {"source_path": "frontend/src/core/artifacts/api.ts", "must_contain": ["expected_sha256: expectedSha256", "method: \"PUT\""]},
+        {"source_path": "backend/app/gateway/routers/artifacts.py", "must_contain": ["/threads/{thread_id}/artifacts/{path:path}", "response_model=ArtifactUpdateResponse"]}
+      ]
+    },
+    {
+      "id": "browser.navigate.browser",
+      "category": "browser",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["POST"],
+      "public_path": "/api/threads/{thread_id}/browser/navigate",
+      "gateway_path": "/api/threads/{thread_id}/browser/navigate",
+      "registration_condition": "Existing owned thread and browser automation capability required; navigation is server-side SSRF screened.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/components/workspace/browser-view/api.ts", "must_contain": ["/browser/navigate", "method: \"POST\""]},
+        {"source_path": "backend/app/gateway/routers/browser.py", "must_contain": ["/threads/{thread_id}/browser/navigate", "if not _browser_tools_enabled()"]}
+      ]
+    },
+    {
+      "id": "browser.live.browser-ws",
+      "category": "ws",
+      "consumer": "browser_websocket",
+      "transport": "WS",
+      "methods": ["UPGRADE"],
+      "public_path": "/api/threads/{thread_id}/browser/stream?frame_format=binary&seed={url}",
+      "gateway_path": "/api/threads/{thread_id}/browser/stream",
+      "registration_condition": "Authenticated owned thread, allowed origin, and browser tools enabled. Browser base URL is converted from http(s) to ws(s).",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "server_frames": ["binary JPEG", "frame(base64 legacy)", "url", "tabs", "nav_rejected"],
+      "client_frames": ["click", "move", "down", "up", "wheel", "key", "text", "navigate", "back", "forward", "activate_tab"],
+      "evidence": [
+        {"source_path": "frontend/src/components/workspace/browser-view/api.ts", "must_contain": ["frame_format", "browser/stream", "origin.replace(/^http/i, \"ws\")"]},
+        {"source_path": "frontend/src/components/workspace/browser-view/use-browser-stream.ts", "must_contain": ["new WebSocket", "socket.binaryType = \"blob\"", "nav_rejected"]},
+        {"source_path": "backend/app/gateway/routers/browser.py", "must_contain": ["@router.websocket(\"/threads/{thread_id}/browser/stream\")", "Server → client: binary JPEG frames"]}
+      ]
+    },
+    {
+      "id": "memory.root.next-bff",
+      "category": "next-bff",
+      "consumer": "next_route_handler",
+      "transport": "BFF",
+      "methods": ["GET", "DELETE"],
+      "public_path": "/api/memory",
+      "gateway_path": "/api/memory",
+      "registration_condition": "Next App Router handler always exists; target is NEXT_PUBLIC_BACKEND_BASE_URL or http://127.0.0.1:8001. This is server-side proxying, not a browser rewrite.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/app/api/memory/route.ts", "must_contain": ["export async function GET", "export async function DELETE", "proxyRequest(request, \"/api/memory\")"]},
+        {"source_path": "backend/app/gateway/app.py", "must_contain": ["app.include_router(memory.router)"]}
+      ]
+    },
+    {
+      "id": "memory.path.next-bff",
+      "category": "next-bff",
+      "consumer": "next_route_handler",
+      "transport": "BFF",
+      "methods": ["GET", "POST", "DELETE", "PATCH"],
+      "public_path": "/api/memory/{path...}",
+      "gateway_path": "/api/memory/{path...}",
+      "registration_condition": "Catch-all Next Route Handler forwards method, headers, and body to the configured backend base.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/app/api/memory/[...path]/route.ts", "must_contain": ["export async function GET", "export async function POST", "export async function DELETE", "export async function PATCH"]}
+      ]
+    },
+    {
+      "id": "routing.langgraph.next-rewrite",
+      "category": "proxy",
+      "consumer": "next_rewrite",
+      "transport": "PROXY",
+      "methods": ["ANY"],
+      "public_path": "/api/langgraph/{path...}",
+      "gateway_path": "/api/{path...}",
+      "registration_condition": "Installed only when NEXT_PUBLIC_LANGGRAPH_BASE_URL is unset; target uses DEER_FLOW_INTERNAL_GATEWAY_BASE_URL or loopback default.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/next.config.js", "must_contain": ["if (!process.env.NEXT_PUBLIC_LANGGRAPH_BASE_URL)", "source: \"/api/langgraph/:path*\"", "destination: `${gatewayURL}/api/:path*`"]}
+      ]
+    },
+    {
+      "id": "routing.gateway.next-rewrite",
+      "category": "proxy",
+      "consumer": "next_rewrite",
+      "transport": "PROXY",
+      "methods": ["ANY"],
+      "public_path": "/api/{path...}",
+      "gateway_path": "/api/{path...}",
+      "registration_condition": "Catch-all installed only when NEXT_PUBLIC_BACKEND_BASE_URL is unset and ordered after the LangGraph-specific rewrite.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/next.config.js", "must_contain": ["if (!process.env.NEXT_PUBLIC_BACKEND_BASE_URL)", "source: \"/api/:path*\"", "destination: `${gatewayURL}/api/:path*`"]}
+      ]
+    }
+  ],
+  "known_not_covered": [
+    "The remaining frontend REST inventory (agents, projects, skills, MCP, schedules, channels, console, trash, batches and all mutations) is not yet enumerated here.",
+    "Exact request/response JSON schemas, status/error branches, pagination defaults, SSE payload schemas and reconnect IDs remain incremental W00/W02 work.",
+    "No reference DeerFlow backend, Haifa backend, browser, SSE, WS, upload, Range, or differential execution has run in this seed.",
+    "No frontend files, backend implementation, third-party assets, prompts or skills are imported by this change."
+  ]
+}

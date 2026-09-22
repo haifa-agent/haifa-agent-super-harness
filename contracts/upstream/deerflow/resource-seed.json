@@ -1,0 +1,95 @@
+{
+  "schema_version": "w00.upstream-resource-seed/v1",
+  "scope": "incremental_seed",
+  "status": "SOURCE_VERIFIED",
+  "runtime_status": "NOT_RUN",
+  "source": {
+    "repository": "https://github.com/bytedance/deer-flow.git",
+    "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294"
+  },
+  "repository_import": {
+    "owner_work_package": "W18",
+    "manifest_path": "third-party/deerflow/manifest.json",
+    "frontend_local_path": "frontend",
+    "source_tree": "993ef89baf273257b7940ceae002200c416f380d",
+    "status": "IMPORTED",
+    "runtime_status": "NOT_RUN"
+  },
+  "license_review": {
+    "root_license": "MIT",
+    "root_license_path": "LICENSE",
+    "conclusion": "Root license is verified only. W18 has imported the frozen frontend; package, font, image, brand and nested third-party obligations still require review before release or distribution.",
+    "status": "SOURCE_VERIFIED"
+  },
+  "resources": [
+    {
+      "id": "deerflow.root-license",
+      "kind": "license",
+      "source_path": "LICENSE",
+      "sha256": "b23dff4d4bac8d17b6efaaa7e88c2b730149c4dda45699ce676b719cfdffe7e1",
+      "intended_local_path": "third-party/deerflow/LICENSES/deer-flow-MIT.txt",
+      "import_status": "IMPORTED",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.frontend-package",
+      "kind": "frontend-build",
+      "source_path": "frontend/package.json",
+      "sha256": "ee5fc3227cc1430837c397489d8b22b1aa5ba62e14f977d175e7ade321c8ca9d",
+      "intended_local_path": "frontend/package.json",
+      "import_status": "IMPORTED",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.frontend-lockfile",
+      "kind": "frontend-build",
+      "source_path": "frontend/pnpm-lock.yaml",
+      "sha256": "97624041dd18396b74555275f1859b7fb2620e940ab0e8f9c87cb63ca24e326e",
+      "intended_local_path": "frontend/pnpm-lock.yaml",
+      "import_status": "IMPORTED",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.next-routing",
+      "kind": "frontend-runtime",
+      "source_path": "frontend/next.config.js",
+      "sha256": "7dc2a4b7a2e0063ee8f003e26d3956c026d8ee63f8e0ab2c526bc302612c981d",
+      "intended_local_path": "frontend/next.config.js",
+      "import_status": "IMPORTED",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.auth-disabled-fixture",
+      "kind": "fixture",
+      "source_path": "frontend/src/core/auth/auth-disabled-user.ts",
+      "sha256": "94120dd524afe9f6b8de629cbb1b6152f2286bc637d3d8c530baadf713d6b623",
+      "intended_local_path": "parity/fixtures/deerflow/auth-disabled-user.ts",
+      "import_status": "NOT_RUN",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.auth-disabled-browser-oracle",
+      "kind": "upstream-test",
+      "source_path": "frontend/tests/e2e-real-backend/auth-disabled-contract.spec.ts",
+      "sha256": "a0c4ea5b90e5ef17034aa9087673a22b7b958da32f85970a1482c46859f01e8d",
+      "intended_local_path": "parity/upstream-tests/auth-disabled-contract.spec.ts",
+      "import_status": "NOT_RUN",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.auth-permissions-backend-oracle",
+      "kind": "upstream-test",
+      "source_path": "backend/tests/test_auth_me_permissions.py",
+      "sha256": "2325817646931eff7b4a5efdd4c900d9316650af2ac93f937d94af2e27193d92",
+      "intended_local_path": "parity/upstream-tests/test_auth_me_permissions.py",
+      "import_status": "NOT_RUN",
+      "status": "SOURCE_VERIFIED"
+    }
+  ],
+  "known_not_covered": [
+    "W18 imported the complete frozen frontend and root license under its own provenance manifest; this W00 change does not duplicate those files.",
+    "Dedicated parity fixture/oracle paths remain NOT_RUN where no separate copy exists, even when the original frontend source is present inside the W18 import.",
+    "Prompt, Skill package, Tool schema, Memory prompt and broader fixture inventories remain to be expanded.",
+    "Root MIT does not settle third-party package, font, image, brand or asset-specific licensing."
+  ]
+}
