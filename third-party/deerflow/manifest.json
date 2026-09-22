@@ -17,12 +17,25 @@
   },
   "import": {
     "localPath": "frontend",
-    "modified": false,
-    "patchStatus": "zero-patch",
+    "modified": true,
+    "patchStatus": "documented-patches",
     "patchDirectory": "third-party/deerflow/patches",
-    "fileCount": 980,
-    "totalBytes": 21171292,
-    "contentInventorySha256": "eb42ed476a42998f3dfe632dc3213d5d61217b0e27f8d1a7813c63e62cf8e092"
+    "patches": [
+      {
+        "id": "0001-memory-bff-use-server-gateway",
+        "file": "third-party/deerflow/patches/0001-memory-bff-use-server-gateway.patch",
+        "sha256": "8baa623ceab286d7f21a0c60cb7bcb5562e22704f6e8a59e1b59aae29be10ceb",
+        "reason": "Prevent the server-side memory BFF from bypassing the Haifa-only same-origin gateway target through the upstream 127.0.0.1:8001 fallback.",
+        "affectedFiles": [
+          "frontend/src/app/api/memory/route.ts",
+          "frontend/src/app/api/memory/[...path]/route.ts",
+          "frontend/tests/unit/app/memory-route.test.ts"
+        ]
+      }
+    ],
+    "fileCount": 981,
+    "totalBytes": 21172960,
+    "contentInventorySha256": "1fc6b2e42ac36b4669f6b9a374241b09428e2c0406796392fc3adb4519a5f8a3"
   },
   "build": {
     "node": ">=22",
@@ -39,6 +52,10 @@
       "NEXT_PUBLIC_LANGGRAPH_BASE_URL"
     ],
     "serverBackendVariable": "DEER_FLOW_INTERNAL_GATEWAY_BASE_URL",
+    "profileVerifier": "scripts/verify-haifa-frontend-profile.ps1",
+    "launcher": "scripts/start-haifa-frontend.ps1",
+    "defaultHaifaGateway": "http://127.0.0.1:18018",
+    "defaultFrontendOrigin": "http://127.0.0.1:33018",
     "deerFlowBackendFallbackAllowed": false,
     "secretsInPublicVariablesAllowed": false
   }

@@ -280,7 +280,7 @@
         <div class="fact"><label>原修改保护</label><code>${baseline.preservedStash.split(":")[0]}</code> <span class="good">● preserved</span></div>
         <div class="fact"><label>证据门禁</label><span class="${baseline.evidenceGatePassed ? "good" : "warn"}">${baseline.evidenceGatePassed} 个工作包通过</span></div>`;
       document.querySelector("#worktreeFacts").innerHTML = dashboardData.worktrees.map(item => `<div class="fact"><label>${item.workPackage}</label><code>${item.branch}</code></div>`).join("");
-      document.querySelector("#timeline").innerHTML = dashboardData.milestones.map(item => {
+      document.querySelector("#timeline").innerHTML = dashboardData.milestones.slice().sort((left, right) => Date.parse(right.at) - Date.parse(left.at)).map(item => {
         const at = new Date(item.at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
         return `<div class="event"><strong>${at} · ${item.title}</strong><span>${item.detail}</span></div>`;
       }).join("");
@@ -302,12 +302,14 @@
       packageRoot.innerHTML = packages.map(pkg => {
         const status = STATUS[pkg.state];
         const prerequisites = pkg.prerequisites?.length ? pkg.prerequisites.join("、") : "无";
+        const startedAt = pkg.startedAt ? new Date(pkg.startedAt).toLocaleString("zh-CN", { hour12: false }) : "未开始";
+        const completedAt = pkg.completedAt ? new Date(pkg.completedAt).toLocaleString("zh-CN", { hour12: false }) : "未完成";
         const tags = pkg.tags || [];
         const tagChips = tags.map(tag => `<span class="tag topic">${tag}</span>`).join("");
-        return `<article class="package" data-id="${pkg.id}" data-wave="${pkg.wave}" data-state="${pkg.state}" data-tags="${tags.join("|")}" data-search="${[pkg.id,pkg.title,pkg.lane,prerequisites,...tags,pkg.summary||"",pkg.exit,pkg.branch||"",pkg.owner||""].join(" ").toLowerCase()}">
+        return `<article class="package" data-id="${pkg.id}" data-wave="${pkg.wave}" data-state="${pkg.state}" data-tags="${tags.join("|")}" data-search="${[pkg.id,pkg.title,pkg.lane,prerequisites,...tags,pkg.summary||"",pkg.exit,pkg.branch||"",pkg.owner||"",pkg.startedAt||"",pkg.completedAt||""].join(" ").toLowerCase()}">
           <div class="package-head"><div><div class="package-id">${pkg.id}</div><h3>${pkg.title}</h3><p>${pkg.exit}</p></div><span class="status-select ${status.className}">${status.label}</span></div>
           <div class="tags"><span class="tag wave-${pkg.wave.toLowerCase()}">Wave ${pkg.wave}</span><span class="tag">${pkg.lane}</span><span class="tag ${status.className}">${status.label}</span>${tagChips}</div>
-          <div class="details"><div class="detail"><b>进展</b><span>${pkg.summary || "尚未更新"}</span></div><div class="detail"><b>直接前置</b><span>${prerequisites}</span></div>${pkg.branch ? `<div class="detail"><b>分支</b><span class="branch">${pkg.branch}</span></div>` : ""}${pkg.owner ? `<div class="detail"><b>智能体</b><span class="branch">${pkg.owner}</span></div>` : ""}</div>
+          <div class="details"><div class="detail"><b>进展</b><span>${pkg.summary || "尚未更新"}</span></div><div class="detail"><b>直接前置</b><span>${prerequisites}</span></div><div class="detail"><b>开始时间</b><span>${startedAt}</span></div><div class="detail"><b>完成时间</b><span>${completedAt}</span></div>${pkg.branch ? `<div class="detail"><b>分支</b><span class="branch">${pkg.branch}</span></div>` : ""}${pkg.owner ? `<div class="detail"><b>智能体</b><span class="branch">${pkg.owner}</span></div>` : ""}</div>
         </article>`;
       }).join("");
       applyFilters();

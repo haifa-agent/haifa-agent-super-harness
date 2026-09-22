@@ -21,3 +21,20 @@ mvn -o -ntp verify
 The first command proves a fully offline rebuild from the configured local Maven repository. The second starts with an empty temporary consumer cache and resolves through the configured Maven repository exposed as a read-only file mirror; this proves the build does not use `D:\workspace\haifa-agent` or any Reactor/source-path dependency.
 
 The smoke test emits a `W01_SDK_EVIDENCE` line containing the real Run ID, Tool alias, Artifact ID, Artifact SHA-256, and byte count. Test reports remain under each module's `target/surefire-reports` directory.
+
+## W18 frozen frontend local profile
+
+Verify the frozen frontend, the recorded minimal BFF patch, the Haifa-only
+loopback profile, and the pinned Node/pnpm launcher without starting services:
+
+```powershell
+pwsh -NoProfile -File scripts/start-haifa-frontend.ps1 `
+  -DryRun `
+  -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow
+pwsh -NoProfile -File tests/frontend/verify-haifa-frontend-profile.ps1
+```
+
+See `docs/development/w18-haifa-local-profile.md` for the guarded topology and
+the non-dry launch workflow. The current W02 backend does not yet provide
+Thread/Run/SSE, so these configuration checks are not chat or differential
+parity evidence.

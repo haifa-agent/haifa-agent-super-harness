@@ -3,10 +3,11 @@
 ## Delivered slice
 
 This slice imports the complete tracked DeerFlow frontend at
-`e545c28ac301e6f9feae247c513d8ea8f83df294` into `frontend/`. The working copy
-is deliberately zero patch: it retains the upstream package manager declaration,
-lockfile, workspace overrides, Next.js SSR/BFF route handlers, public assets,
-tests, and `AGENTS.md` instructions.
+`e545c28ac301e6f9feae247c513d8ea8f83df294` into `frontend/`. The original
+import was zero patch. W18's second slice adds one documented, reproducible
+server-only routing patch for the two memory BFF handlers; it retains the
+upstream package manager declaration, lockfile, workspace overrides, public
+assets, and UI.
 
 The source, license, tree, content digest, and patch state are recorded under
 `third-party/deerflow/`. This is L0 provenance/build evidence. It does not claim
@@ -18,20 +19,26 @@ passed.
 Use a dedicated frontend port, Haifa gateway port, browser profile, and Haifa
 data directory for this work package. Do not put credentials in a tracked file.
 
-Preferred same-origin development configuration:
+Preferred same-origin development configuration is now enforced by
+`scripts/start-haifa-frontend.ps1`; see
+`docs/development/w18-haifa-local-profile.md`. Its default guarded ports are
+Haifa gateway `18018` and frontend `33018`.
+
+The underlying environment is:
 
 ```powershell
 $env:DEER_FLOW_INTERNAL_GATEWAY_BASE_URL = "http://127.0.0.1:<haifa-port>"
 $env:DEER_FLOW_AUTH_DISABLED = "1"
 $env:DEER_FLOW_ENV = "development"
-pnpm --dir frontend dev -- --port <frontend-port>
+pnpm --dir frontend dev -- --hostname 127.0.0.1 --port <frontend-port>
 ```
 
 Leave `NEXT_PUBLIC_BACKEND_BASE_URL` and
 `NEXT_PUBLIC_LANGGRAPH_BASE_URL` unset. Next.js then sends browser calls to its
 own origin and forwards REST/BFF traffic plus `/api/langgraph/*` to the Haifa
 gateway selected by the server-only variable. This must target Haifa only; there
-is no fallback proxy to DeerFlow.
+is no fallback proxy to DeerFlow. The recorded memory BFF patch closes the only
+direct `127.0.0.1:8001` Route Handler fallback found in the frozen tree.
 
 For a deliberately split-origin test, set both public variables to the Haifa
 gateway and configure Haifa CORS explicitly:
@@ -81,7 +88,7 @@ Run/Tool/Artifact plus browser/SSR/BFF network evidence retained.
 
 ## Known limits after this slice
 
-- No DeerFlow or Haifa backend was started by the import itself.
+- No real Thread/Run/SSE backend was started by the import/config slices.
 - No REST/SSE/WS/file/auth route is marked compatible merely because the UI
   builds or unit tests pass.
 - Local auth-disabled mode does not satisfy full login/PAT/RBAC acceptance.

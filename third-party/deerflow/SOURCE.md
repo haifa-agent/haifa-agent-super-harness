@@ -1,7 +1,8 @@
 # DeerFlow frontend source record
 
-The `frontend/` directory is an unmodified import of the complete tracked
-`frontend/` tree from the pinned DeerFlow revision below.
+The `frontend/` directory started from the complete tracked `frontend/` tree
+at the pinned DeerFlow revision below. W18 applies one documented, reproducible
+configuration-boundary patch after import.
 
 | Field | Value |
 | --- | --- |
@@ -11,7 +12,7 @@ The `frontend/` directory is an unmodified import of the complete tracked
 | Git tree | `993ef89baf273257b7940ceae002200c416f380d` |
 | Local path | `frontend/` |
 | License | MIT; see `LICENSES/deer-flow-MIT.txt` |
-| Patch state | Zero patch |
+| Patch state | One documented patch; see `patches/0001-memory-bff-use-server-gateway.patch` |
 
 ## Import boundary
 
@@ -25,16 +26,22 @@ Generated, ignored, local, and sensitive paths were not imported. In
 particular, the import excludes `node_modules/`, `.next/`, `.env`,
 `next-env.d.ts`, caches, test output, and local editor state.
 
-`manifest.json` binds the import to the upstream commit/tree and to a
-deterministic SHA-256 inventory over every local frontend file. Run
+`manifest.json` binds the import to the upstream commit/tree, the patch digest,
+and a deterministic SHA-256 inventory over every local frontend file. Run
 `scripts/verify-deerflow-frontend.ps1` to verify the offline import. Pass the
 read-only upstream checkout with `-SourceRepository` to additionally verify
 its HEAD, clean tracked frontend, Git tree, and file-by-file content.
 
 ## Configuration boundary
 
-No frontend source patch is required for the first local integration slice.
-The pinned frontend already supports both intended configurations:
+The pinned frontend supports the intended same-origin configuration except for
+its two server-side `/api/memory` Route Handlers: they used the public browser
+variable and otherwise fell back directly to `127.0.0.1:8001`. That could
+bypass the selected Haifa target. The documented patch makes both handlers use
+the existing server-only `getGatewayConfig().internalGatewayUrl` and adds a
+target regression test. No UI, client state, or business payload is changed.
+
+The supported configurations are:
 
 - same origin: leave `NEXT_PUBLIC_BACKEND_BASE_URL` and
   `NEXT_PUBLIC_LANGGRAPH_BASE_URL` unset, and set the server-only
@@ -46,6 +53,11 @@ The same-origin configuration is preferred because it covers browser calls,
 Next.js SSR, BFF route handlers, and `/api/langgraph/*` rewrites without
 putting secrets in public environment variables. Neither configuration has a
 DeerFlow backend fallback. A missing Haifa route must fail visibly.
+
+Use `scripts/start-haifa-frontend.ps1` for the guarded Haifa-only local profile.
+It rejects split-origin/public backend overrides, reference topology ports,
+non-loopback targets, production markers, and secret-like `NEXT_PUBLIC_*`
+variables before starting the frontend.
 
 Local auth-disabled mode is opt-in through `DEER_FLOW_AUTH_DISABLED=1` and
 must not be used when `DEER_FLOW_ENV` or `ENVIRONMENT` is `prod` or

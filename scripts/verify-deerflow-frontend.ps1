@@ -179,11 +179,33 @@ if ($inventory.TotalBytes -ne [int64]$manifest.import.totalBytes) {
 if ($inventory.ContentInventorySha256 -ne [string]$manifest.import.contentInventorySha256) {
     throw "Frontend inventory digest mismatch: expected $($manifest.import.contentInventorySha256), got $($inventory.ContentInventorySha256)"
 }
-if ([bool]$manifest.import.modified -or [string]$manifest.import.patchStatus -ne "zero-patch") {
-    throw "This verification baseline requires a zero-patch import"
-}
 if ([bool]$manifest.configuration.deerFlowBackendFallbackAllowed) {
     throw "The Haifa frontend configuration must not allow DeerFlow backend fallback"
+}
+
+$recordedPatches = @($manifest.import.patches)
+if ([bool]$manifest.import.modified) {
+    if ([string]$manifest.import.patchStatus -ne "documented-patches" -or
+        $recordedPatches.Count -eq 0) {
+        throw "A modified frontend import requires documented-patches and at least one patch record"
+    }
+}
+elseif ([string]$manifest.import.patchStatus -ne "zero-patch" -or $recordedPatches.Count -ne 0) {
+    throw "An unmodified frontend import must retain zero-patch status and no patch records"
+}
+
+foreach ($patch in $recordedPatches) {
+    $patchPath = Join-Path $root ([string]$patch.file)
+    if (-not (Test-Path -LiteralPath $patchPath -PathType Leaf)) {
+        throw "Recorded frontend patch is missing: $($patch.file)"
+    }
+    $patchHash = (Get-FileHash -LiteralPath $patchPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($patchHash -ne [string]$patch.sha256) {
+        throw "Frontend patch digest mismatch for $($patch.file): expected $($patch.sha256), got $patchHash"
+    }
+    if (@($patch.affectedFiles).Count -eq 0) {
+        throw "Frontend patch '$($patch.id)' has no affectedFiles provenance"
+    }
 }
 
 if ($SourceRepository) {
@@ -208,16 +230,63 @@ if ($SourceRepository) {
         throw "Source repository has tracked frontend changes relative to the pinned commit"
     }
 
-    $sourceFrontendRoot = Join-Path $sourceRoot $manifest.upstream.sourcePath
-    $sourceFiles = @(Invoke-Git -WorkingDirectory $sourceRoot -Arguments @(
-        "ls-tree",
-        "-r",
-        "--name-only",
-        "$($manifest.upstream.commit):$($manifest.upstream.sourcePath)"
-    ))
-    $sourceInventory = Get-FrontendInventory -FrontendRoot $sourceFrontendRoot -RelativePaths $sourceFiles
-    if ($sourceInventory.ContentInventorySha256 -ne $inventory.ContentInventorySha256) {
-        throw "Imported frontend content differs from the pinned source checkout"
+    if ($recordedPatches.Count -eq 0) {
+        $sourceFrontendRoot = Join-Path $sourceRoot $manifest.upstream.sourcePath
+        $sourceFiles = @(Invoke-Git -WorkingDirectory $sourceRoot -Arguments @(
+            "ls-tree",
+            "-r",
+            "--name-only",
+            "$($manifest.upstream.commit):$($manifest.upstream.sourcePath)"
+        ))
+        $sourceInventory = Get-FrontendInventory -FrontendRoot $sourceFrontendRoot -RelativePaths $sourceFiles
+        if ($sourceInventory.ContentInventorySha256 -ne $inventory.ContentInventorySha256) {
+            throw "Imported frontend content differs from the pinned source checkout"
+        }
+    }
+    else {
+        $temporaryParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')
+        $temporaryRoot = Join-Path $temporaryParent ("haifa-w18-verify-" + [Guid]::NewGuid().ToString('N'))
+        $archivePath = Join-Path $temporaryRoot 'frontend.tar'
+        $materializedRoot = Join-Path $temporaryRoot 'materialized'
+        $null = New-Item -ItemType Directory -Force -Path $materializedRoot
+        try {
+            $null = Invoke-Git -WorkingDirectory $sourceRoot -Arguments @(
+                "archive",
+                "--format=tar",
+                "--output=$archivePath",
+                [string]$manifest.upstream.commit,
+                [string]$manifest.upstream.sourcePath
+            )
+            & tar -xf $archivePath -C $materializedRoot
+            if ($LASTEXITCODE -ne 0) {
+                throw "Unable to extract the pinned frontend archive"
+            }
+            $null = Invoke-Git -WorkingDirectory $materializedRoot -Arguments @("init", "--quiet")
+            foreach ($patch in $recordedPatches) {
+                $patchPath = Join-Path $root ([string]$patch.file)
+                $null = Invoke-Git -WorkingDirectory $materializedRoot -Arguments @(
+                    "apply",
+                    "--unidiff-zero",
+                    "--whitespace=error-all",
+                    $patchPath
+                )
+            }
+            $patchedFrontendRoot = Join-Path $materializedRoot $manifest.upstream.sourcePath
+            $patchedInventory = Get-FrontendInventory -FrontendRoot $patchedFrontendRoot
+            if ($patchedInventory.FileCount -ne $inventory.FileCount -or
+                $patchedInventory.TotalBytes -ne $inventory.TotalBytes -or
+                $patchedInventory.ContentInventorySha256 -ne $inventory.ContentInventorySha256) {
+                throw "Imported frontend content differs from the pinned source plus recorded patches"
+            }
+        }
+        finally {
+            $resolvedTemporaryRoot = [IO.Path]::GetFullPath($temporaryRoot)
+            if ($resolvedTemporaryRoot.StartsWith($temporaryParent + [IO.Path]::DirectorySeparatorChar,
+                    [StringComparison]::OrdinalIgnoreCase) -and
+                (Test-Path -LiteralPath $resolvedTemporaryRoot)) {
+                Remove-Item -LiteralPath $resolvedTemporaryRoot -Recurse -Force
+            }
+        }
     }
 }
 
