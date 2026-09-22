@@ -1,7 +1,7 @@
 - 以 `private-docs/roadmap/35-super-harness-deerflow-parity.md` 及其产品、PRD 配套目录为范围与验收依据。
 - DeerFlow 前后端固定为 `bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294`，禁止随 `main` 漂移。
 - 仅通过本地 Maven 仓库消费 Haifa Agent 公开 JAR/BOM `0.1.1-SNAPSHOT`，禁止源码路径依赖、复制 SDK 或依赖产品 JAR。
-- 如验收过程中确认必须完善上游 Haifa Agent SDK，只能在 `D:\workspace\haifa-agent` 仓库以 `feat-0.1.1-baseline` 分支为起点创建独立 worktree 和新的 `feat/*` 开发分支；禁止直接修改或提交到基线分支，完成后须将公开 JAR/BOM 发布到本地 Maven 仓库并由本项目继续按 `0.1.1-SNAPSHOT` 坐标消费，同时记录 SDK commit、发布与回归证据。
+- 如验收过程中确认必须完善上游 Haifa Agent SDK，只能在 `D:\workspace\haifa-agent` 仓库以 `feat-0.1.1-baseline` 分支为起点创建独立 worktree 和新的 `feat-*` 开发分支；禁止直接修改或提交到基线分支，完成后须将公开 JAR/BOM 发布到本地 Maven 仓库并由本项目继续按 `0.1.1-SNAPSHOT` 坐标消费，同时记录 SDK commit、发布与回归证据。
 - 直接复用冻结的 DeerFlow 前端并由 Haifa 后端兼容其真实 REST/SSE/WS/文件/auth 协议，禁止自研平行 UI 或回落 DeerFlow 后端。
 - 每个工作包使用独立 branch/worktree、端口和数据目录；提交前运行相关测试并保留真实 Run/Tool/Artifact 证据，禁止为绿灯放宽断言。
 - `work-packages.js` 中的 `WORK_PACKAGES_DATA` 是 `dashboard.html` 的唯一进度数据源；页面只负责展示，禁止在 HTML 中复制维护工作包状态。
