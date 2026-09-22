@@ -1,0 +1,186 @@
+{
+  "schema_version": "w00.core-protocol-oracle/v1",
+  "scope": "incremental_core_rest_error_event_contract",
+  "source": {
+    "repository": "https://github.com/bytedance/deer-flow.git",
+    "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294"
+  },
+  "status_policy": {
+    "source_allowed": ["SOURCE_VERIFIED"],
+    "contract_allowed": ["STATIC_CONTRACT_VERIFIED"],
+    "implementation_allowed": ["NOT_ASSESSED", "IMPLEMENTED", "NOT_IMPLEMENTED"],
+    "runtime_allowed": ["PASS", "FAIL", "NOT_RUN"],
+    "rule": "Static source and schema validation never imply implementation or runtime parity. Runtime PASS or FAIL requires separately attached execution evidence."
+  },
+  "source_status": "SOURCE_VERIFIED",
+  "contract_status": "STATIC_CONTRACT_VERIFIED",
+  "implementation_status": "NOT_ASSESSED",
+  "runtime_status": "NOT_RUN",
+  "fixtures_path": "contracts/upstream/deerflow/fixtures/core-protocol-fixtures.json",
+  "required_contract_ids": [
+    "rest.auth.setup-status.response",
+    "rest.auth.me.response",
+    "rest.run.create.request",
+    "error.fastapi.detail",
+    "error.auth.structured-detail",
+    "event.sse.frame",
+    "event.sse.replay-gap-data"
+  ],
+  "contracts": [
+    {
+      "id": "rest.auth.setup-status.response",
+      "kind": "REST_RESPONSE_SCHEMA",
+      "schema_path": "contracts/upstream/deerflow/schemas/auth-setup-status-response.schema.json",
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {
+          "source_path": "backend/app/gateway/routers/auth.py",
+          "must_contain": [
+            "@router.get(\"/setup-status\")",
+            "return {\"needs_setup\": admin_count == 0, \"registration_enabled\": _local_registration_enabled()}"
+          ]
+        },
+        {
+          "source_path": "frontend/src/core/auth/setup.ts",
+          "must_contain": ["needs_setup?: boolean", "registration_enabled?: boolean"]
+        }
+      ]
+    },
+    {
+      "id": "rest.auth.me.response",
+      "kind": "REST_RESPONSE_SCHEMA",
+      "schema_path": "contracts/upstream/deerflow/schemas/auth-me-response.schema.json",
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {
+          "source_path": "backend/app/gateway/auth/models.py",
+          "must_contain": ["class UserResponse(BaseModel):", "permissions: list[str] | None"]
+        },
+        {
+          "source_path": "frontend/src/core/auth/auth-disabled-user.ts",
+          "must_contain": ["id: \"default\"", "email: \"default@test.local\"", "system_role: \"admin\""]
+        },
+        {
+          "source_path": "frontend/tests/e2e-real-backend/auth-disabled-contract.spec.ts",
+          "must_contain": ["const AUTH_DISABLED_PERMISSIONS = [", "permissions: AUTH_DISABLED_PERMISSIONS"]
+        }
+      ]
+    },
+    {
+      "id": "rest.run.create.request",
+      "kind": "REST_REQUEST_SCHEMA",
+      "schema_path": "contracts/upstream/deerflow/schemas/run-create-request.schema.json",
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {
+          "source_path": "backend/app/gateway/run_models.py",
+          "must_contain": [
+            "class RunCreateRequest(BaseModel):",
+            "model_config = ConfigDict(extra=\"forbid\")",
+            "on_disconnect: Literal[\"cancel\", \"continue\"]",
+            "stream_resumable: Literal[False] | None"
+          ]
+        },
+        {
+          "source_path": "backend/packages/harness/deerflow/runtime/stream_modes.py",
+          "must_contain": ["\"messages-tuple\"", "\"updates\"", "\"custom\""]
+        }
+      ]
+    },
+    {
+      "id": "error.fastapi.detail",
+      "kind": "HTTP_ERROR_SCHEMA",
+      "schema_path": "contracts/upstream/deerflow/schemas/http-error-response.schema.json",
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {
+          "source_path": "backend/app/gateway/authz.py",
+          "must_contain": ["raise HTTPException(status_code=401, detail=\"Authentication required\")"]
+        },
+        {
+          "source_path": "frontend/src/core/auth/types.ts",
+          "must_contain": ["if (typeof detail === \"string\")", "Array.isArray(detail)"]
+        }
+      ]
+    },
+    {
+      "id": "error.auth.structured-detail",
+      "kind": "HTTP_ERROR_SCHEMA",
+      "schema_path": "contracts/upstream/deerflow/schemas/http-error-response.schema.json",
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {
+          "source_path": "backend/app/gateway/auth/errors.py",
+          "must_contain": ["class AuthErrorResponse(BaseModel):", "code: AuthErrorCode", "message: str"]
+        },
+        {
+          "source_path": "backend/app/gateway/routers/auth.py",
+          "must_contain": ["code=AuthErrorCode.SYSTEM_ALREADY_INITIALIZED", "message=\"System already initialized\""]
+        }
+      ]
+    },
+    {
+      "id": "event.sse.frame",
+      "kind": "SSE_WIRE_SCHEMA",
+      "schema_path": "contracts/upstream/deerflow/schemas/sse-frame.schema.json",
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {
+          "source_path": "backend/app/gateway/services.py",
+          "must_contain": [
+            "parts = [f\"event: {event}\", f\"data: {payload}\"]",
+            "parts.append(f\"id: {event_id}\")",
+            "yield format_sse(\"end\", None"
+          ]
+        },
+        {
+          "source_path": "backend/tests/test_gateway_services.py",
+          "must_contain": ["format_sse(\"metadata\", {\"run_id\": \"abc\"}, event_id=\"123-0\")", "assert \"data: null\" in frame"]
+        }
+      ]
+    },
+    {
+      "id": "event.sse.replay-gap-data",
+      "kind": "SSE_EVENT_DATA_SCHEMA",
+      "schema_path": "contracts/upstream/deerflow/schemas/stream-replay-gap-data.schema.json",
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {
+          "source_path": "backend/app/gateway/services.py",
+          "must_contain": ["\"code\": \"stream_replay_gap\"", "\"recovery\": \"reload_durable_state\""]
+        },
+        {
+          "source_path": "frontend/src/core/api/api-client.ts",
+          "must_contain": ["export type StreamReplayGapData", "value.recovery !== \"reload_durable_state\""]
+        }
+      ]
+    }
+  ],
+  "known_not_covered": [
+    "This increment does not enumerate the remaining REST mutations or all feature families.",
+    "The schema fixtures are static source-derived oracles; no DeerFlow or Haifa service was started.",
+    "SSE message payload schemas beyond the envelope, replay-gap control payload, metadata and end examples remain incremental work.",
+    "Implementation parity and reference/Haifa/differential runtime results remain NOT_RUN until separate evidence is attached."
+  ]
+}

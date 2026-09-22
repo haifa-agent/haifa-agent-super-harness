@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "w00://deerflow/stream-replay-gap-data",
+  "type": "object",
+  "required": ["code", "run_id", "requested_event_id", "earliest_available_event_id", "latest_available_event_id", "recovery"],
+  "properties": {
+    "code": {"const": "stream_replay_gap"},
+    "run_id": {"type": "string", "minLength": 1},
+    "requested_event_id": {"type": ["string", "null"]},
+    "earliest_available_event_id": {"type": ["string", "null"]},
+    "latest_available_event_id": {"type": ["string", "null"]},
+    "recovery": {"const": "reload_durable_state"}
+  },
+  "additionalProperties": false
+}

@@ -1,5 +1,6 @@
 package io.haifa.agent.superharness.server;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -12,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Function;
 
 /** Minimal HTTP compatibility surface consumed during frozen DeerFlow UI bootstrap. */
 public final class DeerFlowBootstrapApi implements AutoCloseable {
@@ -35,14 +37,21 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final DeerFlowThreadRunApi threadRunApi;
     private final DeerFlowConfigurationApi configurationApi;
 
-    private DeerFlowBootstrapApi(HttpServer server, ExecutorService executor, Path dataDirectory)
+    private DeerFlowBootstrapApi(
+            HttpServer server,
+            ExecutorService executor,
+            Path dataDirectory,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> testRunModelResolver)
             throws IOException {
         this.server = server;
         this.executor = executor;
         this.objectMapper = new ObjectMapper();
         this.configurationApi = new DeerFlowConfigurationApi(objectMapper, dataDirectory);
         this.threadRunApi = new DeerFlowThreadRunApi(
-                objectMapper, HaifaRunBridge.localProbe(), configurationApi::validateRunContext);
+                objectMapper,
+                testRunModelResolver == null
+                        ? configurationApi::resolveRunModel
+                        : testRunModelResolver);
         registerRoutes();
     }
 
@@ -56,7 +65,18 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         HttpServer server = HttpServer.create(configuration.socketAddress(), 0);
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         server.setExecutor(executor);
-        return new DeerFlowBootstrapApi(server, executor, dataDirectory);
+        return new DeerFlowBootstrapApi(server, executor, dataDirectory, null);
+    }
+
+    static DeerFlowBootstrapApi createForTests(
+            LocalServerConfiguration configuration,
+            Path dataDirectory,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver)
+            throws IOException {
+        HttpServer server = HttpServer.create(configuration.socketAddress(), 0);
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        server.setExecutor(executor);
+        return new DeerFlowBootstrapApi(server, executor, dataDirectory, runModelResolver);
     }
 
     public void start() {

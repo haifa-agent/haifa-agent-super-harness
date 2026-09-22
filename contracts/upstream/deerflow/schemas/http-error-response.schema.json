@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "w00://deerflow/http-error-response",
+  "type": "object",
+  "required": ["detail"],
+  "properties": {
+    "detail": {
+      "oneOf": [
+        {"type": "string", "minLength": 1},
+        {
+          "type": "object",
+          "required": ["code", "message"],
+          "properties": {
+            "code": {
+              "enum": [
+                "invalid_credentials",
+                "token_expired",
+                "token_invalid",
+                "user_not_found",
+                "email_already_exists",
+                "provider_not_found",
+                "not_authenticated",
+                "system_already_initialized",
+                "registration_disabled"
+              ]
+            },
+            "message": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["loc", "msg", "type"],
+            "properties": {
+              "loc": {"type": "array", "items": {"type": ["string", "integer"]}},
+              "msg": {"type": "string"},
+              "type": {"type": "string"},
+              "input": {}
+            },
+            "additionalProperties": true
+          }
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

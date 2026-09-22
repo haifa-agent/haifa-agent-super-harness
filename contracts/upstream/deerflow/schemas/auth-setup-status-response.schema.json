@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "w00://deerflow/auth-setup-status-response",
+  "type": "object",
+  "required": ["needs_setup", "registration_enabled"],
+  "properties": {
+    "needs_setup": {"type": "boolean"},
+    "registration_enabled": {"type": "boolean"}
+  },
+  "additionalProperties": false
+}

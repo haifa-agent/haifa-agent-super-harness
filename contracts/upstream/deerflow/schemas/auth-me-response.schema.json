@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "w00://deerflow/auth-me-response",
+  "type": "object",
+  "required": ["id", "email", "system_role", "needs_setup", "oauth_provider", "permissions"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "email": {"type": "string", "format": "email"},
+    "system_role": {"enum": ["admin", "user"]},
+    "needs_setup": {"type": "boolean"},
+    "oauth_provider": {"type": ["string", "null"]},
+    "permissions": {
+      "type": ["array", "null"],
+      "items": {"type": "string"},
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": false
+}

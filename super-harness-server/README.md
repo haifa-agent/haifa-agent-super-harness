@@ -37,12 +37,20 @@ SOUL plus `null`/`[]`/`false` values round-trip without erasing omitted fields. 
 uses Haifa's public OpenAI-compatible model API for a bounded streaming tool-call probe. Missing
 credentials, unknown providers, unsupported modes, and unbound Run models fail closed.
 
-This is still an in-progress compatibility slice. It deliberately reports the executable model
-catalog as empty because saving a credential or passing a one-shot probe does not bind that model
-to the Run bridge. The SDK bridge currently uses a bounded, non-selectable local probe model so the
-runtime/event/cancel path can be tested without a credential. Configured provider Run execution,
-the real external-provider probe (no credential was supplied in this work package),
-process-restart reconstruction, `updates` and `custom` event
+The W03 Run-binding slice now advertises only enabled, credentialed and executable managed models
+from `GET /api/models`. A Run selects an explicit `context.model_name`, then a custom Agent model,
+then the first executable managed model. It freezes the selected model name and revision into a
+public Haifa SDK model snapshot and invokes the public OpenAI-compatible adapter through the same
+SDK Run/SSE/cancel path. Unknown, disabled, credential-less, non-loopback plain-HTTP, reasoning-mode,
+and revision-drift selections fail closed. Plain HTTP is accepted only for a literal loopback
+provider; other providers require HTTPS. The W02 local probe is available only through a
+package-private test bootstrap and is never exposed by the production server entry point.
+
+This is still an in-progress compatibility slice. A thread keeps its first model revision so its
+in-memory Haifa Conversation remains coherent; after a model revision changes, the caller must
+create a new thread. The real external-provider probe and Run remain **NOT_RUN** because no external
+credential was supplied; the controlled loopback provider is L2 protocol evidence, not L3 provider
+evidence. Process-restart reconstruction, `updates` and `custom` event
 projection, HTTP interaction submission/card projection, full history, files, same-UI differential
 verification, and account authentication are **NOT_RUN**. Unsupported Interaction projection fails
 closed instead of manufacturing a card. Cancel currently implements the frozen UI's actual
