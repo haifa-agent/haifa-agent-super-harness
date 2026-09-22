@@ -1,6 +1,6 @@
 window.WORK_PACKAGES_DATA = {
   "schemaVersion": 4,
-  "updatedAt": "2026-09-22T22:19:21+08:00",
+  "updatedAt": "2026-09-22T22:29:02+08:00",
   "source": "private-docs/roadmap/35-super-harness-deerflow-parity.md",
   "baseline": {
     "phase": "Wave A",
@@ -23,7 +23,7 @@ window.WORK_PACKAGES_DATA = {
     { "workPackage": "W18", "branch": "codex/w18-ui-smoke", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w18-ui-smoke", "head": "base 69703a9" },
     { "workPackage": "W03", "branch": "codex/w03-config", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w03-config", "head": "24c4127" },
     { "workPackage": "W04", "branch": "codex/w04-project-diff", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w04-project-diff", "head": "73b9e72" },
-    { "workPackage": "W24", "branch": "codex/w24-evidence", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w24-evidence", "head": "base 2b9d547" }
+    { "workPackage": "W24", "branch": "codex/w24-evidence", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w24-evidence", "head": "afe8c03" }
   ],
   "milestones": [
     { "at": "2026-09-22T15:05:42+08:00", "title": "建立仓库基线", "detail": "创建首个提交 e1cbad5，主分支命名为 main。" },
@@ -42,7 +42,8 @@ window.WORK_PACKAGES_DATA = {
     { "at": "2026-09-22T21:29:31+08:00", "title": "启动 W03 配置与 W18 真实 UI lane", "detail": "主控从 69703a9 创建 codex/w03-config 与 codex/w18-ui-smoke；W03 首次进入 in_progress，W18 延续既有 startedAt，分别推进配置后端与冻结 UI→Haifa 真实闭环。" },
     { "at": "2026-09-22T21:42:05+08:00", "title": "W04 Project shelf 与持久 diff 核心", "detail": "分支提交 73b9e72；持久 Project 文档快照、线程文件晋升、run baseline、CREATE/REPLACE/DELETE、合法 unified diff 与二进制不可 diff 标识完成；Project/baseline 元数据篡改 fail closed，13 项模块测试和 49 项分支全量测试通过，HTTP/UI 仍为 NOT_RUN。" },
     { "at": "2026-09-22T21:49:35+08:00", "title": "启动 W24 持续证据 lane", "detail": "主控从 2b9d547 创建 codex/w24-evidence；首个切片构建工作包生命周期、Dashboard 单一数据源及 Maven/冻结前端证据的 fail-closed 聚合门禁，未运行项必须保持 NOT_RUN。" },
-    { "at": "2026-09-22T22:19:21+08:00", "title": "W03 Managed Model 与 Agent 配置首切片", "detail": "分支提交 24c4127；Managed Model/Agent/SOUL CRUD、owner 持久化、CAS、AES-GCM 密钥保护、公开 Haifa 有界 probe 与 Run 模式 fail-closed 准入完成，40 项 reactor 测试通过。真实 provider、配置模型 Run 绑定与冻结 UI 差分仍为 NOT_RUN。" }
+    { "at": "2026-09-22T22:19:21+08:00", "title": "W03 Managed Model 与 Agent 配置首切片", "detail": "分支提交 24c4127；Managed Model/Agent/SOUL CRUD、owner 持久化、CAS、AES-GCM 密钥保护、公开 Haifa 有界 probe 与 Run 模式 fail-closed 准入完成，40 项 reactor 测试通过。真实 provider、配置模型 Run 绑定与冻结 UI 差分仍为 NOT_RUN。" },
+    { "at": "2026-09-22T22:29:02+08:00", "title": "W24 确定性证据聚合首切片", "detail": "分支提交 afe8c03；工作包生命周期/依赖、Dashboard 与 DAG 单一数据源、Surefire、冻结前端 provenance/contracts 已进入 fail-closed 聚合，39 项正常/负例断言通过。静态门禁不升级运行状态，overall 严格保持 NOT_RUN。" }
   ],
   "workPackages": [
     { "id": "W00", "title": "固定快照、前端消费协议与资源种子", "wave": "A", "lane": "G · 协议/Verifier", "state": "in_progress", "startedAt": "2026-09-22T15:18:36+08:00", "completedAt": null, "prerequisites": [], "branch": "codex/w00-protocol-seed", "owner": "/root/w00_protocol", "summary": "已形成绑定冻结 SHA 的增量协议/资源种子与失败门禁；完整 REST/Error/Event Schema 及真实双后端运行证据仍待展开。", "evidence": ["branch f901baf + 213a4be", "19 surfaces: browser fetch / Next SSR+BFF / LangGraph SDK SSE / Browser WS / file+auth / rewrites", "7 resources: SOURCE_VERIFIED; W18 imported assets split from dedicated parity fixtures", "verify-deerflow-contracts: valid PASS; wrong SHA / missing SSE surface / missing source evidence rejected", "runtime and differential parity: NOT_RUN"], "exit": "固定同 SHA 前后端；形成 REST/SSE/WS/文件/auth/SSR 调用清单、来源许可与首批 Oracle。" },
@@ -69,6 +70,6 @@ window.WORK_PACKAGES_DATA = {
     { "id": "W21", "title": "本地身份底线与诊断；完整账号后置", "wave": "C", "lane": "H · Admin/Security", "state": "pending", "startedAt": null, "completedAt": null, "prerequisites": ["W02", "W05", "W10"], "summary": "本地身份底线随 W02 推进，完整账号体系后置。", "evidence": [], "exit": "当前只做 auth/me、必要偏好、权限负例、Run/Tool/Usage；完整账号体系后置。" },
     { "id": "W22", "title": "Client、TUI、ACP 与可信扩展", "wave": "C", "lane": "H · Client", "state": "pending", "startedAt": null, "completedAt": null, "prerequisites": ["W02"], "summary": "后续按真实需求切片。", "evidence": [], "exit": "Java/HTTP/CLI 等后续切片；真实 Hook 才建 API，禁止产品 JAR/Python ABI 承诺。" },
     { "id": "W23", "title": "PG、Redis 与条件集群", "wave": "D", "lane": "平台/QA", "state": "pending", "startedAt": null, "completedAt": null, "prerequisites": [], "tags": ["上游SDK"], "summary": "Wave D；不作为本地演示前置。", "evidence": [], "exit": "按实际需求触发；两节点控制/事件/文件/沙箱故障验证，不作为本地演示前置。" },
-    { "id": "W24", "title": "持续证据、本地演示与发布", "wave": "A", "lane": "QA/维护者", "state": "in_progress", "startedAt": "2026-09-22T21:49:35+08:00", "completedAt": null, "prerequisites": [], "branch": "codex/w24-evidence", "owner": "/root/w00_protocol", "summary": "已启动首个持续证据切片，正在建设工作包生命周期、Dashboard 单一数据源以及 Maven/冻结前端证据的 fail-closed 聚合门禁；尚无可验证代码证据。", "evidence": [], "exit": "持续聚合证据；先本地技术闭环，再 D01–D05；未做能力明确标记 NOT_RUN。" }
+    { "id": "W24", "title": "持续证据、本地演示与发布", "wave": "A", "lane": "QA/维护者", "state": "in_progress", "startedAt": "2026-09-22T21:49:35+08:00", "completedAt": null, "prerequisites": [], "branch": "codex/w24-evidence", "owner": "/root/w00_protocol", "summary": "已完成首个确定性证据聚合切片：工作包生命周期/依赖、Dashboard 与 DAG 单一数据源、Surefire 及冻结前端 provenance/contracts 均 fail closed；静态验证不得把真实运行 NOT_RUN 升级为 PASS。", "evidence": ["branch afe8c03; integrated in the matching main feature commit", "tests/evidence/verify-evidence-report.ps1: 39 assertions PASS", "./build-support/verify-evidence.ps1: Maven 49 tests PASS on branch baseline; Surefire 10 reports aggregated", "dashboard.html + work-package-dag.html consume WORK_PACKAGES_DATA exactly once; copied milestone descending sort and no per-ID special case PASS", "schema 4 / W00-W24 unique / lifecycle / direct prerequisite existence, non-self and acyclic / complete evidence fail-closed PASS", "frozen SHA e545c28..., imported resources, license, lockfile and recorded patch hashes PASS", "branch manifest SHA-256 cbacf1f2998f52a415c1f7162cc0e0880fd0bf1dba9e290343e964fda305d296; runtime parity and overall: NOT_RUN", "W24 is QA-only with no product domain object; future higher complexity manual gate remains NOT_RUN", "dual-backend UI/L4, live provider/L3, D01-D05, Browser/external services, deployment/release/Full Parity: NOT_RUN"], "exit": "持续聚合证据；先本地技术闭环，再 D01–D05；未做能力明确标记 NOT_RUN。" }
   ]
 };
