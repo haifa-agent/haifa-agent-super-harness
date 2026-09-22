@@ -15,6 +15,7 @@
         <module>super-harness-app</module>
         <module>super-harness-server</module>
         <module>super-harness-workspace</module>
+        <module>super-harness-events</module>
         <module>super-harness-harness</module>
     </modules>
 
