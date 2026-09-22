@@ -4,6 +4,7 @@
 - 如验收过程中确认必须完善上游 Haifa Agent SDK，只能在 `D:\workspace\haifa-agent` 仓库以 `feat-0.1.1-baseline` 分支为起点创建独立 worktree 和新的 `feat-*` 开发分支；禁止直接修改或提交到基线分支，完成后须将公开 JAR/BOM 发布到本地 Maven 仓库并由本项目继续按 `0.1.1-SNAPSHOT` 坐标消费，同时记录 SDK commit、发布与回归证据。
 - 直接复用冻结的 DeerFlow 前端并由 Haifa 后端兼容其真实 REST/SSE/WS/文件/auth 协议，禁止自研平行 UI 或回落 DeerFlow 后端。
 - 每个工作包使用独立 branch/worktree、端口和数据目录；提交前运行相关测试并保留真实 Run/Tool/Artifact 证据，禁止为绿灯放宽断言。
+- 本地联调固定使用四组端口，组间每个端口均直接递增 `10000`：主目录 worktree 固定为 Gateway `18018`、Frontend `33018`；子智能体槽位 1 为 Gateway `28018`、Frontend `43018`；槽位 2 为 Gateway `38018`、Frontend `53018`；槽位 3 为 Gateway `48018`、Frontend `63018`。主控每次分配子智能体时必须同时声明槽位、完整端口组和独立数据目录；同一时刻一个槽位只能分配给一个运行中的任务，任务结束后方可复用。子智能体启动服务前须检查其已分配端口；若被占用，可以查明 PID 后直接终止占用该组端口的进程，但不得终止其他槽位或未分配端口的进程。代码合入主目录 worktree 后，由主控使用固定主端口重启后端/前端服务或刷新现有服务，并完成主线 smoke；子智能体不得操作主端口服务。
 - `work-packages.js` 中的 `WORK_PACKAGES_DATA` 是 `dashboard.html` 的唯一进度数据源；页面只负责展示，禁止在 HTML 中复制维护工作包状态。
 - 项目管理信息由主控在 `work-packages.js` 维护，`dashboard.html` 只实现通用筛选、排序和渲染；新增字段、状态口径或展示规则时必须同步校验数据源与页面，禁止在页面脚本中按工作包 ID 写特例。
 - 工作包取得实质进展时，在同一提交更新其状态、简要说明和关键证据；无可验证代码或测试证据不得标记为完成，阻塞或后置只需简要注明原因。
