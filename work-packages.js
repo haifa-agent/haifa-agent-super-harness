@@ -1,6 +1,6 @@
 window.WORK_PACKAGES_DATA = {
   "schemaVersion": 3,
-  "updatedAt": "2026-09-22T17:21:18+08:00",
+  "updatedAt": "2026-09-22T17:47:00+08:00",
   "source": "private-docs/roadmap/35-super-harness-deerflow-parity.md",
   "baseline": {
     "phase": "Wave A",
@@ -27,7 +27,7 @@ window.WORK_PACKAGES_DATA = {
   "workPackages": [
     { "id": "W00", "title": "固定快照、前端消费协议与资源种子", "wave": "A", "lane": "G · 协议/Verifier", "state": "in_progress", "prerequisites": [], "branch": "codex/w00-protocol-seed", "owner": "/root/w00_protocol", "summary": "智能体已启动，尚无开发提交。", "evidence": [], "exit": "固定同 SHA 前后端；形成 REST/SSE/WS/文件/auth/SSR 调用清单、来源许可与首批 Oracle。" },
     { "id": "W01", "title": "独立仓、JAR、上游 UI 与 Harness v0", "wave": "A", "lane": "底座/发布/Verifier", "state": "complete", "prerequisites": ["W00"], "branch": "codex/w01-foundation", "owner": "/root/w01_foundation", "summary": "独立 Java 21 Parent/BOM、公开 JAR 消费、真实 Run→Tool→Artifact smoke 与最小 fail-closed Harness 已完成。冻结前端导入由 W18 切片提供。", "evidence": ["branch 2784282 / main f0759b9", "mvn -o -ntp verify: 7 tests PASS", "empty consumer cache verify: PASS", "Run 01a0c863-56fb-7cee-b2c9-7cb5bb7368e8 / Tool artifact_render / Artifact w01-artifact-1 / SHA-256 8c2487ab..."], "exit": "独立 Parent/BOM；空缓存解析公开 JAR；最小 Harness 能识别故意失败与缺证据。" },
-    { "id": "W02", "title": "本地身份、上游主协议与基础聊天", "wave": "A", "lane": "后端/联调", "state": "pending", "prerequisites": ["W01"], "summary": "Wave A 近期切片。", "evidence": [], "exit": "auth/me、模型目录、Thread、Run、SSE、取消；同一 UI 真实运行且阻断 DeerFlow 回落。" },
+    { "id": "W02", "title": "本地身份、上游主协议与基础聊天", "wave": "A", "lane": "后端/联调", "state": "in_progress", "prerequisites": ["W01"], "branch": "codex/w02-local-api", "owner": "/root/w02_local_api", "summary": "首个本地 HTTP 垂直切片已实现冻结上游启动契约与安全边界；Thread、Run、SSE、取消及同 UI 真实联调仍待后续切片。", "evidence": ["GET /api/v1/auth/setup-status, /api/v1/auth/me, /api/features, /api/models real socket responses PASS", "mvn -o -ntp clean verify: 18 tests PASS", "empty consumer cache verification: PASS", "forged identity headers ignored; implicit/non-local profile, disabled auth flag, non-loopback bind and production markers fail closed", "executable JAR SHA-256 a0e50f30988e0679e8bc755be879b86a18a017e3cf5a0c978251d115d362b509"], "exit": "auth/me、模型目录、Thread、Run、SSE、取消；同一 UI 真实运行且阻断 DeerFlow 回落。" },
     { "id": "W03", "title": "Agent、Model、模式与配置后端", "wave": "B", "lane": "E · 后端", "state": "pending", "prerequisites": ["W02"], "summary": "等待前置契约。", "evidence": [], "exit": "复用上游页面，提供 SOUL/config/probe/模式/默认值及实际模型合约。" },
     { "id": "W04", "title": "Workspace、Upload、Project 与变化", "wave": "A", "lane": "B · Workspace/Artifact", "state": "pending", "prerequisites": ["W02"], "summary": "计划与 W02/W05 形成首个真实文件闭环。", "evidence": [], "exit": "上传、引用路径、读写搜索 diff 与真实文件/hash/越界/失败验证。" },
     { "id": "W05", "title": "上游事件、Interaction 与单机收敛", "wave": "A", "lane": "A · Run/事件", "state": "pending", "prerequisites": ["W02"], "summary": "计划与 W02/W04 同步推进。", "evidence": [], "exit": "精确 SSE/交互协议、gap+权威 view、断线角色与稳定 key；不依赖 Redis。" },
