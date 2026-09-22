@@ -1,6 +1,6 @@
 window.WORK_PACKAGES_DATA = {
-  "schemaVersion": 4,
-  "updatedAt": "2026-09-22T22:29:02+08:00",
+  "schemaVersion": 5,
+  "updatedAt": "2026-09-22T22:34:01+08:00",
   "source": "private-docs/roadmap/35-super-harness-deerflow-parity.md",
   "baseline": {
     "phase": "Wave A",
@@ -43,7 +43,8 @@ window.WORK_PACKAGES_DATA = {
     { "at": "2026-09-22T21:42:05+08:00", "title": "W04 Project shelf 与持久 diff 核心", "detail": "分支提交 73b9e72；持久 Project 文档快照、线程文件晋升、run baseline、CREATE/REPLACE/DELETE、合法 unified diff 与二进制不可 diff 标识完成；Project/baseline 元数据篡改 fail closed，13 项模块测试和 49 项分支全量测试通过，HTTP/UI 仍为 NOT_RUN。" },
     { "at": "2026-09-22T21:49:35+08:00", "title": "启动 W24 持续证据 lane", "detail": "主控从 2b9d547 创建 codex/w24-evidence；首个切片构建工作包生命周期、Dashboard 单一数据源及 Maven/冻结前端证据的 fail-closed 聚合门禁，未运行项必须保持 NOT_RUN。" },
     { "at": "2026-09-22T22:19:21+08:00", "title": "W03 Managed Model 与 Agent 配置首切片", "detail": "分支提交 24c4127；Managed Model/Agent/SOUL CRUD、owner 持久化、CAS、AES-GCM 密钥保护、公开 Haifa 有界 probe 与 Run 模式 fail-closed 准入完成，40 项 reactor 测试通过。真实 provider、配置模型 Run 绑定与冻结 UI 差分仍为 NOT_RUN。" },
-    { "at": "2026-09-22T22:29:02+08:00", "title": "W24 确定性证据聚合首切片", "detail": "分支提交 afe8c03；工作包生命周期/依赖、Dashboard 与 DAG 单一数据源、Surefire、冻结前端 provenance/contracts 已进入 fail-closed 聚合，39 项正常/负例断言通过。静态门禁不升级运行状态，overall 严格保持 NOT_RUN。" }
+    { "at": "2026-09-22T22:29:02+08:00", "title": "W24 确定性证据聚合首切片", "detail": "分支提交 afe8c03；工作包生命周期/依赖、Dashboard 与 DAG 单一数据源、Surefire、冻结前端 provenance/contracts 已进入 fail-closed 聚合，39 项正常/负例断言通过。静态门禁不升级运行状态，overall 严格保持 NOT_RUN。" },
+    { "at": "2026-09-22T22:34:01+08:00", "title": "新增工作包待验收状态", "detail": "schemaVersion 升至 5；ready_for_acceptance 仅用于整个工作包退出条件和证据齐备后等待主控或人工验收，验收前 completedAt 保持 null。现有工作包不迁移状态。" }
   ],
   "workPackages": [
     { "id": "W00", "title": "固定快照、前端消费协议与资源种子", "wave": "A", "lane": "G · 协议/Verifier", "state": "in_progress", "startedAt": "2026-09-22T15:18:36+08:00", "completedAt": null, "prerequisites": [], "branch": "codex/w00-protocol-seed", "owner": "/root/w00_protocol", "summary": "已形成绑定冻结 SHA 的增量协议/资源种子与失败门禁；完整 REST/Error/Event Schema 及真实双后端运行证据仍待展开。", "evidence": ["branch f901baf + 213a4be", "19 surfaces: browser fetch / Next SSR+BFF / LangGraph SDK SSE / Browser WS / file+auth / rewrites", "7 resources: SOURCE_VERIFIED; W18 imported assets split from dedicated parity fixtures", "verify-deerflow-contracts: valid PASS; wrong SHA / missing SSE surface / missing source evidence rejected", "runtime and differential parity: NOT_RUN"], "exit": "固定同 SHA 前后端；形成 REST/SSE/WS/文件/auth/SSR 调用清单、来源许可与首批 Oracle。" },

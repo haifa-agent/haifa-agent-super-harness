@@ -116,9 +116,9 @@ try {
 
     $badSchema = New-Fixture 'bad-schema'
     $data = Read-WorkData $badSchema
-    $data.schemaVersion = 3
+    $data.schemaVersion = 4
     Write-WorkData $badSchema $data
-    Assert-Fails $badSchema 'schemaVersion must be 4'
+    Assert-Fails $badSchema 'schemaVersion must be 5'
 
     $duplicate = New-Fixture 'duplicate-id'
     $data = Read-WorkData $duplicate
@@ -132,6 +132,13 @@ try {
     $data.workPackages[24].startedAt = '2026-09-22T21:00:00+08:00'
     Write-WorkData $lifecycle $data
     Assert-Fails $lifecycle 'pending lifecycle requires'
+
+    $readyLifecycle = New-Fixture 'bad-ready-lifecycle'
+    $data = Read-WorkData $readyLifecycle
+    $data.workPackages[24].state = 'ready_for_acceptance'
+    $data.workPackages[24].completedAt = '2026-09-22T22:00:00+08:00'
+    Write-WorkData $readyLifecycle $data
+    Assert-Fails $readyLifecycle 'ready_for_acceptance lifecycle requires'
 
     $missingPrerequisite = New-Fixture 'missing-prerequisite'
     $data = Read-WorkData $missingPrerequisite

@@ -9,6 +9,6 @@
 - `work-packages.js` 中的 `WORK_PACKAGES_DATA` 是 `dashboard.html` 的唯一进度数据源；页面只负责展示，禁止在 HTML 中复制维护工作包状态。
 - 项目管理信息由主控在 `work-packages.js` 维护，`dashboard.html` 只实现通用筛选、排序和渲染；新增字段、状态口径或展示规则时必须同步校验数据源与页面，禁止在页面脚本中按工作包 ID 写特例。
 - 工作包取得实质进展时，在同一提交更新其状态、简要说明和关键证据；无可验证代码或测试证据不得标记为完成，阻塞或后置只需简要注明原因。
-- `state` 只能在 `pending`、`in_progress`、`blocked`、`complete` 中四选一；`prerequisites` 只列直接前置工作包，不展开间接依赖。
-- 每个工作包必须包含 `startedAt` 和 `completedAt`，取值为带时区的 ISO 8601 时间或 `null`：`pending` 两者均为 `null`；首次进入 `in_progress` 时设置且此后保留 `startedAt`；`complete` 必须同时具备两个时间且 `completedAt` 不早于 `startedAt`；重新打开已完成工作包时保留 `startedAt` 并清空 `completedAt`；`blocked` 是否已有 `startedAt` 取决于阻塞前是否实际开工，但 `completedAt` 必须为 `null`。
+- `state` 只能在 `pending`、`in_progress`、`ready_for_acceptance`、`blocked`、`complete` 中五选一；`ready_for_acceptance` 表示整个工作包的退出条件、提交、自动测试和真实证据均已具备，正在等待主控复验或所需的人工验收，禁止仅因某个切片完成而进入该状态；验收失败退回 `in_progress`。`prerequisites` 只列直接前置工作包，不展开间接依赖。
+- 每个工作包必须包含 `startedAt` 和 `completedAt`，取值为带时区的 ISO 8601 时间或 `null`：`pending` 两者均为 `null`；首次进入 `in_progress` 时设置且此后保留 `startedAt`；`ready_for_acceptance` 必须保留非空 `startedAt` 且 `completedAt` 为 `null`；`complete` 必须同时具备两个时间且 `completedAt` 不早于 `startedAt`；重新打开已完成工作包时保留 `startedAt` 并清空 `completedAt`；`blocked` 是否已有 `startedAt` 取决于阻塞前是否实际开工，但 `completedAt` 必须为 `null`。
 - `milestones[].at` 只记录事件发生时间，不回填工作包的 `startedAt`/`completedAt`，也不从历史事件反推生命周期字段；新增里程碑按真实发生时间追加，`dashboard.html` 负责按 `at` 倒序展示且不得改写源数组。

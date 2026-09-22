@@ -64,6 +64,7 @@
     .dot { width: 11px; height: 11px; border-radius: 3px; box-shadow: 0 0 0 2px rgba(255, 255, 255, .06); }
     .dot.pending { background: #8293a6; }
     .dot.in-progress { background: var(--cyan); }
+    .dot.ready-for-acceptance { background: var(--amber); }
     .dot.blocked { background: var(--red); }
     .dot.complete { background: var(--green); }
 
@@ -85,6 +86,7 @@
     .node rect.node-bg { fill: #10233a; stroke: rgba(157, 185, 218, .35); stroke-width: 1.5; transition: stroke .15s, fill .15s, filter .15s; }
     .node[data-state="pending"] rect.node-bg { fill: #182638; stroke: #71869d; }
     .node[data-state="in_progress"] rect.node-bg { fill: #0d3942; stroke: var(--cyan); stroke-width: 2; filter: drop-shadow(0 0 8px rgba(82, 225, 210, .2)); }
+    .node[data-state="ready_for_acceptance"] rect.node-bg { fill: #3d321b; stroke: var(--amber); stroke-width: 2; filter: drop-shadow(0 0 8px rgba(246, 198, 111, .2)); }
     .node[data-state="blocked"] rect.node-bg { fill: #421f2b; stroke: var(--red); stroke-width: 2; filter: drop-shadow(0 0 8px rgba(255, 126, 139, .2)); }
     .node[data-state="complete"] rect.node-bg { fill: #14382d; stroke: var(--green); stroke-width: 2; filter: drop-shadow(0 0 8px rgba(99, 219, 155, .18)); }
     .node:hover rect.node-bg, .node:focus rect.node-bg { stroke: #ffffff; stroke-width: 2.5; }
@@ -97,11 +99,13 @@
     .node-meta { fill: var(--muted); font-size: 10px; }
     .node-state.pending { fill: #b6c3d1; }
     .node-state.in_progress { fill: #7ef3e8; font-weight: 700; }
+    .node-state.ready_for_acceptance { fill: #f8d795; font-weight: 700; }
     .node-state.blocked { fill: #ff9aa5; font-weight: 700; }
     .node-state.complete { fill: #8aebb4; font-weight: 700; }
     .wave-label { fill: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .11em; }
     .state-mark.pending { fill: #8293a6; }
     .state-mark.in_progress { fill: var(--cyan); }
+    .state-mark.ready_for_acceptance { fill: var(--amber); }
     .state-mark.blocked { fill: var(--red); }
     .state-mark.complete { fill: var(--green); }
 
@@ -148,6 +152,7 @@
       <input class="search" id="search" type="search" placeholder="搜索工作包 ID、名称、Lane 或标签">
       <button class="btn active" type="button" data-state="all">全部</button>
       <button class="btn" type="button" data-state="in_progress">进行中</button>
+      <button class="btn" type="button" data-state="ready_for_acceptance">待验收</button>
       <button class="btn" type="button" data-state="pending">待开始</button>
       <button class="btn" type="button" data-state="blocked">阻塞</button>
       <button class="btn" type="button" data-state="complete">已完成</button>
@@ -156,6 +161,7 @@
       <div class="legend" aria-label="状态图例">
         <span><i class="dot pending"></i>待开始</span>
         <span><i class="dot in-progress"></i>进行中</span>
+        <span><i class="dot ready-for-acceptance"></i>待验收</span>
         <span><i class="dot blocked"></i>阻塞</span>
         <span><i class="dot complete"></i>已完成</span>
       </div>
@@ -188,7 +194,7 @@
       const reset = document.querySelector("#reset");
       const stateButtons = [...document.querySelectorAll("[data-state]")];
       const NS = "http://www.w3.org/2000/svg";
-      const STATUS = { pending: "待开始", in_progress: "进行中", blocked: "阻塞", complete: "已完成" };
+      const STATUS = { pending: "待开始", in_progress: "进行中", ready_for_acceptance: "待验收", blocked: "阻塞", complete: "已完成" };
 
       if (!data || !Array.isArray(data.workPackages)) {
         frame.innerHTML = '<div class="error" role="alert">无法加载 work-packages.js，请确认它与本页面位于同一目录。</div>';

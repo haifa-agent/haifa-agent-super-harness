@@ -135,6 +135,7 @@
 
     .state-pending { color: #b8c4d1; }
     .state-in-progress { color: var(--cyan); }
+    .state-ready-for-acceptance { color: var(--amber); }
     .state-blocked { color: var(--red); }
     .state-complete { color: var(--green); }
 
@@ -227,6 +228,7 @@
     const STATUS = {
       pending: { label: "待开始", className: "state-pending" },
       in_progress: { label: "进行中", className: "state-in-progress" },
+      ready_for_acceptance: { label: "待验收", className: "state-ready-for-acceptance" },
       blocked: { label: "阻塞", className: "state-blocked" },
       complete: { label: "已完成", className: "state-complete" }
     };
@@ -291,6 +293,7 @@
       const data = [
         [packages.length, "工作包总数", "W00–W24"],
         [counts.in_progress, "进行中", "已有实质执行"],
+        [counts.ready_for_acceptance, "待验收", "等待主控或人工验收"],
         [counts.pending, "待开始", "含后续 Wave"],
         [counts.blocked, "阻塞", "需解除条件"],
         [counts.complete, "已完成", "须有证据门禁"],

@@ -23,7 +23,7 @@ the overall report remains `NOT_RUN` even when governance and Maven tests pass.
 
 The verifier requires:
 
-- `schemaVersion=4`, exactly 25 unique IDs `W00` through `W24`, and only the four allowed states;
+- `schemaVersion=5`, exactly 25 unique IDs `W00` through `W24`, and only the five allowed states, including `ready_for_acceptance` for whole-package acceptance handoff;
 - timezone-bearing `startedAt`/`completedAt` values satisfying each state's lifecycle invariants;
 - existing, unique, non-self prerequisites with no cycles;
 - at least one machine-recognizable evidence reference for every `complete` package;

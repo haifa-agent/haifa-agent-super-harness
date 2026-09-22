@@ -9,7 +9,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $PinnedDeerFlowSha = "e545c28ac301e6f9feae247c513d8ea8f83df294"
-$AllowedStates = @("pending", "in_progress", "blocked", "complete")
+$AllowedStates = @("pending", "in_progress", "ready_for_acceptance", "blocked", "complete")
 $RuntimeStatuses = @("PASS", "FAIL", "NOT_RUN")
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
@@ -77,7 +77,7 @@ function Test-EvidenceReference {
 function Test-WorkPackages {
     param([object]$Data)
 
-    Assert-Condition ($Data.schemaVersion -eq 4) "work-packages schemaVersion must be 4"
+    Assert-Condition ($Data.schemaVersion -eq 5) "work-packages schemaVersion must be 5"
     $packages = @($Data.workPackages)
     Assert-Condition ($packages.Count -eq 25) "work-packages must contain exactly 25 entries"
     $expectedIds = @(0..24 | ForEach-Object { "W{0:D2}" -f $_ })
@@ -107,6 +107,14 @@ function Test-WorkPackages {
             'in_progress' {
                 Assert-Condition ($null -ne $started -and $null -eq $completed) `
                     "$id in_progress lifecycle requires startedAt and completedAt=null"
+            }
+            'ready_for_acceptance' {
+                Assert-Condition ($null -ne $started -and $null -eq $completed) `
+                    "$id ready_for_acceptance lifecycle requires startedAt and completedAt=null"
+                $evidence = @($package.evidence)
+                Assert-Condition ($evidence.Count -gt 0) "$id is ready_for_acceptance but has no evidence"
+                Assert-Condition (@($evidence | Where-Object { Test-EvidenceReference ([string]$_) }).Count -gt 0) `
+                    "$id is ready_for_acceptance but has no machine-recognizable evidence reference"
             }
             'blocked' {
                 Assert-Condition ($null -eq $completed) "$id blocked lifecycle requires completedAt=null"
@@ -154,11 +162,12 @@ function Test-WorkPackages {
 
     return [ordered]@{
         status = "PASS"
-        schemaVersion = 4
+        schemaVersion = 5
         packageCount = 25
         stateCounts = [ordered]@{
             pending = @($packages | Where-Object state -eq 'pending').Count
             in_progress = @($packages | Where-Object state -eq 'in_progress').Count
+            ready_for_acceptance = @($packages | Where-Object state -eq 'ready_for_acceptance').Count
             blocked = @($packages | Where-Object state -eq 'blocked').Count
             complete = @($packages | Where-Object state -eq 'complete').Count
         }
