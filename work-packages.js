@@ -1,0 +1,54 @@
+window.WORK_PACKAGES_DATA = {
+  "schemaVersion": 2,
+  "updatedAt": "2026-09-22T17:17:14+08:00",
+  "source": "private-docs/roadmap/35-super-harness-deerflow-parity.md",
+  "baseline": {
+    "phase": "Wave A",
+    "repositoryCommit": "59c78e9b",
+    "deerFlowCommit": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+    "deerFlowState": "clean_detached_head",
+    "preservedStash": "stash@{0}: pre-super-harness-snapshot-20260922-150524",
+    "haifaSdkVersion": "0.1.1-SNAPSHOT",
+    "evidenceGatePassed": 1
+  },
+  "worktrees": [
+    { "workPackage": "W00", "branch": "codex/w00-protocol-seed", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w00-protocol", "head": "e1cbad5" },
+    { "workPackage": "W01", "branch": "codex/w01-foundation", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w01-foundation", "head": "2784282" },
+    { "workPackage": "W18", "branch": "codex/w18-frontend-import", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w18-frontend", "head": "3b7099f" }
+  ],
+  "milestones": [
+    { "at": "2026-09-22T15:05:42+08:00", "title": "建立仓库基线", "detail": "创建首个提交 e1cbad5，主分支命名为 main。" },
+    { "at": "2026-09-22T15:05:24+08:00", "title": "冻结上游快照", "detail": "原有两处修改进入 stash；DeerFlow 切换至目标 SHA。" },
+    { "at": "2026-09-22T15:11:34+08:00", "title": "创建三条开发 lane", "detail": "W00、W01、W18 worktree 就绪。" },
+    { "at": "2026-09-22T15:18:36+08:00", "title": "派发 W00", "detail": "启动 /root/w00_protocol；当前尚无开发提交证据。" },
+    { "at": "2026-09-22T16:39:59+08:00", "title": "W01 底座通过门禁", "detail": "分支提交 2784282；主线集成 f0759b9。离线 Maven 7/7 通过，真实 Run→Tool→Artifact 与 fail-closed Harness 有证据。" },
+    { "at": "2026-09-22T16:38:08+08:00", "title": "W18 冻结前端导入", "detail": "分支提交 3b7099f；主线集成 59c78e9。980 文件与冻结 tree 一致，构建及 1894 个单测通过；双后端联调仍为 NOT_RUN。" }
+  ],
+  "workPackages": [
+    { "id": "W00", "title": "固定快照、前端消费协议与资源种子", "wave": "A", "lane": "G · 协议/Verifier", "state": "in_progress", "prerequisites": [], "branch": "codex/w00-protocol-seed", "owner": "/root/w00_protocol", "summary": "智能体已启动，尚无开发提交。", "evidence": [], "exit": "固定同 SHA 前后端；形成 REST/SSE/WS/文件/auth/SSR 调用清单、来源许可与首批 Oracle。" },
+    { "id": "W01", "title": "独立仓、JAR、上游 UI 与 Harness v0", "wave": "A", "lane": "底座/发布/Verifier", "state": "complete", "prerequisites": ["W00"], "branch": "codex/w01-foundation", "owner": "/root/w01_foundation", "summary": "独立 Java 21 Parent/BOM、公开 JAR 消费、真实 Run→Tool→Artifact smoke 与最小 fail-closed Harness 已完成。冻结前端导入由 W18 切片提供。", "evidence": ["branch 2784282 / main f0759b9", "mvn -o -ntp verify: 7 tests PASS", "empty consumer cache verify: PASS", "Run 01a0c863-56fb-7cee-b2c9-7cb5bb7368e8 / Tool artifact_render / Artifact w01-artifact-1 / SHA-256 8c2487ab..."], "exit": "独立 Parent/BOM；空缓存解析公开 JAR；最小 Harness 能识别故意失败与缺证据。" },
+    { "id": "W02", "title": "本地身份、上游主协议与基础聊天", "wave": "A", "lane": "后端/联调", "state": "pending", "prerequisites": ["W01"], "summary": "Wave A 近期切片。", "evidence": [], "exit": "auth/me、模型目录、Thread、Run、SSE、取消；同一 UI 真实运行且阻断 DeerFlow 回落。" },
+    { "id": "W03", "title": "Agent、Model、模式与配置后端", "wave": "B", "lane": "E · 后端", "state": "pending", "prerequisites": ["W02"], "summary": "等待前置契约。", "evidence": [], "exit": "复用上游页面，提供 SOUL/config/probe/模式/默认值及实际模型合约。" },
+    { "id": "W04", "title": "Workspace、Upload、Project 与变化", "wave": "A", "lane": "B · Workspace/Artifact", "state": "pending", "prerequisites": ["W02"], "summary": "计划与 W02/W05 形成首个真实文件闭环。", "evidence": [], "exit": "上传、引用路径、读写搜索 diff 与真实文件/hash/越界/失败验证。" },
+    { "id": "W05", "title": "上游事件、Interaction 与单机收敛", "wave": "A", "lane": "A · Run/事件", "state": "pending", "prerequisites": ["W02"], "summary": "计划与 W02/W04 同步推进。", "evidence": [], "exit": "精确 SSE/交互协议、gap+权威 view、断线角色与稳定 key；不依赖 Redis。" },
+    { "id": "W06", "title": "历史、编辑重跑与分支后端", "wave": "C", "lane": "A · Run/历史", "state": "pending", "prerequisites": ["W04", "W05"], "summary": "后续 Wave C。", "evidence": [], "exit": "公开派生实验；身份/隐藏交互/时间线明确，未知副作用不重放。" },
+    { "id": "W07", "title": "Goal、Todo、Context 与终止", "wave": "B", "lane": "A · Run/Context", "state": "pending", "prerequisites": ["W05"], "summary": "等待事件与交互基础。", "evidence": [], "exit": "有界继续、资源引用/预算/终止，映射上游消息与任务结构。" },
+    { "id": "W08", "title": "最小公共 Delegation", "wave": "B", "lane": "A · Run/Delegation", "state": "pending", "prerequisites": ["W01", "W05", "W07"], "summary": "等待公共 Child 契约前置。", "evidence": [], "exit": "稳定 Child、幂等、隔离/权限/预算、结果/Artifact/Usage/events；父等待不死锁。" },
+    { "id": "W09", "title": "持久 Batch 与显式验收", "wave": "C", "lane": "A · Batch", "state": "pending", "prerequisites": ["W08"], "summary": "后续 Wave C。", "evidence": [], "exit": "最小 intent/claim、进度/取消/导出；验证重复、重启和部分失败。" },
+    { "id": "W10", "title": "MCP、Deferred 与凭据", "wave": "B", "lane": "E · MCP/Provider", "state": "pending", "prerequisites": ["W03", "W05"], "summary": "等待配置和可信交互。", "evidence": [], "exit": "本地所需 transport/目录/Tool；冻结、撤权和断线语义分开。" },
+    { "id": "W11", "title": "Web、Image Search 与 Knowledge", "wave": "B", "lane": "E · Web/Provider", "state": "pending", "prerequisites": ["W02", "W04"], "summary": "等待 Tool 与文件基础。", "evidence": [], "exit": "至少一套真实搜索/抓取；Knowledge 按需启用，不捆绑整个平台。" },
+    { "id": "W12", "title": "Browser 后端与既有 Live UI", "wave": "B", "lane": "C · Browser", "state": "pending", "prerequisites": ["W04", "W05"], "summary": "等待文件与交互基础。", "evidence": [], "exit": "八工具、session/tab/ref、WS 帧与动作协议；下载、截图、接管、SSRF、回收实测。" },
+    { "id": "W13", "title": "Memory 简化承接", "wave": "B", "lane": "D · Memory", "state": "pending", "prerequisites": ["W03", "W05", "W07"], "summary": "Memory 缺口不阻塞 W00–W02。", "evidence": [], "exit": "薄 CRUD/scope/revision/provenance/Retriever 与 SH 捕获模式；不默认自动审批平台。" },
+    { "id": "W14", "title": "执行环境及文件生命周期", "wave": "B", "lane": "B · Execution", "state": "pending", "prerequisites": ["W04", "W05"], "summary": "等待文件和事件基础。", "evidence": [], "exit": "一种真实可用执行环境；exec+文件绑定/取消/回收，可信宿主与强隔离明确区分。" },
+    { "id": "W15", "title": "Skill 与 Integration 后端", "wave": "B", "lane": "F · Prompt/Skill", "state": "pending", "prerequisites": ["W03", "W04", "W10"], "summary": "等待配置、文件和 MCP 基础。", "evidence": [], "exit": "整包导入、安装/开关/reload/导出/只读 review；来源、许可、版本与用户数据分离。" },
+    { "id": "W16", "title": "23 Skill 与成果链", "wave": "B", "lane": "F · Prompt/Skill", "state": "pending", "prerequisites": ["W04", "W07", "W11", "W15"], "summary": "按垂直切片逐个验收。", "evidence": [], "exit": "每个 Skill 独立验收，先研究/数据/文件垂直切片，包含数值、来源、渲染和下载 Oracle。" },
+    { "id": "W17", "title": "MCP 长期任务", "wave": "C", "lane": "E · MCP/Provider", "state": "pending", "prerequisites": ["W05", "W10"], "summary": "后续 Wave C。", "evidence": [], "exit": "submit/status/cancel/通知、未知结果、安全补偿和重启；禁止无界轮询。" },
+    { "id": "W18", "title": "上游前端导入、配置与真实联调", "wave": "A", "lane": "G · 前端/Verifier", "state": "in_progress", "prerequisites": ["W00", "W01"], "branch": "codex/w18-frontend-import", "owner": "/root/w18_frontend", "summary": "冻结前端完整导入、来源治理与构建验证完成；同一 UI 的 DeerFlow/Haifa 双后端真实联调尚未运行。", "evidence": ["branch 3b7099f / main 59c78e9", "frontend tree 993ef89baf273257b7940ceae002200c416f380d equals frozen upstream", "pnpm check/build PASS; 219 files / 1894 tests PASS", "REST/SSE/WS/files/auth differential: NOT_RUN"], "exit": "保留 frontend+lockfile/SSR/BFF；最小配置 patch；同一 UI 两种后端真实验证。" },
+    { "id": "W19", "title": "Scheduler", "wave": "C", "lane": "H · Scheduler", "state": "pending", "prerequisites": ["W05", "W07"], "summary": "后续 Wave C。", "evidence": [], "exit": "CRUD/触发/历史/timezone/misfire/幂等/重启，复用现有页面。" },
+    { "id": "W20", "title": "五 IM、GitHub 与 Lark", "wave": "C", "lane": "H · Channels", "state": "pending", "prerequisites": ["W03", "W05", "W10", "W15"], "summary": "不作为本地 Web 启动前置。", "evidence": [], "exit": "逐渠道身份、附件、取消、去重和真实服务验证；不阻塞本地 Web。" },
+    { "id": "W21", "title": "本地身份底线与诊断；完整账号后置", "wave": "C", "lane": "H · Admin/Security", "state": "pending", "prerequisites": ["W02", "W05", "W10"], "summary": "本地身份底线随 W02 推进，完整账号体系后置。", "evidence": [], "exit": "当前只做 auth/me、必要偏好、权限负例、Run/Tool/Usage；完整账号体系后置。" },
+    { "id": "W22", "title": "Client、TUI、ACP 与可信扩展", "wave": "C", "lane": "H · Client", "state": "pending", "prerequisites": ["W02"], "summary": "后续按真实需求切片。", "evidence": [], "exit": "Java/HTTP/CLI 等后续切片；真实 Hook 才建 API，禁止产品 JAR/Python ABI 承诺。" },
+    { "id": "W23", "title": "PG、Redis 与条件集群", "wave": "D", "lane": "平台/QA", "state": "pending", "prerequisites": [], "summary": "Wave D；不作为本地演示前置。", "evidence": [], "exit": "按实际需求触发；两节点控制/事件/文件/沙箱故障验证，不作为本地演示前置。" },
+    { "id": "W24", "title": "持续证据、本地演示与发布", "wave": "A", "lane": "QA/维护者", "state": "pending", "prerequisites": [], "summary": "从首批实现开始持续聚合证据。", "evidence": [], "exit": "持续聚合证据；先本地技术闭环，再 D01–D05；未做能力明确标记 NOT_RUN。" }
+  ]
+};
