@@ -12,7 +12,9 @@ import io.haifa.agent.runtime.api.RunEventPage;
 import io.haifa.agent.sdk.api.HaifaAgent;
 import io.haifa.agent.sdk.conversation.StartConversationCommand;
 import io.haifa.agent.sdk.conversation.SubmitConversationTurnCommand;
+import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.starter.HaifaAgentStarter;
+import java.util.List;
 import java.util.Optional;
 
 /** Adapter that exposes only public Haifa Agent 0.1.1 SDK types to the HTTP boundary. */
@@ -21,12 +23,17 @@ final class HaifaRunBridge implements AutoCloseable {
     private final ModelBinding binding;
 
     HaifaRunBridge(ModelBinding binding) {
+        this(binding, List.of());
+    }
+
+    HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools) {
         this.binding = binding;
         this.agent = HaifaAgentStarter.builder()
                 .name("Super Harness local compatibility agent")
                 .instructions("Return a concise answer to the local user's request.")
                 .model(binding.model(), binding.snapshot())
                 .defaultModel(binding.name())
+                .tools(tools)
                 .build();
     }
 
