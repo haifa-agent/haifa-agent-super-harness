@@ -31,11 +31,13 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final HttpServer server;
     private final ExecutorService executor;
     private final ObjectMapper objectMapper;
+    private final DeerFlowThreadRunApi threadRunApi;
 
     private DeerFlowBootstrapApi(HttpServer server, ExecutorService executor) {
         this.server = server;
         this.executor = executor;
         this.objectMapper = new ObjectMapper();
+        this.threadRunApi = new DeerFlowThreadRunApi(objectMapper, HaifaRunBridge.localProbe());
         registerRoutes();
     }
 
@@ -58,6 +60,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     @Override
     public void close() {
         server.stop(0);
+        threadRunApi.close();
         executor.close();
     }
 
@@ -108,6 +111,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 "/api/models",
                 orderedMap(
                         "models", List.of(), "token_usage", Map.of("enabled", false)));
+        server.createContext("/api/threads", threadRunApi);
         server.createContext("/", this::notFound);
     }
 

@@ -1,16 +1,34 @@
-# DeerFlow-compatible local bootstrap API
+# DeerFlow-compatible local HTTP API
 
-This module is the first W02 vertical slice. It exposes only the startup endpoints consumed by
-the frozen DeerFlow frontend at `e545c28ac301e6f9feae247c513d8ea8f83df294`:
+This module contains the first two W02 vertical slices. It exposes the startup endpoints and a
+bounded Thread -> real Haifa SDK Run -> SSE -> cancel path consumed by the frozen DeerFlow
+frontend at `e545c28ac301e6f9feae247c513d8ea8f83df294`:
 
 - `GET /api/v1/auth/setup-status`
 - `GET /api/v1/auth/me`
 - `GET /api/features`
 - `GET /api/models`
 - `GET /health` for local process readiness
+- `POST /api/threads`, `GET /api/threads/{thread_id}` and
+  `GET /api/threads/{thread_id}/state`
+- `POST /api/threads/search`
+- `POST /api/threads/{thread_id}/runs/stream`
+- `GET /api/threads/{thread_id}/runs/{run_id}`
+- `POST /api/threads/{thread_id}/runs/{run_id}/cancel`
 
-It deliberately reports not-yet-implemented capabilities and models as unavailable. Thread, Run,
-SSE, cancellation, files, and account authentication remain later W02/W04/W05 slices.
+The run endpoint calls the public `haifa-agent-sdk-starter:0.1.1-SNAPSHOT` JAR, streams its durable
+assistant output as LangGraph-compatible `messages-tuple` frames, projects safe SDK failures as an
+`error` frame, and invokes the public `AgentRunHandle.cancel()` API. The `Content-Location`,
+`metadata`, `messages-tuple`, and terminal `end` frame shapes follow the frozen gateway.
+
+This is still an in-progress compatibility slice. It deliberately reports catalog models and
+not-yet-implemented capabilities as unavailable. The SDK bridge currently uses a bounded local
+probe model so the runtime/event/cancel path can be tested without a credential. Configured model
+catalog/provider execution, durable restart/reconnect/gap recovery, `updates` and `custom` event
+projection, interaction, full history, files, same-UI differential verification, and account
+authentication are **NOT_RUN**. Cancel currently implements the frozen UI's actual
+`wait=false&action=interrupt` request; blocking wait and rollback are rejected rather than
+silently approximated. No request falls back to the DeerFlow backend.
 
 The response fixtures were derived from these files in the frozen checkout, not from a moving
 upstream branch:
@@ -21,11 +39,18 @@ upstream branch:
 - `frontend/src/core/features/api.ts` and `backend/app/gateway/routers/features.py`
 - `frontend/src/core/models/{api,types}.ts` and `backend/app/gateway/routers/models.py`
 - `backend/tests/test_auth_me_permissions.py`
+- `frontend/src/core/threads/api.ts`
+- `frontend/src/core/threads/hooks.ts`
+- `frontend/src/core/api/api-client.ts` and `frontend/src/core/api/stream-mode.ts`
+- `backend/app/gateway/run_models.py`
+- `backend/app/gateway/routers/threads.py` and `thread_runs.py`
+- `backend/app/gateway/services.py` (`format_sse` and `sse_consumer`)
 
 The server accepts only the `local` profile and resolves the listener to a loopback address before
 opening the socket. `DEER_FLOW_ENV`, `ENVIRONMENT`, or `SUPER_HARNESS_ENVIRONMENT` set to `prod` or
 `production`, a non-loopback bind address, or a non-local profile aborts startup. The principal and
-permissions are server constants; identity or role headers from the caller are ignored.
+permissions are server constants; identity or role headers from the caller are ignored. Thread
+metadata keys that could forge ownership (`owner`, `user_id`, `system_role`) are discarded.
 
 Configuration variables and defaults:
 
