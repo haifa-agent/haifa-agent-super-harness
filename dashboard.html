@@ -126,6 +126,7 @@
     .tag.wave-b { color: #9ac9ff; background: rgba(85, 167, 255, .1); }
     .tag.wave-c { color: #c4aeff; background: rgba(171, 140, 255, .1); }
     .tag.wave-d { color: #edbe78; background: rgba(246, 198, 111, .1); }
+    .tag.topic { color: #82e9b2; border: 1px solid rgba(99, 219, 155, .18); background: rgba(99, 219, 155, .08); }
     .details { display: grid; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line); }
     .detail { display: grid; grid-template-columns: 62px 1fr; gap: 7px; color: #b6c9db; font-size: 11px; line-height: 1.45; }
     .detail b { color: var(--muted); font-weight: 600; }
@@ -209,6 +210,7 @@
           <div class="filter-row">
             <div class="filter-set"><span class="filter-label">波次</span><div class="tabs" id="waveFilter" role="tablist" aria-label="按波次筛选"><button class="filter-tab active" type="button" role="tab" aria-selected="true" data-value="all">全部</button><button class="filter-tab" type="button" role="tab" aria-selected="false" data-value="A">A</button><button class="filter-tab" type="button" role="tab" aria-selected="false" data-value="B">B</button><button class="filter-tab" type="button" role="tab" aria-selected="false" data-value="C">C</button><button class="filter-tab" type="button" role="tab" aria-selected="false" data-value="D">D</button></div></div>
             <div class="filter-set"><span class="filter-label">状态</span><div class="tabs" id="stateFilter" role="tablist" aria-label="按状态筛选"></div></div>
+            <div class="filter-set"><span class="filter-label">标签</span><div class="tabs" id="tagFilter" role="tablist" aria-label="按标签筛选"></div></div>
           </div>
         </div>
         <div class="notice"><b>状态口径</b><span>数据来自 <code>work-packages.js</code>。状态严格四选一：待开始、进行中、阻塞、已完成；只有实际代码、Oracle、运行证据和验证结果齐全才可标记“已完成”。</span></div>
@@ -238,12 +240,16 @@
     const search = document.querySelector("#search");
     const waveFilter = document.querySelector("#waveFilter");
     const stateFilter = document.querySelector("#stateFilter");
+    const tagFilter = document.querySelector("#tagFilter");
     const packageRoot = document.querySelector("#packages");
     const empty = document.querySelector("#empty");
-    const filters = { wave: "all", state: "all" };
+    const filters = { wave: "all", state: "all", tag: "all" };
 
     stateFilter.innerHTML = `<button class="filter-tab active" type="button" role="tab" aria-selected="true" data-value="all">全部</button>` +
       Object.entries(STATUS).map(([key, value]) => `<button class="filter-tab" type="button" role="tab" aria-selected="false" data-value="${key}">${value.label}</button>`).join("");
+    const availableTags = [...new Set(packages.flatMap(pkg => pkg.tags || []))].sort();
+    tagFilter.innerHTML = `<button class="filter-tab active" type="button" role="tab" aria-selected="true" data-value="all">全部</button>` +
+      availableTags.map(tag => `<button class="filter-tab" type="button" role="tab" aria-selected="false" data-value="${tag}">${tag}</button>`).join("");
 
     function setupTabs(container, filterKey) {
       container.addEventListener("click", event => {
@@ -261,6 +267,7 @@
 
     setupTabs(waveFilter, "wave");
     setupTabs(stateFilter, "state");
+    setupTabs(tagFilter, "tag");
 
     function renderContext() {
       const baseline = dashboardData.baseline;
@@ -295,9 +302,11 @@
       packageRoot.innerHTML = packages.map(pkg => {
         const status = STATUS[pkg.state];
         const prerequisites = pkg.prerequisites?.length ? pkg.prerequisites.join("、") : "无";
-        return `<article class="package" data-id="${pkg.id}" data-wave="${pkg.wave}" data-state="${pkg.state}" data-search="${[pkg.id,pkg.title,pkg.lane,prerequisites,pkg.summary||"",pkg.exit,pkg.branch||"",pkg.owner||""].join(" ").toLowerCase()}">
+        const tags = pkg.tags || [];
+        const tagChips = tags.map(tag => `<span class="tag topic">${tag}</span>`).join("");
+        return `<article class="package" data-id="${pkg.id}" data-wave="${pkg.wave}" data-state="${pkg.state}" data-tags="${tags.join("|")}" data-search="${[pkg.id,pkg.title,pkg.lane,prerequisites,...tags,pkg.summary||"",pkg.exit,pkg.branch||"",pkg.owner||""].join(" ").toLowerCase()}">
           <div class="package-head"><div><div class="package-id">${pkg.id}</div><h3>${pkg.title}</h3><p>${pkg.exit}</p></div><span class="status-select ${status.className}">${status.label}</span></div>
-          <div class="tags"><span class="tag wave-${pkg.wave.toLowerCase()}">Wave ${pkg.wave}</span><span class="tag">${pkg.lane}</span><span class="tag ${status.className}">${status.label}</span></div>
+          <div class="tags"><span class="tag wave-${pkg.wave.toLowerCase()}">Wave ${pkg.wave}</span><span class="tag">${pkg.lane}</span><span class="tag ${status.className}">${status.label}</span>${tagChips}</div>
           <div class="details"><div class="detail"><b>进展</b><span>${pkg.summary || "尚未更新"}</span></div><div class="detail"><b>直接前置</b><span>${prerequisites}</span></div>${pkg.branch ? `<div class="detail"><b>分支</b><span class="branch">${pkg.branch}</span></div>` : ""}${pkg.owner ? `<div class="detail"><b>智能体</b><span class="branch">${pkg.owner}</span></div>` : ""}</div>
         </article>`;
       }).join("");
@@ -308,7 +317,8 @@
       const term = search.value.trim().toLowerCase();
       let visible = 0;
       document.querySelectorAll(".package").forEach(card => {
-        const show = (!term || card.dataset.search.includes(term)) && (filters.wave === "all" || card.dataset.wave === filters.wave) && (filters.state === "all" || card.dataset.state === filters.state);
+        const cardTags = card.dataset.tags ? card.dataset.tags.split("|") : [];
+        const show = (!term || card.dataset.search.includes(term)) && (filters.wave === "all" || card.dataset.wave === filters.wave) && (filters.state === "all" || card.dataset.state === filters.state) && (filters.tag === "all" || cardTags.includes(filters.tag));
         card.classList.toggle("hidden", !show); if (show) visible++;
       });
       empty.style.display = visible ? "none" : "block";
