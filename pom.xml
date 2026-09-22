@@ -13,6 +13,7 @@
 
     <modules>
         <module>super-harness-app</module>
+        <module>super-harness-server</module>
         <module>super-harness-harness</module>
     </modules>
 
@@ -26,6 +27,7 @@
         <maven.surefire.plugin.version>3.5.3</maven.surefire.plugin.version>
         <maven.enforcer.plugin.version>3.6.2</maven.enforcer.plugin.version>
         <maven.dependency.plugin.version>3.8.1</maven.dependency.plugin.version>
+        <maven.shade.plugin.version>3.6.2</maven.shade.plugin.version>
         <archunit.version>1.4.1</archunit.version>
     </properties>
 
@@ -41,6 +43,11 @@
             <dependency>
                 <groupId>io.haifa.agent.superharness</groupId>
                 <artifactId>super-harness-app</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.haifa.agent.superharness</groupId>
+                <artifactId>super-harness-server</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -80,6 +87,11 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-dependency-plugin</artifactId>
                     <version>${maven.dependency.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-shade-plugin</artifactId>
+                    <version>${maven.shade.plugin.version}</version>
                 </plugin>
             </plugins>
         </pluginManagement>

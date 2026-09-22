@@ -3,3 +3,6 @@
 - 仅通过本地 Maven 仓库消费 Haifa Agent 公开 JAR/BOM `0.1.1-SNAPSHOT`，禁止源码路径依赖、复制 SDK 或依赖产品 JAR。
 - 直接复用冻结的 DeerFlow 前端并由 Haifa 后端兼容其真实 REST/SSE/WS/文件/auth 协议，禁止自研平行 UI 或回落 DeerFlow 后端。
 - 每个工作包使用独立 branch/worktree、端口和数据目录；提交前运行相关测试并保留真实 Run/Tool/Artifact 证据，禁止为绿灯放宽断言。
+- `work-packages.js` 中的 `WORK_PACKAGES_DATA` 是 `dashboard.html` 的唯一进度数据源；页面只负责展示，禁止在 HTML 中复制维护工作包状态。
+- 工作包取得实质进展时，在同一提交更新其状态、简要说明和关键证据；无可验证代码或测试证据不得标记为完成，阻塞或后置只需简要注明原因。
+- `state` 只能在 `pending`、`in_progress`、`blocked`、`complete` 中四选一；`prerequisites` 只列直接前置工作包，不展开间接依赖。
