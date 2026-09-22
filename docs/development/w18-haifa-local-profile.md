@@ -50,7 +50,9 @@ mvn -o -ntp -pl super-harness-server -am package
 $env:SUPER_HARNESS_PROFILE = 'local'
 $env:SUPER_HARNESS_BIND_ADDRESS = '127.0.0.1'
 $env:SUPER_HARNESS_PORT = '18018'
-$env:SUPER_HARNESS_DATA_ROOT = (New-Item -ItemType Directory -Force 'target/w18-haifa-config-data').FullName
+$dataRoot = (New-Item -ItemType Directory -Force 'target/w18-haifa-config-data').FullName
+$env:SUPER_HARNESS_DATA_ROOT = $dataRoot
+$env:SUPER_HARNESS_DATA_DIR = $dataRoot
 $env:SUPER_HARNESS_ENVIRONMENT = 'development'
 $env:DEER_FLOW_AUTH_DISABLED = '1'
 $env:DEER_FLOW_ENV = 'development'
@@ -91,6 +93,34 @@ These checks prevent accidental fallback configuration. They do not replace
 the later network-level differential test that blocks the reference backend and
 retains real Haifa Run/Tool/Artifact evidence.
 
+## Slot 2 browser smoke
+
+The opt-in W18 browser harness uses the assigned gateway/frontend ports
+`38018`/`53018`, keeps both server data variables on
+`target/agent-slot-2-data`, and starts its controlled provider on an
+OS-assigned loopback port:
+
+```powershell
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 `
+  -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow
+```
+
+The provider is test wiring for the UI-to-SDK bridge only. It does not count as
+an external-provider run. The runner uses the real managed-model save, probe,
+and executable catalog APIs before starting Playwright, records redacted
+evidence under `target/w18-ui-smoke-evidence`, and stops only its own exact
+process objects.
+
+On 2026-09-23, auth startup, the managed-model probe, and model discovery passed
+through the real frozen frontend profile. The independent Run/SSE, cancel, and
+reload cases all exposed the same W02 protocol gap before a Run was created:
+the frozen UI sent a human message with `content` as a text-block array, while
+`DeerFlowThreadRunApi.lastHumanMessage` only accepts textual `content`. The
+gateway therefore returned HTTP 422 with
+`input.messages requires a human message`. Sanitized request/response and the
+three created Thread IDs are checked in at
+`tests/w18-ui-smoke/evidence/20260923-run-stream-422.json`.
+
 ## Verified and not run
 
 Verified in this slice:
@@ -105,7 +135,11 @@ Verified in this slice:
 - frontend lint, TypeScript checks, and the production build (101 generated
   pages) pass.
 
-`NOT_RUN`: real browser UI to Haifa Thread/Run/SSE, cancellation, reconnect,
-files, Browser WebSocket, real model/tool/artifact, and DeerFlow-vs-Haifa
-differential. W02 currently exposes bootstrap auth/features/models only, so a
-successful launcher/config gate must not be reported as chat parity.
+`FAIL`: real browser UI Run/SSE currently stops at the documented W02 HTTP 422
+compatibility gap. No Run or event ID was created.
+
+`NOT_RUN`: the actual cancel request and completed-thread reload assertion were
+not reached because Run creation failed. Reconnect/gap recovery, files, Browser
+WebSocket, real external provider/model/tool/artifact, and DeerFlow-vs-Haifa
+differential are also `NOT_RUN`. A successful launcher, auth case, or controlled
+model probe must not be reported as chat parity.

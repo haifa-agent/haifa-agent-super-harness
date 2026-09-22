@@ -1,0 +1,289 @@
+[CmdletBinding()]
+param(
+    [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$SourceRepository = 'D:\workspace\haifa-agent-super-harness\deer-flow',
+    [int]$GatewayPort = 38018,
+    [int]$FrontendPort = 53018,
+    [int]$ProviderPort = 0,
+    [string]$DataDirectory,
+    [switch]$SkipBuild
+)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+if ($GatewayPort -ne 38018 -or $FrontendPort -ne 53018 -or $ProviderPort -ne 0) {
+    throw 'W18 slot 2 is fixed to Gateway=38018 and Frontend=53018; controlled Provider must use OS-assigned port 0.'
+}
+
+$root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
+if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
+    $DataDirectory = Join-Path $root 'target/agent-slot-2-data'
+}
+$dataRoot = [IO.Path]::GetFullPath($DataDirectory).TrimEnd('\', '/')
+$rootPrefix = $root.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+if (-not $dataRoot.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'W18 data directory must remain inside this worktree.'
+}
+
+foreach ($port in @($GatewayPort, $FrontendPort)) {
+    $listener = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue
+    if ($listener) {
+        throw "Refusing occupied W18 slot port $port (PID $($listener.OwningProcess -join ','))."
+    }
+}
+
+$null = New-Item -ItemType Directory -Force -Path $dataRoot
+$evidenceRoot = Join-Path $root 'target/w18-ui-smoke-evidence/playwright'
+$null = New-Item -ItemType Directory -Force -Path $evidenceRoot
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$serverOut = Join-Path $evidenceRoot "server-$stamp.stdout.log"
+$serverErr = Join-Path $evidenceRoot "server-$stamp.stderr.log"
+$frontendOut = Join-Path $evidenceRoot "frontend-$stamp.stdout.log"
+$frontendErr = Join-Path $evidenceRoot "frontend-$stamp.stderr.log"
+$providerOut = Join-Path $evidenceRoot "provider-$stamp.stdout.log"
+$providerErr = Join-Path $evidenceRoot "provider-$stamp.stderr.log"
+$providerReady = Join-Path $evidenceRoot "provider-$stamp.ready.json"
+
+$managedEnvironment = @{
+    SUPER_HARNESS_GATEWAY_KIND = 'haifa'
+    SUPER_HARNESS_PROFILE = 'local'
+    SUPER_HARNESS_BIND_ADDRESS = '127.0.0.1'
+    SUPER_HARNESS_PORT = [string]$GatewayPort
+    SUPER_HARNESS_DATA_ROOT = $dataRoot
+    SUPER_HARNESS_DATA_DIR = $dataRoot
+    SUPER_HARNESS_ENVIRONMENT = 'development'
+    DEER_FLOW_INTERNAL_GATEWAY_BASE_URL = "http://127.0.0.1:$GatewayPort"
+    DEER_FLOW_AUTH_DISABLED = '1'
+    DEER_FLOW_ENV = 'development'
+    ENVIRONMENT = 'development'
+    DEER_FLOW_TRUSTED_ORIGINS = "http://127.0.0.1:$FrontendPort"
+    NEXT_PUBLIC_STATIC_WEBSITE_ONLY = 'false'
+    HAIFA_FRONTEND_BIND_ADDRESS = '127.0.0.1'
+    HAIFA_FRONTEND_PORT = [string]$FrontendPort
+    E2E_GATEWAY_PORT = [string]$GatewayPort
+    E2E_FRONTEND_PORT = [string]$FrontendPort
+    E2E_APP_URL = "http://127.0.0.1:$FrontendPort"
+    W18_EVIDENCE_DIR = $evidenceRoot
+    W18_PROVIDER_URL = $null
+}
+$savedEnvironment = @{}
+foreach ($name in $managedEnvironment.Keys) {
+    $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    [Environment]::SetEnvironmentVariable($name, $managedEnvironment[$name], 'Process')
+}
+
+$gatewayProcess = $null
+$frontendProcess = $null
+$providerProcess = $null
+$testExitCode = 1
+try {
+    $profile = & (Join-Path $root 'scripts/verify-haifa-frontend-profile.ps1') `
+        -RepositoryRoot $root `
+        -SourceRepository $SourceRepository
+    if ($LASTEXITCODE -ne 0) {
+        throw 'W18 Haifa frontend profile verification failed.'
+    }
+    $profile | Set-Content -LiteralPath (Join-Path $evidenceRoot "profile-$stamp.json") -Encoding utf8
+
+    if (-not $SkipBuild) {
+        Push-Location $root
+        try {
+            & mvn.cmd -o -ntp -pl super-harness-server -am package
+            if ($LASTEXITCODE -ne 0) {
+                throw "Maven package failed with exit code $LASTEXITCODE."
+            }
+        }
+        finally {
+            Pop-Location
+        }
+
+        Push-Location (Join-Path $root 'frontend')
+        try {
+            & pnpm.cmd build
+            if ($LASTEXITCODE -ne 0) {
+                throw "Frozen frontend build failed with exit code $LASTEXITCODE."
+            }
+        }
+        finally {
+            Pop-Location
+        }
+    }
+
+    $jar = Join-Path $root 'super-harness-server/target/super-harness-server-0.1.0-SNAPSHOT-exec.jar'
+    $next = Join-Path $root 'frontend/node_modules/next/dist/bin/next'
+    if (-not (Test-Path -LiteralPath $jar -PathType Leaf)) {
+        throw 'Executable Haifa server JAR is missing; run without -SkipBuild.'
+    }
+    if (-not (Test-Path -LiteralPath $next -PathType Leaf)) {
+        throw 'Repo-local Next.js executable is missing; run pnpm install --offline --frozen-lockfile.'
+    }
+
+    $providerScript = Join-Path $root 'tests/w18-ui-smoke/loopback-openai-provider.cjs'
+    $providerProcess = Start-Process -FilePath (Get-Command node.exe).Source `
+        -ArgumentList @($providerScript, [string]$ProviderPort, $providerReady) `
+        -WorkingDirectory $root `
+        -RedirectStandardOutput $providerOut `
+        -RedirectStandardError $providerErr `
+        -PassThru `
+        -WindowStyle Hidden
+    $providerDeadline = (Get-Date).AddSeconds(15)
+    $providerMetadata = $null
+    do {
+        Start-Sleep -Milliseconds 100
+        if (Test-Path -LiteralPath $providerReady -PathType Leaf) {
+            try {
+                $providerMetadata = Get-Content -Raw -LiteralPath $providerReady | ConvertFrom-Json
+            }
+            catch {
+                $providerMetadata = $null
+            }
+        }
+    } until (($null -ne $providerMetadata -and $providerMetadata.type -eq 'ready') -or $providerProcess.HasExited -or (Get-Date) -ge $providerDeadline)
+    if ($null -eq $providerMetadata -or $providerMetadata.type -ne 'ready') {
+        throw "Controlled provider failed readiness (PID $($providerProcess.Id))."
+    }
+    $providerUrl = [string]$providerMetadata.address
+    $providerUri = [Uri]$providerUrl
+    if ($providerUri.Scheme -ne 'http' -or $providerUri.Host -ne '127.0.0.1' -or $providerUri.Port -lt 1) {
+        throw "Controlled provider published unsafe ready address '$providerUrl'."
+    }
+    if ([int]$providerMetadata.pid -ne $providerProcess.Id) {
+        throw 'Controlled provider ready metadata PID does not match the started process.'
+    }
+    [Environment]::SetEnvironmentVariable('W18_PROVIDER_URL', $providerUrl, 'Process')
+    $providerHealth = Invoke-RestMethod "$providerUrl/health" -TimeoutSec 2
+    if ($providerHealth.status -ne 'ok') {
+        throw "Controlled provider health check failed (PID $($providerProcess.Id))."
+    }
+
+    $gatewayProcess = Start-Process -FilePath (Get-Command java.exe).Source `
+        -ArgumentList @('-jar', $jar) `
+        -WorkingDirectory $root `
+        -RedirectStandardOutput $serverOut `
+        -RedirectStandardError $serverErr `
+        -PassThru `
+        -WindowStyle Hidden
+    $gatewayDeadline = (Get-Date).AddSeconds(30)
+    do {
+        Start-Sleep -Milliseconds 200
+        try {
+            $health = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/health" -TimeoutSec 1
+        }
+        catch {
+            $health = $null
+        }
+    } until (($null -ne $health -and $health.status -eq 'ok') -or $gatewayProcess.HasExited -or (Get-Date) -ge $gatewayDeadline)
+    if ($null -eq $health -or $health.status -ne 'ok') {
+        throw "Haifa gateway failed readiness (PID $($gatewayProcess.Id))."
+    }
+
+    $managedModels = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/managed-models" -TimeoutSec 3
+    $existingModel = @($managedModels.models) | Where-Object { $_.name -eq 'w18-controlled' } | Select-Object -First 1
+    $expectedRevision = if ($null -eq $existingModel) { $null } else { $existingModel.revision }
+    $modelEnvelope = [ordered]@{
+        config = [ordered]@{
+            name = 'w18-controlled'
+            display_name = 'W18 Controlled Loopback'
+            provider = 'openai-compatible'
+            model = 'w18-controlled-model'
+            base_url = "$providerUrl/v1"
+            enabled = $true
+            supports_vision = $false
+            context_window = 8192
+            max_tokens = 1024
+            api_key = 'w18-loopback-only'
+        }
+        expected_revision = $expectedRevision
+    }
+    $modelBody = $modelEnvelope | ConvertTo-Json -Depth 6 -Compress
+    $savedModel = Invoke-RestMethod `
+        -Uri "http://127.0.0.1:$GatewayPort/api/managed-models" `
+        -Method Put `
+        -ContentType 'application/json' `
+        -Body $modelBody `
+        -TimeoutSec 5
+    $probe = Invoke-RestMethod `
+        -Uri "http://127.0.0.1:$GatewayPort/api/managed-models/test" `
+        -Method Post `
+        -ContentType 'application/json' `
+        -Body $modelBody `
+        -TimeoutSec 10
+    if ($probe.ok -ne $true) {
+        throw "Controlled managed-model probe failed: $($probe.message)"
+    }
+    $runCatalog = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/models" -TimeoutSec 3
+    if (@($runCatalog.models.name) -notcontains 'w18-controlled') {
+        throw 'Controlled managed model did not enter the executable Run catalog.'
+    }
+    [ordered]@{
+        name = $savedModel.name
+        revision = $savedModel.revision
+        enabled = $savedModel.enabled
+        hasApiKey = $savedModel.has_api_key
+        probe = $probe
+        executableCatalogNames = @($runCatalog.models.name)
+        provider = "$providerUrl/v1"
+    } | ConvertTo-Json -Depth 5 | Set-Content `
+        -LiteralPath (Join-Path $evidenceRoot "managed-model-$stamp.json") `
+        -Encoding utf8
+
+    $frontendProcess = Start-Process -FilePath (Get-Command node.exe).Source `
+        -ArgumentList @($next, 'start', '--hostname', '127.0.0.1', '--port', [string]$FrontendPort) `
+        -WorkingDirectory (Join-Path $root 'frontend') `
+        -RedirectStandardOutput $frontendOut `
+        -RedirectStandardError $frontendErr `
+        -PassThru `
+        -WindowStyle Hidden
+    $frontendDeadline = (Get-Date).AddSeconds(60)
+    do {
+        Start-Sleep -Milliseconds 250
+        try {
+            $page = Invoke-WebRequest "http://127.0.0.1:$FrontendPort/workspace/chats/new" `
+                -UseBasicParsing `
+                -TimeoutSec 2
+        }
+        catch {
+            $page = $null
+        }
+    } until (($null -ne $page -and $page.StatusCode -eq 200) -or $frontendProcess.HasExited -or (Get-Date) -ge $frontendDeadline)
+    if ($null -eq $page -or $page.StatusCode -ne 200) {
+        throw "Frozen frontend failed readiness (PID $($frontendProcess.Id))."
+    }
+
+    [ordered]@{
+        gateway = "http://127.0.0.1:$GatewayPort"
+        gatewayPid = $gatewayProcess.Id
+        controlledProvider = $providerUrl
+        controlledProviderPid = $providerProcess.Id
+        frontend = "http://127.0.0.1:$FrontendPort"
+        frontendPid = $frontendProcess.Id
+        dataRoot = $dataRoot
+        evidenceRoot = $evidenceRoot
+    } | ConvertTo-Json
+
+    Push-Location $root
+    try {
+        & node.exe frontend/node_modules/@playwright/test/cli.js test `
+            --config tests/w18-ui-smoke/playwright.config.cjs
+        $testExitCode = $LASTEXITCODE
+    }
+    finally {
+        Pop-Location
+    }
+}
+finally {
+    foreach ($process in @($frontendProcess, $gatewayProcess, $providerProcess)) {
+        if ($null -ne $process -and -not $process.HasExited) {
+            Stop-Process -InputObject $process -Force
+            $null = $process.WaitForExit(10000)
+        }
+    }
+    foreach ($name in $savedEnvironment.Keys) {
+        [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
+    }
+}
+
+if ($testExitCode -ne 0) {
+    throw "W18 UI smoke failed with exit code $testExitCode."
+}

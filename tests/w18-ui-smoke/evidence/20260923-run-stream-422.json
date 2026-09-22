@@ -1,0 +1,78 @@
+{
+  "captured_at": "2026-09-23T07:01:46+08:00",
+  "profile": {
+    "frontend": "http://127.0.0.1:53018",
+    "gateway": "http://127.0.0.1:38018",
+    "controlled_provider": "http://127.0.0.1:62615/v1",
+    "controlled_provider_port_policy": "os-assigned-ephemeral",
+    "data_directory": "target/agent-slot-2-data"
+  },
+  "request": {
+    "browser_method": "POST",
+    "browser_path": "/api/langgraph/threads/<thread-id>/runs/stream",
+    "gateway_path_after_next_rewrite": "/api/threads/<thread-id>/runs/stream",
+    "content_type": "application/json",
+    "body": {
+      "input": {
+        "messages": [
+          {
+            "type": "human",
+            "id": "<local-human-id>",
+            "content": [
+              {
+                "type": "text",
+                "text": "<prompt>"
+              }
+            ],
+            "additional_kwargs": {}
+          }
+        ]
+      },
+      "config": {
+        "recursion_limit": 1000
+      },
+      "context": {
+        "model_name": "w18-controlled",
+        "mode": "flash",
+        "thinking_enabled": false,
+        "is_plan_mode": false,
+        "subagent_enabled": false,
+        "thread_id": "<thread-id>"
+      },
+      "stream_mode": [
+        "messages-tuple",
+        "updates",
+        "custom"
+      ],
+      "assistant_id": "lead_agent",
+      "on_disconnect": "continue"
+    }
+  },
+  "response": {
+    "status": 422,
+    "content_type": "application/json",
+    "body": {
+      "detail": "input.messages requires a human message"
+    }
+  },
+  "observations": {
+    "next_rewrite_transforms_body": false,
+    "server_accepts_human_or_user_type": true,
+    "server_accepts_string_content": true,
+    "server_accepts_text_content_blocks": false,
+    "diagnosis": "server DTO compatibility gap: frozen UI sends LangChain text content blocks, while DeerFlowThreadRunApi.lastHumanMessage reads only a textual content node"
+  },
+  "case_results": {
+    "auth_and_model_catalog": "PASS",
+    "run_and_sse": "FAIL_422",
+    "cancel": "NOT_RUN_PREREQUISITE_RUN_CREATE_FAIL_422",
+    "reload": "NOT_RUN_PREREQUISITE_RUN_CREATE_FAIL_422"
+  },
+  "created_thread_ids": {
+    "run_and_sse": "57a96a80-5efc-4e14-be34-8ba889d64027",
+    "cancel": "a0c62deb-0824-4010-891a-6caf152ea969",
+    "reload": "61696b62-7555-4f5b-a83f-cb5d1192ef02"
+  },
+  "run_ids": [],
+  "event_ids": []
+}
