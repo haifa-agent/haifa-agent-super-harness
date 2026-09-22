@@ -17,8 +17,10 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
@@ -108,6 +110,55 @@ class DeerFlowConfigurationApiTest {
                     .contains("credential is required")
                     .doesNotContain("saved-secret");
         }
+    }
+
+    @Test
+    void disabledCredentialLessAndRemotePlainHttpModelsNeverEnterRunCatalog() throws Exception {
+        HttpResponse<String> credentialLess =
+                request("PUT", "/api/managed-models", saveModel(null, null));
+        assertThat(credentialLess.statusCode()).isEqualTo(200);
+        assertThat(request("GET", "/api/models", null).body()).contains("\"models\":[]");
+        assertThat(request("POST", "/api/threads", "{\"thread_id\":\"unusable-model\"}")
+                        .statusCode())
+                .isEqualTo(200);
+        String run = """
+                {"input":{"messages":[{"type":"human","content":"must fail closed"}]},"context":{"model_name":"demo-model","mode":"flash"}}
+                """;
+        HttpResponse<String> credentialLessRun =
+                request("POST", "/api/threads/unusable-model/runs/stream", run);
+        assertThat(credentialLessRun.statusCode()).isEqualTo(422);
+        assertThat(credentialLessRun.body()).contains("not configured and usable");
+
+        String firstRevision = json.readTree(credentialLess.body()).path("revision").asText();
+        String disabled = saveModel(firstRevision, "disabled-secret").replace("\"enabled\":true", "\"enabled\":false");
+        HttpResponse<String> disabledSaved = request("PUT", "/api/managed-models", disabled);
+        assertThat(disabledSaved.statusCode()).isEqualTo(200);
+        assertThat(request("GET", "/api/models", null).body())
+                .contains("\"models\":[]")
+                .doesNotContain("disabled-secret");
+        HttpResponse<String> disabledRun =
+                request("POST", "/api/threads/unusable-model/runs/stream", run);
+        assertThat(disabledRun.statusCode()).isEqualTo(422);
+        assertThat(disabledRun.body())
+                .contains("not configured and usable")
+                .doesNotContain("disabled-secret");
+
+        String disabledRevision = json.readTree(disabledSaved.body()).path("revision").asText();
+        HttpResponse<String> remoteHttp = request(
+                "PUT",
+                "/api/managed-models",
+                saveModelAt(disabledRevision, "remote-secret", "http://192.0.2.10/v1"));
+        assertThat(remoteHttp.statusCode()).isEqualTo(200);
+        assertThat(request("GET", "/api/models", null).body())
+                .contains("\"models\":[]")
+                .doesNotContain("remote-secret", "192.0.2.10");
+
+        HttpResponse<String> rejected =
+                request("POST", "/api/threads/unusable-model/runs/stream", run);
+        assertThat(rejected.statusCode()).isEqualTo(422);
+        assertThat(rejected.body())
+                .contains("not configured and usable")
+                .doesNotContain("remote-secret", "192.0.2.10");
     }
 
     @Test
@@ -249,12 +300,119 @@ class DeerFlowConfigurationApiTest {
         assertThat(unsupportedMode.statusCode()).isEqualTo(422);
         assertThat(unsupportedMode.body()).contains("Unsupported mode 'turbo'");
 
+        HttpResponse<String> unsupportedCapability = request(
+                "POST",
+                "/api/threads/w03-context/runs/stream",
+                "{" + input
+                        + ",\"context\":{\"mode\":\"flash\",\"thinking_enabled\":true}}");
+        assertThat(unsupportedCapability.statusCode()).isEqualTo(422);
+        assertThat(unsupportedCapability.body())
+                .contains("do not support thinking")
+                .doesNotContain("api_key");
+
         HttpResponse<String> unavailableModel = request(
                 "POST",
                 "/api/threads/w03-context/runs/stream",
                 "{" + input + ",\"context\":{\"mode\":\"flash\",\"model_name\":\"demo-model\"}}");
         assertThat(unavailableModel.statusCode()).isEqualTo(422);
-        assertThat(unavailableModel.body()).contains("not available for Run execution");
+        assertThat(unavailableModel.body()).contains("not configured and usable");
+    }
+
+    @Test
+    void savedManagedModelDrivesRealSdkRunAndToolCallProbeAgainstControlledProvider()
+            throws Exception {
+        List<JsonNode> providerRequests = java.util.Collections.synchronizedList(new ArrayList<>());
+        List<String> authorizations = java.util.Collections.synchronizedList(new ArrayList<>());
+        HttpServer provider = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        provider.createContext("/v1/chat/completions", exchange -> {
+            JsonNode request = json.readTree(exchange.getRequestBody());
+            providerRequests.add(request);
+            authorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
+            boolean probe = request.path("tools").isArray() && !request.path("tools").isEmpty();
+            String payload = probe
+                    ? """
+                    data: {"id":"probe-1","model":"controlled-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"connection_check","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}
+
+                    data: {"id":"probe-1","model":"controlled-model","choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1}}
+
+                    data: [DONE]
+
+                    """
+                    : """
+                    data: {"id":"run-1","model":"controlled-model","choices":[{"index":0,"delta":{"content":"controlled "},"finish_reason":null}]}
+
+                    data: {"id":"run-1","model":"controlled-model","choices":[{"index":0,"delta":{"content":"provider response"},"finish_reason":"stop"}]}
+
+                    data: {"id":"run-1","model":"controlled-model","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":3}}
+
+                    data: [DONE]
+
+                    """;
+            byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        provider.start();
+        try {
+            String endpoint = "http://127.0.0.1:" + provider.getAddress().getPort() + "/v1";
+            HttpResponse<String> saved =
+                    request("PUT", "/api/managed-models", saveModelAt(null, "controlled-secret", endpoint));
+            assertThat(saved.statusCode()).isEqualTo(200);
+            JsonNode savedModel = json.readTree(saved.body());
+            String revision = savedModel.path("revision").asText();
+
+            JsonNode catalog = json.readTree(request("GET", "/api/models", null).body());
+            assertThat(catalog.path("models")).hasSize(1);
+            assertThat(catalog.path("models").get(0).path("name").asText())
+                    .isEqualTo("demo-model");
+            assertThat(catalog.toString()).doesNotContain("controlled-secret", endpoint);
+
+            HttpResponse<String> probe = request(
+                    "POST", "/api/managed-models/test", saveModelAt(revision, null, endpoint));
+            assertThat(probe.statusCode()).isEqualTo(200);
+            assertThat(json.readTree(probe.body()))
+                    .isEqualTo(json.readTree("{\"message\":\"success\",\"ok\":true}"));
+
+            assertThat(request("POST", "/api/threads", "{\"thread_id\":\"managed-run\"}")
+                            .statusCode())
+                    .isEqualTo(200);
+            String runBody = """
+                    {"assistant_id":"lead_agent","input":{"messages":[{"type":"human","content":"use the configured provider"}]},"stream_mode":["messages-tuple","updates","custom"],"context":{"model_name":"demo-model","mode":"flash","thinking_enabled":false},"on_disconnect":"continue","multitask_strategy":"reject"}
+                    """;
+            HttpResponse<String> run =
+                    request("POST", "/api/threads/managed-run/runs/stream", runBody);
+            assertThat(run.statusCode()).isEqualTo(200);
+            assertThat(run.body())
+                    .contains("controlled provider response", "event: end")
+                    .doesNotContain("controlled-secret");
+            String runLocation = run.headers().firstValue("content-location").orElseThrow();
+            JsonNode runView = json.readTree(request("GET", runLocation, null).body());
+            assertThat(runView.path("status").asText()).isEqualTo("success");
+            assertThat(runView.path("llm_call_count").asLong()).isEqualTo(1);
+
+            HttpResponse<String> updated = request(
+                    "PUT", "/api/managed-models", saveModelAt(revision, null, endpoint));
+            assertThat(updated.statusCode()).isEqualTo(200);
+            HttpResponse<String> drifted =
+                    request("POST", "/api/threads/managed-run/runs/stream", runBody);
+            assertThat(drifted.statusCode()).isEqualTo(409);
+            assertThat(drifted.body()).contains("different model revision");
+
+            assertThat(providerRequests).hasSize(2);
+            assertThat(providerRequests.get(0).path("tools")).isNotEmpty();
+            assertThat(providerRequests.get(0).path("stream").asBoolean()).isTrue();
+            assertThat(providerRequests.get(1).path("tools")).isEmpty();
+            assertThat(providerRequests.get(1).path("stream").asBoolean()).isTrue();
+            assertThat(authorizations).containsOnly("Bearer controlled-secret");
+            System.out.println("W03_MANAGED_RUN_EVIDENCE run="
+                    + runView.path("run_id").asText()
+                    + " model=demo-model revision=" + revision
+                    + " provider_calls=" + providerRequests.size());
+        } finally {
+            provider.stop(0);
+        }
     }
 
     @Test
@@ -311,17 +469,21 @@ class DeerFlowConfigurationApiTest {
     }
 
     private static String saveModel(String revision, String apiKey) {
+        return saveModelAt(revision, apiKey, "https://provider.invalid/v1");
+    }
+
+    private static String saveModelAt(String revision, String apiKey, String endpoint) {
         String revisionJson = revision == null ? "null" : "\"" + revision + "\"";
         String key = apiKey == null ? "" : ",\"api_key\":\"" + apiKey + "\"";
         return """
                 {"config":{
                   "name":"demo-model","display_name":"Demo Model",
                   "provider":"openai-compatible","model":"demo-provider-id",
-                  "base_url":"https://provider.invalid/v1","enabled":true,
+                  "base_url":"%s","enabled":true,
                   "supports_vision":false,"context_window":8192,"max_tokens":1024%s
                 },"expected_revision":%s}
                 """
-                .formatted(key, revisionJson);
+                .formatted(endpoint, key, revisionJson);
     }
 
     private static String saveModelWithApiKeyLiteral(String revision, String apiKeyLiteral) {

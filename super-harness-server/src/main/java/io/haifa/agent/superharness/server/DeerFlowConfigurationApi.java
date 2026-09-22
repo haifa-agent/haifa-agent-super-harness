@@ -10,18 +10,24 @@ import io.haifa.agent.core.run.AgentRunId;
 import io.haifa.agent.model.api.AgentChatRequest;
 import io.haifa.agent.model.api.AgentChatResponse;
 import io.haifa.agent.model.api.CredentialRef;
+import io.haifa.agent.model.api.ModelApiBindingDefinition;
+import io.haifa.agent.model.api.ModelApiStyles;
 import io.haifa.agent.model.api.ModelCallId;
 import io.haifa.agent.model.api.ModelCapability;
+import io.haifa.agent.model.api.ModelDefinitionId;
 import io.haifa.agent.model.api.ModelMessage;
 import io.haifa.agent.model.api.ModelMessageRole;
+import io.haifa.agent.model.api.ModelProviderId;
 import io.haifa.agent.model.api.ModelStreamControl;
 import io.haifa.agent.model.api.ModelToolSpecification;
 import io.haifa.agent.model.api.ResolvedCredential;
-import io.haifa.agent.model.openai.OpenAiCompatibleModelConfiguration;
+import io.haifa.agent.model.api.ResolvedModelSnapshot;
+import io.haifa.agent.model.openai.OpenAiCompatibleChatModel;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
+import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -65,6 +71,9 @@ final class DeerFlowConfigurationApi implements HttpHandler {
             "thinking_enabled",
             "reasoning_effort",
             "soul");
+    private static final int DEFAULT_CONTEXT_WINDOW = 8_192;
+    private static final int DEFAULT_MAX_OUTPUT_TOKENS = 1_024;
+    private static final int MAX_PROVIDER_RESPONSE_BYTES = 4 * 1024 * 1024;
 
     private final ObjectMapper json;
     private final ConfigurationStore store;
@@ -81,29 +90,49 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         this.probeTransport = probeTransport == null ? this::invokeToolCallProbe : probeTransport;
     }
 
-    Optional<String> validateRunContext(JsonNode body) {
+    HaifaRunBridge.ModelBinding resolveRunModel(JsonNode body) {
         JsonNode context = body.path("context");
-        if (context.isMissingNode() || context.isNull()) return Optional.empty();
-        if (!context.isObject()) return Optional.of("context must be an object");
-        JsonNode model = context.get("model_name");
-        if (model != null && !model.isNull()) {
-            if (!model.isTextual() || model.asText().isBlank()) {
-                return Optional.of("context.model_name must be a non-empty string");
-            }
-            return Optional.of("Model '" + model.asText()
-                    + "' is configured for management only and is not available for Run execution");
+        if (!context.isMissingNode() && !context.isNull() && !context.isObject()) {
+            throw new IllegalArgumentException("context must be an object");
         }
         String mode = context.path("mode").asText("flash");
         if (!Set.of("flash", "thinking", "pro", "ultra").contains(mode)) {
-            return Optional.of("Unsupported mode '" + mode + "'");
+            throw new IllegalArgumentException("Unsupported mode '" + mode + "'");
         }
         if (!mode.equals("flash")) {
-            return Optional.of("Mode '" + mode + "' requires an available reasoning-capable model");
+            throw new IllegalArgumentException(
+                    "Mode '" + mode + "' requires an available reasoning-capable model");
         }
         if (context.has("reasoning_effort") && !context.get("reasoning_effort").isNull()) {
-            return Optional.of("reasoning_effort is not supported in flash mode");
+            throw new IllegalArgumentException("reasoning_effort is not supported in flash mode");
         }
-        return Optional.empty();
+        rejectUnavailableBooleanCapability(context, "thinking_enabled", "thinking");
+        rejectUnavailableBooleanCapability(context, "is_plan_mode", "plan mode");
+        rejectUnavailableBooleanCapability(context, "subagent_enabled", "subagent delegation");
+
+        String requestedModel = optionalNonBlankText(context.get("model_name"), "context.model_name");
+        String agentName = optionalNonBlankText(context.get("agent_name"), "context.agent_name");
+        String assistantId = optionalNonBlankText(body.get("assistant_id"), "assistant_id");
+        if (agentName == null && assistantId != null && !assistantId.equals("lead_agent")) {
+            agentName = assistantId.toLowerCase(java.util.Locale.ROOT).replace('_', '-');
+        }
+        String agentModel = null;
+        if (agentName != null) {
+            validateAgentName(agentName);
+            String selectedAgentName = agentName.toLowerCase(java.util.Locale.ROOT);
+            ObjectNode agent = store.agent(selectedAgentName)
+                    .orElseThrow(
+                            () -> new IllegalArgumentException("Agent '" + selectedAgentName + "' not found"));
+            agentModel = nullableStoredText(agent.get("model"));
+        }
+        String selectedName = requestedModel != null ? requestedModel : agentModel;
+        ObjectNode selected = selectedName == null
+                ? store.defaultExecutableModel().orElseThrow(
+                        () -> new IllegalArgumentException("No enabled managed model with a credential is available"))
+                : store.executableModel(selectedName)
+                        .orElseThrow(() -> new IllegalArgumentException(
+                                "Model '" + selectedName + "' is not configured and usable"));
+        return binding(selected);
     }
 
     @Override
@@ -172,9 +201,8 @@ final class DeerFlowConfigurationApi implements HttpHandler {
     }
 
     private void listModels(HttpExchange exchange) throws IOException {
-        // Saved profiles are not advertised until the Run bridge can bind them. A credential and
-        // successful one-shot probe do not by themselves make a model executable (SD03/F04).
         ArrayNode models = json.createArrayNode();
+        store.executableModels().stream().map(this::publicExecutableModel).forEach(models::add);
         ObjectNode response = json.createObjectNode();
         response.set("models", models);
         response.set("token_usage", json.createObjectNode().put("enabled", false));
@@ -232,27 +260,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
     }
 
     private AgentChatResponse invokeToolCallProbe(ObjectNode config) {
-        String secret = config.path("api_key").asText();
-        var configured = OpenAiCompatibleModelConfiguration.builder(
-                        ignored -> new ResolvedCredential(secret))
-                .providerId("super-harness-managed-openai-compatible")
-                .providerVersion("0.1.1-SNAPSHOT")
-                .modelId(config.path("name").asText())
-                .modelVersion(config.path("revision").asText("probe"))
-                .providerModelId(config.path("model").asText())
-                .apiStyle(OpenAiCompatibleModelConfiguration.ApiStyle.CHAT_COMPLETIONS)
-                .dialect(OpenAiCompatibleModelConfiguration.Dialect.STANDARD)
-                .endpoint(URI.create(config.path("base_url").asText()))
-                .credentialRef(new CredentialRef("managed://default/" + config.path("name").asText()))
-                .nativeStreaming(true)
-                .capabilities(Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING))
-                .tokenLimits(
-                        positiveOr(config, "context_window", 8192),
-                        positiveOr(config, "max_tokens", 32))
-                .connectTimeout(Duration.ofSeconds(5))
-                .requestTimeout(Duration.ofSeconds(20))
-                .toolChoice(OpenAiCompatibleModelConfiguration.ToolChoice.REQUIRED)
-                .build();
+        HaifaRunBridge.ModelBinding binding = binding(config);
         var tool = new ModelToolSpecification(
                 "connection_check",
                 "1",
@@ -266,13 +274,13 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                 new AgentRunId("managed-model-probe"),
                 1,
                 1,
-                configured.snapshot(),
+                binding.snapshot(),
                 List.of(ModelMessage.text(ModelMessageRole.USER, "Call connection_check.")),
                 List.of(tool),
                 32,
                 Duration.ofSeconds(20),
                 Map.of());
-        return configured.model().invokeStreaming(request, event -> ModelStreamControl.CONTINUE);
+        return binding.model().invokeStreaming(request, event -> ModelStreamControl.CONTINUE);
     }
 
     private static void validateModelRequest(ObjectNode request) {
@@ -507,6 +515,98 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         return result;
     }
 
+    private ObjectNode publicExecutableModel(ObjectNode stored) {
+        ObjectNode result = json.createObjectNode();
+        result.put("id", stored.path("name").asText());
+        result.put("name", stored.path("name").asText());
+        result.put("model", stored.path("model").asText());
+        String displayName = stored.path("display_name").asText();
+        result.put("display_name", displayName.isBlank() ? stored.path("name").asText() : displayName);
+        result.put("supports_thinking", false);
+        result.put("supports_reasoning_effort", false);
+        return result;
+    }
+
+    private HaifaRunBridge.ModelBinding binding(ObjectNode config) {
+        String name = config.path("name").asText();
+        String revision = config.path("revision").asText("unsaved-probe");
+        String secret = config.path("api_key").asText();
+        URI endpoint = URI.create(config.path("base_url").asText());
+        boolean allowInsecureHttp = "http".equalsIgnoreCase(endpoint.getScheme()) && isLiteralLoopback(endpoint);
+        if ("http".equalsIgnoreCase(endpoint.getScheme()) && !allowInsecureHttp) {
+            throw new IllegalArgumentException("Model '" + name + "' requires HTTPS outside loopback");
+        }
+        int contextWindow = positiveOr(config, "context_window", DEFAULT_CONTEXT_WINDOW);
+        int maxOutputTokens = positiveOr(
+                config, "max_tokens", Math.min(DEFAULT_MAX_OUTPUT_TOKENS, contextWindow));
+        if (maxOutputTokens > contextWindow) {
+            throw new IllegalArgumentException("Model '" + name + "' has incompatible token limits");
+        }
+        var model = new OpenAiCompatibleChatModel(
+                "openai-compatible",
+                "1.0.0",
+                HttpClient.newBuilder()
+                        .connectTimeout(Duration.ofSeconds(5))
+                        .followRedirects(HttpClient.Redirect.NEVER)
+                        .build(),
+                json,
+                ignored -> new ResolvedCredential(secret),
+                allowInsecureHttp,
+                MAX_PROVIDER_RESPONSE_BYTES);
+        ResolvedModelSnapshot snapshot = ResolvedModelSnapshot.create(
+                new ModelProviderId("super-harness-managed-openai-compatible"),
+                "0.1.1-SNAPSHOT",
+                new ModelDefinitionId(name),
+                revision,
+                config.path("model").asText(),
+                "openai-compatible",
+                "1.0.0",
+                ModelApiStyles.OPENAI_CHAT_COMPLETIONS,
+                ModelApiBindingDefinition.STANDARD_DIALECT,
+                endpoint,
+                new CredentialRef("managed://default/" + name),
+                true,
+                Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING),
+                contextWindow,
+                maxOutputTokens,
+                Map.of(),
+                Map.of());
+        return new HaifaRunBridge.ModelBinding(name, revision, model, snapshot);
+    }
+
+    private static boolean isLiteralLoopback(URI endpoint) {
+        String host = endpoint.getHost();
+        if (host == null) return false;
+        String normalized = host.toLowerCase(java.util.Locale.ROOT);
+        return normalized.equals("::1")
+                || normalized.equals("[::1]")
+                || normalized.startsWith("127.");
+    }
+
+    private static String optionalNonBlankText(JsonNode value, String field) {
+        if (value == null || value.isNull()) return null;
+        if (!value.isTextual() || value.asText().isBlank()) {
+            throw new IllegalArgumentException(field + " must be a non-empty string");
+        }
+        return value.asText();
+    }
+
+    private static String nullableStoredText(JsonNode value) {
+        return value != null && value.isTextual() && !value.asText().isBlank() ? value.asText() : null;
+    }
+
+    private static void rejectUnavailableBooleanCapability(
+            JsonNode context, String field, String capability) {
+        JsonNode value = context.get(field);
+        if (value == null || value.isNull()) return;
+        if (!value.isBoolean()) {
+            throw new IllegalArgumentException("context." + field + " must be boolean");
+        }
+        if (value.asBoolean()) {
+            throw new IllegalArgumentException("Configured managed models do not support " + capability);
+        }
+    }
+
     private ObjectNode readObject(HttpExchange exchange) throws IOException {
         byte[] payload = readBounded(exchange.getRequestBody());
         JsonNode node;
@@ -664,9 +764,32 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         }
 
         Set<String> executableModelNames() {
-            // W02's deterministic local probe is deliberately not a selectable production model.
-            // The configured-provider Run bridge remains a later W03 slice.
-            return Set.of();
+            synchronized (lock) {
+                return executableModels().stream()
+                        .map(model -> model.path("name").asText())
+                        .collect(java.util.stream.Collectors.toUnmodifiableSet());
+            }
+        }
+
+        List<ObjectNode> executableModels() {
+            synchronized (lock) {
+                return models().stream().filter(ConfigurationStore::isExecutable).toList();
+            }
+        }
+
+        Optional<ObjectNode> executableModel(String name) {
+            synchronized (lock) {
+                return models().stream()
+                        .filter(model -> model.path("name").asText().equals(name))
+                        .filter(ConfigurationStore::isExecutable)
+                        .findFirst();
+            }
+        }
+
+        Optional<ObjectNode> defaultExecutableModel() {
+            synchronized (lock) {
+                return models().stream().filter(ConfigurationStore::isExecutable).findFirst();
+            }
         }
 
         ObjectNode saveModel(ObjectNode request, String expectedRevision) {
@@ -868,6 +991,37 @@ final class DeerFlowConfigurationApi implements HttpHandler {
             root.set("models", json.createArrayNode());
             root.set("agents", json.createArrayNode());
             return root;
+        }
+
+        private static boolean isExecutable(ObjectNode model) {
+            if (!model.path("enabled").asBoolean(false)
+                    || !model.path("provider").asText().equals("openai-compatible")
+                    || !hasText(model, "api_key")
+                    || !hasText(model, "name")
+                    || !hasText(model, "model")
+                    || !hasText(model, "base_url")
+                    || !hasText(model, "revision")) {
+                return false;
+            }
+            URI endpoint;
+            try {
+                endpoint = URI.create(model.path("base_url").asText());
+            } catch (IllegalArgumentException exception) {
+                return false;
+            }
+            if (!("http".equalsIgnoreCase(endpoint.getScheme())
+                            || "https".equalsIgnoreCase(endpoint.getScheme()))
+                    || endpoint.getHost() == null
+                    || endpoint.getUserInfo() != null
+                    || endpoint.getQuery() != null
+                    || endpoint.getFragment() != null
+                    || ("http".equalsIgnoreCase(endpoint.getScheme()) && !isLiteralLoopback(endpoint))) {
+                return false;
+            }
+            int contextWindow = positiveOr(model, "context_window", DEFAULT_CONTEXT_WINDOW);
+            int maxTokens = positiveOr(
+                    model, "max_tokens", Math.min(DEFAULT_MAX_OUTPUT_TOKENS, contextWindow));
+            return maxTokens <= contextWindow;
         }
 
         private static List<ObjectNode> objects(ArrayNode values) {

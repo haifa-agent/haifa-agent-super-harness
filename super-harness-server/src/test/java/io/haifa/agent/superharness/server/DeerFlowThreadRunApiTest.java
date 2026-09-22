@@ -34,9 +34,10 @@ class DeerFlowThreadRunApiTest {
 
     @BeforeEach
     void startServer() throws Exception {
-        api = DeerFlowBootstrapApi.create(
+        api = DeerFlowBootstrapApi.createForTests(
                 new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
-                dataDirectory);
+                dataDirectory,
+                ignored -> LocalProbeModelTestSupport.binding());
         api.start();
         baseUri = URI.create("http://127.0.0.1:" + api.address().getPort());
     }

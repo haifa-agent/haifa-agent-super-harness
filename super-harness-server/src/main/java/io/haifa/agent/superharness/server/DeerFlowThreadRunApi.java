@@ -50,22 +50,15 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final int EVENT_PAGE_SIZE = 4;
 
     private final ObjectMapper json;
-    private final HaifaRunBridge bridge;
-    private final Function<JsonNode, Optional<String>> runConfigurationValidator;
+    private final Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver;
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
     private final Map<String, RunRecord> runs = new ConcurrentHashMap<>();
 
-    DeerFlowThreadRunApi(ObjectMapper json, HaifaRunBridge bridge) {
-        this(json, bridge, ignored -> Optional.empty());
-    }
-
     DeerFlowThreadRunApi(
             ObjectMapper json,
-            HaifaRunBridge bridge,
-            Function<JsonNode, Optional<String>> runConfigurationValidator) {
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver) {
         this.json = json;
-        this.bridge = bridge;
-        this.runConfigurationValidator = runConfigurationValidator;
+        this.runModelResolver = runModelResolver;
     }
 
     @Override
@@ -157,7 +150,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             RunRecord run = runs.get(thread.latestRunId);
             if (run != null) {
                 messages.add(message("human-" + run.runId.value(), "human", run.humanMessage));
-                AgentRunSnapshot snapshot = bridge.snapshot(run.runId);
+                AgentRunSnapshot snapshot = run.bridge.snapshot(run.runId);
                 snapshot.output().ifPresent(output -> messages.add(
                         message("assistant-" + run.runId.value(), "ai", output)));
             }
@@ -220,18 +213,37 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             sendJson(exchange, 422, Map.of("detail", "input.messages requires a human message"));
             return;
         }
+        HaifaRunBridge.ModelBinding binding;
+        try {
+            binding = runModelResolver.apply(body);
+        } catch (IllegalArgumentException exception) {
+            sendJson(exchange, 422, Map.of("detail", exception.getMessage()));
+            return;
+        }
 
         RunRecord run;
         synchronized (thread) {
             if (thread.activeRunId != null) {
                 RunRecord active = runs.get(thread.activeRunId);
-                if (active == null || !bridge.snapshot(active.runId).status().isTerminal()) {
+                if (active == null || !active.bridge.snapshot(active.runId).status().isTerminal()) {
                     sendJson(exchange, 409, Map.of("detail", "Thread already has an active run"));
                     return;
                 }
             }
+            if (thread.bridge == null) {
+                thread.bridge = new HaifaRunBridge(binding);
+                thread.modelBindingIdentity = thread.bridge.bindingIdentity();
+            } else if (!thread.modelBindingIdentity.equals(binding.name() + "@" + binding.revision())) {
+                sendJson(
+                        exchange,
+                        409,
+                        Map.of(
+                                "detail",
+                                "Thread is already bound to a different model revision; create a new thread"));
+                return;
+            }
             HaifaRunBridge.StartedRun started =
-                    bridge.start(threadId, message, Optional.ofNullable(thread.session));
+                    thread.bridge.start(threadId, message, Optional.ofNullable(thread.session));
             thread.session = started.session();
             thread.updatedAt = Instant.now();
             thread.activeRunId = started.runId().value();
@@ -241,7 +253,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     threadId,
                     text(body, "assistant_id").orElse(null),
                     message,
-                    bridge,
+                    thread.bridge,
                     Instant.now());
             runs.put(run.runId.value(), run);
         }
@@ -331,7 +343,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     return;
                 }
                 if (run.projector.head().equals(delivered)
-                        && bridge.snapshot(run.runId).status().isTerminal()) {
+                        && run.bridge.snapshot(run.runId).status().isTerminal()) {
                     if (!creator && delivered.sequence() == initialCursor.sequence()) {
                         // The observer already acknowledged the durable terminal cursor. Match
                         // DeerFlow's terminal rejoin behavior with an id-less end sentinel.
@@ -355,17 +367,17 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     Thread.sleep(10);
                 } catch (InterruptedException exception) {
                     Thread.currentThread().interrupt();
-                    bridge.cancel(run.runId);
+                    run.bridge.cancel(run.runId);
                     break;
                 }
             }
         } catch (IOException disconnected) {
             if (creator && "cancel".equals(onDisconnect)) {
-                bridge.cancel(run.runId);
+                run.bridge.cancel(run.runId);
             }
         } finally {
             synchronized (thread) {
-                boolean terminal = bridge.snapshot(run.runId).status().isTerminal();
+                boolean terminal = run.bridge.snapshot(run.runId).status().isTerminal();
                 if (terminal && run.runId.value().equals(thread.activeRunId)) {
                     thread.activeRunId = null;
                 }
@@ -376,7 +388,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private Optional<AppendResult.Gap> synchronizeOnePage(RunRecord run) {
         synchronized (run) {
-            var page = bridge.events(run.runId, run.sdkCursor, EVENT_PAGE_SIZE);
+            var page = run.bridge.events(run.runId, run.sdkCursor, EVENT_PAGE_SIZE);
             for (AgentRunEvent source : page.items()) {
                 AppendResult append = run.projector.append(source);
                 if (append instanceof AppendResult.Gap gap) {
@@ -391,7 +403,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private void synchronizeAllAvailable(RunRecord run) {
         synchronized (run) {
             while (true) {
-                var page = bridge.events(run.runId, run.sdkCursor, EVENT_PAGE_SIZE);
+                var page = run.bridge.events(run.runId, run.sdkCursor, EVENT_PAGE_SIZE);
                 for (AgentRunEvent source : page.items()) {
                     AppendResult append = run.projector.append(source);
                     if (append instanceof AppendResult.Gap gap) {
@@ -456,7 +468,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         if (!event.terminalKind().terminal()) {
             return false;
         }
-        AgentRunSnapshot terminalSnapshot = bridge.snapshot(run.runId);
+        AgentRunSnapshot terminalSnapshot = run.bridge.snapshot(run.runId);
         if (event.terminalKind() == RunTerminalKind.COMPLETED
                 && terminalSnapshot.output().isPresent()) {
             writeMessageDelta(output, run, terminalSnapshot.output().orElseThrow(), cursor);
@@ -527,14 +539,14 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             sendJson(exchange, 404, Map.of("detail", "Run " + runId + " not found"));
             return;
         }
-        if (!bridge.cancel(run.runId)) {
+        if (!run.bridge.cancel(run.runId)) {
             sendJson(
                     exchange,
                     409,
                     Map.of(
                             "detail",
                             "Run " + runId + " is not cancellable (status: "
-                                    + deerFlowStatus(bridge.snapshot(run.runId).status()) + ")"));
+                                    + deerFlowStatus(run.bridge.snapshot(run.runId).status()) + ")"));
             return;
         }
         exchange.sendResponseHeaders(202, -1);
@@ -547,7 +559,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             sendJson(exchange, 404, Map.of("detail", "Run " + runId + " not found"));
             return;
         }
-        AgentRunSnapshot snapshot = bridge.snapshot(run.runId);
+        AgentRunSnapshot snapshot = run.bridge.snapshot(run.runId);
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("run_id", runId);
         response.put("thread_id", threadId);
@@ -608,7 +620,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         if (!multitask.equals("reject")) {
             return Optional.of("Only multitask_strategy='reject' is implemented");
         }
-        return runConfigurationValidator.apply(body);
+        return Optional.empty();
     }
 
     private Optional<String> queryValue(HttpExchange exchange, String name) {
@@ -643,7 +655,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 return "idle";
             }
             RunRecord active = runs.get(record.activeRunId);
-            if (active == null || bridge.snapshot(active.runId).status().isTerminal()) {
+            if (active == null || active.bridge.snapshot(active.runId).status().isTerminal()) {
                 record.activeRunId = null;
                 record.updatedAt = Instant.now();
                 return "idle";
@@ -773,7 +785,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     @Override
     public void close() {
-        bridge.close();
+        threads.values().stream()
+                .map(thread -> thread.bridge)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .forEach(HaifaRunBridge::close);
     }
 
     private static final class ThreadRecord {
@@ -782,6 +798,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private final Instant createdAt;
         private volatile Instant updatedAt;
         private volatile HaifaRunBridge.SessionState session;
+        private volatile HaifaRunBridge bridge;
+        private volatile String modelBindingIdentity;
         private volatile String activeRunId;
         private volatile String latestRunId;
 
@@ -798,6 +816,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private final String threadId;
         private final String assistantId;
         private final String humanMessage;
+        private final HaifaRunBridge bridge;
         private final BoundedRunEventProjector projector;
         private final Instant createdAt;
         private io.haifa.agent.runtime.api.RunEventCursor sdkCursor;
@@ -813,6 +832,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             this.threadId = threadId;
             this.assistantId = assistantId;
             this.humanMessage = humanMessage;
+            this.bridge = bridge;
             this.projector = new BoundedRunEventProjector(
                     runId,
                     EVENT_RETENTION_CAPACITY,
