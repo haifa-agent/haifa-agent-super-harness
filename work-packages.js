@@ -1,6 +1,6 @@
 window.WORK_PACKAGES_DATA = {
   "schemaVersion": 4,
-  "updatedAt": "2026-09-22T21:42:05+08:00",
+  "updatedAt": "2026-09-22T21:49:35+08:00",
   "source": "private-docs/roadmap/35-super-harness-deerflow-parity.md",
   "baseline": {
     "phase": "Wave A",
@@ -22,7 +22,8 @@ window.WORK_PACKAGES_DATA = {
     { "workPackage": "W05", "branch": "codex/w05-sse-reconnect", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w05-sse-reconnect", "head": "63650e3" },
     { "workPackage": "W18", "branch": "codex/w18-ui-smoke", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w18-ui-smoke", "head": "base 69703a9" },
     { "workPackage": "W03", "branch": "codex/w03-config", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w03-config", "head": "base 69703a9" },
-    { "workPackage": "W04", "branch": "codex/w04-project-diff", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w04-project-diff", "head": "73b9e72" }
+    { "workPackage": "W04", "branch": "codex/w04-project-diff", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w04-project-diff", "head": "73b9e72" },
+    { "workPackage": "W24", "branch": "codex/w24-evidence", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w24-evidence", "head": "base 2b9d547" }
   ],
   "milestones": [
     { "at": "2026-09-22T15:05:42+08:00", "title": "建立仓库基线", "detail": "创建首个提交 e1cbad5，主分支命名为 main。" },
@@ -39,7 +40,8 @@ window.WORK_PACKAGES_DATA = {
     { "at": "2026-09-22T19:40:00+08:00", "title": "W18 Haifa-only 前端配置门禁", "detail": "分支提交 d57f438；增加 loopback/same-origin launcher 与 fail-closed profile verifier，记录最小 Memory BFF patch；冻结 source+patch inventory、定向测试、check/build 与独立 profile/dry-run 复验通过，真实 Run/SSE differential 仍为 NOT_RUN。" },
     { "at": "2026-09-22T20:29:00+08:00", "title": "W05 持久 SSE 游标与断线重连", "detail": "公开 AgentRunEvent 持久 sequence 已接入 W02 SSE；真实 loopback socket 覆盖 Last-Event-ID 重放、重复幂等、retention gap+权威 run view、durable state 恢复及 creator/joiner 断线分离。Interaction 卡片、updates/custom、进程重启和冻结 UI 差分仍为 NOT_RUN。" },
     { "at": "2026-09-22T21:29:31+08:00", "title": "启动 W03 配置与 W18 真实 UI lane", "detail": "主控从 69703a9 创建 codex/w03-config 与 codex/w18-ui-smoke；W03 首次进入 in_progress，W18 延续既有 startedAt，分别推进配置后端与冻结 UI→Haifa 真实闭环。" },
-    { "at": "2026-09-22T21:42:05+08:00", "title": "W04 Project shelf 与持久 diff 核心", "detail": "分支提交 73b9e72；持久 Project 文档快照、线程文件晋升、run baseline、CREATE/REPLACE/DELETE、合法 unified diff 与二进制不可 diff 标识完成；Project/baseline 元数据篡改 fail closed，13 项模块测试和 49 项分支全量测试通过，HTTP/UI 仍为 NOT_RUN。" }
+    { "at": "2026-09-22T21:42:05+08:00", "title": "W04 Project shelf 与持久 diff 核心", "detail": "分支提交 73b9e72；持久 Project 文档快照、线程文件晋升、run baseline、CREATE/REPLACE/DELETE、合法 unified diff 与二进制不可 diff 标识完成；Project/baseline 元数据篡改 fail closed，13 项模块测试和 49 项分支全量测试通过，HTTP/UI 仍为 NOT_RUN。" },
+    { "at": "2026-09-22T21:49:35+08:00", "title": "启动 W24 持续证据 lane", "detail": "主控从 2b9d547 创建 codex/w24-evidence；首个切片构建工作包生命周期、Dashboard 单一数据源及 Maven/冻结前端证据的 fail-closed 聚合门禁，未运行项必须保持 NOT_RUN。" }
   ],
   "workPackages": [
     { "id": "W00", "title": "固定快照、前端消费协议与资源种子", "wave": "A", "lane": "G · 协议/Verifier", "state": "in_progress", "startedAt": "2026-09-22T15:18:36+08:00", "completedAt": null, "prerequisites": [], "branch": "codex/w00-protocol-seed", "owner": "/root/w00_protocol", "summary": "已形成绑定冻结 SHA 的增量协议/资源种子与失败门禁；完整 REST/Error/Event Schema 及真实双后端运行证据仍待展开。", "evidence": ["branch f901baf + 213a4be", "19 surfaces: browser fetch / Next SSR+BFF / LangGraph SDK SSE / Browser WS / file+auth / rewrites", "7 resources: SOURCE_VERIFIED; W18 imported assets split from dedicated parity fixtures", "verify-deerflow-contracts: valid PASS; wrong SHA / missing SSE surface / missing source evidence rejected", "runtime and differential parity: NOT_RUN"], "exit": "固定同 SHA 前后端；形成 REST/SSE/WS/文件/auth/SSR 调用清单、来源许可与首批 Oracle。" },
@@ -66,6 +68,6 @@ window.WORK_PACKAGES_DATA = {
     { "id": "W21", "title": "本地身份底线与诊断；完整账号后置", "wave": "C", "lane": "H · Admin/Security", "state": "pending", "startedAt": null, "completedAt": null, "prerequisites": ["W02", "W05", "W10"], "summary": "本地身份底线随 W02 推进，完整账号体系后置。", "evidence": [], "exit": "当前只做 auth/me、必要偏好、权限负例、Run/Tool/Usage；完整账号体系后置。" },
     { "id": "W22", "title": "Client、TUI、ACP 与可信扩展", "wave": "C", "lane": "H · Client", "state": "pending", "startedAt": null, "completedAt": null, "prerequisites": ["W02"], "summary": "后续按真实需求切片。", "evidence": [], "exit": "Java/HTTP/CLI 等后续切片；真实 Hook 才建 API，禁止产品 JAR/Python ABI 承诺。" },
     { "id": "W23", "title": "PG、Redis 与条件集群", "wave": "D", "lane": "平台/QA", "state": "pending", "startedAt": null, "completedAt": null, "prerequisites": [], "tags": ["上游SDK"], "summary": "Wave D；不作为本地演示前置。", "evidence": [], "exit": "按实际需求触发；两节点控制/事件/文件/沙箱故障验证，不作为本地演示前置。" },
-    { "id": "W24", "title": "持续证据、本地演示与发布", "wave": "A", "lane": "QA/维护者", "state": "pending", "startedAt": null, "completedAt": null, "prerequisites": [], "summary": "从首批实现开始持续聚合证据。", "evidence": [], "exit": "持续聚合证据；先本地技术闭环，再 D01–D05；未做能力明确标记 NOT_RUN。" }
+    { "id": "W24", "title": "持续证据、本地演示与发布", "wave": "A", "lane": "QA/维护者", "state": "in_progress", "startedAt": "2026-09-22T21:49:35+08:00", "completedAt": null, "prerequisites": [], "branch": "codex/w24-evidence", "owner": "/root/w00_protocol", "summary": "已启动首个持续证据切片，正在建设工作包生命周期、Dashboard 单一数据源以及 Maven/冻结前端证据的 fail-closed 聚合门禁；尚无可验证代码证据。", "evidence": [], "exit": "持续聚合证据；先本地技术闭环，再 D01–D05；未做能力明确标记 NOT_RUN。" }
   ]
 };
