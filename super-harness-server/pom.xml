@@ -22,6 +22,11 @@
             <artifactId>super-harness-app</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.haifa.agent.superharness</groupId>
+            <artifactId>super-harness-events</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>

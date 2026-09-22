@@ -17,9 +17,10 @@ import io.haifa.agent.model.api.ModelStreamEvent;
 import io.haifa.agent.model.api.ModelStreamSink;
 import io.haifa.agent.model.api.ModelUsage;
 import io.haifa.agent.model.api.ResolvedModelSnapshot;
-import io.haifa.agent.runtime.api.AgentRunOutputEvent;
+import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
 import io.haifa.agent.runtime.api.AgentRunSnapshot;
-import io.haifa.agent.runtime.api.RunOutputCursor;
+import io.haifa.agent.runtime.api.RunEventCursor;
+import io.haifa.agent.runtime.api.RunEventPage;
 import io.haifa.agent.sdk.api.HaifaAgent;
 import io.haifa.agent.sdk.conversation.StartConversationCommand;
 import io.haifa.agent.sdk.conversation.SubmitConversationTurnCommand;
@@ -68,12 +69,20 @@ final class HaifaRunBridge implements AutoCloseable {
                 new SessionState(submitted.record().sessionId(), submitted.record().revision()));
     }
 
-    List<AgentRunOutputEvent> outputAfter(AgentRunId runId, long exclusiveSequence) {
-        return agent.runs().outputEvents(runId, new RunOutputCursor(exclusiveSequence), 100);
-    }
-
     AgentRunSnapshot snapshot(AgentRunId runId) {
         return agent.runs().find(runId).orElseThrow();
+    }
+
+    AgentRunViewSnapshot authoritativeView(AgentRunId runId) {
+        return agent.runs().view(runId).orElseThrow();
+    }
+
+    RunEventCursor beforeFirstEvent(AgentRunId runId) {
+        return RunEventCursor.beforeFirst(runId);
+    }
+
+    RunEventPage events(AgentRunId runId, RunEventCursor cursor, int limit) {
+        return agent.runs().events(runId, cursor, limit);
     }
 
     boolean cancel(AgentRunId runId) {
