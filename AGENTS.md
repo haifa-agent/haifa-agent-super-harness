@@ -1,0 +1,5 @@
+- 以 `private-docs/roadmap/35-super-harness-deerflow-parity.md` 及其产品、PRD 配套目录为范围与验收依据。
+- DeerFlow 前后端固定为 `bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294`，禁止随 `main` 漂移。
+- 仅通过本地 Maven 仓库消费 Haifa Agent 公开 JAR/BOM `0.1.1-SNAPSHOT`，禁止源码路径依赖、复制 SDK 或依赖产品 JAR。
+- 直接复用冻结的 DeerFlow 前端并由 Haifa 后端兼容其真实 REST/SSE/WS/文件/auth 协议，禁止自研平行 UI 或回落 DeerFlow 后端。
+- 每个工作包使用独立 branch/worktree、端口和数据目录；提交前运行相关测试并保留真实 Run/Tool/Artifact 证据，禁止为绿灯放宽断言。

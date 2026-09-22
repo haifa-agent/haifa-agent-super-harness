@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "upstream": {
+    "repository": "https://github.com/bytedance/deer-flow.git",
+    "commit": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+    "sourcePath": "frontend",
+    "sourceTree": "993ef89baf273257b7940ceae002200c416f380d",
+    "license": "MIT",
+    "licenseBlob": "9dc98a4a6b9b549447a4fc314e4cf50529c184c7",
+    "licenseFile": "third-party/deerflow/LICENSES/deer-flow-MIT.txt",
+    "licenseSha256": "b23dff4d4bac8d17b6efaaa7e88c2b730149c4dda45699ce676b719cfdffe7e1",
+    "embeddedLicenseFiles": [
+      "frontend/public/images/plugins/LOBE-ICONS-LICENSE.md",
+      "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+      "frontend/src/components/workspace/channels/buzz-provider-icon.LICENSE.txt"
+    ]
+  },
+  "import": {
+    "localPath": "frontend",
+    "modified": false,
+    "patchStatus": "zero-patch",
+    "patchDirectory": "third-party/deerflow/patches",
+    "fileCount": 980,
+    "totalBytes": 21171292,
+    "contentInventorySha256": "eb42ed476a42998f3dfe632dc3213d5d61217b0e27f8d1a7813c63e62cf8e092"
+  },
+  "build": {
+    "node": ">=22",
+    "packageManager": "pnpm@10.26.2",
+    "packageFile": "frontend/package.json",
+    "lockfile": "frontend/pnpm-lock.yaml",
+    "lockfileSha256": "97624041dd18396b74555275f1859b7fb2620e940ab0e8f9c87cb63ca24e326e",
+    "workspaceFile": "frontend/pnpm-workspace.yaml"
+  },
+  "configuration": {
+    "defaultMode": "same-origin",
+    "browserBackendVariables": [
+      "NEXT_PUBLIC_BACKEND_BASE_URL",
+      "NEXT_PUBLIC_LANGGRAPH_BASE_URL"
+    ],
+    "serverBackendVariable": "DEER_FLOW_INTERNAL_GATEWAY_BASE_URL",
+    "deerFlowBackendFallbackAllowed": false,
+    "secretsInPublicVariablesAllowed": false
+  }
+}
