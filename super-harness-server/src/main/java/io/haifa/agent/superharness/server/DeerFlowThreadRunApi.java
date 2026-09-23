@@ -692,10 +692,45 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         for (JsonNode message : messages) {
             String type = message.path("type").asText(message.path("role").asText());
             if (type.equals("human") || type.equals("user")) {
-                result = message.path("content").asText("");
+                result = humanMessageContent(message.get("content"));
+                if (result.isBlank()) {
+                    return "";
+                }
             }
         }
         return result;
+    }
+
+    private String humanMessageContent(JsonNode content) {
+        if (content == null) {
+            return "";
+        }
+        if (content.isTextual()) {
+            return content.textValue();
+        }
+        if (!content.isArray() || content.isEmpty()) {
+            return "";
+        }
+        // The frozen UI sends LangChain text content blocks. Match DeerFlow's
+        // text projection by concatenating them in order without a separator,
+        // but reject the whole message if any block cannot be represented by
+        // this text-only Haifa bridge; never coerce or silently drop a block.
+        StringBuilder combined = new StringBuilder();
+        for (JsonNode block : content) {
+            JsonNode blockType = block.get("type");
+            JsonNode text = block.get("text");
+            if (!block.isObject()
+                    || blockType == null
+                    || !blockType.isTextual()
+                    || !blockType.textValue().equals("text")
+                    || text == null
+                    || !text.isTextual()
+                    || text.textValue().isBlank()) {
+                return "";
+            }
+            combined.append(text.textValue());
+        }
+        return combined.toString();
     }
 
     private Optional<String> text(JsonNode node, String name) {

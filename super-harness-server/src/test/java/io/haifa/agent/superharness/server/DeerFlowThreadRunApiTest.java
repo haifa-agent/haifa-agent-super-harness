@@ -108,6 +108,73 @@ class DeerFlowThreadRunApiTest {
     }
 
     @Test
+    void acceptsFrozenUiTextBlockRequestAndConcatenatesMultipleBlocks() throws Exception {
+        createThread("thread-frozen-ui-shape");
+        HttpResponse<String> frozenUi = postJson(
+                "/api/threads/thread-frozen-ui-shape/runs/stream",
+                """
+                {"input":{"messages":[{"type":"human","id":"local-human-1","content":[{"type":"text","text":"frozen UI request"}],"additional_kwargs":{}}]},"config":{"recursion_limit":1000},"context":{"model_name":"test-model","mode":"flash","thinking_enabled":false,"is_plan_mode":false,"subagent_enabled":false,"thread_id":"thread-frozen-ui-shape"},"stream_mode":["messages-tuple","updates","custom"],"assistant_id":"lead_agent","on_disconnect":"continue"}
+                """);
+
+        assertThat(frozenUi.statusCode()).isEqualTo(200);
+        assertThat(frozenUi.body()).contains("Haifa Agent SDK: frozen UI request");
+
+        createThread("thread-multiple-text-blocks");
+        HttpResponse<String> multipleBlocks = postJson(
+                "/api/threads/thread-multiple-text-blocks/runs/stream",
+                """
+                {"assistant_id":"lead_agent","input":{"messages":[{"type":"human","content":[{"type":"text","text":"first "},{"type":"text","text":"second"}]}]},"stream_mode":["messages-tuple","updates","custom"]}
+                """);
+
+        assertThat(multipleBlocks.statusCode()).isEqualTo(200);
+        assertThat(multipleBlocks.body()).contains("Haifa Agent SDK: first second");
+    }
+
+    @Test
+    void preservesPlainStringHumanContentCompatibility() throws Exception {
+        createThread("thread-string-content");
+
+        HttpResponse<String> response = postJson(
+                "/api/threads/thread-string-content/runs/stream",
+                """
+                {"input":{"messages":[{"role":"user","content":"plain string"}]},"stream_mode":["messages-tuple","updates","custom"]}
+                """);
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.body()).contains("Haifa Agent SDK: plain string");
+    }
+
+    @Test
+    void rejectsMalformedOrNonTextHumanContentWithoutPartialExtraction() throws Exception {
+        createThread("thread-invalid-content-blocks");
+        List<String> invalidContents = List.of(
+                "\"\"",
+                "\"   \"",
+                "[]",
+                "[{\"type\":\"text\",\"text\":\"   \"}]",
+                "[{\"type\":\"image_url\",\"image_url\":{\"url\":\"https://example.invalid/image.png\"}}]",
+                "[{\"type\":\"text\"}]",
+                "[{\"type\":\"text\",\"text\":42}]",
+                "[{\"type\":\"text\",\"text\":\"kept\"},{\"type\":\"tool_use\",\"text\":\"must not be ignored\"}]",
+                "[\"must not be coerced\"]",
+                "{\"type\":\"text\",\"text\":\"not an array\"}",
+                "42",
+                "true",
+                "null");
+
+        for (String content : invalidContents) {
+            HttpResponse<String> response = postJson(
+                    "/api/threads/thread-invalid-content-blocks/runs/stream",
+                    "{\"input\":{\"messages\":[{\"type\":\"human\",\"content\":" + content + "}]}}");
+
+            assertThat(response.statusCode()).as("content=%s", content).isEqualTo(422);
+            assertThat(json.readTree(response.body()).path("detail").asText())
+                    .as("content=%s", content)
+                    .isEqualTo("input.messages requires a human message");
+        }
+    }
+
+    @Test
     void failedHaifaRunEmitsErrorThenEndAndReportsErrorStatus() throws Exception {
         createThread("thread-failure");
 
