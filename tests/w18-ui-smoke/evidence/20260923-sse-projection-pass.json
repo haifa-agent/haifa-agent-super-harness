@@ -1,0 +1,88 @@
+{
+  "captured_at": "2026-09-23T11:09:00+08:00",
+  "result": "PASS",
+  "playwright": {
+    "passed": 4,
+    "failed": 0,
+    "duration_seconds": 21.0,
+    "retries": 0,
+    "case_duration_seconds": {
+      "auth": 3.7,
+      "run_sse": 4.0,
+      "cancel": 3.5,
+      "reload": 4.0
+    }
+  },
+  "runtime": {
+    "gateway": "http://127.0.0.1:38018",
+    "frontend": "http://127.0.0.1:53018",
+    "data_directory": "target/agent-slot-2-data",
+    "controlled_provider": "http://127.0.0.1:63170",
+    "provider_kind": "process-local OpenAI-compatible test provider"
+  },
+  "auth": {
+    "status": 200,
+    "principal_id": "default",
+    "executable_model": "w18-controlled"
+  },
+  "run_sse": {
+    "thread_id": "03239bae-d28f-4119-b22b-7c54d85e09c0",
+    "run_id": "01a0cc3d-e4f6-708b-8aa1-325d07ffd9ec",
+    "terminal_status": "success",
+    "message_event": "messages",
+    "event_ids": ["11-0", "11-0"],
+    "rendered_text": "Controlled provider: w18-ui-success-1790133002087"
+  },
+  "cancel": {
+    "thread_id": "ea1316ac-3ba1-4972-96a2-29820d112d2c",
+    "run_id": "01a0cc3d-f33c-7d66-847e-5e0dde13a62d",
+    "request_query": "wait=0&action=interrupt",
+    "http_status": 202,
+    "terminal_status": "interrupted"
+  },
+  "reload": {
+    "thread_id": "3614ce74-5c02-4986-a295-b5ebba522c4a",
+    "run_id": "01a0cc3e-0230-7e0f-bbd5-e10d8f839951",
+    "rendered_text": "Controlled provider: w18-ui-reload-1790133009599"
+  },
+  "repeat_run": {
+    "result": "PASS",
+    "runner_elapsed_seconds": 76.847,
+    "playwright_duration_seconds": 22.123,
+    "retries": 0,
+    "case_duration_seconds": {
+      "auth": 3.684,
+      "run_sse": 3.639,
+      "cancel": 3.548,
+      "reload": 5.269
+    },
+    "controlled_provider_port": 64182,
+    "run_sse_thread_id": "aff8cdda-635f-4cac-950c-ba0974839f73",
+    "run_sse_run_id": "01a0cc4a-8afc-7bd3-9038-f18fbb0bd905",
+    "cancel_thread_id": "2b0c75c2-b079-4181-b70b-a59e7b58e748",
+    "cancel_run_id": "01a0cc4a-96e9-7815-8a62-4dc1b6b3f8b2",
+    "reload_thread_id": "dd6e5e3b-2d43-40ed-8fd7-01f117762a6a",
+    "reload_run_id": "01a0cc4a-a57a-7d2b-86b1-59ea7bad794c",
+    "ports_released": [38018, 53018, 64182],
+    "owned_pids_exited": [24204, 48056, 31948]
+  },
+  "process_health": {
+    "cold_build_observation_seconds": {
+      "maven_package": 36.463,
+      "next_compile": 101.0,
+      "typescript": 99.0,
+      "static_pages": 6.2
+    },
+    "cold_first_product_failure": "two assertion mismatches; no runner or Next hang and no infrastructure timeout",
+    "warm_runs_passed": 2,
+    "runner_or_next_hang": false,
+    "timeout": false,
+    "failure_artifacts_were_usable": true,
+    "failure_artifact_kinds": ["trace", "screenshot", "error-context", "provider log", "gateway log", "frontend log"],
+    "residual_owned_processes": false
+  },
+  "not_run": [
+    "real external provider",
+    "active-stream disconnect/reconnect recovery"
+  ]
+}

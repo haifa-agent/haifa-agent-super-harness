@@ -28,6 +28,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -38,6 +39,11 @@ import java.util.regex.Pattern;
 final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final Pattern THREAD = Pattern.compile("^/api/threads/([^/]+)$");
     private static final Pattern THREAD_STATE = Pattern.compile("^/api/threads/([^/]+)/state$");
+    private static final Pattern THREAD_HISTORY =
+            Pattern.compile("^/api/threads/([^/]+)/history$");
+    private static final Pattern THREAD_MESSAGES_PAGE =
+            Pattern.compile("^/api/threads/([^/]+)/messages/page$");
+    private static final Pattern THREAD_RUNS = Pattern.compile("^/api/threads/([^/]+)/runs$");
     private static final Pattern STREAM = Pattern.compile("^/api/threads/([^/]+)/runs/stream$");
     private static final Pattern JOIN_STREAM =
             Pattern.compile("^/api/threads/([^/]+)/runs/([^/]+)/stream$");
@@ -96,6 +102,16 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 getThreadState(exchange, match.group(1));
                 return;
             }
+            match = THREAD_HISTORY.matcher(path);
+            if (match.matches() && exchange.getRequestMethod().equals("POST")) {
+                getThreadHistory(exchange, match.group(1));
+                return;
+            }
+            match = THREAD_MESSAGES_PAGE.matcher(path);
+            if (match.matches() && exchange.getRequestMethod().equals("GET")) {
+                listThreadMessagesPage(exchange, match.group(1));
+                return;
+            }
             match = THREAD.matcher(path);
             if (match.matches() && exchange.getRequestMethod().equals("GET")) {
                 getThread(exchange, match.group(1));
@@ -114,6 +130,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             match = CANCEL.matcher(path);
             if (match.matches() && exchange.getRequestMethod().equals("POST")) {
                 cancelRun(exchange, match.group(1), match.group(2));
+                return;
+            }
+            match = THREAD_RUNS.matcher(path);
+            if (match.matches() && exchange.getRequestMethod().equals("GET")) {
+                listRuns(exchange, match.group(1));
                 return;
             }
             match = RUN.matcher(path);
@@ -172,25 +193,78 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             sendJson(exchange, 404, Map.of("detail", "Thread not found"));
             return;
         }
-        List<Map<String, Object>> messages = new ArrayList<>();
-        if (thread.latestRunId != null) {
-            RunRecord run = runs.get(thread.latestRunId);
-            if (run != null) {
-                messages.add(message("human-" + run.runId.value(), "human", run.humanMessage));
-                AgentRunSnapshot snapshot = run.bridge.snapshot(run.runId);
-                snapshot.output().ifPresent(output -> messages.add(
-                        message("assistant-" + run.runId.value(), "ai", output)));
-            }
+        sendJson(exchange, 200, threadStateResponse(thread));
+    }
+
+    private void getThreadHistory(HttpExchange exchange, String threadId) throws IOException {
+        ThreadRecord thread = threads.get(threadId);
+        if (thread == null) {
+            sendJson(exchange, 404, Map.of("detail", "Thread not found"));
+            return;
         }
+        JsonNode body = readBody(exchange);
+        JsonNode limitNode = body.get("limit");
+        if (limitNode != null
+                && (!limitNode.canConvertToInt()
+                        || !limitNode.isIntegralNumber()
+                        || limitNode.intValue() < 1
+                        || limitNode.intValue() > 100)) {
+            sendJson(exchange, 422, Map.of("detail", "limit must be between 1 and 100"));
+            return;
+        }
+        if (body.has("before") && !body.get("before").isNull()) {
+            sendJson(exchange, 422, Map.of("detail", "before history cursor is not implemented"));
+            return;
+        }
+        if (threadRuns(threadId).isEmpty()) {
+            sendJson(exchange, 200, List.of());
+            return;
+        }
+        sendJson(exchange, 200, List.of(threadHistoryResponse(thread)));
+    }
+
+    private void listThreadMessagesPage(HttpExchange exchange, String threadId) throws IOException {
+        if (!threads.containsKey(threadId)) {
+            sendJson(exchange, 404, Map.of("detail", "Thread not found"));
+            return;
+        }
+        if (queryValue(exchange, "after_seq").isPresent()) {
+            sendJson(
+                    exchange,
+                    422,
+                    Map.of("detail", "after_seq is not supported by this backward-only endpoint"));
+            return;
+        }
+        Optional<Integer> limit = positiveQueryInteger(exchange, "limit", 50, 200);
+        Optional<String> beforeRaw = queryValue(exchange, "before_seq");
+        Long before = null;
+        try {
+            if (beforeRaw.isPresent()) {
+                before = Long.parseLong(beforeRaw.orElseThrow());
+                if (before < 1) {
+                    throw new NumberFormatException();
+                }
+            }
+        } catch (NumberFormatException invalid) {
+            sendJson(exchange, 422, Map.of("detail", "Invalid message pagination"));
+            return;
+        }
+        if (limit.isEmpty()) {
+            sendJson(exchange, 422, Map.of("detail", "Invalid message pagination"));
+            return;
+        }
+
+        Long beforeSequence = before;
+        List<Map<String, Object>> eligible = threadMessageRows(threadId).stream()
+                .filter(row -> beforeSequence == null || ((Long) row.get("seq")) < beforeSequence)
+                .toList();
+        int from = Math.max(0, eligible.size() - limit.orElseThrow());
+        boolean hasMore = from > 0;
+        List<Map<String, Object>> page = eligible.subList(from, eligible.size());
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("values", Map.of("messages", messages));
-        response.put("next", List.of());
-        response.put("metadata", Map.of());
-        response.put("checkpoint", Map.of());
-        response.put("checkpoint_id", null);
-        response.put("parent_checkpoint_id", null);
-        response.put("created_at", null);
-        response.put("tasks", List.of());
+        response.put("data", page);
+        response.put("has_more", hasMore);
+        response.put("next_before_seq", hasMore ? page.getFirst().get("seq") : null);
         sendJson(exchange, 200, response);
     }
 
@@ -275,13 +349,16 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             thread.updatedAt = Instant.now();
             thread.activeRunId = started.runId().value();
             thread.latestRunId = started.runId().value();
+            long humanSequence = thread.nextMessageSequence;
+            thread.nextMessageSequence += 2;
             run = new RunRecord(
                     started.runId(),
                     threadId,
                     text(body, "assistant_id").orElse(null),
                     message,
                     thread.bridge,
-                    Instant.now());
+                    Instant.now(),
+                    humanSequence);
             runs.put(run.runId.value(), run);
         }
 
@@ -557,8 +634,13 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private void cancelRun(HttpExchange exchange, String threadId, String runId) throws IOException {
         String action = queryValue(exchange, "action").orElse("interrupt");
         String wait = queryValue(exchange, "wait").orElse("false");
-        if (!action.equals("interrupt") || !wait.equals("false")) {
-            sendJson(exchange, 422, Map.of("detail", "Only wait=false&action=interrupt is implemented"));
+        // The frozen JS SDK serializes boolean false as "0" while direct DeerFlow
+        // callers commonly use "false"; FastAPI's bool query accepts both.
+        if (!action.equals("interrupt") || !Set.of("false", "0").contains(wait)) {
+            sendJson(
+                    exchange,
+                    422,
+                    Map.of("detail", "Only wait=false/0&action=interrupt is implemented"));
             return;
         }
         RunRecord run = runs.get(runId);
@@ -586,10 +668,36 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             sendJson(exchange, 404, Map.of("detail", "Run " + runId + " not found"));
             return;
         }
+        sendJson(exchange, 200, runResponse(run));
+    }
+
+    private void listRuns(HttpExchange exchange, String threadId) throws IOException {
+        if (!threads.containsKey(threadId)) {
+            sendJson(exchange, 404, Map.of("detail", "Thread not found"));
+            return;
+        }
+        Optional<Integer> limit = positiveQueryInteger(exchange, "limit", 10, 1000);
+        Optional<Integer> offset = nonNegativeQueryInteger(exchange, "offset", 0);
+        if (limit.isEmpty() || offset.isEmpty()) {
+            sendJson(exchange, 422, Map.of("detail", "Invalid run pagination"));
+            return;
+        }
+        Optional<String> status = queryValue(exchange, "status");
+        List<Map<String, Object>> response = threadRuns(threadId).stream()
+                .sorted((left, right) -> Long.compare(right.humanSequence, left.humanSequence))
+                .map(this::runResponse)
+                .filter(run -> status.map(expected -> expected.equals(run.get("status"))).orElse(true))
+                .skip(offset.orElseThrow())
+                .limit(limit.orElseThrow())
+                .toList();
+        sendJson(exchange, 200, response);
+    }
+
+    private Map<String, Object> runResponse(RunRecord run) {
         AgentRunSnapshot snapshot = run.bridge.snapshot(run.runId);
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("run_id", runId);
-        response.put("thread_id", threadId);
+        response.put("run_id", run.runId.value());
+        response.put("thread_id", run.threadId);
         response.put("assistant_id", run.assistantId);
         response.put("status", deerFlowStatus(snapshot.status()));
         response.put("metadata", Map.of());
@@ -615,7 +723,72 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         response.put("middleware_tokens", 0);
         response.put("message_count", 0);
         response.put("stop_reason", null);
-        sendJson(exchange, 200, response);
+        return response;
+    }
+
+    private Map<String, Object> threadStateResponse(ThreadRecord thread) {
+        Map<String, Object> response = threadHistoryResponse(thread);
+        response.put("checkpoint", Map.of());
+        response.put("tasks", List.of());
+        return response;
+    }
+
+    private Map<String, Object> threadHistoryResponse(ThreadRecord thread) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("values", Map.of("messages", threadMessages(thread.threadId)));
+        response.put("next", List.of());
+        response.put("metadata", Map.of());
+        response.put("checkpoint_id", thread.latestRunId);
+        response.put("parent_checkpoint_id", null);
+        response.put("created_at", thread.updatedAt.toString());
+        return response;
+    }
+
+    private List<Map<String, Object>> threadMessages(String threadId) {
+        List<Map<String, Object>> messages = new ArrayList<>();
+        for (RunRecord run : threadRuns(threadId)) {
+            messages.add(messageForRun(
+                    "human-" + run.runId.value(), "human", run.humanMessage, run.runId.value()));
+            run.bridge.snapshot(run.runId).output().ifPresent(output -> messages.add(messageForRun(
+                    "assistant-" + run.runId.value(), "ai", output, run.runId.value())));
+        }
+        return messages;
+    }
+
+    private List<Map<String, Object>> threadMessageRows(String threadId) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (RunRecord run : threadRuns(threadId)) {
+            rows.add(messageRow(
+                    run,
+                    run.humanSequence,
+                    run.createdAt,
+                    message("human-" + run.runId.value(), "human", run.humanMessage)));
+            AgentRunSnapshot snapshot = run.bridge.snapshot(run.runId);
+            snapshot.output().ifPresent(output -> rows.add(messageRow(
+                    run,
+                    run.humanSequence + 1,
+                    snapshot.updatedAt(),
+                    message("assistant-" + run.runId.value(), "ai", output))));
+        }
+        return rows;
+    }
+
+    private Map<String, Object> messageRow(
+            RunRecord run, long sequence, Instant createdAt, Map<String, Object> content) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("run_id", run.runId.value());
+        row.put("seq", sequence);
+        row.put("content", content);
+        row.put("metadata", Map.of("caller", "lead_agent"));
+        row.put("created_at", createdAt.toString());
+        return row;
+    }
+
+    private List<RunRecord> threadRuns(String threadId) {
+        return runs.values().stream()
+                .filter(run -> run.threadId.equals(threadId))
+                .sorted((left, right) -> Long.compare(left.humanSequence, right.humanSequence))
+                .toList();
     }
 
     private Optional<String> validateRunRequest(JsonNode body) {
@@ -662,6 +835,34 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
         }
         return Optional.empty();
+    }
+
+    private Optional<Integer> positiveQueryInteger(
+            HttpExchange exchange, String name, int defaultValue, int maximum) {
+        Optional<String> raw = queryValue(exchange, name);
+        if (raw.isEmpty()) {
+            return Optional.of(defaultValue);
+        }
+        try {
+            int value = Integer.parseInt(raw.orElseThrow());
+            return value >= 1 && value <= maximum ? Optional.of(value) : Optional.empty();
+        } catch (NumberFormatException invalid) {
+            return Optional.empty();
+        }
+    }
+
+    private Optional<Integer> nonNegativeQueryInteger(
+            HttpExchange exchange, String name, int defaultValue) {
+        Optional<String> raw = queryValue(exchange, name);
+        if (raw.isEmpty()) {
+            return Optional.of(defaultValue);
+        }
+        try {
+            int value = Integer.parseInt(raw.orElseThrow());
+            return value >= 0 ? Optional.of(value) : Optional.empty();
+        } catch (NumberFormatException invalid) {
+            return Optional.empty();
+        }
     }
 
     private Map<String, Object> threadResponse(ThreadRecord record) {
@@ -819,9 +1020,19 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         messagePayload.put("additional_kwargs", Map.of());
         writeSse(
                 output,
-                "messages-tuple",
+                // LangGraph calls the requested wire mode "messages-tuple", but its
+                // platform SSE event is "messages" and the frozen SDK reducer matches
+                // that exact name before consuming the tuple payload.
+                "messages",
                 List.of(messagePayload, Map.of("langgraph_node", "agent")),
                 id);
+    }
+
+    private Map<String, Object> messageForRun(
+            String id, String type, String content, String runId) {
+        Map<String, Object> result = message(id, type, content);
+        result.put("run_id", runId);
+        return result;
     }
 
     private Map<String, Object> message(String id, String type, String content) {
@@ -884,6 +1095,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private volatile String modelBindingIdentity;
         private volatile String activeRunId;
         private volatile String latestRunId;
+        private long nextMessageSequence = 1;
 
         private ThreadRecord(String threadId, Map<String, Object> metadata, Instant now) {
             this.threadId = threadId;
@@ -901,6 +1113,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private final HaifaRunBridge bridge;
         private final BoundedRunEventProjector projector;
         private final Instant createdAt;
+        private final long humanSequence;
         private io.haifa.agent.runtime.api.RunEventCursor sdkCursor;
 
         private RunRecord(
@@ -909,7 +1122,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 String assistantId,
                 String humanMessage,
                 HaifaRunBridge bridge,
-                Instant createdAt) {
+                Instant createdAt,
+                long humanSequence) {
             this.runId = runId;
             this.threadId = threadId;
             this.assistantId = assistantId;
@@ -921,6 +1135,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     requestedRunId -> Optional.of(bridge.authoritativeView(requestedRunId)));
             this.sdkCursor = bridge.beforeFirstEvent(runId);
             this.createdAt = createdAt;
+            this.humanSequence = humanSequence;
         }
     }
 
