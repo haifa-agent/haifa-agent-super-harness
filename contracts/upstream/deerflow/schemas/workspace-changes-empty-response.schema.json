@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["available", "version", "summary", "files", "limits"],
+  "properties": {
+    "available": {"const": false},
+    "version": {"const": 1},
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["created", "modified", "deleted", "symlink_created", "additions", "deletions", "truncated"],
+      "properties": {
+        "created": {"const": 0},
+        "modified": {"const": 0},
+        "deleted": {"const": 0},
+        "symlink_created": {"const": 0},
+        "additions": {"const": 0},
+        "deletions": {"const": 0},
+        "truncated": {"const": false}
+      }
+    },
+    "files": {"type": "array", "maxItems": 0},
+    "limits": {"type": "object", "maxProperties": 0}
+  }
+}

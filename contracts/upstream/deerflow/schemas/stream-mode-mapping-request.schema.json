@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["stream_mode"],
+  "properties": {
+    "stream_mode": {
+      "type": "array",
+      "prefixItems": [{"const": "messages-tuple"}],
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"enum": ["messages-tuple", "values", "updates", "debug", "tasks", "checkpoints", "custom"]}
+    }
+  }
+}

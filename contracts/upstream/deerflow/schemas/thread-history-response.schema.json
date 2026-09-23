@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["checkpoint_id", "parent_checkpoint_id", "metadata", "values", "created_at", "next"],
+    "properties": {
+      "checkpoint_id": {"type": "string"},
+      "parent_checkpoint_id": {"type": ["string", "null"]},
+      "metadata": {"type": "object"},
+      "values": {"type": "object"},
+      "created_at": {"type": ["string", "null"]},
+      "next": {"type": "array", "items": {"type": "string"}}
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "instructions", "presentation", "status", "created_at", "updated_at"],
+  "properties": {
+    "id": {"type": "string"},
+    "name": {"type": "string"},
+    "instructions": {"type": "string"},
+    "presentation": {"type": "object"},
+    "status": {"enum": ["active", "archived"]},
+    "created_at": {"type": "string"},
+    "updated_at": {"type": "string"}
+  }
+}
