@@ -15,7 +15,6 @@ import io.haifa.agent.superharness.workspace.UploadReceipt;
 import io.haifa.agent.superharness.workspace.WorkspaceBinding;
 import io.haifa.agent.superharness.workspace.WorkspaceError;
 import io.haifa.agent.superharness.workspace.WorkspaceException;
-import io.haifa.agent.superharness.workspace.WorkspaceFileSnapshot;
 import io.haifa.agent.superharness.workspace.WorkspaceLimits;
 
 import java.io.ByteArrayOutputStream;
@@ -24,6 +23,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -32,6 +33,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Semaphore;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -45,8 +47,8 @@ import java.util.regex.Pattern;
 final class DeerFlowWorkspaceApi {
     private static final String OWNER_ID = DeerFlowBootstrapApi.DEFAULT_USER_ID;
     private static final int MAX_FILES = 10;
-    private static final long MAX_TOTAL_BYTES = 100L * 1024 * 1024;
-    private static final long MAX_MULTIPART_OVERHEAD = 1024L * 1024;
+    private static final long MAX_TOTAL_BYTES = 25L * 1024 * 1024;
+    private static final long MAX_MULTIPART_OVERHEAD = 256L * 1024;
     private static final int MAX_HEADER_BYTES = 16 * 1024;
     private static final int LIST_PAGE_SIZE = 256;
     private static final int MAX_LISTED_FILES = 4096;
@@ -70,6 +72,7 @@ final class DeerFlowWorkspaceApi {
     private final WorkspaceLimits limits;
     private final RestrictedWorkspaceService workspace;
     private final Predicate<String> threadExists;
+    private final Semaphore uploadSlot = new Semaphore(1);
 
     DeerFlowWorkspaceApi(ObjectMapper json, java.nio.file.Path storageRoot, Predicate<String> threadExists) {
         this.json = java.util.Objects.requireNonNull(json, "json");
@@ -139,18 +142,56 @@ final class DeerFlowWorkspaceApi {
     }
 
     private void upload(HttpExchange exchange, WorkspaceBinding binding) throws IOException {
-        List<MultipartFile> files = parseMultipart(exchange);
-        List<Map<String, Object>> uploaded = new ArrayList<>(files.size());
-        for (MultipartFile file : files) {
-            UploadReceipt receipt = workspace.upload(
-                    OWNER_ID, binding.workspaceId(), file.filename, file.content, file.mediaType);
-            uploaded.add(uploadInfo(binding.threadId(), receipt, Optional.empty()));
+        if (!uploadSlot.tryAcquire()) {
+            throw new HttpFailure(429, "Another upload request is already using the bounded local slot");
         }
-        sendJson(exchange, 200, orderedMap(
-                "success", true,
-                "files", uploaded,
-                "message", "Successfully uploaded " + uploaded.size() + " file(s)",
-                "skipped_files", List.of()));
+        try {
+            List<MultipartFile> files = parseMultipart(exchange);
+            List<UploadReceipt> receipts = new ArrayList<>(files.size());
+            try {
+                for (MultipartFile file : files) {
+                    receipts.add(workspace.upload(
+                            OWNER_ID, binding.workspaceId(), file.filename, file.content, file.mediaType));
+                }
+            } catch (RuntimeException failure) {
+                rollbackNewUploads(binding, receipts, failure);
+                throw failure;
+            }
+            List<Map<String, Object>> uploaded = receipts.stream()
+                    .map(receipt -> uploadInfo(binding.threadId(), receipt, Optional.empty()))
+                    .toList();
+            sendJson(exchange, 200, orderedMap(
+                    "success", true,
+                    "files", uploaded,
+                    "message", "Successfully uploaded " + uploaded.size() + " file(s)",
+                    "skipped_files", List.of()));
+        } finally {
+            uploadSlot.release();
+        }
+    }
+
+    private void rollbackNewUploads(
+            WorkspaceBinding binding, List<UploadReceipt> receipts, RuntimeException originalFailure) {
+        RuntimeException rollbackFailure = null;
+        for (int index = receipts.size() - 1; index >= 0; index--) {
+            UploadReceipt receipt = receipts.get(index);
+            if (receipt.deduplicated()) {
+                continue;
+            }
+            try {
+                workspace.rollbackNewUpload(OWNER_ID, binding.workspaceId(), receipt);
+            } catch (RuntimeException failure) {
+                if (rollbackFailure == null) {
+                    rollbackFailure = failure;
+                } else {
+                    rollbackFailure.addSuppressed(failure);
+                }
+            }
+        }
+        if (rollbackFailure != null) {
+            rollbackFailure.addSuppressed(originalFailure);
+            throw new HttpFailure(500, "Upload failed and its bounded compensation was incomplete");
+        }
     }
 
     private void listUploads(HttpExchange exchange, WorkspaceBinding binding) throws IOException {
@@ -182,31 +223,20 @@ final class DeerFlowWorkspaceApi {
     }
 
     private void readArtifact(HttpExchange exchange, WorkspaceBinding binding, String logicalPath) throws IOException {
-        WorkspaceFileService files = workspace.workspaceFiles(OWNER_ID, binding.workspaceId());
         String relativePath = logicalPath.substring("/mnt/user-data/".length());
-        WorkspacePath path = new WorkspacePath(binding.workspaceId(), ProjectPath.of(relativePath));
-        FileMetadata metadata = files.stat(path, true);
-        if (metadata.type() != FileType.FILE || metadata.link()) {
-            throw new HttpFailure(404, "Artifact file does not exist");
-        }
-        long total = metadata.size();
-        String expectedHash = metadata.contentHash()
-                .orElseThrow(() -> new HttpFailure(409, "Artifact hash is unavailable"));
+        byte[] all = workspace.readVerifiedBytes(OWNER_ID, binding.workspaceId(), logicalPath);
+        long total = all.length;
+        String expectedHash = sha256(all);
         ByteSelection selection = parseRange(exchange.getRequestHeaders().getFirst("Range"), total);
-        byte[] payload = readVerified(binding, logicalPath, selection.start, selection.length, total, expectedHash);
-        if (payload.length != selection.length) {
-            throw new HttpFailure(409, "Artifact size changed while it was read");
-        }
 
         String filename = relativePath.substring(relativePath.lastIndexOf('/') + 1);
-        String mediaType = Optional.ofNullable(URLConnection.guessContentTypeFromName(filename))
-                .orElse("application/octet-stream");
+        String mediaType = mediaType(filename, all);
         boolean download = queryValue(exchange, "download").map("true"::equalsIgnoreCase).orElse(false);
         boolean activeContent = isActiveContent(mediaType);
         exchange.getResponseHeaders().set("Accept-Ranges", "bytes");
         exchange.getResponseHeaders().set("ETag", "\"" + expectedHash + "\"");
         exchange.getResponseHeaders().set("Content-Type", mediaType);
-        exchange.getResponseHeaders().set("Content-Length", Integer.toString(payload.length));
+        exchange.getResponseHeaders().set("Content-Length", Integer.toString(selection.length));
         exchange.getResponseHeaders().set("Cache-Control", "private, no-store");
         exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
         exchange.getResponseHeaders().set(
@@ -217,40 +247,15 @@ final class DeerFlowWorkspaceApi {
             exchange.getResponseHeaders().set(
                     "Content-Range", "bytes " + selection.start + "-" + selection.end + "/" + total);
         }
-        if (payload.length == 0) {
+        if (selection.length == 0) {
             exchange.sendResponseHeaders(selection.status, -1);
             exchange.close();
             return;
         }
-        exchange.sendResponseHeaders(selection.status, payload.length);
+        exchange.sendResponseHeaders(selection.status, selection.length);
         try (OutputStream output = exchange.getResponseBody()) {
-            output.write(payload);
+            output.write(all, Math.toIntExact(selection.start), selection.length);
         }
-    }
-
-    private byte[] readVerified(
-            WorkspaceBinding binding,
-            String logicalPath,
-            long start,
-            int length,
-            long total,
-            String expectedHash) {
-        ByteArrayOutputStream output = new ByteArrayOutputStream(length);
-        long offset = start;
-        int remaining = length;
-        while (remaining > 0) {
-            int request = Math.min(remaining, limits.maxReadBytes());
-            WorkspaceFileSnapshot page = workspace.read(
-                    OWNER_ID, binding.workspaceId(), logicalPath, offset, request);
-            if (page.totalByteCount() != total || !page.sha256().equals(expectedHash)
-                    || page.offset() != offset || page.bytes().length == 0) {
-                throw new HttpFailure(409, "Artifact content changed while it was read");
-            }
-            output.writeBytes(page.bytes());
-            offset += page.bytes().length;
-            remaining -= page.bytes().length;
-        }
-        return output.toByteArray();
     }
 
     private List<MultipartFile> parseMultipart(HttpExchange exchange) throws IOException {
@@ -268,17 +273,22 @@ final class DeerFlowWorkspaceApi {
             throw new HttpFailure(422, "Multipart boundary is invalid");
         }
         long maxBody = MAX_TOTAL_BYTES + MAX_MULTIPART_OVERHEAD;
+        long declaredLength = -1;
         String contentLength = exchange.getRequestHeaders().getFirst("Content-Length");
         if (contentLength != null) {
             try {
-                if (Long.parseLong(contentLength) > maxBody) {
+                declaredLength = Long.parseLong(contentLength);
+                if (declaredLength < 0) {
+                    throw new HttpFailure(422, "Content-Length is invalid");
+                }
+                if (declaredLength > maxBody) {
                     throw new HttpFailure(413, "Multipart request exceeds the total size limit");
                 }
             } catch (NumberFormatException malformed) {
                 throw new HttpFailure(422, "Content-Length is invalid");
             }
         }
-        byte[] body = readBounded(exchange.getRequestBody(), maxBody);
+        byte[] body = readBounded(exchange.getRequestBody(), maxBody, declaredLength);
         List<MultipartFile> files = decodeMultipart(body, boundary);
         if (files.isEmpty()) {
             throw new HttpFailure(400, "No files provided");
@@ -467,7 +477,17 @@ final class DeerFlowWorkspaceApi {
         }
     }
 
-    private static byte[] readBounded(InputStream input, long maxBytes) throws IOException {
+    private static byte[] readBounded(InputStream input, long maxBytes, long declaredLength) throws IOException {
+        if (declaredLength >= 0) {
+            byte[] exact = input.readNBytes(Math.toIntExact(declaredLength));
+            if (exact.length != declaredLength) {
+                throw new HttpFailure(422, "Multipart body is shorter than Content-Length");
+            }
+            if (input.read() >= 0) {
+                throw new HttpFailure(413, "Multipart body exceeds Content-Length");
+            }
+            return exact;
+        }
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         byte[] buffer = new byte[8192];
         long total = 0;
@@ -482,6 +502,28 @@ final class DeerFlowWorkspaceApi {
             output.write(buffer, 0, count);
         }
         return output.toByteArray();
+    }
+
+    private static String mediaType(String filename, byte[] content) {
+        String guessed = URLConnection.guessContentTypeFromName(filename);
+        if (guessed != null) {
+            return guessed;
+        }
+        int sample = Math.min(content.length, 8192);
+        for (int index = 0; index < sample; index++) {
+            if (content[index] == 0) {
+                return "application/octet-stream";
+            }
+        }
+        return "text/plain";
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
     }
 
     private static int indexOf(byte[] value, byte[] needle, int from) {
@@ -562,9 +604,7 @@ final class DeerFlowWorkspaceApi {
     private static boolean isActiveContent(String mediaType) {
         String value = mediaType.toLowerCase(Locale.ROOT);
         return value.equals("text/html") || value.equals("application/xhtml+xml")
-                || value.equals("image/svg+xml") || value.equals("text/xml")
-                || value.equals("application/xml") || value.equals("text/xsl")
-                || value.endsWith("+xml");
+                || value.equals("image/svg+xml");
     }
 
     private static boolean isLoopbackPeer(HttpExchange exchange) {

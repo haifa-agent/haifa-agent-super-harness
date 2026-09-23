@@ -182,6 +182,34 @@ class RestrictedWorkspaceServiceTest {
                 .isEqualTo(bytes("v1"));
     }
 
+    @Test
+    void readsVerifiedBytesOnceAndOnlyRollsBackNewReceipt() {
+        RestrictedWorkspaceService workspace = service();
+        WorkspaceBinding binding = workspace.bind("owner-a", "thread-rollback");
+        UploadReceipt created = workspace.upload(
+                "owner-a", binding.workspaceId(), "input.txt", bytes("payload"), "text/plain");
+
+        assertThat(workspace.readVerifiedBytes(
+                "owner-a", binding.workspaceId(), created.logicalPath())).isEqualTo(bytes("payload"));
+        workspace.rollbackNewUpload("owner-a", binding.workspaceId(), created);
+        assertThatThrownBy(() -> workspace.readVerifiedBytes(
+                "owner-a", binding.workspaceId(), created.logicalPath()))
+                .isInstanceOf(WorkspaceException.class)
+                .extracting(exception -> ((WorkspaceException) exception).error())
+                .isEqualTo(WorkspaceError.FILE_NOT_FOUND);
+
+        UploadReceipt recreated = workspace.upload(
+                "owner-a", binding.workspaceId(), "input.txt", bytes("payload"), "text/plain");
+        UploadReceipt existing = workspace.upload(
+                "owner-a", binding.workspaceId(), "input.txt", bytes("payload"), "text/plain");
+        assertThat(recreated.deduplicated()).isFalse();
+        assertThat(existing.deduplicated()).isTrue();
+        assertThatThrownBy(() -> workspace.rollbackNewUpload("owner-a", binding.workspaceId(), existing))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(workspace.readVerifiedBytes(
+                "owner-a", binding.workspaceId(), recreated.logicalPath())).isEqualTo(bytes("payload"));
+    }
+
     private RestrictedWorkspaceService service() {
         return new RestrictedWorkspaceService(storageRoot, limits);
     }

@@ -140,6 +140,50 @@ public final class RestrictedWorkspaceService {
         }
     }
 
+    /**
+     * Load one owner-checked file into a fresh caller-owned byte array.
+     *
+     * <p>This is the bounded transport handoff used by HTTP full and Range responses. Unlike the
+     * paged text/read API it reads the file exactly once, so slicing multiple response pages cannot
+     * accidentally re-read and re-hash the complete file for every page.
+     */
+    public byte[] readVerifiedBytes(String ownerId, WorkspaceId workspaceId, String logicalPath) {
+        WorkspaceBinding binding = registry.requireOwner(ownerId, workspaceId);
+        String normalized = LogicalWorkspacePath.normalize(logicalPath);
+        Path root = registry.userDataRoot(binding.workspaceId());
+        return readAllVerified(root, LogicalWorkspacePath.resolve(root, normalized), limits.maxWorkingFileBytes());
+    }
+
+    /**
+     * Compensate a newly-created upload after a later member of the same HTTP request fails.
+     * Existing/deduplicated files are never eligible, and the exact receipt hash and size must still
+     * match before deletion.
+     */
+    public void rollbackNewUpload(String ownerId, WorkspaceId workspaceId, UploadReceipt receipt) {
+        Objects.requireNonNull(receipt, "receipt");
+        if (receipt.deduplicated()) {
+            throw new IllegalArgumentException("a deduplicated upload cannot be rolled back");
+        }
+        WorkspaceBinding binding = registry.requireOwner(ownerId, workspaceId);
+        String normalized = LogicalWorkspacePath.normalize(receipt.logicalPath());
+        if (!normalized.startsWith("uploads/")) {
+            throw new WorkspaceException(WorkspaceError.INVALID_PATH,
+                    "only a newly-created upload can be rolled back");
+        }
+        Path root = registry.userDataRoot(binding.workspaceId());
+        Path target = LogicalWorkspacePath.resolve(root, normalized);
+        byte[] current = readAllVerified(root, target, limits.maxUploadBytes());
+        if (current.length != receipt.byteCount() || !Hashing.sha256(current).equals(receipt.sha256())) {
+            throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY,
+                    "upload changed before failure compensation");
+        }
+        try {
+            Files.delete(target);
+        } catch (IOException exception) {
+            throw WorkspaceRegistry.ioFailure("failed to compensate upload", exception);
+        }
+    }
+
     public Artifact publish(String ownerId, WorkspaceId workspaceId, String logicalPath, String title,
                             String artifactType, String mediaType, ArtifactPublishContext context) {
         WorkspaceBinding binding = registry.requireOwner(ownerId, workspaceId);

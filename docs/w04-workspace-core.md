@@ -80,8 +80,20 @@ the frozen `/api/threads/{thread}/artifacts/mnt/user-data/...` shape. Full reads
 range return verified Workspace bytes with real `Content-Length`, `Content-Range`, `ETag`, MIME, and
 download disposition. Invalid or multiple ranges return 416; unknown threads, other path roots,
 traversal, links, non-files, size drift, or hash drift fail closed. Multipart request bytes, headers,
-file count, individual file bytes, and total bytes are bounded before storage. Active HTML/XML/SVG
-content is always an attachment.
+file count, individual file bytes, and total bytes are bounded before storage. The HTTP adapter lowers
+the frozen client's configurable 100 MiB total to 25 MiB, accepts only one upload request at a time,
+and caps multipart framing overhead at 256 KiB. Its retained payload arrays are therefore bounded to
+the request body (25.25 MiB), decoded parts (25 MiB total), and one service-owned 25 MiB clone; an
+existing-name integrity comparison can transiently add one further 25 MiB read. Later-member failure
+compensates every earlier newly-created receipt in reverse order after rechecking owner, path, size,
+and hash; pre-existing deduplicated files are never deleted. Active HTML/XHTML/SVG content is always
+an attachment.
+
+Artifact delivery reads and verifies the bounded file into one snapshot and hashes it once. Full and
+Range responses write directly from that snapshot, so a large response no longer re-reads/re-hashes
+the whole file per page or allocates a second Range-sized array. Filename MIME detection is followed
+by the frozen backend's 8 KiB no-NUL text sniff, preserving extensionless text previews while leaving
+extensionless binary content as `application/octet-stream`.
 
 This HTTP slice still uses the server-selected local owner `default`; client input cannot choose an
 owner. It asks the existing Thread API whether the thread exists and keeps all file identity below
