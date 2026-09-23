@@ -1,0 +1,75 @@
+{
+  "captured_at": "2026-09-23T12:00:50+08:00",
+  "result": "PASS",
+  "level": "L3",
+  "commit_under_test": "a3c7f8ce621ed7c4a3d4f9d5c95d69cac9dac4a6",
+  "runtime": {
+    "gateway": "http://127.0.0.1:38018",
+    "frontend": "http://127.0.0.1:53018",
+    "data_directory": "target/agent-slot-2-deepseek-data",
+    "provider": "https://api.deepseek.com",
+    "dialect": "deepseek-openai-chat",
+    "provider_model": "deepseek-v4-pro",
+    "managed_model": "w18-deepseek-live",
+    "credential_source": "os",
+    "credential_reference_resolved_by_gateway": true,
+    "has_api_key_in_public_response": false,
+    "secret_value_persisted": false,
+    "authorization_or_bearer_in_process_logs": false
+  },
+  "browser": {
+    "thread_id": "d1149976-71a5-4750-9049-56fd730eb6f5",
+    "run_id": "01a0cc6c-4517-77bd-bdb5-b46e9e744cb5",
+    "terminal_status": "success",
+    "assistant_non_empty": true,
+    "assistant_length": 25,
+    "assistant_sha256": "a2c0dabaa885261d648977d12dacb74d1d9f74af7265d914baf058f42221cf5d",
+    "stream_event": "messages",
+    "stream_end": true,
+    "event_ids": ["11-0", "11-0"],
+    "reload_restored_assistant": true,
+    "browser_api_origins": ["http://127.0.0.1:53018"],
+    "deerflow_backend_fallback_observed": false
+  },
+  "timing": {
+    "build_mode": "warm_skip_build",
+    "runner_elapsed_seconds": 95.292,
+    "gateway_start_to_ready_seconds": 1.14,
+    "next_start_to_ready_seconds": 1.858,
+    "next_dynamic_compile": "not_applicable_prebuilt_production_start",
+    "playwright_elapsed_seconds": 12.059,
+    "case_elapsed_seconds": 8.121,
+    "submit_to_reload_assertion_seconds": 5.925,
+    "retries": 0,
+    "timeouts": 0,
+    "runner_or_next_hang": false
+  },
+  "process_health": {
+    "gateway_pid": 50308,
+    "frontend_pid": 9752,
+    "owned_pids_exited": true,
+    "ports_released": [38018, 53018],
+    "server_error_lines": 0,
+    "frontend_error_lines": 0
+  },
+  "artifacts": {
+    "root": "target/w18-deepseek-web-l3/playwright",
+    "trace": "target/w18-deepseek-web-l3/playwright/artifacts/w18-deepseek-live-real-Dee-193a6-nal-streamed-and-reloadable-chromium/trace.zip",
+    "screenshot": "target/w18-deepseek-web-l3/playwright/artifacts/w18-deepseek-live-real-Dee-193a6-nal-streamed-and-reloadable-chromium/deepseek-web-l3.png",
+    "browser_evidence": "target/w18-deepseek-web-l3/playwright/artifacts/w18-deepseek-live-real-Dee-193a6-nal-streamed-and-reloadable-chromium/deepseek-web-l3.json",
+    "results": "target/w18-deepseek-web-l3/playwright/results.json",
+    "gateway_logs": [
+      "target/w18-deepseek-web-l3/playwright/server-20260923-115923.stdout.log",
+      "target/w18-deepseek-web-l3/playwright/server-20260923-115923.stderr.log"
+    ],
+    "frontend_logs": [
+      "target/w18-deepseek-web-l3/playwright/frontend-20260923-115923.stdout.log",
+      "target/w18-deepseek-web-l3/playwright/frontend-20260923-115923.stderr.log"
+    ]
+  },
+  "previous_controlled_provider_health_evidence": "tests/w18-ui-smoke/evidence/20260923-sse-projection-pass.json",
+  "not_run": [
+    "active-stream disconnect/reconnect recovery",
+    "DeerFlow-vs-Haifa runtime differential"
+  ]
+}

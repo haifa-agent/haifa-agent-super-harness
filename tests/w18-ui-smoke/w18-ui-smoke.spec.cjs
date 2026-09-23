@@ -55,7 +55,7 @@ async function saveEvidence(testInfo, name, evidence) {
 
 async function openNewChat(page) {
   await page.goto("/workspace/chats/new", { waitUntil: "domcontentloaded" });
-  const input = page.getByPlaceholder(/how can i assist you/i);
+  const input = page.locator('textarea[name="message"]');
   await expect(input).toBeVisible();
   return { input };
 }
