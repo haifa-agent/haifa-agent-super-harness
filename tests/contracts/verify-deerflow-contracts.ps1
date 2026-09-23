@@ -77,6 +77,15 @@ try {
         throw "Unevidenced runtime PASS gate did not fail for the expected reason:`n$($runtimeClaimResult.Output)"
     }
 
+    $implementationClaimPath = Join-Path $TempRoot 'implementation-claim-without-evidence.json'
+    $implementationClaim = Get-Content -LiteralPath $OracleManifest -Raw | ConvertFrom-Json -Depth 100
+    $implementationClaim.contracts[0].implementation_status = 'IMPLEMENTED'
+    $implementationClaim | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $implementationClaimPath -Encoding utf8NoBOM
+    $implementationClaimResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleManifest $implementationClaimPath
+    if ($implementationClaimResult.ExitCode -eq 0 -or $implementationClaimResult.Output -notmatch 'must keep implementation NOT_ASSESSED') {
+        throw "Unevidenced implementation claim gate did not fail for the expected reason:`n$($implementationClaimResult.Output)"
+    }
+
     $invalidFixturePath = Join-Path $TempRoot 'invalid-fixture.json'
     $invalidFixture = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
     $authFixture = @($invalidFixture.fixtures | Where-Object id -eq 'auth.me.disabled-local')[0]
@@ -97,13 +106,68 @@ try {
         throw "Unknown run option gate did not fail for the expected reason:`n$($unknownRunOptionResult.Output)"
     }
 
+    $missingExpandedContractPath = Join-Path $TempRoot 'missing-expanded-contract.json'
+    $missingExpandedContract = Get-Content -LiteralPath $OracleManifest -Raw | ConvertFrom-Json -Depth 100
+    $missingExpandedContract.contracts = @($missingExpandedContract.contracts | Where-Object id -ne 'rest.projects.patch.exchange')
+    $missingExpandedContract | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $missingExpandedContractPath -Encoding utf8NoBOM
+    $missingExpandedContractResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleManifest $missingExpandedContractPath
+    if ($missingExpandedContractResult.ExitCode -eq 0 -or $missingExpandedContractResult.Output -notmatch 'Required core protocol contract is missing') {
+        throw "Missing expanded contract gate did not fail for the expected reason:`n$($missingExpandedContractResult.Output)"
+    }
+
+    $wrongWireEventPath = Join-Path $TempRoot 'wrong-wire-event.json'
+    $wrongWireEvent = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $wireFixture = @($wrongWireEvent.fixtures | Where-Object id -eq 'stream.messages-tuple.wire-messages')[0]
+    $wireFixture.response.wire_event = 'messages-tuple'
+    $wrongWireEvent | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $wrongWireEventPath -Encoding utf8NoBOM
+    $wrongWireEventResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleFixtures $wrongWireEventPath
+    if ($wrongWireEventResult.ExitCode -eq 0 -or $wrongWireEventResult.Output -notmatch 'failed schema validation') {
+        throw "Wrong SSE wire event gate did not fail for the expected reason:`n$($wrongWireEventResult.Output)"
+    }
+
+    $projectLeakPath = Join-Path $TempRoot 'project-response-leak.json'
+    $projectLeak = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $projectFixture = @($projectLeak.fixtures | Where-Object id -eq 'projects.get.active')[0]
+    $projectFixture.response | Add-Member -NotePropertyName user_id -NotePropertyValue 'must-not-leak'
+    $projectLeak | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $projectLeakPath -Encoding utf8NoBOM
+    $projectLeakResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleFixtures $projectLeakPath
+    if ($projectLeakResult.ExitCode -eq 0 -or $projectLeakResult.Output -notmatch 'failed schema validation') {
+        throw "Project ownership leak gate did not fail for the expected reason:`n$($projectLeakResult.Output)"
+    }
+
+    $workspaceFalsePath = Join-Path $TempRoot 'workspace-empty-claims-available.json'
+    $workspaceFalse = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $workspaceFixture = @($workspaceFalse.fixtures | Where-Object id -eq 'workspace-changes.unavailable-empty')[0]
+    $workspaceFixture.response.available = $true
+    $workspaceFalse | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $workspaceFalsePath -Encoding utf8NoBOM
+    $workspaceFalseResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleFixtures $workspaceFalsePath
+    if ($workspaceFalseResult.ExitCode -eq 0 -or $workspaceFalseResult.Output -notmatch 'failed schema validation') {
+        throw "Workspace unavailable response gate did not fail for the expected reason:`n$($workspaceFalseResult.Output)"
+    }
+
+    $missingErrorsPath = Join-Path $TempRoot 'missing-error-statuses.json'
+    $missingErrors = Get-Content -LiteralPath $OracleManifest -Raw | ConvertFrom-Json -Depth 100
+    $expandedContract = @($missingErrors.contracts | Where-Object id -eq 'rest.thread.messages-page.exchange')[0]
+    $expandedContract.http_status.errors = @()
+    $missingErrors | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $missingErrorsPath -Encoding utf8NoBOM
+    $missingErrorsResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleManifest $missingErrorsPath
+    if ($missingErrorsResult.ExitCode -eq 0 -or $missingErrorsResult.Output -notmatch 'has no fail-closed error status inventory') {
+        throw "Missing error status inventory gate did not fail for the expected reason:`n$($missingErrorsResult.Output)"
+    }
+
     Write-Host 'PASS valid manifest'
     Write-Host 'PASS frozen SHA mismatch is rejected'
     Write-Host 'PASS missing critical SSE surface is rejected'
     Write-Host 'PASS missing endpoint source evidence is rejected'
     Write-Host 'PASS static Oracle cannot claim runtime PASS without evidence'
+    Write-Host 'PASS static Oracle cannot claim implementation without evidence'
     Write-Host 'PASS invalid REST fixture is rejected by its frozen schema'
     Write-Host 'PASS undeclared run options are rejected instead of silently ignored'
+    Write-Host 'PASS missing expanded protocol contract is rejected'
+    Write-Host 'PASS messages-tuple request cannot drift to a messages-tuple wire event'
+    Write-Host 'PASS project responses cannot leak undeclared ownership fields'
+    Write-Host 'PASS workspace unavailable fixture cannot claim available=true'
+    Write-Host 'PASS expanded contracts must retain explicit error statuses'
 }
 finally {
     if (Test-Path -LiteralPath $TempRoot) {

@@ -50,6 +50,15 @@
     "run.create.sdk-sse",
     "run.join.sdk-sse",
     "run.cancel.sdk-rest",
+    "thread.history.sdk-rest",
+    "thread.messages-page.browser",
+    "thread.runs.sdk-rest",
+    "projects.config.browser",
+    "projects.list.browser",
+    "projects.create.browser",
+    "projects.get-patch.browser",
+    "projects.threads.browser",
+    "run.workspace-changes.browser",
     "file.upload.browser",
     "file.artifact.browser",
     "browser.navigate.browser",
@@ -245,6 +254,151 @@
       ]
     },
     {
+      "id": "thread.history.sdk-rest",
+      "category": "rest",
+      "consumer": "langgraph_sdk",
+      "transport": "REST",
+      "methods": ["POST"],
+      "public_path": "/api/langgraph/threads/{thread_id}/history",
+      "gateway_path": "/api/threads/{thread_id}/history",
+      "registration_condition": "Thread read permission and ownership required; the SDK requests checkpoint history, while only the latest returned checkpoint retains messages.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/components/workspace/chats/chat-page.tsx", "must_contain": ["LangGraph SDK eagerly fetches /history"]},
+        {"source_path": "backend/app/gateway/routers/threads.py", "must_contain": ["@router.post(\"/{thread_id}/history\", response_model=list[HistoryEntry])", "Only the latest (first) checkpoint carries the ``messages`` key"]}
+      ]
+    },
+    {
+      "id": "thread.messages-page.browser",
+      "category": "rest",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["GET"],
+      "public_path": "/api/threads/{thread_id}/messages/page?before_seq={seq}",
+      "gateway_path": "/api/threads/{thread_id}/messages/page",
+      "registration_condition": "Thread run-read permission and ownership required; the browser uses backward keyset pagination and never sends after_seq.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/threads/hooks.ts", "must_contain": ["/messages/page`", "url.searchParams.set(\"before_seq\", String(beforeSeq))"]},
+        {"source_path": "backend/app/gateway/routers/thread_runs.py", "must_contain": ["@router.get(\"/{thread_id}/messages/page\", response_model=ThreadMessagesPageResponse)", "after_seq is not supported by this backward-only endpoint"]}
+      ]
+    },
+    {
+      "id": "thread.runs.sdk-rest",
+      "category": "rest",
+      "consumer": "langgraph_sdk",
+      "transport": "REST",
+      "methods": ["GET"],
+      "public_path": "/api/langgraph/threads/{thread_id}/runs",
+      "gateway_path": "/api/threads/{thread_id}/runs",
+      "registration_condition": "Thread run-read permission and ownership required; response is a bare newest-first array, not the /runs/page envelope.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/threads/hooks.ts", "must_contain": ["apiClient.runs.list(threadId)"]},
+        {"source_path": "backend/app/gateway/routers/thread_runs.py", "must_contain": ["@router.get(\"/{thread_id}/runs\", response_model=list[RunResponse])", "default 100, as a bare array"]}
+      ]
+    },
+    {
+      "id": "projects.config.browser",
+      "category": "rest",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["GET"],
+      "public_path": "/api/projects/config",
+      "gateway_path": "/api/projects/config",
+      "registration_condition": "Projects read permission required; the fixed route is declared before /{project_id} and falls back client-side to 8192 bytes / 30 days when unavailable.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/projects/api.ts", "must_contain": ["/api/projects/config", "instructions_max_bytes: 8192", "trash_retention_days: 30"]},
+        {"source_path": "backend/app/gateway/routers/projects.py", "must_contain": ["@router.get(\"/config\", response_model=ProjectsConfigResponse)"]}
+      ]
+    },
+    {
+      "id": "projects.list.browser",
+      "category": "rest",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["GET"],
+      "public_path": "/api/projects?status={active|archived}",
+      "gateway_path": "/api/projects",
+      "registration_condition": "Projects read permission required; status is optional and limited to active/archived.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/projects/api.ts", "must_contain": ["export async function listProjects(status?: ProjectStatus)"]},
+        {"source_path": "backend/app/gateway/routers/projects.py", "must_contain": ["@router.get(\"\", response_model=ProjectListResponse)", "ProjectStatus = Literal[\"active\", \"archived\"]"]}
+      ]
+    },
+    {
+      "id": "projects.create.browser",
+      "category": "rest",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["POST"],
+      "public_path": "/api/projects",
+      "gateway_path": "/api/projects",
+      "registration_condition": "Projects write permission required; the frontend sends explicit empty instructions/presentation defaults and expects 201.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/projects/api.ts", "must_contain": ["export async function createProject(", "instructions: input.instructions ?? \"\"", "presentation: input.presentation ?? {}"]},
+        {"source_path": "backend/app/gateway/routers/projects.py", "must_contain": ["@router.post(\"\", response_model=ProjectResponse, status_code=201)"]}
+      ]
+    },
+    {
+      "id": "projects.get-patch.browser",
+      "category": "rest",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["GET", "PATCH"],
+      "public_path": "/api/projects/{project_id}",
+      "gateway_path": "/api/projects/{project_id}",
+      "registration_condition": "Projects read or write permission applies by method; absent fields are omitted on PATCH so unrelated fields remain unchanged.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/projects/api.ts", "must_contain": ["export async function getProject(projectId: string)", "export async function patchProject(", "...(input.name !== undefined"]},
+        {"source_path": "backend/app/gateway/routers/projects.py", "must_contain": ["@router.get(\"/{project_id}\", response_model=ProjectResponse)", "@router.patch(\"/{project_id}\", response_model=ProjectResponse)"]}
+      ]
+    },
+    {
+      "id": "projects.threads.browser",
+      "category": "rest",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["GET"],
+      "public_path": "/api/projects/{project_id}/threads?limit={1..1000}&offset={n}",
+      "gateway_path": "/api/projects/{project_id}/threads",
+      "registration_condition": "Both projects:read and threads:read are required; only active member threads are returned.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/projects/api.ts", "must_contain": ["export async function listProjectThreads(", "search.set(\"limit\", String(params.limit))", "search.set(\"offset\", String(params.offset))"]},
+        {"source_path": "backend/app/gateway/routers/projects.py", "must_contain": ["@router.get(\"/{project_id}/threads\", response_model=list[ProjectThreadResponse])", "archived=False"]}
+      ]
+    },
+    {
+      "id": "run.workspace-changes.browser",
+      "category": "rest",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["GET"],
+      "public_path": "/api/threads/{thread_id}/runs/{run_id}/workspace-changes?include_files={bool}&include_diff={bool}",
+      "gateway_path": "/api/threads/{thread_id}/runs/{run_id}/workspace-changes",
+      "registration_condition": "Run read permission and thread ownership required; the browser always emits both boolean query keys, and no recorded event returns available=false with an empty summary/files/limits response.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/workspace-changes/api.ts", "must_contain": ["include_files: includeFiles ? \"true\" : \"false\"", "include_diff: includeDiff ? \"true\" : \"false\""]},
+        {"source_path": "backend/app/gateway/routers/thread_runs.py", "must_contain": ["@router.get(\"/{thread_id}/runs/{run_id}/workspace-changes\")"]},
+        {"source_path": "backend/packages/harness/deerflow/workspace_changes/api.py", "must_contain": ["\"available\": False", "\"files\": []", "\"limits\": {}"]}
+      ]
+    },
+    {
       "id": "file.upload.browser",
       "category": "file",
       "consumer": "browser_fetch",
@@ -375,8 +529,8 @@
     }
   ],
   "known_not_covered": [
-    "The remaining frontend REST inventory (agents, projects, skills, MCP, schedules, channels, console, trash, batches and all mutations) is not yet enumerated here.",
-    "Core auth/run request-response, FastAPI/auth error and SSE envelope/replay-gap schemas are linked from core_protocol_oracle; remaining routes, pagination defaults and message payload schemas remain incremental W00/W02 work.",
+    "The remaining frontend REST inventory (agents, project documents/trash, skills, MCP, schedules, channels, console, batches and remaining mutations) is not yet enumerated here.",
+    "Core auth/run request-response, FastAPI/auth error, SSE envelope/mapping/replay-gap, selected history/project/workspace contracts are linked from core_protocol_oracle; remaining routes and message payload schemas remain incremental W00/W02 work.",
     "No reference DeerFlow backend, Haifa backend, browser, SSE, WS, upload, Range, or differential execution has run in this seed.",
     "No frontend files, backend implementation, third-party assets, prompts or skills are imported by this change."
   ]

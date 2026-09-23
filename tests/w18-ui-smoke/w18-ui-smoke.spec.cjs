@@ -131,15 +131,15 @@ test.describe("W18 frozen UI -> Haifa local smoke", () => {
       "success",
     );
 
-    const replay = await context.request.get(
-      `${APP}/api/langgraph/threads/${identity.threadId}/runs/${identity.runId}/stream`,
-      { headers: { Accept: "text/event-stream" } },
-    );
-    expect(replay.status(), await replay.text()).toBe(200);
-    const replayText = await replay.text();
-    expect(replayText).toContain("event: messages-tuple");
-    expect(replayText).toContain("event: end");
-    const eventIds = [...replayText.matchAll(/^id: (.+)$/gm)].map(
+    // Inspect the exact stream the frozen SDK rendered. Starting a second stream
+    // without Last-Event-ID intentionally exercises replay-gap recovery once the
+    // bounded bridge has evicted its first events; it is not evidence about the
+    // original browser projection.
+    const streamText = await streamResponse.text();
+    expect(streamText).toContain("event: messages");
+    expect(streamText).not.toContain("event: messages-tuple");
+    expect(streamText).toContain("event: end");
+    const eventIds = [...streamText.matchAll(/^id: (.+)$/gm)].map(
       (match) => match[1],
     );
     expect(eventIds.length).toBeGreaterThan(0);
@@ -155,8 +155,9 @@ test.describe("W18 frozen UI -> Haifa local smoke", () => {
       ...identity,
       terminalStatus: run.status,
       eventIds,
-      replayContainsMessageTuple: true,
-      replayContainsEnd: true,
+      streamContainsMessageTuplePayload: true,
+      streamMessageEvent: "messages",
+      streamContainsEnd: true,
     });
   });
 
@@ -179,7 +180,7 @@ test.describe("W18 frozen UI -> Haifa local smoke", () => {
         /\/api\/langgraph\/threads\/[^/]+\/runs\/[^/]+\/cancel$/.test(
           url.pathname,
         ) &&
-        url.searchParams.get("wait") === "false" &&
+        url.searchParams.get("wait") === "0" &&
         url.searchParams.get("action") === "interrupt"
       );
     });
@@ -189,6 +190,17 @@ test.describe("W18 frozen UI -> Haifa local smoke", () => {
     const streamResponse = await streamResponsePromise;
     await expectStreamSuccess(streamResponse);
     const identity = runIdentity(streamResponse);
+    // waitForResponse resolves when headers arrive. The SDK stores the
+    // Content-Location run id in sessionStorage on the next iterator step;
+    // wait for that observable stop prerequisite before clicking the square.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          ({ threadId }) => sessionStorage.getItem(`lg:stream:${threadId}`),
+          identity,
+        ),
+      )
+      .toBe(identity.runId);
     await page.getByRole("button", { name: "Submit" }).click();
     const cancelResponse = await cancelResponsePromise;
     expect(cancelResponse.status()).toBe(202);

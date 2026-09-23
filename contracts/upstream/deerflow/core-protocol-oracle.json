@@ -1,6 +1,6 @@
 {
-  "schema_version": "w00.core-protocol-oracle/v1",
-  "scope": "incremental_core_rest_error_event_contract",
+  "schema_version": "w00.core-protocol-oracle/v2",
+  "scope": "incremental_core_rest_error_event_and_frontend_trace_contract",
   "source": {
     "repository": "https://github.com/bytedance/deer-flow.git",
     "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294"
@@ -8,7 +8,7 @@
   "status_policy": {
     "source_allowed": ["SOURCE_VERIFIED"],
     "contract_allowed": ["STATIC_CONTRACT_VERIFIED"],
-    "implementation_allowed": ["NOT_ASSESSED", "IMPLEMENTED", "NOT_IMPLEMENTED"],
+    "implementation_allowed": ["NOT_ASSESSED"],
     "runtime_allowed": ["PASS", "FAIL", "NOT_RUN"],
     "rule": "Static source and schema validation never imply implementation or runtime parity. Runtime PASS or FAIL requires separately attached execution evidence."
   },
@@ -24,7 +24,18 @@
     "error.fastapi.detail",
     "error.auth.structured-detail",
     "event.sse.frame",
-    "event.sse.replay-gap-data"
+    "event.sse.replay-gap-data",
+    "event.stream-mode.messages-tuple-wire-messages",
+    "rest.thread.history.exchange",
+    "rest.thread.messages-page.exchange",
+    "rest.thread.runs.list.exchange",
+    "rest.projects.config.exchange",
+    "rest.projects.list.exchange",
+    "rest.projects.create.exchange",
+    "rest.projects.get.exchange",
+    "rest.projects.patch.exchange",
+    "rest.projects.threads.exchange",
+    "rest.run.workspace-changes.empty.exchange"
   ],
   "contracts": [
     {
@@ -175,12 +186,325 @@
           "must_contain": ["export type StreamReplayGapData", "value.recovery !== \"reload_durable_state\""]
         }
       ]
+    },
+    {
+      "id": "event.stream-mode.messages-tuple-wire-messages",
+      "kind": "SSE_REQUEST_WIRE_MAPPING",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/stream-mode-mapping-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/stream-mode-mapping-response.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated creator"},
+          {"status": 403, "condition": "missing runs:create"},
+          {"status": 404, "condition": "missing or foreign thread"},
+          {"status": 422, "condition": "unsupported public stream mode or invalid request"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {
+          "source_path": "backend/packages/harness/deerflow/runtime/stream_modes.py",
+          "must_contain": [
+            "mapped = [\"messages\" if mode == \"messages-tuple\" else mode for mode in modes]",
+            "return list(dict.fromkeys(mapped))"
+          ]
+        },
+        {
+          "source_path": "backend/packages/harness/deerflow/runtime/runs/worker.py",
+          "must_contain": [
+            "sse_event = _lg_mode_to_sse_event(single_mode)",
+            "await bridge.publish(run_id, sse_event, single_payload)",
+            "# All LG modes map 1:1 to SSE event names — \"messages\" stays \"messages\""
+          ]
+        },
+        {
+          "source_path": "backend/tests/test_gateway_services.py",
+          "must_contain": ["(\"messages-tuple\", [\"messages\"])", "assert to_langgraph_stream_modes(raw) == expected"]
+        }
+      ]
+    },
+    {
+      "id": "rest.thread.history.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/thread-history-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/thread-history-response.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing threads:read"},
+          {"status": 404, "condition": "foreign or missing thread"},
+          {"status": 422, "condition": "invalid thread id, limit, or body"},
+          {"status": 409, "condition": "persisted checkpoint mode mismatch"},
+          {"status": 503, "condition": "checkpoint mode is being reconfigured"},
+          {"status": 500, "condition": "checkpoint history read failure"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {
+          "source_path": "backend/app/gateway/routers/threads.py",
+          "must_contain": [
+            "class ThreadHistoryRequest(BaseModel):",
+            "limit: int = Field(default=10, ge=1, le=100",
+            "@router.post(\"/{thread_id}/history\", response_model=list[HistoryEntry])",
+            "Only the latest (first) checkpoint carries the ``messages`` key"
+          ]
+        },
+        {
+          "source_path": "backend/tests/test_gateway_checkpoint_mode.py",
+          "must_contain": ["client.post(f\"/api/threads/{_THREAD_ID}/history\", json={\"limit\": 10})"]
+        }
+      ]
+    },
+    {
+      "id": "rest.thread.messages-page.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/thread-messages-page-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/thread-messages-page-response.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing runs:read"},
+          {"status": 404, "condition": "foreign or missing thread"},
+          {"status": 422, "condition": "invalid limit/before_seq or forbidden after_seq"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {
+          "source_path": "backend/app/gateway/routers/thread_runs.py",
+          "must_contain": [
+            "class ThreadMessagesPageResponse(BaseModel):",
+            "@router.get(\"/{thread_id}/messages/page\", response_model=ThreadMessagesPageResponse)",
+            "limit: int = Query(default=50, ge=1, le=200)",
+            "detail=\"after_seq is not supported by this backward-only endpoint\"",
+            "next_before_seq=data[0][\"seq\"] if has_more else None"
+          ]
+        },
+        {
+          "source_path": "frontend/src/core/threads/hooks.ts",
+          "must_contain": [
+            "const path = `/api/threads/${encodeURIComponent(threadId)}/messages/page`",
+            "url.searchParams.set(\"before_seq\", String(beforeSeq))",
+            "next_before_seq: number | null"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "rest.thread.runs.list.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/thread-runs-list-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/thread-runs-list-response.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing runs:read"},
+          {"status": 404, "condition": "foreign or missing thread"},
+          {"status": 422, "condition": "invalid thread id"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {
+          "source_path": "backend/app/gateway/routers/thread_runs.py",
+          "must_contain": [
+            "class RunResponse(BaseModel):",
+            "@router.get(\"/{thread_id}/runs\", response_model=list[RunResponse])",
+            "List the newest runs for a thread (default 100, as a bare array)."
+          ]
+        },
+        {
+          "source_path": "frontend/src/core/threads/hooks.ts",
+          "must_contain": ["const response = await apiClient.runs.list(threadId)"]
+        }
+      ]
+    },
+    {
+      "id": "rest.projects.config.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/empty-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/projects-config-response.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing projects:read"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {
+          "source_path": "backend/app/gateway/routers/projects.py",
+          "must_contain": ["@router.get(\"/config\", response_model=ProjectsConfigResponse)", "instructions_max_bytes=config.projects.instructions_max_bytes"]
+        },
+        {
+          "source_path": "frontend/src/core/projects/api.ts",
+          "must_contain": ["`${getBackendBaseURL()}/api/projects/config`", "instructions_max_bytes: 8192", "trash_retention_days: 30"]
+        }
+      ]
+    },
+    {
+      "id": "rest.projects.list.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/projects-list-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/projects-list-response.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing projects:read"},
+          {"status": 422, "condition": "status is not active or archived"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "backend/app/gateway/routers/projects.py", "must_contain": ["@router.get(\"\", response_model=ProjectListResponse)", "status: ProjectStatus | None = None"]},
+        {"source_path": "frontend/src/core/projects/api.ts", "must_contain": ["export async function listProjects(status?: ProjectStatus)", "`?status=${encodeURIComponent(status)}`"]}
+      ]
+    },
+    {
+      "id": "rest.projects.create.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/project-create-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/project-response.schema.json",
+      "http_status": {
+        "success": 201,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing projects:write"},
+          {"status": 422, "condition": "invalid name or instructions exceed configured UTF-8 byte limit"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "backend/app/gateway/routers/projects.py", "must_contain": ["@router.post(\"\", response_model=ProjectResponse, status_code=201)", "name: str = Field(..., min_length=1, max_length=128)", "instructions exceeds the configured"]},
+        {"source_path": "frontend/src/core/projects/api.ts", "must_contain": ["export async function createProject(", "instructions: input.instructions ?? \"\"", "presentation: input.presentation ?? {}"]}
+      ]
+    },
+    {
+      "id": "rest.projects.get.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/project-id-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/project-response.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing projects:read"},
+          {"status": 404, "condition": "missing or foreign project"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "backend/app/gateway/routers/projects.py", "must_contain": ["@router.get(\"/{project_id}\", response_model=ProjectResponse)", "return HTTPException(status_code=404, detail=\"Project not found\")"]},
+        {"source_path": "frontend/src/core/projects/api.ts", "must_contain": ["export async function getProject(projectId: string)", "method: \"GET\""]}
+      ]
+    },
+    {
+      "id": "rest.projects.patch.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/project-patch-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/project-response.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing projects:write"},
+          {"status": 404, "condition": "missing or foreign project"},
+          {"status": 422, "condition": "invalid name or instructions exceed configured UTF-8 byte limit"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "backend/app/gateway/routers/projects.py", "must_contain": ["@router.patch(\"/{project_id}\", response_model=ProjectResponse)", "presentation: dict | None = None", "_validate_instructions_length(body.instructions)"]},
+        {"source_path": "frontend/src/core/projects/api.ts", "must_contain": ["export async function patchProject(", "...(input.presentation !== undefined"]}
+      ]
+    },
+    {
+      "id": "rest.projects.threads.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/project-threads-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/project-threads-response.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing projects:read or threads:read"},
+          {"status": 404, "condition": "missing or foreign project"},
+          {"status": 422, "condition": "limit outside 1..1000 or negative offset"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "backend/app/gateway/routers/projects.py", "must_contain": ["@router.get(\"/{project_id}/threads\", response_model=list[ProjectThreadResponse])", "limit: int = Query(default=100, ge=1, le=1000)", "archived=False"]},
+        {"source_path": "frontend/src/core/projects/api.ts", "must_contain": ["export async function listProjectThreads(", "search.set(\"offset\", String(params.offset))"]}
+      ]
+    },
+    {
+      "id": "rest.run.workspace-changes.empty.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/workspace-changes-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/workspace-changes-empty-response.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing runs:read"},
+          {"status": 404, "condition": "missing run or foreign thread"},
+          {"status": 422, "condition": "invalid thread id or boolean query"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "backend/app/gateway/routers/thread_runs.py", "must_contain": ["@router.get(\"/{thread_id}/runs/{run_id}/workspace-changes\")", "include_files: bool = Query(default=True)", "include_diff: bool = Query(default=True)"]},
+        {"source_path": "backend/packages/harness/deerflow/workspace_changes/api.py", "must_contain": ["if not events:", "\"available\": False", "\"files\": []", "\"limits\": {}"]},
+        {"source_path": "frontend/src/core/workspace-changes/api.ts", "must_contain": ["include_files: includeFiles ? \"true\" : \"false\"", "include_diff: includeDiff ? \"true\" : \"false\"", "/workspace-changes?${query}"]}
+      ]
     }
   ],
   "known_not_covered": [
     "This increment does not enumerate the remaining REST mutations or all feature families.",
     "The schema fixtures are static source-derived oracles; no DeerFlow or Haifa service was started.",
     "SSE message payload schemas beyond the envelope, replay-gap control payload, metadata and end examples remain incremental work.",
+    "This increment covers only the named history, message page, run list, project core and unavailable workspace-change traces; their implementation and runtime parity remain unassessed.",
     "Implementation parity and reference/Haifa/differential runtime results remain NOT_RUN until separate evidence is attached."
   ]
 }

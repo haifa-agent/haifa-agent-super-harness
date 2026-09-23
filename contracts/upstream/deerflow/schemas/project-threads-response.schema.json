@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["thread_id", "display_name", "created_at", "updated_at", "metadata"],
+    "properties": {
+      "thread_id": {"type": "string"},
+      "display_name": {"type": ["string", "null"]},
+      "created_at": {"type": "string"},
+      "updated_at": {"type": "string"},
+      "metadata": {"type": "object"}
+    }
+  }
+}

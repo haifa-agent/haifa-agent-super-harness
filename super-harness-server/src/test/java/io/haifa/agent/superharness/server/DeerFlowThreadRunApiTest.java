@@ -94,7 +94,8 @@ class DeerFlowThreadRunApiTest {
         String runId = location.substring(location.lastIndexOf('/') + 1);
         assertThat(response.body()).contains("event: metadata");
         assertThat(response.body()).contains("\"run_id\":\"" + runId + "\"");
-        assertThat(response.body()).contains("event: messages-tuple");
+        assertThat(response.body()).contains("event: messages");
+        assertThat(response.body()).doesNotContain("event: messages-tuple");
         assertThat(response.body()).contains("Haifa Agent SDK: ");
         assertThat(response.body()).contains("hello sdk");
         assertThat(response.body()).containsPattern("event: end\\ndata: null\\nid: \\d+-0\\n\\n$");
@@ -128,6 +129,75 @@ class DeerFlowThreadRunApiTest {
 
         assertThat(multipleBlocks.statusCode()).isEqualTo(200);
         assertThat(multipleBlocks.body()).contains("Haifa Agent SDK: first second");
+    }
+
+    @Test
+    void frozenUiProjectionEndpointsExposeStableTranscriptHistoryAndRunList() throws Exception {
+        createThread("thread-projection");
+        HttpResponse<String> first = client.send(
+                runRequest("thread-projection", "first turn"),
+                HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> second = client.send(
+                runRequest("thread-projection", "second turn"),
+                HttpResponse.BodyHandlers.ofString());
+        String firstRunId = first.headers()
+                .firstValue("content-location")
+                .orElseThrow()
+                .replaceFirst(".*/", "");
+        String secondRunId = second.headers()
+                .firstValue("content-location")
+                .orElseThrow()
+                .replaceFirst(".*/", "");
+
+        assertThat(second.body()).contains("event: messages");
+        assertThat(second.body()).doesNotContain("event: messages-tuple");
+
+        JsonNode page = getJson("/api/threads/thread-projection/messages/page?limit=3");
+        assertThat(page.path("has_more").asBoolean()).isTrue();
+        assertThat(page.path("next_before_seq").asLong()).isEqualTo(2);
+        assertThat(page.path("data").findValuesAsText("run_id"))
+                .contains(firstRunId, secondRunId);
+        assertThat(page.path("data").findValuesAsText("seq"))
+                .containsExactly("2", "3", "4");
+        assertThat(page.path("data").get(2).path("content").path("content").asText())
+                .isEqualTo("Haifa Agent SDK: second turn");
+
+        JsonNode older = getJson("/api/threads/thread-projection/messages/page?before_seq=2");
+        assertThat(older.path("has_more").asBoolean()).isFalse();
+        assertThat(older.path("next_before_seq").isNull()).isTrue();
+        assertThat(older.path("data")).hasSize(1);
+        assertThat(older.path("data").get(0).path("seq").asLong()).isEqualTo(1);
+
+        HttpResponse<String> history = postJson(
+                "/api/threads/thread-projection/history", "{\"limit\":1}");
+        assertThat(history.statusCode()).isEqualTo(200);
+        JsonNode historyEntries = json.readTree(history.body());
+        assertThat(historyEntries).hasSize(1);
+        assertThat(historyEntries.get(0).path("checkpoint_id").asText())
+                .isEqualTo(secondRunId);
+        assertThat(historyEntries.get(0).path("values").path("messages")).hasSize(4);
+        assertThat(historyEntries.get(0).path("values").path("messages").get(3).path("run_id").asText())
+                .isEqualTo(secondRunId);
+
+        JsonNode newestRun = getJson("/api/threads/thread-projection/runs?limit=1&offset=0");
+        assertThat(newestRun).hasSize(1);
+        assertThat(newestRun.get(0).path("run_id").asText()).isEqualTo(secondRunId);
+        assertThat(newestRun.get(0).path("status").asText()).isEqualTo("success");
+
+        assertThat(get("/api/threads/thread-projection/messages/page?after_seq=1").statusCode())
+                .isEqualTo(422);
+        assertThat(get("/api/threads/thread-projection/messages/page?before_seq=bad").statusCode())
+                .isEqualTo(422);
+        assertThat(get("/api/threads/thread-projection/runs?offset=-1").statusCode())
+                .isEqualTo(422);
+        assertThat(postJson("/api/threads/thread-projection/history", "{\"limit\":0}")
+                        .statusCode())
+                .isEqualTo(422);
+        assertThat(postJson(
+                                "/api/threads/thread-projection/history",
+                                "{\"limit\":1,\"before\":\"unsupported\"}")
+                        .statusCode())
+                .isEqualTo(422);
     }
 
     @Test
@@ -209,12 +279,34 @@ class DeerFlowThreadRunApiTest {
         }
         assertThat(transcript).contains("event: end");
         awaitStatus(location, "interrupted");
+        JsonNode listed = getJson("/api/threads/thread-cancel/runs?limit=10&offset=0");
+        assertThat(listed).hasSize(1);
+        assertThat(listed.get(0).path("status").asText()).isEqualTo("interrupted");
 
         HttpResponse<String> duplicate =
                 postJson(location + "/cancel?wait=false&action=interrupt", "");
         assertThat(duplicate.statusCode()).isEqualTo(409);
         assertThat(json.readTree(duplicate.body()).path("detail").asText())
                 .contains("not cancellable", "interrupted");
+    }
+
+    @Test
+    void cancelAcceptsFrozenSdkNumericFalseButRejectsTruthyWait() throws Exception {
+        createThread("thread-sdk-cancel-query");
+        HttpResponse<InputStream> stream = client.send(
+                runRequest("thread-sdk-cancel-query", "__slow__"),
+                HttpResponse.BodyHandlers.ofInputStream());
+        String location = stream.headers().firstValue("content-location").orElseThrow();
+
+        assertThat(postJson(location + "/cancel?wait=true&action=interrupt", "").statusCode())
+                .isEqualTo(422);
+        assertThat(postJson(location + "/cancel?wait=0&action=interrupt", "").statusCode())
+                .isEqualTo(202);
+        try (InputStream input = stream.body()) {
+            assertThat(new String(input.readAllBytes(), StandardCharsets.UTF_8))
+                    .contains("event: end");
+        }
+        awaitStatus(location, "interrupted");
     }
 
     @Test
@@ -429,6 +521,12 @@ class DeerFlowThreadRunApiTest {
                         .header("Content-Type", "application/json")
                         .POST(HttpRequest.BodyPublishers.ofString(body))
                         .build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> get(String path) throws Exception {
+        return client.send(
+                HttpRequest.newBuilder(baseUri.resolve(path)).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
     }
 

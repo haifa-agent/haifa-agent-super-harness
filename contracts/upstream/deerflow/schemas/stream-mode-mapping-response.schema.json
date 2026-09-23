@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["langgraph_mode", "wire_event"],
+  "properties": {
+    "langgraph_mode": {"const": "messages"},
+    "wire_event": {"const": "messages"}
+  }
+}

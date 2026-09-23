@@ -93,10 +93,27 @@ function Assert-JsonMatchesSchema {
     if (-not (Test-Path -LiteralPath $SchemaPath -PathType Leaf)) {
         throw "Fixture '$FixtureId' schema is missing: $SchemaPath"
     }
-    $json = $Payload | ConvertTo-Json -Depth 100 -Compress
+    # -InputObject preserves singleton arrays; pipeline input would unwrap them
+    # and accidentally validate the only element instead of the wire array.
+    $json = ConvertTo-Json -InputObject $Payload -Depth 100 -Compress
     $isValid = Test-Json -Json $json -SchemaFile $SchemaPath -ErrorAction SilentlyContinue
     if (-not $isValid) {
         throw "Fixture '$FixtureId' failed schema validation against '$SchemaPath'."
+    }
+}
+
+function Assert-SchemaExists {
+    param(
+        [string]$SchemaPath,
+        [string]$ContractId,
+        [string]$Side
+    )
+    if ([string]::IsNullOrWhiteSpace($SchemaPath)) {
+        throw "Contract '$ContractId' has no $Side schema."
+    }
+    $absolutePath = Join-Path $RepositoryRoot $SchemaPath
+    if (-not (Test-Path -LiteralPath $absolutePath -PathType Leaf)) {
+        throw "Contract '$ContractId' $Side schema is missing: $SchemaPath"
     }
 }
 
@@ -145,18 +162,18 @@ Assert-Equal $resourceManifest.runtime_status 'NOT_RUN' 'Resource seed must not 
 Assert-Equal $resourceManifest.repository_import.status 'IMPORTED' 'Frozen W18 frontend import must be recorded separately from runtime status'
 Assert-Equal $resourceManifest.repository_import.runtime_status 'NOT_RUN' 'Imported source must not claim runtime parity PASS'
 
-Assert-Equal $oracleManifest.schema_version 'w00.core-protocol-oracle/v1' 'Unexpected core protocol Oracle schema'
+Assert-Equal $oracleManifest.schema_version 'w00.core-protocol-oracle/v2' 'Unexpected core protocol Oracle schema'
 Assert-Equal $oracleManifest.source.source_sha $ExpectedSourceSha 'Core protocol Oracle source SHA drifted'
 Assert-Equal $oracleManifest.source_status 'SOURCE_VERIFIED' 'Core protocol Oracle source status is invalid'
 Assert-Equal $oracleManifest.contract_status 'STATIC_CONTRACT_VERIFIED' 'Core protocol Oracle contract status is invalid'
-Assert-OneOf $oracleManifest.implementation_status @('NOT_ASSESSED', 'IMPLEMENTED', 'NOT_IMPLEMENTED') 'Core protocol Oracle implementation status is invalid'
+Assert-Equal $oracleManifest.implementation_status 'NOT_ASSESSED' 'Static core protocol Oracle must keep implementation NOT_ASSESSED'
 Assert-Equal $oracleManifest.runtime_status 'NOT_RUN' 'Static core protocol Oracle must not claim runtime PASS or FAIL'
 Assert-Equal $oracleManifest.fixtures_path 'contracts/upstream/deerflow/fixtures/core-protocol-fixtures.json' 'Core protocol Oracle fixture link drifted'
-Assert-Equal $oracleFixtures.schema_version 'w00.core-protocol-fixtures/v1' 'Unexpected core protocol fixture schema'
+Assert-Equal $oracleFixtures.schema_version 'w00.core-protocol-fixtures/v2' 'Unexpected core protocol fixture schema'
 Assert-Equal $oracleFixtures.source_sha $ExpectedSourceSha 'Core protocol fixtures source SHA drifted'
 Assert-Equal $oracleFixtures.source_status 'SOURCE_VERIFIED' 'Core protocol fixture source status is invalid'
 Assert-Equal $oracleFixtures.contract_status 'STATIC_CONTRACT_VERIFIED' 'Core protocol fixture contract status is invalid'
-Assert-OneOf $oracleFixtures.implementation_status @('NOT_ASSESSED', 'IMPLEMENTED', 'NOT_IMPLEMENTED') 'Core protocol fixture implementation status is invalid'
+Assert-Equal $oracleFixtures.implementation_status 'NOT_ASSESSED' 'Static core protocol fixtures must keep implementation NOT_ASSESSED'
 Assert-Equal $oracleFixtures.runtime_status 'NOT_RUN' 'Static core protocol fixtures must not claim runtime PASS or FAIL'
 
 $w18ManifestPath = Join-Path $RepositoryRoot ([string]$resourceManifest.repository_import.manifest_path)
@@ -237,11 +254,32 @@ foreach ($requiredId in @($oracleManifest.required_contract_ids)) {
 foreach ($contract in $oracleContracts) {
     Assert-Equal $contract.source_status 'SOURCE_VERIFIED' "Contract '$($contract.id)' source status is invalid"
     Assert-Equal $contract.contract_status 'STATIC_CONTRACT_VERIFIED' "Contract '$($contract.id)' static status is invalid"
-    Assert-OneOf $contract.implementation_status @('NOT_ASSESSED', 'IMPLEMENTED', 'NOT_IMPLEMENTED') "Contract '$($contract.id)' implementation status is invalid"
+    Assert-Equal $contract.implementation_status 'NOT_ASSESSED' "Static contract '$($contract.id)' must keep implementation NOT_ASSESSED"
     Assert-Equal $contract.runtime_status 'NOT_RUN' "Contract '$($contract.id)' must not claim runtime PASS or FAIL"
-    $schemaPath = Join-Path $RepositoryRoot ([string]$contract.schema_path)
-    if (-not (Test-Path -LiteralPath $schemaPath -PathType Leaf)) {
-        throw "Contract '$($contract.id)' schema is missing: $($contract.schema_path)"
+    $hasExchangeSchemas = $contract.PSObject.Properties.Name -contains 'request_schema_path' -or
+        $contract.PSObject.Properties.Name -contains 'response_schema_path'
+    if ($hasExchangeSchemas) {
+        Assert-SchemaExists -SchemaPath ([string]$contract.request_schema_path) -ContractId ([string]$contract.id) -Side 'request'
+        Assert-SchemaExists -SchemaPath ([string]$contract.response_schema_path) -ContractId ([string]$contract.id) -Side 'response'
+        $successStatus = $contract.http_status.success
+        if ($successStatus -isnot [int] -and $successStatus -isnot [long]) {
+            throw "Contract '$($contract.id)' has no numeric success HTTP status."
+        }
+        $errorStatuses = @($contract.http_status.errors)
+        if ($errorStatuses.Count -eq 0) {
+            throw "Contract '$($contract.id)' has no fail-closed error status inventory."
+        }
+        foreach ($errorStatus in $errorStatuses) {
+            if ($errorStatus.status -isnot [int] -and $errorStatus.status -isnot [long]) {
+                throw "Contract '$($contract.id)' contains a non-numeric error status."
+            }
+            if ([string]::IsNullOrWhiteSpace([string]$errorStatus.condition)) {
+                throw "Contract '$($contract.id)' contains an error status without a condition."
+            }
+        }
+    }
+    else {
+        Assert-SchemaExists -SchemaPath ([string]$contract.schema_path) -ContractId ([string]$contract.id) -Side 'payload'
     }
     foreach ($evidence in @($contract.evidence)) {
         Assert-Evidence -Evidence $evidence -SourceRoot $resolvedDeerFlowRoot -SurfaceId ([string]$contract.id)
@@ -263,9 +301,19 @@ foreach ($fixture in $fixtures) {
         throw "Fixture '$($fixture.id)' references unknown contract '$contractId'."
     }
     $contract = @($oracleContracts | Where-Object id -eq $contractId)[0]
-    Assert-Equal $fixture.schema_path $contract.schema_path "Fixture '$($fixture.id)' schema does not match contract '$contractId'"
-    $schemaPath = Join-Path $RepositoryRoot ([string]$fixture.schema_path)
-    Assert-JsonMatchesSchema -Payload $fixture.payload -SchemaPath $schemaPath -FixtureId ([string]$fixture.id)
+    $hasExchangeSchemas = $contract.PSObject.Properties.Name -contains 'request_schema_path' -or
+        $contract.PSObject.Properties.Name -contains 'response_schema_path'
+    if ($hasExchangeSchemas) {
+        Assert-Equal $fixture.request_schema_path $contract.request_schema_path "Fixture '$($fixture.id)' request schema does not match contract '$contractId'"
+        Assert-Equal $fixture.response_schema_path $contract.response_schema_path "Fixture '$($fixture.id)' response schema does not match contract '$contractId'"
+        Assert-JsonMatchesSchema -Payload $fixture.request -SchemaPath (Join-Path $RepositoryRoot ([string]$fixture.request_schema_path)) -FixtureId "$($fixture.id) request"
+        Assert-JsonMatchesSchema -Payload $fixture.response -SchemaPath (Join-Path $RepositoryRoot ([string]$fixture.response_schema_path)) -FixtureId "$($fixture.id) response"
+    }
+    else {
+        Assert-Equal $fixture.schema_path $contract.schema_path "Fixture '$($fixture.id)' schema does not match contract '$contractId'"
+        $schemaPath = Join-Path $RepositoryRoot ([string]$fixture.schema_path)
+        Assert-JsonMatchesSchema -Payload $fixture.payload -SchemaPath $schemaPath -FixtureId ([string]$fixture.id)
+    }
 }
 foreach ($contractId in @($oracleManifest.required_contract_ids)) {
     if (@($fixtures | Where-Object contract_id -eq $contractId).Count -eq 0) {

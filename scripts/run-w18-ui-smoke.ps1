@@ -203,6 +203,11 @@ try {
         -ContentType 'application/json' `
         -Body $modelBody `
         -TimeoutSec 5
+    # PUT advances the optimistic-lock revision. Probe the exact revision just
+    # saved so repeated evidence runs remain deterministic against persisted
+    # slot data instead of reusing the pre-save expected_revision.
+    $modelEnvelope.expected_revision = $savedModel.revision
+    $modelBody = $modelEnvelope | ConvertTo-Json -Depth 6 -Compress
     $probe = Invoke-RestMethod `
         -Uri "http://127.0.0.1:$GatewayPort/api/managed-models/test" `
         -Method Post `

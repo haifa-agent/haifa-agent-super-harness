@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["thread_id", "run_id", "query"],
+  "properties": {
+    "thread_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["include_files", "include_diff"],
+      "properties": {
+        "include_files": {"type": "boolean"},
+        "include_diff": {"type": "boolean"}
+      }
+    }
+  }
+}

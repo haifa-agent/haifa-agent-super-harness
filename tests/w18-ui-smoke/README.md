@@ -23,37 +23,42 @@ cancellation evidence:
 
 - no-cookie auth startup plus executable model catalog;
 - Thread creation, Run/SSE rendering, replay event IDs, and terminal status;
-- the frozen `?wait=false&action=interrupt` cancellation request;
+- the frozen SDK's `?wait=0&action=interrupt` cancellation request;
 - reload of a completed thread.
 
-## Current captured blocker
+## Latest captured result
 
-The 2026-09-23 slot 2 run passed auth startup and the managed-model probe, but
-all three Run-dependent cases stopped at the initial Run POST with HTTP 422.
-Run/SSE is therefore `FAIL_422`; the actual cancel request and post-completion
-reload assertion are `NOT_RUN` because their Run-creation prerequisite failed.
-The sanitized network contract is recorded in
-`evidence/20260923-run-stream-422.json`.
+The 2026-09-23 slot 2 run passed all four independent Chromium cases against
+the packaged Haifa gateway and the unmodified frozen frontend:
 
-The browser sends JSON to
-`/api/langgraph/threads/<id>/runs/stream`. The declarative Next rewrite maps it
-unchanged to gateway path `/api/threads/<id>/runs/stream`. The frozen UI's
-human message uses LangChain content blocks:
+- no-cookie local auth and the executable managed-model catalog;
+- Thread creation plus a real controlled-provider Run whose tuple payload was
+  delivered as LangGraph Platform `event: messages` and rendered by the UI;
+- the frozen SDK's actual `?wait=0&action=interrupt` request, HTTP 202, and
+  terminal `interrupted` status;
+- reload of a completed Thread with both human and assistant messages restored
+  through `/messages/page` and `/history`.
 
-```json
-{"type":"human","content":[{"type":"text","text":"<prompt>"}]}
-```
+The sanitized identities and event cursor are recorded in
+`evidence/20260923-sse-projection-pass.json`. The runner keeps screenshots,
+traces, process logs, and response attachments under ignored
+`target/w18-ui-smoke-evidence/playwright` for local review and always stops the
+exact provider, gateway, and frontend processes it started.
 
-`DeerFlowThreadRunApi.lastHumanMessage` currently calls `asText("")` on the
-`content` node, so an array becomes empty and the handler returns
-`input.messages requires a human message`. This is a W02 endpoint contract gap,
-not a provider failure: the real managed-model API accepted the enabled model,
-its connection probe passed, and the model appeared in `/api/models` before the
-browser tests began.
+The cold diagnostic run spent 36.463 seconds packaging Maven modules and the
+frozen Next build reported 101 seconds of compilation, 99 seconds of type
+checking, and 6.2 seconds generating static pages. It reached Playwright and
+failed on two exact assertion mismatches rather than a runner/Next hang or an
+infrastructure timeout; its trace, screenshot, error context, and three process
+logs were sufficient to identify the event-name and cancellation-query gaps.
+After the fixes, a warm run passed 4/4 in 21.0 seconds (3.7/4.0/3.5/4.0 seconds
+for auth, Run/SSE, cancel, and reload respectively) with zero retries. A second
+warm execution also passed 4/4 in 22.123 seconds
+(3.684/3.639/3.548/5.269 seconds) with zero retries; its complete runner
+lifecycle took 76.847 seconds. The repeat-run provider, Gateway, and frontend
+PIDs exited and ports `64182`, `38018`, and `53018` were released. No runner or
+Next hang, test timeout, or owned child-process residue was observed.
 
-The smallest compatible W02 repair is to preserve string content and additionally
-extract non-empty `text` values from array content blocks whose `type` is
-`text`, with contract tests for both shapes and empty/unsupported arrays. Until
-that separate repair lands, Run/SSE remains failed, while cancellation, reload,
-real external provider, and DeerFlow differential remain fail-closed `NOT_RUN`
-and must not be reported as passing.
+This remains controlled loopback wiring evidence. A real external provider and
+active-stream disconnect/reconnect recovery were not exercised and remain
+`NOT_RUN`; the test does not claim either result.

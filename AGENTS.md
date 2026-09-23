@@ -1,3 +1,5 @@
+# 公共规则
+
 - 以 `private-docs/roadmap/35-super-harness-deerflow-parity.md` 及其产品、PRD 配套目录为范围与验收依据。
 - DeerFlow 前后端固定为 `bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294`，禁止随 `main` 漂移。
 - 仅通过本地 Maven 仓库消费 Haifa Agent 公开 JAR/BOM `0.1.1-SNAPSHOT`，禁止源码路径依赖、复制 SDK 或依赖产品 JAR。
@@ -5,9 +7,12 @@
 - 直接复用冻结的 DeerFlow 前端并由 Haifa 后端兼容其真实 REST/SSE/WS/文件/auth 协议，禁止自研平行 UI 或回落 DeerFlow 后端。
 - Haifa Agent Super Harness 为同一功能引入的领域模型复杂度必须与冻结 DeerFlow 的对应实现保持平衡或更低，禁止为了协议兼容复制、叠加或扩张不必要的领域对象、状态机、持久化概念和抽象层；若有证据表明只有更高的领域复杂度才能实现验收范围，执行智能体必须在编码前提交包含 DeerFlow 对照、复杂度增量、不可替代原因、风险与简化备选的设计说明，先经主控 Agent 评审，再等待人工裁决，未获人工明确同意不得实施或合入。
 - 每个工作包使用独立 branch/worktree、端口和数据目录；提交前运行相关测试并保留真实 Run/Tool/Artifact 证据，禁止为绿灯放宽断言。
-- 本地联调固定使用四组端口，组间每个端口均直接递增 `10000`：主目录 worktree 固定为 Gateway `18018`、Frontend `33018`；子智能体槽位 1 为 Gateway `28018`、Frontend `43018`；槽位 2 为 Gateway `38018`、Frontend `53018`；槽位 3 为 Gateway `48018`、Frontend `63018`。主控每次分配子智能体时必须同时声明槽位、完整端口组和独立数据目录；同一时刻一个槽位只能分配给一个运行中的任务，任务结束后方可复用。子智能体启动服务前须检查其已分配端口；若被占用，可以查明 PID 后直接终止占用该组端口的进程，但不得终止其他槽位或未分配端口的进程。代码合入主目录 worktree 后，由主控使用固定主端口重启后端/前端服务或刷新现有服务，并完成主线 smoke；子智能体不得操作主端口服务。
-- 软件安装、依赖准备、配置、凭据或权限问题实行“首次发现、立即沉淀、后续先查”规则：首次发现者须在不泄露密钥的前提下把症状、根因、影响范围、精确检查命令、最小修复步骤和修复后验证写入 `AGENTS.md`，并在 checkpoint 中通知主控；后续智能体开工前必须先读取这些记录，禁止重复试错，禁止用复制 SDK/`node_modules`、全局安装、放宽系统权限或污染用户目录来绕过。当前仓库根目录没有 Maven Wrapper，Java 门禁使用系统 `mvn`；PowerShell 中带逗号的 Maven `-Dtest=...,...` 参数必须整体加引号。每个新 worktree 的 `frontend/node_modules` 不会自动继承，运行 Next/Playwright 前先检查 `frontend/node_modules/.bin/next.cmd` 和 Playwright browser；缺依赖时只能在该 worktree 按冻结 lockfile 使用已有本地 pnpm store 做 `pnpm install --offline --frozen-lockfile`，不得复制其他 worktree 的依赖，离线依赖不齐则如实标记 UI `NOT_RUN` 并继续可执行的 HTTP/Java 门禁。
+- 软件安装、依赖准备、配置、凭据或权限问题实行“首次发现、立即沉淀、后续先查”规则：首次发现者须在不泄露密钥的前提下把症状、根因、影响范围、精确检查命令、最小修复步骤和修复后验证写入 `AGENTS.md`，并在 checkpoint 中通知主控；后续智能体开工前必须先读取这些记录，禁止重复试错，禁止用复制 SDK/`node_modules`、全局安装、放宽系统权限或污染用户目录来绕过。当前仓库根目录没有 Maven Wrapper，Java 门禁使用系统 `mvn`；PowerShell 中带逗号的 Maven `-Dtest=...,...` 参数必须整体加引号。Windows 上从模块 `target` 目录运行的主服务会锁定 `super-harness-server-*-exec.jar`，使 `mvn clean` 报 `Failed to delete`；主控执行 clean gate 前须先用 `Get-NetTCPConnection` 从主端口解析 PID，再用 `Get-CimInstance Win32_Process` 核对命令行确属当前 Super Harness JAR，停止该精确进程，完成构建后按原外置数据目录和配置重启，禁止按进程名批量结束 Java。每个新 worktree 的 `frontend/node_modules` 不会自动继承，运行 Next/Playwright 前先检查 `frontend/node_modules/.bin/next.cmd` 和 Playwright browser；缺依赖时只能在该 worktree 按冻结 lockfile 使用已有本地 pnpm store 做 `pnpm install --offline --frozen-lockfile`，不得复制其他 worktree 的依赖，离线依赖不齐则如实标记 UI `NOT_RUN` 并继续可执行的 HTTP/Java 门禁。
 - Playwright 验收除功能断言外还必须报告流程健康度：记录 cold/warm 启动与总耗时、是否重试、首个超时或卡点、Next 动态编译时间、trace/screenshot/日志位置，以及结束后端口和子进程是否清理；至少做一次同脚本重复运行以区分稳定问题与偶发问题。不得用无界等待掩盖启动或断言失败；等待必须有明确对象、超时和失败证据。
+
+# 主控 Agent 规则
+
+- 本地联调固定使用四组端口，组间每个端口均直接递增 `10000`：主目录 worktree 固定为 Gateway `18018`、Frontend `33018`；子智能体槽位 1 为 Gateway `28018`、Frontend `43018`；槽位 2 为 Gateway `38018`、Frontend `53018`；槽位 3 为 Gateway `48018`、Frontend `63018`。主控每次分配子智能体时必须同时声明槽位、完整端口组和独立数据目录；同一时刻一个槽位只能分配给一个运行中的任务，任务结束后方可复用。代码合入主目录 worktree 后，由主控使用固定主端口重启后端/前端服务或刷新现有服务，并完成主线 smoke。
 - 多智能体执行采用“15 分钟无声上限”：每个运行中的子智能体至少每 15 分钟向主控回报一次 checkpoint，至少包含当前工作包、已完成证据、正在执行的命令或步骤、首个失败或阻塞、worktree 变更及下一交付点；长时间命令须在启动前说明目的，并在结束后立即回报。若距上次有效回报或可观察进展达到 15 分钟，主控必须发送一次非中断式点名消息，不得因智能体状态仍显示 `running` 而无限等待。
 - 点名后 5 分钟仍无应答，或主控通过 worktree、测试进程、端口与日志审计确认任务停滞、跑偏、越界或反复等待无结果时，按“失联/失控 lane”恢复：先保留未提交变更、日志、数据目录和进程证据，只中止受影响智能体的当前回合，再用原 worktree 恢复同一任务或明确交接给替代智能体，并收紧范围、端口与下一 checkpoint；禁止打断正常推进的其他智能体。主控须将该 lane 的实际工作包映射、恢复动作、可验证进展和仍为 `NOT_RUN` 的项目及时更新到 `work-packages.js`，避免用旧智能体名称误报任务进度。
 - `work-packages.js` 中的 `WORK_PACKAGES_DATA` 是 `dashboard.html` 的唯一进度数据源；页面只负责展示，禁止在 HTML 中复制维护工作包状态。
@@ -16,3 +21,13 @@
 - `state` 只能在 `pending`、`in_progress`、`ready_for_acceptance`、`blocked`、`complete` 中五选一；`ready_for_acceptance` 表示整个工作包的退出条件、提交、自动测试和真实证据均已具备，正在等待主控复验或所需的人工验收，禁止仅因某个切片完成而进入该状态；验收失败退回 `in_progress`。`prerequisites` 只列直接前置工作包，不展开间接依赖。
 - 每个工作包必须包含 `startedAt` 和 `completedAt`，取值为带时区的 ISO 8601 时间或 `null`：`pending` 两者均为 `null`；首次进入 `in_progress` 时设置且此后保留 `startedAt`；`ready_for_acceptance` 必须保留非空 `startedAt` 且 `completedAt` 为 `null`；`complete` 必须同时具备两个时间且 `completedAt` 不早于 `startedAt`；重新打开已完成工作包时保留 `startedAt` 并清空 `completedAt`；`blocked` 是否已有 `startedAt` 取决于阻塞前是否实际开工，但 `completedAt` 必须为 `null`。
 - `milestones[].at` 只记录事件发生时间，不回填工作包的 `startedAt`/`completedAt`，也不从历史事件反推生命周期字段；新增里程碑按真实发生时间追加，`dashboard.html` 负责按 `at` 倒序展示且不得改写源数组。
+
+# 子智能体规则
+
+- 接单后先完整阅读本文件、工作包对应 roadmap/产品/PRD、冻结 DeerFlow 源码与已有证据；首个 checkpoint 必须复述实际工作包、branch/worktree、槽位端口、数据目录、范围边界和下一交付点。除非主控明确授权，子智能体不得修改 `work-packages.js`、`dashboard.html` 或主目录服务。
+- 只能使用主控分配的 worktree、数据目录和端口组。启动服务前须检查已分配端口；若被占用，可以查明 PID 并核对命令行后直接终止占用该组端口的进程，但不得终止主端口、其他槽位、未分配端口或仅按进程名批量结束进程。任务结束时须清理自己启动的服务并验证端口释放。
+- 每个运行中的子智能体至少每 15 分钟向主控回报一次 checkpoint，至少包含当前工作包、已完成证据、正在执行的命令或步骤、首个失败或阻塞、worktree 变更及下一交付点；长时间命令须在启动前说明目的，并在结束后立即回报。收到主控非中断式点名后，应在当前安全命令边界立即应答，不得为回报而破坏正在运行的测试或写入。
+- 发现软件安装、依赖、配置、凭据或权限新坑位时，先保存可复现证据，再按公共规则更新 `AGENTS.md`；涉及密钥只能记录凭据引用、存在性和脱敏结果，禁止输出或提交密钥值。若问题需要全局安装、联网取依赖、提升权限或改变用户/系统配置，先停止扩张并报告主控，不得自行绕过。
+- 编码前以冻结实现对照领域复杂度；若拟引入的领域对象、状态机、持久化概念或抽象层高于 DeerFlow，必须停在编码前提交设计说明，等待主控评审和人工裁决。
+- 提交前须运行范围内定向测试、可执行的全仓门禁、`git diff --check`、secret scan 与真实 smoke；失败项和未运行项必须分别记录为 `FAIL`/`NOT_RUN`，不得用静态验证替代运行证据，不得放宽断言或删除失败测试换取绿灯。
+- 交付 checkpoint 必须包含分支、最终 commit SHA、变更文件、测试/Playwright 次数与耗时、真实 Run/Tool/Artifact 或 HTTP/SSE 证据、已释放端口、worktree clean 状态、明确 `NOT_RUN` 清单以及建议的下一切片；提交后不得 amend/rebase 已交给主控评审的 SHA，除非主控明确要求。

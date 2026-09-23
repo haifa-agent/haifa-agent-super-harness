@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instructions_max_bytes", "trash_retention_days"],
+  "properties": {
+    "instructions_max_bytes": {"type": "integer", "minimum": 256, "maximum": 262144},
+    "trash_retention_days": {"type": "integer", "minimum": 1, "maximum": 3650}
+  }
+}

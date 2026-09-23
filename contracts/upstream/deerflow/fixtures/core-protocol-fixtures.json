@@ -1,5 +1,5 @@
 {
-  "schema_version": "w00.core-protocol-fixtures/v1",
+  "schema_version": "w00.core-protocol-fixtures/v2",
   "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
   "source_status": "SOURCE_VERIFIED",
   "contract_status": "STATIC_CONTRACT_VERIFIED",
@@ -88,6 +88,143 @@
         "earliest_available_event_id": "1718000000100-42",
         "latest_available_event_id": "1718000000200-84",
         "recovery": "reload_durable_state"
+      }
+    },
+    {
+      "id": "stream.messages-tuple.wire-messages",
+      "contract_id": "event.stream-mode.messages-tuple-wire-messages",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/stream-mode-mapping-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/stream-mode-mapping-response.schema.json",
+      "request": {"stream_mode": ["messages-tuple"]},
+      "response": {"langgraph_mode": "messages", "wire_event": "messages"}
+    },
+    {
+      "id": "thread.history.latest-page",
+      "contract_id": "rest.thread.history.exchange",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/thread-history-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/thread-history-response.schema.json",
+      "request": {"thread_id": "thread-123", "body": {"limit": 10, "before": null}},
+      "response": [
+        {
+          "checkpoint_id": "checkpoint-2",
+          "parent_checkpoint_id": "checkpoint-1",
+          "metadata": {"step": 2},
+          "values": {"messages": [{"type": "ai", "content": "done"}]},
+          "created_at": "2026-09-23T12:00:00Z",
+          "next": []
+        }
+      ]
+    },
+    {
+      "id": "thread.messages-page.first-page",
+      "contract_id": "rest.thread.messages-page.exchange",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/thread-messages-page-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/thread-messages-page-response.schema.json",
+      "request": {"thread_id": "thread-123", "query": {}},
+      "response": {
+        "data": [
+          {"seq": 41, "run_id": "run-123", "event_type": "llm.human.input", "content": {"type": "human", "content": "hello"}},
+          {"seq": 42, "run_id": "run-123", "event_type": "llm.ai.response", "content": {"type": "ai", "content": "hi"}}
+        ],
+        "has_more": false,
+        "next_before_seq": null
+      }
+    },
+    {
+      "id": "thread.runs.bare-array",
+      "contract_id": "rest.thread.runs.list.exchange",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/thread-runs-list-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/thread-runs-list-response.schema.json",
+      "request": {"thread_id": "thread-123"},
+      "response": [
+        {
+          "run_id": "run-123",
+          "thread_id": "thread-123",
+          "assistant_id": "lead_agent",
+          "status": "success",
+          "metadata": {},
+          "kwargs": {},
+          "multitask_strategy": "reject",
+          "created_at": "2026-09-23T12:00:00Z",
+          "updated_at": "2026-09-23T12:00:01Z",
+          "total_input_tokens": 10,
+          "total_output_tokens": 5,
+          "total_tokens": 15,
+          "llm_call_count": 1,
+          "lead_agent_tokens": 15,
+          "subagent_tokens": 0,
+          "middleware_tokens": 0,
+          "message_count": 2,
+          "stop_reason": null
+        }
+      ]
+    },
+    {
+      "id": "projects.config.defaults",
+      "contract_id": "rest.projects.config.exchange",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/empty-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/projects-config-response.schema.json",
+      "request": {},
+      "response": {"instructions_max_bytes": 8192, "trash_retention_days": 30}
+    },
+    {
+      "id": "projects.list.active",
+      "contract_id": "rest.projects.list.exchange",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/projects-list-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/projects-list-response.schema.json",
+      "request": {"status": "active"},
+      "response": {
+        "projects": [
+          {"id": "project-1", "name": "Alpha", "instructions": "Use cited sources.", "presentation": {"icon": "folder"}, "status": "active", "created_at": "2026-09-23T10:00:00Z", "updated_at": "2026-09-23T10:00:00Z"}
+        ]
+      }
+    },
+    {
+      "id": "projects.create.defaults-explicit",
+      "contract_id": "rest.projects.create.exchange",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/project-create-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/project-response.schema.json",
+      "request": {"name": "Alpha", "instructions": "", "presentation": {}},
+      "response": {"id": "project-1", "name": "Alpha", "instructions": "", "presentation": {}, "status": "active", "created_at": "2026-09-23T10:00:00Z", "updated_at": "2026-09-23T10:00:00Z"}
+    },
+    {
+      "id": "projects.get.active",
+      "contract_id": "rest.projects.get.exchange",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/project-id-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/project-response.schema.json",
+      "request": {"project_id": "project-1"},
+      "response": {"id": "project-1", "name": "Alpha", "instructions": "Use cited sources.", "presentation": {}, "status": "active", "created_at": "2026-09-23T10:00:00Z", "updated_at": "2026-09-23T10:05:00Z"}
+    },
+    {
+      "id": "projects.patch.instructions",
+      "contract_id": "rest.projects.patch.exchange",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/project-patch-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/project-response.schema.json",
+      "request": {"project_id": "project-1", "body": {"instructions": "Prefer primary sources."}},
+      "response": {"id": "project-1", "name": "Alpha", "instructions": "Prefer primary sources.", "presentation": {}, "status": "active", "created_at": "2026-09-23T10:00:00Z", "updated_at": "2026-09-23T10:06:00Z"}
+    },
+    {
+      "id": "projects.threads.active-page",
+      "contract_id": "rest.projects.threads.exchange",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/project-threads-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/project-threads-response.schema.json",
+      "request": {"project_id": "project-1", "query": {"limit": 100, "offset": 0}},
+      "response": [
+        {"thread_id": "thread-123", "display_name": "Research", "created_at": "2026-09-23T10:00:00Z", "updated_at": "2026-09-23T11:00:00Z", "metadata": {"deerflow_project_id": "project-1"}}
+      ]
+    },
+    {
+      "id": "workspace-changes.unavailable-empty",
+      "contract_id": "rest.run.workspace-changes.empty.exchange",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/workspace-changes-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/workspace-changes-empty-response.schema.json",
+      "request": {"thread_id": "thread-123", "run_id": "run-123", "query": {"include_files": false, "include_diff": false}},
+      "response": {
+        "available": false,
+        "version": 1,
+        "summary": {"created": 0, "modified": 0, "deleted": 0, "symlink_created": 0, "additions": 0, "deletions": 0, "truncated": false},
+        "files": [],
+        "limits": {}
       }
     }
   ]
