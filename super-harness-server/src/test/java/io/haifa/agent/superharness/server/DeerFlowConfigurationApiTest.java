@@ -8,9 +8,12 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpServer;
 import io.haifa.agent.core.tool.ProviderToolCallCorrelationId;
 import io.haifa.agent.model.api.AgentChatResponse;
+import io.haifa.agent.model.api.CredentialRef;
 import io.haifa.agent.model.api.ModelFinishReason;
 import io.haifa.agent.model.api.ModelToolCall;
 import io.haifa.agent.model.api.ModelUsage;
+import io.haifa.agent.model.api.ResolvedCredential;
+import io.haifa.agent.model.openai.OpenAiCompatibleDialects;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -23,6 +26,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -109,6 +113,84 @@ class DeerFlowConfigurationApiTest {
             assertThat(explicitClear.body())
                     .contains("credential is required")
                     .doesNotContain("saved-secret");
+        }
+    }
+
+    @Test
+    void osCredentialReferenceWinsWithoutPersistenceOrResponseSecretAndSelectsDeepSeekDialect()
+            throws Exception {
+        AtomicReference<CredentialRef> resolvedReference = new AtomicReference<>();
+        HttpServer contractServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        DeerFlowConfigurationApi handler = new DeerFlowConfigurationApi(
+                json,
+                dataDirectory.resolve("deepseek-contract"),
+                null,
+                reference -> {
+                    resolvedReference.set(reference);
+                    return new ResolvedCredential("resolved-os-secret");
+                });
+        contractServer.createContext("/api/managed-models", handler);
+        contractServer.start();
+        try {
+            URI contractBase = URI.create("http://127.0.0.1:" + contractServer.getAddress().getPort());
+            String request = withCredentialRef(
+                    saveModelAt(null, "ignored-api-key", "https://api.deepseek.com"),
+                    "os://MODEL_KEY");
+            HttpResponse<String> saved = requestAt(contractBase, "PUT", "/api/managed-models", request);
+            assertThat(saved.statusCode()).isEqualTo(200);
+            JsonNode response = json.readTree(saved.body());
+            assertThat(response.path("has_api_key").asBoolean()).isFalse();
+            assertThat(response.path("has_credential").asBoolean()).isTrue();
+            assertThat(response.path("credential_source").asText()).isEqualTo("os");
+            assertThat(saved.body()).doesNotContain("ignored-api-key", "MODEL_KEY", "credential_ref");
+
+            String persisted = Files.readString(dataDirectory.resolve(
+                    "deepseek-contract/owners/default/configuration.json"));
+            assertThat(persisted)
+                    .contains("os://MODEL_KEY")
+                    .doesNotContain("ignored-api-key", "resolved-os-secret", "api_key_ciphertext");
+
+            HaifaRunBridge.ModelBinding binding = handler.resolveRunModel(json.readTree(
+                    "{\"context\":{\"model_name\":\"demo-model\",\"mode\":\"flash\"}}"));
+            assertThat(resolvedReference.get()).isEqualTo(new CredentialRef("os://MODEL_KEY"));
+            assertThat(binding.snapshot().credentialRef()).isEqualTo(new CredentialRef("os://MODEL_KEY"));
+            assertThat(binding.snapshot().dialect()).isEqualTo(OpenAiCompatibleDialects.DEEPSEEK);
+            assertThat(binding.snapshot().endpoint()).isEqualTo(URI.create("https://api.deepseek.com"));
+            assertThat(binding.snapshot().invocationOptions()).containsEntry("thinking", "disabled");
+
+            ObjectNode apiKeyFallback =
+                    (ObjectNode) json.readTree(saveModelAt(
+                            response.path("revision").asText(),
+                            "replacement-api-key",
+                            "https://api.deepseek.com"));
+            ((ObjectNode) apiKeyFallback.path("config")).putNull("credential_ref");
+            HttpResponse<String> switched =
+                    requestAt(contractBase, "PUT", "/api/managed-models", apiKeyFallback.toString());
+            assertThat(switched.statusCode()).isEqualTo(200);
+            JsonNode switchedResponse = json.readTree(switched.body());
+            assertThat(switchedResponse.path("has_api_key").asBoolean()).isTrue();
+            assertThat(switchedResponse.path("has_credential").asBoolean()).isTrue();
+            assertThat(switchedResponse.path("credential_source").asText()).isEqualTo("api_key");
+            assertThat(switched.body()).doesNotContain("replacement-api-key", "MODEL_KEY");
+            String apiKeyPersisted = Files.readString(dataDirectory.resolve(
+                    "deepseek-contract/owners/default/configuration.json"));
+            assertThat(apiKeyPersisted)
+                    .contains("api_key_ciphertext")
+                    .doesNotContain("replacement-api-key", "credential_ref", "MODEL_KEY");
+        } finally {
+            contractServer.stop(0);
+        }
+    }
+
+    @Test
+    void credentialReferenceRejectsUnsupportedOrMalformedSchemes() throws Exception {
+        for (String reference : List.of("env://DEEPSEEK_API_KEY", "os://invalid/name", "", "os://1INVALID")) {
+            HttpResponse<String> response = request(
+                    "PUT",
+                    "/api/managed-models",
+                    withCredentialRef(saveModel(null, null), reference));
+            assertThat(response.statusCode()).isEqualTo(422);
+            assertThat(response.body()).contains("credential_ref must use os://NAME");
         }
     }
 
@@ -489,6 +571,12 @@ class DeerFlowConfigurationApiTest {
     private static String saveModelWithApiKeyLiteral(String revision, String apiKeyLiteral) {
         return saveModel(revision, null).replace(
                 "\"max_tokens\":1024", "\"max_tokens\":1024,\"api_key\":" + apiKeyLiteral);
+    }
+
+    private static String withCredentialRef(String request, String credentialReference) {
+        return request.replace(
+                "\"max_tokens\":1024",
+                "\"max_tokens\":1024,\"credential_ref\":\"" + credentialReference + "\"");
     }
 
     private static String withModel(String request, String model) {

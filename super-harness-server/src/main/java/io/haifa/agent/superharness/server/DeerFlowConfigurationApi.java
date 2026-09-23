@@ -6,10 +6,14 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import io.haifa.agent.auth.localmodel.ExternalLoginRegistry;
+import io.haifa.agent.auth.localmodel.LocalModelCredentialResolver;
+import io.haifa.agent.auth.localmodel.WindowsLocalModelAuthStore;
 import io.haifa.agent.core.run.AgentRunId;
 import io.haifa.agent.model.api.AgentChatRequest;
 import io.haifa.agent.model.api.AgentChatResponse;
 import io.haifa.agent.model.api.CredentialRef;
+import io.haifa.agent.model.api.CredentialResolver;
 import io.haifa.agent.model.api.ModelApiBindingDefinition;
 import io.haifa.agent.model.api.ModelApiStyles;
 import io.haifa.agent.model.api.ModelCallId;
@@ -23,6 +27,7 @@ import io.haifa.agent.model.api.ModelToolSpecification;
 import io.haifa.agent.model.api.ResolvedCredential;
 import io.haifa.agent.model.api.ResolvedModelSnapshot;
 import io.haifa.agent.model.openai.OpenAiCompatibleChatModel;
+import io.haifa.agent.model.openai.OpenAiCompatibleDialects;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -35,6 +40,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -57,6 +63,9 @@ final class DeerFlowConfigurationApi implements HttpHandler {
     private static final Pattern AGENT_PATH = Pattern.compile("^/api/agents/([^/]+)$");
     private static final Pattern AGENT_NAME = Pattern.compile("^[A-Za-z0-9-]+$");
     private static final Pattern MODEL_NAME = Pattern.compile("^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$");
+    private static final Pattern OS_CREDENTIAL_REF =
+            Pattern.compile("^os://[A-Za-z_][A-Za-z0-9_-]*$");
+    private static final URI DEEPSEEK_ENDPOINT = URI.create("https://api.deepseek.com");
     private static final Set<String> REASONING_EFFORTS = Set.of("low", "medium", "high");
     private static final List<String> AGENT_FIELDS = List.of(
             "display_name",
@@ -78,16 +87,28 @@ final class DeerFlowConfigurationApi implements HttpHandler {
     private final ObjectMapper json;
     private final ConfigurationStore store;
     private final ProbeTransport probeTransport;
+    private final CredentialResolver externalCredentialResolver;
 
     DeerFlowConfigurationApi(ObjectMapper json, Path dataDirectory) throws IOException {
-        this(json, dataDirectory, null);
+        this(json, dataDirectory, null, operatingSystemCredentialResolver(json));
     }
 
     DeerFlowConfigurationApi(ObjectMapper json, Path dataDirectory, ProbeTransport probeTransport)
             throws IOException {
+        this(json, dataDirectory, probeTransport, operatingSystemCredentialResolver(json));
+    }
+
+    DeerFlowConfigurationApi(
+            ObjectMapper json,
+            Path dataDirectory,
+            ProbeTransport probeTransport,
+            CredentialResolver externalCredentialResolver)
+            throws IOException {
         this.json = json;
         this.store = new ConfigurationStore(json, dataDirectory.resolve("owners").resolve("default"));
         this.probeTransport = probeTransport == null ? this::invokeToolCallProbe : probeTransport;
+        this.externalCredentialResolver = java.util.Objects.requireNonNull(
+                externalCredentialResolver, "externalCredentialResolver must not be null");
     }
 
     HaifaRunBridge.ModelBinding resolveRunModel(JsonNode body) {
@@ -235,7 +256,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         validateModel(config);
         String expectedRevision = nullableText(request.get("expected_revision"));
         ObjectNode effective = store.modelForProbe(config, expectedRevision);
-        if (!hasText(effective, "api_key")) {
+        if (!hasConfiguredCredential(effective)) {
             throw new InvalidRequestException(422, "Model credential is required for probe");
         }
         ProbeResult result = runToolCallProbe(effective);
@@ -277,7 +298,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                 binding.snapshot(),
                 List.of(ModelMessage.text(ModelMessageRole.USER, "Call connection_check.")),
                 List.of(tool),
-                32,
+                Math.min(binding.snapshot().maxOutputTokens(), 256),
                 Duration.ofSeconds(20),
                 Map.of());
         return binding.model().invokeStreaming(request, event -> ModelStreamControl.CONTINUE);
@@ -348,6 +369,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                         "model",
                         "base_url",
                         "api_key",
+                        "credential_ref",
                         "enabled",
                         "supports_vision",
                         "context_window",
@@ -386,6 +408,12 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         }
         positiveOrNull(config, "context_window");
         positiveOrNull(config, "max_tokens");
+        if (config.has("credential_ref") && !config.get("credential_ref").isNull()) {
+            if (!config.get("credential_ref").isTextual()
+                    || !OS_CREDENTIAL_REF.matcher(config.get("credential_ref").asText()).matches()) {
+                throw new InvalidRequestException(422, "credential_ref must use os://NAME");
+            }
+        }
     }
 
     private ObjectNode normalizeModel(ObjectNode input) {
@@ -396,7 +424,8 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         if (!config.has("supports_vision")) config.put("supports_vision", false);
         if (!config.has("context_window")) config.putNull("context_window");
         if (!config.has("max_tokens")) config.putNull("max_tokens");
-        for (String textField : List.of("name", "display_name", "provider", "model", "base_url")) {
+        for (String textField :
+                List.of("name", "display_name", "provider", "model", "base_url", "credential_ref")) {
             if (config.has(textField) && config.get(textField).isTextual()) {
                 config.put(textField, config.get(textField).asText().trim());
             }
@@ -512,6 +541,12 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         }
         result.put("source", "managed");
         result.put("has_api_key", hasText(stored, "api_key"));
+        result.put("has_credential", hasConfiguredCredential(stored));
+        result.put(
+                "credential_source",
+                hasText(stored, "credential_ref")
+                        ? "os"
+                        : hasText(stored, "api_key") ? "api_key" : "none");
         return result;
     }
 
@@ -530,7 +565,6 @@ final class DeerFlowConfigurationApi implements HttpHandler {
     private HaifaRunBridge.ModelBinding binding(ObjectNode config) {
         String name = config.path("name").asText();
         String revision = config.path("revision").asText("unsaved-probe");
-        String secret = config.path("api_key").asText();
         URI endpoint = URI.create(config.path("base_url").asText());
         boolean allowInsecureHttp = "http".equalsIgnoreCase(endpoint.getScheme()) && isLiteralLoopback(endpoint);
         if ("http".equalsIgnoreCase(endpoint.getScheme()) && !allowInsecureHttp) {
@@ -542,6 +576,25 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         if (maxOutputTokens > contextWindow) {
             throw new IllegalArgumentException("Model '" + name + "' has incompatible token limits");
         }
+        String credentialReference;
+        CredentialResolver credentials;
+        if (hasText(config, "credential_ref")) {
+            credentialReference = config.path("credential_ref").asText();
+            credentials = externalCredentialResolver;
+        } else {
+            String secret = config.path("api_key").asText();
+            credentialReference = "managed://default/" + name;
+            credentials = ignored -> new ResolvedCredential(secret);
+        }
+        try {
+            credentials.resolve(new CredentialRef(credentialReference));
+        } catch (RuntimeException exception) {
+            throw new IllegalArgumentException("Model '" + name + "' credential is unavailable");
+        }
+        boolean deepSeek = DEEPSEEK_ENDPOINT.equals(endpoint);
+        String dialect = deepSeek
+                ? OpenAiCompatibleDialects.DEEPSEEK
+                : ModelApiBindingDefinition.STANDARD_DIALECT;
         var model = new OpenAiCompatibleChatModel(
                 "openai-compatible",
                 "1.0.0",
@@ -550,7 +603,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                         .followRedirects(HttpClient.Redirect.NEVER)
                         .build(),
                 json,
-                ignored -> new ResolvedCredential(secret),
+                credentials,
                 allowInsecureHttp,
                 MAX_PROVIDER_RESPONSE_BYTES);
         ResolvedModelSnapshot snapshot = ResolvedModelSnapshot.create(
@@ -562,16 +615,25 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                 "openai-compatible",
                 "1.0.0",
                 ModelApiStyles.OPENAI_CHAT_COMPLETIONS,
-                ModelApiBindingDefinition.STANDARD_DIALECT,
+                dialect,
                 endpoint,
-                new CredentialRef("managed://default/" + name),
+                new CredentialRef(credentialReference),
                 true,
                 Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING),
                 contextWindow,
                 maxOutputTokens,
                 Map.of(),
-                Map.of());
+                deepSeek ? Map.of("thinking", "disabled") : Map.of());
         return new HaifaRunBridge.ModelBinding(name, revision, model, snapshot);
+    }
+
+    private static CredentialResolver operatingSystemCredentialResolver(ObjectMapper json) {
+        return new LocalModelCredentialResolver(
+                System::getenv,
+                WindowsLocalModelAuthStore.defaultStore(json),
+                new ExternalLoginRegistry(List.of()),
+                Clock.systemUTC(),
+                Duration.ZERO);
     }
 
     private static boolean isLiteralLoopback(URI endpoint) {
@@ -677,6 +739,10 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         return node.has(field) && node.get(field).isTextual() && !node.get(field).asText().isBlank();
     }
 
+    private static boolean hasConfiguredCredential(ObjectNode node) {
+        return hasText(node, "credential_ref") || hasText(node, "api_key");
+    }
+
     private static void rejectUnknownFields(ObjectNode node, Set<String> allowed) {
         node.fieldNames().forEachRemaining(field -> {
             if (!allowed.contains(field)) {
@@ -717,6 +783,23 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         exchange.sendResponseHeaders(status, payload.length);
         try (var response = exchange.getResponseBody()) {
             response.write(payload);
+        }
+    }
+
+    private static void mergeCredentialSelection(ObjectNode candidate, ObjectNode existing) {
+        if (!candidate.has("credential_ref") && existing != null && hasText(existing, "credential_ref")) {
+            candidate.put("credential_ref", existing.path("credential_ref").asText());
+        }
+        if (!candidate.has("api_key") && existing != null && hasText(existing, "api_key")) {
+            candidate.put("api_key", existing.path("api_key").asText());
+        }
+        if (candidate.has("credential_ref") && candidate.get("credential_ref").isNull()) {
+            candidate.remove("credential_ref");
+        }
+        if (hasText(candidate, "credential_ref")) {
+            candidate.remove("api_key");
+        } else if (candidate.has("api_key") && !hasText(candidate, "api_key")) {
+            candidate.remove("api_key");
         }
     }
 
@@ -807,11 +890,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                     throw new InvalidRequestException(409, "Model changed or already exists; reload before saving");
                 }
                 ObjectNode saved = request.deepCopy();
-                if (!saved.has("api_key") && existing != null && hasText(existing, "api_key")) {
-                    saved.put("api_key", existing.path("api_key").asText());
-                } else if (saved.has("api_key") && !hasText(saved, "api_key")) {
-                    saved.remove("api_key");
-                }
+                mergeCredentialSelection(saved, existing);
                 saved.put("revision", UUID.randomUUID().toString());
                 replace(models, existing, saved);
                 write(root);
@@ -822,17 +901,16 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         ObjectNode modelForProbe(ObjectNode request, String expectedRevision) {
             synchronized (lock) {
                 ObjectNode candidate = request.deepCopy();
+                ObjectNode existing = null;
                 if (expectedRevision != null) {
-                    ObjectNode existing = find(read().withArrayProperty("models"), request.path("name").asText())
+                    existing = find(read().withArrayProperty("models"), request.path("name").asText())
                             .orElseThrow(() -> new InvalidRequestException(409, "Model changed; reload before testing"));
                     if (!existing.path("revision").asText().equals(expectedRevision)) {
                         throw new InvalidRequestException(409, "Model changed; reload before testing");
                     }
-                    if (!candidate.has("api_key") && hasText(existing, "api_key")) {
-                        candidate.put("api_key", existing.path("api_key").asText());
-                    }
                     candidate.put("revision", existing.path("revision").asText());
                 }
+                mergeCredentialSelection(candidate, existing);
                 return candidate;
             }
         }
@@ -996,7 +1074,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         private static boolean isExecutable(ObjectNode model) {
             if (!model.path("enabled").asBoolean(false)
                     || !model.path("provider").asText().equals("openai-compatible")
-                    || !hasText(model, "api_key")
+                    || !hasConfiguredCredential(model)
                     || !hasText(model, "name")
                     || !hasText(model, "model")
                     || !hasText(model, "base_url")

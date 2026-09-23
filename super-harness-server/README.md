@@ -37,8 +37,18 @@ SOUL plus `null`/`[]`/`false` values round-trip without erasing omitted fields. 
 uses Haifa's public OpenAI-compatible model API for a bounded streaming tool-call probe. Missing
 credentials, unknown providers, unsupported modes, and unbound Run models fail closed.
 
-The W03 Run-binding slice now advertises only enabled, credentialed and executable managed models
-from `GET /api/models`. A Run selects an explicit `context.model_name`, then a custom Agent model,
+Managed models may use either the frozen `api_key` field or a controlled `credential_ref` with the
+form `os://NAME`. An OS reference wins when both are supplied; clearing it explicitly with `null`
+allows the encrypted `api_key` compatibility path to be selected again. The server delegates
+`os://` resolution to Haifa Agent's public local-model-auth integration and never copies the OS
+secret into its JSON store. Responses expose only `has_credential` and `credential_source`; the
+reference name and resolved value are not returned. The exact official endpoint
+`https://api.deepseek.com` selects Haifa's `deepseek-openai-chat` dialect with thinking disabled;
+all other compatible endpoints retain the standard dialect. Probe and Run both use the same model
+binding, credential reference, dialect, endpoint, and frozen snapshot.
+
+The W03 Run-binding slice now advertises only enabled, credential-configured and executable managed
+models from `GET /api/models`. A Run selects an explicit `context.model_name`, then a custom Agent model,
 then the first executable managed model. It freezes the selected model name and revision into a
 public Haifa SDK model snapshot and invokes the public OpenAI-compatible adapter through the same
 SDK Run/SSE/cancel path. Unknown, disabled, credential-less, non-loopback plain-HTTP, reasoning-mode,
@@ -48,9 +58,9 @@ package-private test bootstrap and is never exposed by the production server ent
 
 This is still an in-progress compatibility slice. A thread keeps its first model revision so its
 in-memory Haifa Conversation remains coherent; after a model revision changes, the caller must
-create a new thread. The real external-provider probe and Run remain **NOT_RUN** because no external
-credential was supplied; the controlled loopback provider is L2 protocol evidence, not L3 provider
-evidence. Process-restart reconstruction, `updates` and `custom` event
+create a new thread. The controlled loopback provider remains L2 protocol evidence; real-provider
+evidence must be reported separately from an explicitly enabled live test using an OS credential.
+Process-restart reconstruction, `updates` and `custom` event
 projection, HTTP interaction submission/card projection, full history, files, same-UI differential
 verification, and account authentication are **NOT_RUN**. Unsupported Interaction projection fails
 closed instead of manufacturing a card. Cancel currently implements the frozen UI's actual
@@ -93,6 +103,15 @@ Run the contract and real-socket integration tests with:
 
 ```powershell
 mvn -pl super-harness-server -am test
+```
+
+The explicit DeepSeek L3 test uses only the Windows Credential Manager entry referenced by
+`os://DEEPSEEK_API_KEY`; it never reads an env file. Run it in the assigned isolated slot with:
+
+```powershell
+mvn -pl super-harness-server -am "-Dtest=DeepSeekOsCredentialLiveTest" `
+  "-Dsurefire.failIfNoSpecifiedTests=false" "-Dhaifa.deepseek.live=true" `
+  "-Dsuper.harness.live.data.dir=target/agent-slot-3-data" test
 ```
 
 Build and start the executable JAR with:
