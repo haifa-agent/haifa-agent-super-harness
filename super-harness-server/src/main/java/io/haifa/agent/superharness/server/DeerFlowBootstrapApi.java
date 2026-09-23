@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
+import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
+import io.haifa.agent.superharness.workspace.WorkspaceChangeLimits;
+import io.haifa.agent.superharness.workspace.WorkspaceLimits;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.file.Path;
@@ -37,6 +40,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final DeerFlowThreadRunApi threadRunApi;
     private final DeerFlowConfigurationApi configurationApi;
     private final DeerFlowWorkspaceApi workspaceApi;
+    private final DeerFlowProjectApi projectApi;
 
     private DeerFlowBootstrapApi(
             HttpServer server,
@@ -48,11 +52,15 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.executor = executor;
         this.objectMapper = new ObjectMapper();
         this.configurationApi = new DeerFlowConfigurationApi(objectMapper, dataDirectory);
+        PersistentProjectWorkspaceService projects = new PersistentProjectWorkspaceService(
+                dataDirectory.resolve("workspace"), WorkspaceLimits.defaults(), WorkspaceChangeLimits.defaults());
         this.threadRunApi = new DeerFlowThreadRunApi(
                 objectMapper,
                 testRunModelResolver == null
                         ? configurationApi::resolveRunModel
-                        : testRunModelResolver);
+                        : testRunModelResolver,
+                projectId -> projects.projectExists(DEFAULT_USER_ID, projectId));
+        this.projectApi = new DeerFlowProjectApi(objectMapper, projects, threadRunApi);
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
         registerRoutes();
@@ -143,6 +151,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         server.createContext("/api/models", configurationApi);
         server.createContext("/api/managed-models", configurationApi);
         server.createContext("/api/agents", configurationApi);
+        server.createContext("/api/projects", projectApi);
         server.createContext("/api/threads", exchange -> {
             if (!workspaceApi.tryHandle(exchange)) {
                 threadRunApi.handle(exchange);

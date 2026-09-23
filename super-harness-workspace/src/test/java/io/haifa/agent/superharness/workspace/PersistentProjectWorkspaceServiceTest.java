@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.function.Consumer;
@@ -292,6 +293,51 @@ class PersistentProjectWorkspaceServiceTest {
 
     private static String sha256(byte[] value) {
         return Hashing.sha256(value);
+    }
+
+    @Test
+    void projectProfilesAreOwnerScopedPersistentAndPatchedAtomically() {
+        PersistentProjectWorkspaceService projects = projects();
+        ProjectProfile created = projects.createProject(
+                "owner-a", "Alpha", "Be concise", Map.of("icon", "folder", "color", "blue"));
+
+        assertThat(created.id()).matches("[0-9a-f]{32}");
+        assertThat(projects.listProjects("owner-a", Optional.of("active")))
+                .extracting(ProjectProfile::id)
+                .containsExactly(created.id());
+        assertThat(projects.listProjects("owner-a", Optional.of("archived"))).isEmpty();
+        assertThat(projects.projectExists("owner-a", created.id())).isTrue();
+        assertThat(projects.projectExists("owner-b", created.id())).isFalse();
+
+        ProjectProfile patched = projects.patchProject("owner-a", created.id(), Optional.of("Renamed"),
+                Optional.empty(), Optional.of(Map.of("color", "green")));
+        assertThat(patched.name()).isEqualTo("Renamed");
+        assertThat(patched.instructions()).isEqualTo("Be concise");
+        assertThat(patched.presentation()).containsExactlyEntriesOf(Map.of("color", "green"));
+        assertThat(patched.createdAt()).isEqualTo(created.createdAt());
+        assertThat(patched.updatedAt()).isAfterOrEqualTo(created.updatedAt());
+
+        PersistentProjectWorkspaceService restarted = projects();
+        assertThat(restarted.getProject("owner-a", created.id())).isEqualTo(patched);
+        assertThatThrownBy(() -> restarted.getProject("owner-b", created.id()))
+                .isInstanceOfSatisfying(WorkspaceException.class,
+                        failure -> assertThat(failure.error()).isEqualTo(WorkspaceError.OWNER_MISMATCH));
+    }
+
+    @Test
+    void projectProfileValidationIsUtf8BoundedAndFailedPatchPreservesMetadata() {
+        PersistentProjectWorkspaceService projects = projects();
+        ProjectProfile created = projects.createProject("owner-a", "Alpha", "", Map.of());
+        String oversized = "界".repeat(2731);
+
+        assertThatThrownBy(() -> projects.patchProject("owner-a", created.id(), Optional.empty(),
+                Optional.of(oversized), Optional.empty()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(projects.getProject("owner-a", created.id())).isEqualTo(created);
+        assertThatThrownBy(() -> projects.createProject("owner-a", "", "", Map.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> projects.createProject("owner-a", "ok", "", Map.of("other", "x")))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @FunctionalInterface

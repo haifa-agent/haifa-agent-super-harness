@@ -44,6 +44,8 @@ import java.util.stream.Stream;
 public final class PersistentProjectWorkspaceService {
     private static final String BINDING_FILE = "binding.properties";
     private static final String BASELINE_FILE = "baseline.properties";
+    public static final int PROJECT_NAME_MAX_CODE_POINTS = 128;
+    public static final int PROJECT_INSTRUCTIONS_MAX_BYTES = 8192;
 
     private final Path projectsRoot;
     private final Path changesRoot;
@@ -79,7 +81,100 @@ public final class PersistentProjectWorkspaceService {
         Properties properties = new Properties();
         properties.setProperty("ownerId", owner);
         properties.setProperty("projectId", project);
+        String defaultName = project.codePoints()
+                .limit(PROJECT_NAME_MAX_CODE_POINTS)
+                .collect(StringBuilder::new, StringBuilder::appendCodePoint, StringBuilder::append)
+                .toString();
+        Instant now = Instant.now();
+        properties.setProperty("name", defaultName);
+        properties.setProperty("instructions", "");
+        properties.setProperty("status", "active");
+        properties.setProperty("createdAt", now.toString());
+        properties.setProperty("updatedAt", now.toString());
         storeNew(properties, binding, "Super Harness project binding");
+    }
+
+    /** Create one active Project under the server-selected owner. */
+    public synchronized ProjectProfile createProject(
+            String ownerId, String name, String instructions, Map<String, String> presentation) {
+        String owner = requireIdentity(ownerId, "ownerId");
+        String projectId = UUID.randomUUID().toString().replace("-", "");
+        String validName = validateProjectName(name);
+        String validInstructions = validateProjectInstructions(instructions);
+        Map<String, String> validPresentation = validatePresentation(presentation);
+        Path root = projectRoot(projectId);
+        WorkspaceRegistry.createDirectories(root.resolve("documents"));
+        WorkspaceRegistry.createDirectories(root.resolve("payloads"));
+        Instant now = Instant.now();
+        Properties properties = projectProperties(owner, projectId, validName, validInstructions,
+                validPresentation, "active", now, now);
+        storeNew(properties, root.resolve(BINDING_FILE), "Super Harness project binding");
+        return new ProjectProfile(projectId, validName, validInstructions, validPresentation, "active", now, now);
+    }
+
+    public synchronized boolean projectExists(String ownerId, String projectId) {
+        try {
+            getProject(ownerId, projectId);
+            return true;
+        } catch (WorkspaceException failure) {
+            if (failure.error() == WorkspaceError.PROJECT_NOT_FOUND
+                    || failure.error() == WorkspaceError.OWNER_MISMATCH
+                    || failure.error() == WorkspaceError.INVALID_IDENTITY) {
+                return false;
+            }
+            throw failure;
+        }
+    }
+
+    public synchronized ProjectProfile getProject(String ownerId, String projectId) {
+        Path root = requireProject(ownerId, projectId);
+        return loadProject(root.resolve(BINDING_FILE), projectId);
+    }
+
+    public synchronized List<ProjectProfile> listProjects(String ownerId, Optional<String> status) {
+        String owner = requireIdentity(ownerId, "ownerId");
+        String expectedStatus = status.orElse(null);
+        if (expectedStatus != null && !expectedStatus.equals("active") && !expectedStatus.equals("archived")) {
+            throw new IllegalArgumentException("project status must be active or archived");
+        }
+        try (Stream<Path> paths = Files.list(projectsRoot)) {
+            return paths.filter(path -> Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS))
+                    .map(path -> path.resolve(BINDING_FILE))
+                    .filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
+                    .map(path -> loadProperties(path, WorkspaceError.PROJECT_NOT_FOUND, "project does not exist"))
+                    .filter(properties -> owner.equals(properties.getProperty("ownerId")))
+                    .map(properties -> loadProject(properties, properties.getProperty("projectId")))
+                    .filter(project -> expectedStatus == null || expectedStatus.equals(project.status()))
+                    .sorted(Comparator.comparing(ProjectProfile::createdAt).thenComparing(ProjectProfile::id))
+                    .toList();
+        } catch (IOException exception) {
+            throw WorkspaceRegistry.ioFailure("failed to list projects", exception);
+        }
+    }
+
+    /** Patch only explicitly supplied fields. Empty optionals preserve the stored value. */
+    public synchronized ProjectProfile patchProject(
+            String ownerId,
+            String projectId,
+            Optional<String> name,
+            Optional<String> instructions,
+            Optional<Map<String, String>> presentation) {
+        Path root = requireProject(ownerId, projectId);
+        Path binding = root.resolve(BINDING_FILE);
+        Properties current = loadProperties(binding, WorkspaceError.PROJECT_NOT_FOUND, "project does not exist");
+        ProjectProfile existing = loadProject(current, projectId);
+        String nextName = name.map(PersistentProjectWorkspaceService::validateProjectName).orElse(existing.name());
+        String nextInstructions = instructions.map(PersistentProjectWorkspaceService::validateProjectInstructions)
+                .orElse(existing.instructions());
+        Map<String, String> nextPresentation = presentation
+                .map(PersistentProjectWorkspaceService::validatePresentation)
+                .orElse(existing.presentation());
+        Instant now = Instant.now();
+        Properties updated = projectProperties(current.getProperty("ownerId"), projectId, nextName,
+                nextInstructions, nextPresentation, existing.status(), existing.createdAt(), now);
+        storeReplacing(updated, binding, "Super Harness project binding");
+        return new ProjectProfile(projectId, nextName, nextInstructions, nextPresentation,
+                existing.status(), existing.createdAt(), now);
     }
 
     /** Store one immutable upload snapshot. Equal content deduplicates and the first metadata wins. */
@@ -456,6 +551,96 @@ public final class PersistentProjectWorkspaceService {
         return root;
     }
 
+    private ProjectProfile loadProject(Path binding, String expectedProjectId) {
+        return loadProject(loadProperties(binding, WorkspaceError.PROJECT_NOT_FOUND, "project does not exist"),
+                expectedProjectId);
+    }
+
+    private ProjectProfile loadProject(Properties properties, String expectedProjectId) {
+        try {
+            String id = requireIdentity(properties.getProperty("projectId"), "projectId");
+            if (!Objects.equals(id, expectedProjectId)) {
+                throw new IllegalArgumentException("project id does not match binding");
+            }
+            String name = validateProjectName(properties.getProperty("name"));
+            String instructions = validateProjectInstructions(properties.getProperty("instructions", ""));
+            Map<String, String> presentation = new LinkedHashMap<>();
+            Optional.ofNullable(properties.getProperty("presentation.icon"))
+                    .ifPresent(value -> presentation.put("icon", value));
+            Optional.ofNullable(properties.getProperty("presentation.color"))
+                    .ifPresent(value -> presentation.put("color", value));
+            String status = properties.getProperty("status");
+            if (!Objects.equals(status, "active") && !Objects.equals(status, "archived")) {
+                throw new IllegalArgumentException("project status is invalid");
+            }
+            Instant createdAt = Instant.parse(properties.getProperty("createdAt"));
+            Instant updatedAt = Instant.parse(properties.getProperty("updatedAt"));
+            if (updatedAt.isBefore(createdAt)) {
+                throw new IllegalArgumentException("project update timestamp precedes creation");
+            }
+            return new ProjectProfile(id, name, instructions, presentation, status, createdAt, updatedAt);
+        } catch (RuntimeException exception) {
+            if (exception instanceof WorkspaceException workspace) {
+                throw workspace;
+            }
+            throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY,
+                    "project metadata is corrupt", exception);
+        }
+    }
+
+    private static Properties projectProperties(
+            String ownerId,
+            String projectId,
+            String name,
+            String instructions,
+            Map<String, String> presentation,
+            String status,
+            Instant createdAt,
+            Instant updatedAt) {
+        Properties properties = new Properties();
+        properties.setProperty("ownerId", ownerId);
+        properties.setProperty("projectId", projectId);
+        properties.setProperty("name", name);
+        properties.setProperty("instructions", instructions);
+        properties.setProperty("status", status);
+        properties.setProperty("createdAt", createdAt.toString());
+        properties.setProperty("updatedAt", updatedAt.toString());
+        presentation.forEach((key, value) -> properties.setProperty("presentation." + key, value));
+        return properties;
+    }
+
+    private static String validateProjectName(String name) {
+        if (name == null || name.isEmpty() || name.codePointCount(0, name.length()) > PROJECT_NAME_MAX_CODE_POINTS) {
+            throw new IllegalArgumentException("project name must contain 1-128 characters");
+        }
+        return name;
+    }
+
+    private static String validateProjectInstructions(String instructions) {
+        if (instructions == null) {
+            throw new IllegalArgumentException("project instructions must not be null");
+        }
+        if (instructions.getBytes(StandardCharsets.UTF_8).length > PROJECT_INSTRUCTIONS_MAX_BYTES) {
+            throw new IllegalArgumentException("project instructions exceed the configured 8192-byte UTF-8 limit");
+        }
+        return instructions;
+    }
+
+    private static Map<String, String> validatePresentation(Map<String, String> presentation) {
+        Objects.requireNonNull(presentation, "presentation");
+        Map<String, String> result = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : presentation.entrySet()) {
+            if (!entry.getKey().equals("icon") && !entry.getKey().equals("color")) {
+                throw new IllegalArgumentException("project presentation only supports icon and color");
+            }
+            if (entry.getValue() == null || entry.getValue().getBytes(StandardCharsets.UTF_8).length > 256) {
+                throw new IllegalArgumentException("project presentation values must contain at most 256 UTF-8 bytes");
+            }
+            result.put(entry.getKey(), entry.getValue());
+        }
+        return result;
+    }
+
     private Path projectRoot(String projectId) {
         return projectsRoot.resolve("prj-" + Hashing.sha256(projectId).substring(0, 32));
     }
@@ -521,6 +706,27 @@ public final class PersistentProjectWorkspaceService {
                     "persisted metadata already exists", exception);
         } catch (IOException exception) {
             throw WorkspaceRegistry.ioFailure("failed to persist workspace metadata", exception);
+        }
+    }
+
+    private static void storeReplacing(Properties properties, Path target, String comment) {
+        Path part = target.resolveSibling(target.getFileName() + "." + UUID.randomUUID() + ".part");
+        try {
+            try (OutputStream output = Files.newOutputStream(part, StandardOpenOption.CREATE_NEW)) {
+                properties.store(output, comment);
+            }
+            try {
+                Files.move(part, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+                Files.move(part, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException exception) {
+            try {
+                Files.deleteIfExists(part);
+            } catch (IOException ignored) {
+                // Preserve the original persistence failure.
+            }
+            throw WorkspaceRegistry.ioFailure("failed to update persisted workspace metadata", exception);
         }
     }
 

@@ -29,9 +29,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.function.Function;
 
 /** Frozen DeerFlow thread/run compatibility routes backed by the public Haifa Agent SDK. */
 final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
@@ -51,14 +52,23 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private final ObjectMapper json;
     private final Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver;
+    private final Predicate<String> projectExists;
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
     private final Map<String, RunRecord> runs = new ConcurrentHashMap<>();
 
     DeerFlowThreadRunApi(
             ObjectMapper json,
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver) {
+        this(json, runModelResolver, ignored -> false);
+    }
+
+    DeerFlowThreadRunApi(
+            ObjectMapper json,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            Predicate<String> projectExists) {
         this.json = json;
         this.runModelResolver = runModelResolver;
+        this.projectExists = projectExists;
     }
 
     boolean hasThread(String threadId) {
@@ -129,6 +139,19 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         metadata.remove("owner");
         metadata.remove("user_id");
         metadata.remove("system_role");
+        metadata.remove("deerflow_project_id");
+        if (body.has("project_id") && !body.get("project_id").isNull()) {
+            if (!body.get("project_id").isTextual() || body.get("project_id").asText().isBlank()) {
+                sendJson(exchange, 422, Map.of("detail", "Invalid project_id"));
+                return;
+            }
+            String projectId = body.get("project_id").asText();
+            if (!projectExists.test(projectId)) {
+                sendJson(exchange, 404, Map.of("detail", "Project not found"));
+                return;
+            }
+            metadata.put("deerflow_project_id", projectId);
+        }
         ThreadRecord record = threads.computeIfAbsent(
                 threadId, ignored -> new ThreadRecord(threadId, metadata, Instant.now()));
         sendJson(exchange, 200, threadResponse(record));
@@ -651,6 +674,26 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         response.put("values", Map.of());
         response.put("interrupts", Map.of());
         return response;
+    }
+
+    List<Map<String, Object>> listProjectThreads(String projectId, int limit, int offset) {
+        return threads.values().stream()
+                .filter(record -> projectId.equals(record.metadata.get("deerflow_project_id")))
+                .filter(record -> !Boolean.TRUE.equals(record.metadata.get("deerflow_archived")))
+                .sorted((left, right) -> right.updatedAt.compareTo(left.updatedAt))
+                .skip(offset)
+                .limit(limit)
+                .map(record -> {
+                    Map<String, Object> response = new LinkedHashMap<>();
+                    response.put("thread_id", record.threadId);
+                    Object displayName = record.metadata.get("title");
+                    response.put("display_name", displayName instanceof String ? displayName : null);
+                    response.put("created_at", record.createdAt.toString());
+                    response.put("updated_at", record.updatedAt.toString());
+                    response.put("metadata", record.metadata);
+                    return response;
+                })
+                .toList();
     }
 
     private String threadStatus(ThreadRecord record) {
