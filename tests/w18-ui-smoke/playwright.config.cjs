@@ -12,11 +12,11 @@ const evidenceRoot = process.env.W18_EVIDENCE_DIR
 
 module.exports = defineConfig({
   testDir: __dirname,
-  testMatch: "w18-ui-smoke.spec.cjs",
+  testMatch: process.env.W18_PLAYWRIGHT_SPEC ?? "w18-ui-smoke.spec.cjs",
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  timeout: 60_000,
+  timeout: Number(process.env.W18_PLAYWRIGHT_TIMEOUT_MS ?? "60000"),
   expect: { timeout: 20_000 },
   outputDir: path.join(evidenceRoot, "artifacts"),
   reporter: [
@@ -28,7 +28,7 @@ module.exports = defineConfig({
       process.env.E2E_APP_URL ?? `http://127.0.0.1:${frontendPort}`,
     ...devices["Desktop Chrome"],
     screenshot: "only-on-failure",
-    trace: "retain-on-failure",
+    trace: process.env.W18_PLAYWRIGHT_TRACE ?? "retain-on-failure",
   },
   projects: [{ name: "chromium", use: { browserName: "chromium" } }],
 });

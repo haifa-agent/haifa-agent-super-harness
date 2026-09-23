@@ -12,6 +12,23 @@ pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 `
   -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow
 ```
 
+The explicitly authorized DeepSeek L3 variant uses the same runner and slot,
+but a separate data/evidence directory and one independent Playwright case:
+
+```powershell
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 `
+  -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow `
+  -LiveDeepSeek -SkipBuild
+```
+
+`-LiveDeepSeek` never starts the controlled provider and never accepts an API
+key argument or environment value. The gateway resolves only the existing
+Windows Credential Manager reference `os://DEEPSEEK_API_KEY`. It saves the
+official `https://api.deepseek.com` endpoint, which selects Haifa's
+`deepseek-openai-chat` dialect, and uses `deepseek-v4-pro`. This command incurs
+a real external model call and therefore must only be run when explicitly
+authorized.
+
 The runner owns only slot 2 gateway/frontend ports (`38018` and `53018`). The
 controlled provider binds to `127.0.0.1:0`, publishes its actual address and PID
 through repo-local ready metadata, and is stopped by its exact process object.
@@ -59,6 +76,11 @@ lifecycle took 76.847 seconds. The repeat-run provider, Gateway, and frontend
 PIDs exited and ports `64182`, `38018`, and `53018` were released. No runner or
 Next hang, test timeout, or owned child-process residue was observed.
 
-This remains controlled loopback wiring evidence. A real external provider and
-active-stream disconnect/reconnect recovery were not exercised and remain
-`NOT_RUN`; the test does not claim either result.
+The controlled-provider result remains L2 wiring evidence. On 2026-09-23 the
+separately authorized DeepSeek L3 case also passed once through the same frozen
+page: non-empty assistant text rendered, the Run reached `success`, the stream
+contained `messages` and `end`, and a browser reload restored the answer. Its
+sanitized identities, timing, credential-safety checks, and artifact paths are
+recorded in `evidence/20260923-deepseek-web-l3-pass.json`. Active-stream
+disconnect/reconnect recovery and the DeerFlow-vs-Haifa runtime differential
+remain `NOT_RUN`.

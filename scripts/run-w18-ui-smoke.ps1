@@ -6,6 +6,7 @@ param(
     [int]$FrontendPort = 53018,
     [int]$ProviderPort = 0,
     [string]$DataDirectory,
+    [switch]$LiveDeepSeek,
     [switch]$SkipBuild
 )
 
@@ -18,7 +19,11 @@ if ($GatewayPort -ne 38018 -or $FrontendPort -ne 53018 -or $ProviderPort -ne 0) 
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
-    $DataDirectory = Join-Path $root 'target/agent-slot-2-data'
+    $DataDirectory = Join-Path $root $(if ($LiveDeepSeek) {
+        'target/agent-slot-2-deepseek-data'
+    } else {
+        'target/agent-slot-2-data'
+    })
 }
 $dataRoot = [IO.Path]::GetFullPath($DataDirectory).TrimEnd('\', '/')
 $rootPrefix = $root.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
@@ -34,7 +39,11 @@ foreach ($port in @($GatewayPort, $FrontendPort)) {
 }
 
 $null = New-Item -ItemType Directory -Force -Path $dataRoot
-$evidenceRoot = Join-Path $root 'target/w18-ui-smoke-evidence/playwright'
+$evidenceRoot = Join-Path $root $(if ($LiveDeepSeek) {
+    'target/w18-deepseek-web-l3/playwright'
+} else {
+    'target/w18-ui-smoke-evidence/playwright'
+})
 $null = New-Item -ItemType Directory -Force -Path $evidenceRoot
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $serverOut = Join-Path $evidenceRoot "server-$stamp.stdout.log"
@@ -66,6 +75,10 @@ $managedEnvironment = @{
     E2E_APP_URL = "http://127.0.0.1:$FrontendPort"
     W18_EVIDENCE_DIR = $evidenceRoot
     W18_PROVIDER_URL = $null
+    W18_MODEL_NAME = $(if ($LiveDeepSeek) { 'w18-deepseek-live' } else { 'w18-controlled' })
+    W18_PLAYWRIGHT_SPEC = $(if ($LiveDeepSeek) { 'w18-deepseek-live.spec.cjs' } else { 'w18-ui-smoke.spec.cjs' })
+    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek) { '120000' } else { '60000' })
+    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek) { 'on' } else { 'retain-on-failure' })
 }
 $savedEnvironment = @{}
 foreach ($name in $managedEnvironment.Keys) {
@@ -119,42 +132,45 @@ try {
         throw 'Repo-local Next.js executable is missing; run pnpm install --offline --frozen-lockfile.'
     }
 
-    $providerScript = Join-Path $root 'tests/w18-ui-smoke/loopback-openai-provider.cjs'
-    $providerProcess = Start-Process -FilePath (Get-Command node.exe).Source `
-        -ArgumentList @($providerScript, [string]$ProviderPort, $providerReady) `
-        -WorkingDirectory $root `
-        -RedirectStandardOutput $providerOut `
-        -RedirectStandardError $providerErr `
-        -PassThru `
-        -WindowStyle Hidden
-    $providerDeadline = (Get-Date).AddSeconds(15)
-    $providerMetadata = $null
-    do {
-        Start-Sleep -Milliseconds 100
-        if (Test-Path -LiteralPath $providerReady -PathType Leaf) {
-            try {
-                $providerMetadata = Get-Content -Raw -LiteralPath $providerReady | ConvertFrom-Json
+    $providerUrl = $null
+    if (-not $LiveDeepSeek) {
+        $providerScript = Join-Path $root 'tests/w18-ui-smoke/loopback-openai-provider.cjs'
+        $providerProcess = Start-Process -FilePath (Get-Command node.exe).Source `
+            -ArgumentList @($providerScript, [string]$ProviderPort, $providerReady) `
+            -WorkingDirectory $root `
+            -RedirectStandardOutput $providerOut `
+            -RedirectStandardError $providerErr `
+            -PassThru `
+            -WindowStyle Hidden
+        $providerDeadline = (Get-Date).AddSeconds(15)
+        $providerMetadata = $null
+        do {
+            Start-Sleep -Milliseconds 100
+            if (Test-Path -LiteralPath $providerReady -PathType Leaf) {
+                try {
+                    $providerMetadata = Get-Content -Raw -LiteralPath $providerReady | ConvertFrom-Json
+                }
+                catch {
+                    $providerMetadata = $null
+                }
             }
-            catch {
-                $providerMetadata = $null
-            }
+        } until (($null -ne $providerMetadata -and $providerMetadata.type -eq 'ready') -or $providerProcess.HasExited -or (Get-Date) -ge $providerDeadline)
+        if ($null -eq $providerMetadata -or $providerMetadata.type -ne 'ready') {
+            throw "Controlled provider failed readiness (PID $($providerProcess.Id))."
         }
-    } until (($null -ne $providerMetadata -and $providerMetadata.type -eq 'ready') -or $providerProcess.HasExited -or (Get-Date) -ge $providerDeadline)
-    if ($null -eq $providerMetadata -or $providerMetadata.type -ne 'ready') {
-        throw "Controlled provider failed readiness (PID $($providerProcess.Id))."
-    }
-    $providerUrl = [string]$providerMetadata.address
-    $providerUri = [Uri]$providerUrl
-    if ($providerUri.Scheme -ne 'http' -or $providerUri.Host -ne '127.0.0.1' -or $providerUri.Port -lt 1) {
-        throw "Controlled provider published unsafe ready address '$providerUrl'."
-    }
-    if ([int]$providerMetadata.pid -ne $providerProcess.Id) {
-        throw 'Controlled provider ready metadata PID does not match the started process.'
-    }
-    [Environment]::SetEnvironmentVariable('W18_PROVIDER_URL', $providerUrl, 'Process')
-    $providerHealth = Invoke-RestMethod "$providerUrl/health" -TimeoutSec 2
-    if ($providerHealth.status -ne 'ok') {
-        throw "Controlled provider health check failed (PID $($providerProcess.Id))."
+        $providerUrl = [string]$providerMetadata.address
+        $providerUri = [Uri]$providerUrl
+        if ($providerUri.Scheme -ne 'http' -or $providerUri.Host -ne '127.0.0.1' -or $providerUri.Port -lt 1) {
+            throw "Controlled provider published unsafe ready address '$providerUrl'."
+        }
+        if ([int]$providerMetadata.pid -ne $providerProcess.Id) {
+            throw 'Controlled provider ready metadata PID does not match the started process.'
+        }
+        [Environment]::SetEnvironmentVariable('W18_PROVIDER_URL', $providerUrl, 'Process')
+        $providerHealth = Invoke-RestMethod "$providerUrl/health" -TimeoutSec 2
+        if ($providerHealth.status -ne 'ok') {
+            throw "Controlled provider health check failed (PID $($providerProcess.Id))."
+        }
     }
 
     $gatewayProcess = Start-Process -FilePath (Get-Command java.exe).Source `
@@ -179,20 +195,36 @@ try {
     }
 
     $managedModels = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/managed-models" -TimeoutSec 3
-    $existingModel = @($managedModels.models) | Where-Object { $_.name -eq 'w18-controlled' } | Select-Object -First 1
+    $modelName = if ($LiveDeepSeek) { 'w18-deepseek-live' } else { 'w18-controlled' }
+    $existingModel = @($managedModels.models) | Where-Object { $_.name -eq $modelName } | Select-Object -First 1
     $expectedRevision = if ($null -eq $existingModel) { $null } else { $existingModel.revision }
     $modelEnvelope = [ordered]@{
-        config = [ordered]@{
-            name = 'w18-controlled'
-            display_name = 'W18 Controlled Loopback'
-            provider = 'openai-compatible'
-            model = 'w18-controlled-model'
-            base_url = "$providerUrl/v1"
-            enabled = $true
-            supports_vision = $false
-            context_window = 8192
-            max_tokens = 1024
-            api_key = 'w18-loopback-only'
+        config = if ($LiveDeepSeek) {
+            [ordered]@{
+                name = $modelName
+                display_name = 'W18 DeepSeek Live'
+                provider = 'openai-compatible'
+                model = 'deepseek-v4-pro'
+                base_url = 'https://api.deepseek.com'
+                credential_ref = 'os://DEEPSEEK_API_KEY'
+                enabled = $true
+                supports_vision = $false
+                context_window = 1048576
+                max_tokens = 2048
+            }
+        } else {
+            [ordered]@{
+                name = $modelName
+                display_name = 'W18 Controlled Loopback'
+                provider = 'openai-compatible'
+                model = 'w18-controlled-model'
+                base_url = "$providerUrl/v1"
+                enabled = $true
+                supports_vision = $false
+                context_window = 8192
+                max_tokens = 1024
+                api_key = 'w18-loopback-only'
+            }
         }
         expected_revision = $expectedRevision
     }
@@ -203,32 +235,38 @@ try {
         -ContentType 'application/json' `
         -Body $modelBody `
         -TimeoutSec 5
-    # PUT advances the optimistic-lock revision. Probe the exact revision just
-    # saved so repeated evidence runs remain deterministic against persisted
-    # slot data instead of reusing the pre-save expected_revision.
-    $modelEnvelope.expected_revision = $savedModel.revision
-    $modelBody = $modelEnvelope | ConvertTo-Json -Depth 6 -Compress
-    $probe = Invoke-RestMethod `
-        -Uri "http://127.0.0.1:$GatewayPort/api/managed-models/test" `
-        -Method Post `
-        -ContentType 'application/json' `
-        -Body $modelBody `
-        -TimeoutSec 10
-    if ($probe.ok -ne $true) {
-        throw "Controlled managed-model probe failed: $($probe.message)"
+    $probe = $null
+    if (-not $LiveDeepSeek) {
+        # PUT advances the optimistic-lock revision. Probe the exact revision just
+        # saved so repeated evidence runs remain deterministic against persisted
+        # slot data instead of reusing the pre-save expected_revision.
+        $modelEnvelope.expected_revision = $savedModel.revision
+        $modelBody = $modelEnvelope | ConvertTo-Json -Depth 6 -Compress
+        $probe = Invoke-RestMethod `
+            -Uri "http://127.0.0.1:$GatewayPort/api/managed-models/test" `
+            -Method Post `
+            -ContentType 'application/json' `
+            -Body $modelBody `
+            -TimeoutSec 10
+        if ($probe.ok -ne $true) {
+            throw "Controlled managed-model probe failed: $($probe.message)"
+        }
     }
     $runCatalog = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/models" -TimeoutSec 3
-    if (@($runCatalog.models.name) -notcontains 'w18-controlled') {
-        throw 'Controlled managed model did not enter the executable Run catalog.'
+    if (@($runCatalog.models.name) -notcontains $modelName) {
+        throw 'Managed model did not enter the executable Run catalog.'
     }
     [ordered]@{
         name = $savedModel.name
         revision = $savedModel.revision
         enabled = $savedModel.enabled
         hasApiKey = $savedModel.has_api_key
+        hasCredential = $savedModel.has_credential
+        credentialSource = $savedModel.credential_source
         probe = $probe
         executableCatalogNames = @($runCatalog.models.name)
-        provider = "$providerUrl/v1"
+        provider = $(if ($LiveDeepSeek) { 'https://api.deepseek.com' } else { "$providerUrl/v1" })
+        dialect = $(if ($LiveDeepSeek) { 'deepseek-openai-chat' } else { 'openai-standard' })
     } | ConvertTo-Json -Depth 5 | Set-Content `
         -LiteralPath (Join-Path $evidenceRoot "managed-model-$stamp.json") `
         -Encoding utf8
@@ -259,8 +297,8 @@ try {
     [ordered]@{
         gateway = "http://127.0.0.1:$GatewayPort"
         gatewayPid = $gatewayProcess.Id
-        controlledProvider = $providerUrl
-        controlledProviderPid = $providerProcess.Id
+        provider = $(if ($LiveDeepSeek) { 'https://api.deepseek.com' } else { $providerUrl })
+        controlledProviderPid = $(if ($null -eq $providerProcess) { $null } else { $providerProcess.Id })
         frontend = "http://127.0.0.1:$FrontendPort"
         frontendPid = $frontendProcess.Id
         dataRoot = $dataRoot
