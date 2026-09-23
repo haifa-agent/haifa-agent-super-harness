@@ -8,9 +8,14 @@ import java.util.List;
 
 /** Core change evidence. HTTP projection to DeerFlow's response shape remains a server concern. */
 public record WorkspaceChanges(
-        List<FileChange> files, DiffResult diff, List<ProjectPath> diffUnavailablePaths, boolean truncated) {
+        List<FileChange> files,
+        DiffResult diff,
+        List<ProjectPath> diffUnavailablePaths,
+        List<ProjectPath> binaryPaths,
+        boolean truncated) {
     public WorkspaceChanges {
         files = List.copyOf(files);
         diffUnavailablePaths = List.copyOf(diffUnavailablePaths);
+        binaryPaths = List.copyOf(binaryPaths);
     }
 }

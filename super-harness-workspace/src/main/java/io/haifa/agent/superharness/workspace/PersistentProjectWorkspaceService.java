@@ -24,6 +24,7 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -44,8 +45,11 @@ import java.util.stream.Stream;
 public final class PersistentProjectWorkspaceService {
     private static final String BINDING_FILE = "binding.properties";
     private static final String BASELINE_FILE = "baseline.properties";
+    private static final String COMPLETED_DIR = "completed";
     public static final int PROJECT_NAME_MAX_CODE_POINTS = 128;
     public static final int PROJECT_INSTRUCTIONS_MAX_BYTES = 8192;
+    private static final int MAX_ABANDONED_STAGES = 64;
+    private static final Duration STAGE_MAX_AGE = Duration.ofHours(1);
 
     private final Path projectsRoot;
     private final Path changesRoot;
@@ -64,6 +68,7 @@ public final class PersistentProjectWorkspaceService {
         this.changesRoot = root.resolve("workspace-changes");
         WorkspaceRegistry.createDirectories(projectsRoot);
         WorkspaceRegistry.createDirectories(changesRoot);
+        cleanupAbandonedStages();
     }
 
     /** Persist an owner binding for a trusted project id. */
@@ -266,21 +271,43 @@ public final class PersistentProjectWorkspaceService {
     /** Capture a bounded immutable baseline for a run. */
     public synchronized void beginRunChanges(
             String ownerId, String threadId, WorkspaceId workspaceId, String runId) {
-        WorkspaceBinding binding = requireThreadWorkspace(ownerId, threadId, workspaceId);
-        String run = requireIdentity(runId, "runId");
-        Path target = runRoot(binding.workspaceId(), run);
-        if (Files.exists(target)) {
-            throw new WorkspaceException(WorkspaceError.RUN_ALREADY_TRACKED,
-                    "a baseline already exists for this workspace and run");
+        StagedRunChanges staged = stageRunChanges(ownerId, threadId, workspaceId);
+        try {
+            publishRunChanges(staged, runId);
+        } catch (RuntimeException failure) {
+            discardRunChanges(staged);
+            throw failure;
         }
+    }
+
+    public synchronized WorkspaceBinding bindThreadWorkspace(String ownerId, String threadId) {
+        return registry.bind(ownerId, threadId);
+    }
+
+    public WorkspaceBinding requireThreadWorkspace(String ownerId, String threadId) {
+        return registry.require(ownerId, threadId);
+    }
+
+    public WorkspaceChangeLimits workspaceChangeLimits() {
+        return changeLimits;
+    }
+
+    /** Capture before starting the SDK run, then publish under the returned real run id. */
+    public synchronized StagedRunChanges stageRunChanges(
+            String ownerId, String threadId, WorkspaceId workspaceId) {
+        cleanupAbandonedStages();
+        WorkspaceBinding binding = requireThreadWorkspace(ownerId, threadId, workspaceId);
         Map<String, FileState> baseline = scan(registry.userDataRoot(workspaceId));
-        Path temporary = changesRoot.resolve(".baseline-" + UUID.randomUUID());
+        String token = UUID.randomUUID().toString();
+        Path temporary = stagedRoot(token);
         WorkspaceRegistry.createDirectories(temporary.resolve("payloads"));
         Properties properties = new Properties();
         properties.setProperty("ownerId", binding.ownerId());
         properties.setProperty("threadId", binding.threadId());
         properties.setProperty("workspaceId", binding.workspaceId().value());
-        properties.setProperty("runId", run);
+        properties.setProperty("stageToken", token);
+        properties.setProperty("processId", Long.toString(ProcessHandle.current().pid()));
+        properties.setProperty("createdAt", Instant.now().toString());
         for (FileState state : baseline.values()) {
             String key = "file." + Base64.getUrlEncoder().withoutPadding()
                     .encodeToString(state.path().getBytes(StandardCharsets.UTF_8));
@@ -291,6 +318,27 @@ public final class PersistentProjectWorkspaceService {
             }
         }
         storeNew(properties, temporary.resolve(BASELINE_FILE), "Super Harness workspace change baseline");
+        return new StagedRunChanges(token);
+    }
+
+    public synchronized void publishRunChanges(StagedRunChanges staged, String runId) {
+        Path temporary = requireStage(staged);
+        String run = requireIdentity(runId, "runId");
+        Properties properties = loadProperties(temporary.resolve(BASELINE_FILE),
+                WorkspaceError.RUN_BASELINE_NOT_FOUND, "staged run baseline does not exist");
+        validateStage(properties, staged.token);
+        WorkspaceId workspaceId = new WorkspaceId(properties.getProperty("workspaceId"));
+        Path target = runRoot(workspaceId, run);
+        if (Files.exists(target)) {
+            throw new WorkspaceException(WorkspaceError.RUN_ALREADY_TRACKED,
+                    "a baseline already exists for this workspace and run");
+        }
+        properties.remove("stageToken");
+        properties.remove("processId");
+        properties.remove("createdAt");
+        properties.setProperty("runId", run);
+        storeReplacing(properties, temporary.resolve(BASELINE_FILE),
+                "Super Harness workspace change baseline");
         try {
             Files.createDirectories(target.getParent());
             try {
@@ -306,6 +354,59 @@ public final class PersistentProjectWorkspaceService {
         }
     }
 
+    public synchronized void discardRunChanges(StagedRunChanges staged) {
+        if (staged == null || staged.token == null || !staged.token.matches("[0-9a-f-]{36}")) {
+            return;
+        }
+        deleteStage(stagedRoot(staged.token));
+    }
+
+    /** Persist the post-run snapshot once; later runs cannot change this run's evidence. */
+    public synchronized void completeRunChanges(
+            String ownerId, String threadId, WorkspaceId workspaceId, String runId) {
+        WorkspaceBinding binding = requireThreadWorkspace(ownerId, threadId, workspaceId);
+        String run = requireIdentity(runId, "runId");
+        Path root = runRoot(workspaceId, run);
+        Properties baseline = loadProperties(root.resolve(BASELINE_FILE), WorkspaceError.RUN_BASELINE_NOT_FOUND,
+                "run baseline does not exist");
+        validateRunBinding(binding, run, baseline);
+        Path completed = root.resolve(COMPLETED_DIR);
+        if (Files.isDirectory(completed, LinkOption.NOFOLLOW_LINKS)) {
+            Properties existing = loadProperties(completed.resolve(BASELINE_FILE),
+                    WorkspaceError.RUN_CHANGES_NOT_COMPLETED, "run changes are not completed");
+            validateRunBinding(binding, run, existing);
+            return;
+        }
+        Map<String, FileState> after = scan(registry.userDataRoot(workspaceId));
+        Path temporary = root.resolve(".completed-" + UUID.randomUUID());
+        WorkspaceRegistry.createDirectories(temporary.resolve("payloads"));
+        Properties properties = new Properties();
+        properties.setProperty("ownerId", binding.ownerId());
+        properties.setProperty("threadId", binding.threadId());
+        properties.setProperty("workspaceId", binding.workspaceId().value());
+        properties.setProperty("runId", run);
+        for (FileState state : after.values()) {
+            String key = "file." + Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(state.path().getBytes(StandardCharsets.UTF_8));
+            properties.setProperty(key, state.size() + ":" + state.sha256());
+            Path payload = temporary.resolve("payloads").resolve(state.sha256());
+            if (!Files.exists(payload)) writeNew(payload, state.bytes());
+        }
+        storeNew(properties, temporary.resolve(BASELINE_FILE), "Super Harness completed workspace changes");
+        try {
+            try {
+                Files.move(temporary, completed, StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+                Files.move(temporary, completed);
+            }
+        } catch (FileAlreadyExistsException raced) {
+            deleteTreeWithin(root, temporary, "\\.completed-[0-9a-f-]{36}");
+        } catch (IOException failure) {
+            deleteTreeWithin(root, temporary, "\\.completed-[0-9a-f-]{36}");
+            throw WorkspaceRegistry.ioFailure("failed to publish completed workspace changes", failure);
+        }
+    }
+
     /** Compare current files with the persisted baseline; neither baseline nor current files are modified. */
     public WorkspaceChanges readRunChanges(
             String ownerId, String threadId, WorkspaceId workspaceId, String runId) {
@@ -314,19 +415,20 @@ public final class PersistentProjectWorkspaceService {
         Path root = runRoot(workspaceId, run);
         Properties properties = loadProperties(root.resolve(BASELINE_FILE), WorkspaceError.RUN_BASELINE_NOT_FOUND,
                 "run baseline does not exist");
-        if (!binding.ownerId().equals(properties.getProperty("ownerId"))
-                || !binding.threadId().equals(properties.getProperty("threadId"))
-                || !binding.workspaceId().value().equals(properties.getProperty("workspaceId"))
-                || !run.equals(properties.getProperty("runId"))) {
-            throw new WorkspaceException(WorkspaceError.OWNER_MISMATCH,
-                    "run baseline does not belong to this owner, thread, and workspace");
-        }
+        validateRunBinding(binding, run, properties);
         Map<String, FileState> before = loadBaseline(root, properties);
-        Map<String, FileState> after = scan(registry.userDataRoot(workspaceId));
+        Path completed = root.resolve(COMPLETED_DIR);
+        Properties completedProperties = loadProperties(completed.resolve(BASELINE_FILE),
+                WorkspaceError.RUN_CHANGES_NOT_COMPLETED, "run changes are not completed");
+        validateRunBinding(binding, run, completedProperties);
+        Map<String, FileState> after = loadBaseline(completed, completedProperties);
         List<String> paths = Stream.concat(before.keySet().stream(), after.keySet().stream()).distinct().sorted().toList();
         List<FileChange> changes = new ArrayList<>();
         List<DiffFile> diffFiles = new ArrayList<>();
         List<ProjectPath> unavailable = new ArrayList<>();
+        List<ProjectPath> binary = new ArrayList<>();
+        int diffOutputBytes = 0;
+        boolean truncated = false;
         for (String pathValue : paths) {
             FileState oldState = before.get(pathValue);
             FileState newState = after.get(pathValue);
@@ -339,17 +441,42 @@ public final class PersistentProjectWorkspaceService {
             FileChangeType type = oldState == null ? FileChangeType.CREATE
                     : newState == null ? FileChangeType.DELETE : FileChangeType.REPLACE;
             changes.add(new FileChange(type, path, null, oldVersion, newVersion));
-            Optional<String> oldText = oldState == null ? Optional.of("") : decodeUtf8(oldState.bytes());
-            Optional<String> newText = newState == null ? Optional.of("") : decodeUtf8(newState.bytes());
+            if ((oldState != null && oldState.size() > changeLimits.maxFileBytes())
+                    || (newState != null && newState.size() > changeLimits.maxFileBytes())) {
+                unavailable.add(path);
+                continue;
+            }
+            Optional<String> oldText = oldState == null ? Optional.of("") : decodeText(oldState.bytes());
+            Optional<String> newText = newState == null ? Optional.of("") : decodeText(newState.bytes());
             if (oldText.isPresent() && newText.isPresent()) {
-                diffFiles.add(new DiffFile(path, oldText.orElseThrow(), newText.orElseThrow()));
+                DiffFile candidate = new DiffFile(path, oldText.orElseThrow(), newText.orElseThrow());
+                DiffResult single;
+                try {
+                    single = diffs.diff(new DiffRequest(
+                            List.of(candidate), 1, changeLimits.maxFileBytes(), changeLimits.maxOutputBytes()));
+                } catch (WorkspaceException failure) {
+                    if (failure.error() != WorkspaceError.FILE_TOO_LARGE) {
+                        throw failure;
+                    }
+                    unavailable.add(path);
+                    truncated = true;
+                    continue;
+                }
+                if ((long) diffOutputBytes + single.outputBytes() <= changeLimits.maxOutputBytes()) {
+                    diffFiles.add(candidate);
+                    diffOutputBytes += single.outputBytes();
+                } else {
+                    unavailable.add(path);
+                    truncated = true;
+                }
             } else {
                 unavailable.add(path);
+                binary.add(path);
             }
         }
         DiffResult diff = diffs.diff(new DiffRequest(diffFiles, changeLimits.maxFiles(),
                 changeLimits.maxFileBytes(), changeLimits.maxOutputBytes()));
-        return new WorkspaceChanges(changes, diff, unavailable, false);
+        return new WorkspaceChanges(changes, diff, unavailable, binary, truncated);
     }
 
     public DiffResult diff(DiffRequest request) {
@@ -474,27 +601,41 @@ public final class PersistentProjectWorkspaceService {
         return binding;
     }
 
+    private static void validateRunBinding(WorkspaceBinding binding, String run, Properties properties) {
+        if (!binding.ownerId().equals(properties.getProperty("ownerId"))
+                || !binding.threadId().equals(properties.getProperty("threadId"))
+                || !binding.workspaceId().value().equals(properties.getProperty("workspaceId"))
+                || !run.equals(properties.getProperty("runId"))) {
+            throw new WorkspaceException(WorkspaceError.OWNER_MISMATCH,
+                    "run baseline does not belong to this owner, thread, and workspace");
+        }
+    }
+
     private Map<String, FileState> scan(Path userDataRoot) {
         Map<String, FileState> states = new LinkedHashMap<>();
-        try (Stream<Path> paths = Files.walk(userDataRoot)) {
-            for (Path path : paths.filter(candidate -> Files.isRegularFile(candidate, LinkOption.NOFOLLOW_LINKS))
-                    .filter(candidate -> !candidate.getFileName().toString().endsWith(".part"))
-                    .sorted().toList()) {
-                if (states.size() >= changeLimits.maxFiles()) {
-                    throw new WorkspaceException(WorkspaceError.FILE_TOO_LARGE,
-                            "workspace change scan exceeds file-count limit");
+        for (String rootName : List.of("workspace", "outputs")) {
+            Path scanRoot = userDataRoot.resolve(rootName);
+            try (Stream<Path> paths = Files.walk(scanRoot)) {
+                for (Path path : paths.filter(candidate -> Files.isRegularFile(candidate, LinkOption.NOFOLLOW_LINKS))
+                        .filter(candidate -> !candidate.getFileName().toString().endsWith(".part"))
+                        .sorted().toList()) {
+                    if (states.size() >= changeLimits.maxFiles()) {
+                        throw new WorkspaceException(WorkspaceError.FILE_TOO_LARGE,
+                                "workspace change scan exceeds file-count limit");
+                    }
+                    RestrictedWorkspaceService.ensureNoLinks(userDataRoot, path);
+                    byte[] bytes = RestrictedWorkspaceService.readAllVerified(userDataRoot, path,
+                            workspaceLimits.maxWorkingFileBytes());
+                    String logical = userDataRoot.relativize(path).toString()
+                            .replace(java.io.File.separatorChar, '/');
+                    logical = LogicalWorkspacePath.normalize(logical);
+                    states.put(logical, new FileState(logical, bytes.length, Hashing.sha256(bytes), bytes));
                 }
-                RestrictedWorkspaceService.ensureNoLinks(userDataRoot, path);
-                byte[] bytes = RestrictedWorkspaceService.readAllVerified(userDataRoot, path,
-                        changeLimits.maxFileBytes());
-                String logical = userDataRoot.relativize(path).toString().replace(java.io.File.separatorChar, '/');
-                logical = LogicalWorkspacePath.normalize(logical);
-                states.put(logical, new FileState(logical, bytes.length, Hashing.sha256(bytes), bytes));
+            } catch (IOException exception) {
+                throw WorkspaceRegistry.ioFailure("failed to scan workspace changes", exception);
             }
-            return states;
-        } catch (IOException exception) {
-            throw WorkspaceRegistry.ioFailure("failed to scan workspace changes", exception);
         }
+        return states;
     }
 
     private Map<String, FileState> loadBaseline(Path runRoot, Properties properties) {
@@ -513,7 +654,7 @@ public final class PersistentProjectWorkspaceService {
                     throw new IllegalArgumentException("invalid baseline entry");
                 }
                 size = Long.parseLong(value[0]);
-                if (size < 0 || size > changeLimits.maxFileBytes()) {
+                if (size < 0 || size > workspaceLimits.maxWorkingFileBytes()) {
                     throw new IllegalArgumentException("invalid baseline size");
                 }
                 hash = value[1];
@@ -526,7 +667,8 @@ public final class PersistentProjectWorkspaceService {
                 throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY,
                         "run baseline payload is missing");
             }
-            byte[] bytes = RestrictedWorkspaceService.readAllVerified(runRoot, payload, changeLimits.maxFileBytes());
+            byte[] bytes = RestrictedWorkspaceService.readAllVerified(
+                    runRoot, payload, workspaceLimits.maxWorkingFileBytes());
             if (bytes.length != size || !Hashing.sha256(bytes).equals(hash)) {
                 throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY,
                         "run baseline payload does not match persisted metadata");
@@ -650,12 +792,128 @@ public final class PersistentProjectWorkspaceService {
                 .resolve("run-" + Hashing.sha256(runId).substring(0, 32));
     }
 
-    private static Optional<String> decodeUtf8(byte[] bytes) {
+    private Path stagedRoot(String token) {
+        if (token == null || !token.matches("[0-9a-f-]{36}")) {
+            throw new WorkspaceException(WorkspaceError.RUN_BASELINE_NOT_FOUND,
+                    "staged run baseline does not exist");
+        }
+        return changesRoot.resolve(".baseline-" + token);
+    }
+
+    private Path requireStage(StagedRunChanges staged) {
+        if (staged == null) {
+            throw new WorkspaceException(WorkspaceError.RUN_BASELINE_NOT_FOUND,
+                    "staged run baseline does not exist");
+        }
+        Path path = stagedRoot(staged.token);
+        if (!Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) {
+            throw new WorkspaceException(WorkspaceError.RUN_BASELINE_NOT_FOUND,
+                    "staged run baseline does not exist");
+        }
+        return path;
+    }
+
+    private static void validateStage(Properties properties, String expectedToken) {
         try {
-            return Optional.of(StandardCharsets.UTF_8.newDecoder()
+            if (!expectedToken.equals(properties.getProperty("stageToken"))) {
+                throw new IllegalArgumentException("stage token does not match metadata");
+            }
+            long processId = Long.parseLong(properties.getProperty("processId"));
+            if (processId != ProcessHandle.current().pid()) {
+                throw new IllegalArgumentException("stage belongs to a different process");
+            }
+            Instant.parse(properties.getProperty("createdAt"));
+            requireIdentity(properties.getProperty("ownerId"), "ownerId");
+            requireIdentity(properties.getProperty("threadId"), "threadId");
+            new WorkspaceId(properties.getProperty("workspaceId"));
+        } catch (RuntimeException failure) {
+            throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY,
+                    "staged run baseline metadata is corrupt", failure);
+        }
+    }
+
+    private void cleanupAbandonedStages() {
+        List<Path> stages;
+        try (Stream<Path> paths = Files.list(changesRoot)) {
+            stages = paths.filter(path -> path.getFileName().toString().matches("\\.baseline-[0-9a-f-]{36}"))
+                    .limit(MAX_ABANDONED_STAGES + 1L)
+                    .toList();
+        } catch (IOException failure) {
+            throw WorkspaceRegistry.ioFailure("failed to inspect staged run baselines", failure);
+        }
+        if (stages.size() > MAX_ABANDONED_STAGES) {
+            throw new WorkspaceException(WorkspaceError.IO_FAILURE,
+                    "staged run baseline cleanup exceeds the bounded stage limit");
+        }
+        Instant now = Instant.now();
+        for (Path stage : stages) {
+            Properties properties;
+            try {
+                properties = loadProperties(stage.resolve(BASELINE_FILE), WorkspaceError.RUN_BASELINE_NOT_FOUND,
+                        "staged run baseline does not exist");
+                long processId = Long.parseLong(properties.getProperty("processId"));
+                Instant createdAt = Instant.parse(properties.getProperty("createdAt"));
+                boolean originatingProcessAlive = ProcessHandle.of(processId)
+                        .map(ProcessHandle::isAlive)
+                        .orElse(false);
+                if (!originatingProcessAlive || createdAt.plus(STAGE_MAX_AGE).isBefore(now)) {
+                    deleteStage(stage);
+                }
+            } catch (RuntimeException corrupt) {
+                deleteStage(stage);
+            }
+        }
+    }
+
+    private void deleteStage(Path stage) {
+        Path normalized = stage.toAbsolutePath().normalize();
+        if (!normalized.getParent().equals(changesRoot)
+                || !normalized.getFileName().toString().matches("\\.baseline-[0-9a-f-]{36}")) {
+            throw new WorkspaceException(WorkspaceError.PATH_ESCAPE,
+                    "refusing to delete a path outside staged run baselines");
+        }
+        if (!Files.exists(normalized, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        deleteTreeWithin(changesRoot, normalized, "\\.baseline-[0-9a-f-]{36}");
+    }
+
+    private static void deleteTreeWithin(Path parent, Path target, String filenamePattern) {
+        Path normalized = target.toAbsolutePath().normalize();
+        if (!normalized.getParent().equals(parent.toAbsolutePath().normalize())
+                || !normalized.getFileName().toString().matches(filenamePattern)) {
+            throw new WorkspaceException(WorkspaceError.PATH_ESCAPE,
+                    "refusing to delete a path outside the expected temporary root");
+        }
+        if (!Files.exists(normalized, LinkOption.NOFOLLOW_LINKS)) return;
+        try (Stream<Path> paths = Files.walk(normalized)) {
+            for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(path);
+            }
+        } catch (IOException failure) {
+            throw WorkspaceRegistry.ioFailure("failed to clean staged run baseline", failure);
+        }
+    }
+
+    private static Optional<String> decodeText(byte[] bytes) {
+        try {
+            int offset = 0;
+            java.nio.charset.Charset charset = StandardCharsets.UTF_8;
+            if (bytes.length >= 2 && bytes[0] == (byte) 0xff && bytes[1] == (byte) 0xfe) {
+                charset = StandardCharsets.UTF_16LE;
+                offset = 2;
+            } else if (bytes.length >= 2 && bytes[0] == (byte) 0xfe && bytes[1] == (byte) 0xff) {
+                charset = StandardCharsets.UTF_16BE;
+                offset = 2;
+            } else if (bytes.length >= 3 && bytes[0] == (byte) 0xef
+                    && bytes[1] == (byte) 0xbb && bytes[2] == (byte) 0xbf) {
+                offset = 3;
+            }
+            String decoded = charset.newDecoder()
                     .onMalformedInput(CodingErrorAction.REPORT)
                     .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(bytes)).toString());
+                    .decode(ByteBuffer.wrap(bytes, offset, bytes.length - offset)).toString();
+            return decoded.indexOf('\0') >= 0 ? Optional.empty() : Optional.of(decoded);
         } catch (CharacterCodingException exception) {
             return Optional.empty();
         }

@@ -25,8 +25,12 @@ final class LocalProbeModelTestSupport {
     private LocalProbeModelTestSupport() {}
 
     static HaifaRunBridge.ModelBinding binding() {
+        return binding(new LocalProbeModel());
+    }
+
+    static HaifaRunBridge.ModelBinding binding(AgentChatModel model) {
         return new HaifaRunBridge.ModelBinding(
-                "super-harness-local-probe", "1.0.0", new LocalProbeModel(), snapshot());
+                "super-harness-local-probe", "1.0.0", model, snapshot());
     }
 
     private static ResolvedModelSnapshot snapshot() {
