@@ -116,6 +116,7 @@ class PersistentProjectWorkspaceServiceTest {
                 new byte[] {(byte) 0xff, 1, 2}, Optional.of(sha256(new byte[] {0, 1, 2})));
         Files.delete(storageRoot.resolve("workspaces").resolve(binding.workspaceId().value())
                 .resolve("user-data/outputs/delete.txt"));
+        changes.completeRunChanges("owner-a", "thread-1", binding.workspaceId(), "run-1");
 
         WorkspaceChanges result = projects().readRunChanges(
                 "owner-a", "thread-1", binding.workspaceId(), "run-1");
@@ -136,6 +137,98 @@ class PersistentProjectWorkspaceServiceTest {
     }
 
     @Test
+    void stagesBeforeRunPublishesAtomicallyPersistsAndExcludesUploads() {
+        RestrictedWorkspaceService workspace = workspace();
+        WorkspaceBinding binding = workspace.bind("owner-a", "thread-stage");
+        workspace.upload("owner-a", binding.workspaceId(), "ignored.txt", bytes("upload"), "text/plain");
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(), "workspace/before.txt", bytes("before\n"),
+                Optional.empty());
+        PersistentProjectWorkspaceService changes = projects();
+
+        StagedRunChanges staged = changes.stageRunChanges("owner-a", "thread-stage", binding.workspaceId());
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(), "outputs/created.txt", bytes("created\n"),
+                Optional.empty());
+        changes.publishRunChanges(staged, "run-staged");
+        changes.completeRunChanges("owner-a", "thread-stage", binding.workspaceId(), "run-staged");
+
+        WorkspaceChanges result = projects().readRunChanges(
+                "owner-a", "thread-stage", binding.workspaceId(), "run-staged");
+        assertThat(result.files()).extracting(change -> change.path().value())
+                .containsExactly("outputs/created.txt");
+        assertThat(result.diff().unifiedDiff()).contains("+created");
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(), "outputs/later.txt", bytes("later\n"),
+                Optional.empty());
+        assertThat(projects().readRunChanges("owner-a", "thread-stage", binding.workspaceId(), "run-staged")
+                .files()).extracting(change -> change.path().value()).doesNotContain("outputs/later.txt");
+        assertError(WorkspaceError.RUN_BASELINE_NOT_FOUND,
+                () -> changes.publishRunChanges(staged, "run-staged"));
+    }
+
+    @Test
+    void discardAndRestartCleanupRemoveOnlyOpaqueStagedBaselines() throws IOException {
+        RestrictedWorkspaceService workspace = workspace();
+        WorkspaceBinding binding = workspace.bind("owner-a", "thread-cleanup");
+        PersistentProjectWorkspaceService changes = projects();
+
+        StagedRunChanges discarded = changes.stageRunChanges("owner-a", "thread-cleanup", binding.workspaceId());
+        Path discardedRoot = storageRoot.resolve("workspace-changes").resolve(".baseline-" + discarded.token);
+        changes.discardRunChanges(discarded);
+        assertThat(discardedRoot).doesNotExist();
+
+        StagedRunChanges abandoned = changes.stageRunChanges("owner-a", "thread-cleanup", binding.workspaceId());
+        Path abandonedRoot = storageRoot.resolve("workspace-changes").resolve(".baseline-" + abandoned.token);
+        Path metadata = abandonedRoot.resolve("baseline.properties");
+        Properties properties = load(metadata);
+        properties.setProperty("processId", Long.toString(Long.MAX_VALUE));
+        store(properties, metadata);
+
+        projects();
+        assertThat(abandonedRoot).doesNotExist();
+    }
+
+    @Test
+    void reportsOversizedChangedFileWithoutAttemptingAContentDiff() {
+        WorkspaceLimits largerWorkspace = new WorkspaceLimits(512, 512, 64);
+        WorkspaceChangeLimits tinyDiffs = new WorkspaceChangeLimits(20, 8, 256);
+        RestrictedWorkspaceService workspace = new RestrictedWorkspaceService(storageRoot, largerWorkspace);
+        PersistentProjectWorkspaceService changes =
+                new PersistentProjectWorkspaceService(storageRoot, largerWorkspace, tinyDiffs);
+        WorkspaceBinding binding = workspace.bind("owner-a", "thread-large");
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(), "outputs/large.txt", bytes("before content"),
+                Optional.empty());
+        changes.beginRunChanges("owner-a", "thread-large", binding.workspaceId(), "run-large");
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(), "outputs/large.txt", bytes("after content!"),
+                Optional.of(sha256(bytes("before content"))));
+        changes.completeRunChanges("owner-a", "thread-large", binding.workspaceId(), "run-large");
+
+        WorkspaceChanges result = changes.readRunChanges(
+                "owner-a", "thread-large", binding.workspaceId(), "run-large");
+        assertThat(result.files()).hasSize(1);
+        assertThat(result.diff().unifiedDiff()).isEmpty();
+        assertThat(result.diffUnavailablePaths()).extracting(ProjectPath::value)
+                .containsExactly("outputs/large.txt");
+    }
+
+    @Test
+    void classifiesExtensionlessNulContentAsBinaryAndDecodesUtf16BomText() {
+        RestrictedWorkspaceService workspace = workspace();
+        WorkspaceBinding binding = workspace.bind("owner-a", "thread-encoding");
+        PersistentProjectWorkspaceService changes = projects();
+        changes.beginRunChanges("owner-a", "thread-encoding", binding.workspaceId(), "run-encoding");
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(), "outputs/extensionless",
+                new byte[] {0, 1, 2, 3}, Optional.empty());
+        byte[] utf16 = "title\n".getBytes(StandardCharsets.UTF_16);
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(), "workspace/guide.md", utf16, Optional.empty());
+        changes.completeRunChanges("owner-a", "thread-encoding", binding.workspaceId(), "run-encoding");
+
+        WorkspaceChanges result = changes.readRunChanges(
+                "owner-a", "thread-encoding", binding.workspaceId(), "run-encoding");
+        assertThat(result.binaryPaths()).extracting(ProjectPath::value)
+                .containsExactly("outputs/extensionless");
+        assertThat(result.diff().unifiedDiff()).contains("+++ b/workspace/guide.md", "+title");
+    }
+
+    @Test
     void combinesPublishedReadWriteSearchAndDiffContractsWithBoundedFailures() {
         RestrictedWorkspaceService workspace = workspace();
         WorkspaceBinding binding = workspace.bind("owner-a", "thread-1");
@@ -153,6 +246,7 @@ class PersistentProjectWorkspaceServiceTest {
                 "alpha", 10, 10, 128, true))).hasSize(1);
         workspace.writeWorkingFile("owner-a", binding.workspaceId(), "workspace/note.txt", bytes("beta\n"),
                 Optional.of(sha256(bytes("alpha\n"))));
+        changes.completeRunChanges("owner-a", "thread-1", binding.workspaceId(), "run-1");
         assertThat(changes.readRunChanges("owner-a", "thread-1", binding.workspaceId(), "run-1")
                 .diff().unifiedDiff()).contains("-alpha", "+beta");
 

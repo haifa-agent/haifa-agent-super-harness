@@ -10,6 +10,9 @@ import io.haifa.agent.runtime.api.AgentRunEvent;
 import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
 import io.haifa.agent.runtime.api.AgentRunSnapshot;
 import io.haifa.agent.runtime.api.RunEventPayloads;
+import io.haifa.agent.project.changeset.FileChange;
+import io.haifa.agent.project.changeset.FileChangeType;
+import io.haifa.agent.project.changeset.FileVersion;
 import io.haifa.agent.superharness.events.AppendResult;
 import io.haifa.agent.superharness.events.BoundedRunEventProjector;
 import io.haifa.agent.superharness.events.EventProjectionException;
@@ -18,12 +21,20 @@ import io.haifa.agent.superharness.events.ProjectionCursor;
 import io.haifa.agent.superharness.events.ProjectionGap;
 import io.haifa.agent.superharness.events.ReplayResult;
 import io.haifa.agent.superharness.events.RunTerminalKind;
+import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
+import io.haifa.agent.superharness.workspace.StagedRunChanges;
+import io.haifa.agent.superharness.workspace.WorkspaceBinding;
+import io.haifa.agent.superharness.workspace.WorkspaceChangeLimits;
+import io.haifa.agent.superharness.workspace.WorkspaceChanges;
+import io.haifa.agent.superharness.workspace.WorkspaceError;
+import io.haifa.agent.superharness.workspace.WorkspaceException;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -48,6 +59,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final Pattern JOIN_STREAM =
             Pattern.compile("^/api/threads/([^/]+)/runs/([^/]+)/stream$");
     private static final Pattern RUN = Pattern.compile("^/api/threads/([^/]+)/runs/([^/]+)$");
+    private static final Pattern WORKSPACE_CHANGES =
+            Pattern.compile("^/api/threads/([^/]+)/runs/([^/]+)/workspace-changes$");
     private static final Pattern CANCEL =
             Pattern.compile("^/api/threads/([^/]+)/runs/([^/]+)/cancel$");
     private static final List<String> SUPPORTED_STREAM_MODES =
@@ -55,26 +68,27 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final Pattern SSE_CURSOR = Pattern.compile("^(\\d+)-0$");
     private static final int EVENT_RETENTION_CAPACITY = 8;
     private static final int EVENT_PAGE_SIZE = 4;
+    private static final Set<String> BINARY_EXTENSIONS = Set.of(
+            ".7z", ".avif", ".bmp", ".class", ".db", ".dll", ".dmg", ".doc", ".docx", ".exe",
+            ".gif", ".gz", ".ico", ".jar", ".jpeg", ".jpg", ".mov", ".mp3", ".mp4", ".o",
+            ".pdf", ".png", ".pyc", ".so", ".tar", ".webp", ".xls", ".xlsx", ".zip");
 
     private final ObjectMapper json;
     private final Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver;
     private final Predicate<String> projectExists;
+    private final PersistentProjectWorkspaceService workspaceChanges;
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
     private final Map<String, RunRecord> runs = new ConcurrentHashMap<>();
 
     DeerFlowThreadRunApi(
             ObjectMapper json,
-            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver) {
-        this(json, runModelResolver, ignored -> false);
-    }
-
-    DeerFlowThreadRunApi(
-            ObjectMapper json,
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
-            Predicate<String> projectExists) {
+            Predicate<String> projectExists,
+            PersistentProjectWorkspaceService workspaceChanges) {
         this.json = json;
         this.runModelResolver = runModelResolver;
         this.projectExists = projectExists;
+        this.workspaceChanges = workspaceChanges;
     }
 
     boolean hasThread(String threadId) {
@@ -135,6 +149,16 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             match = THREAD_RUNS.matcher(path);
             if (match.matches() && exchange.getRequestMethod().equals("GET")) {
                 listRuns(exchange, match.group(1));
+                return;
+            }
+            match = WORKSPACE_CHANGES.matcher(path);
+            if (match.matches()) {
+                if (exchange.getRequestMethod().equals("GET")) {
+                    getWorkspaceChanges(exchange, match.group(1), match.group(2));
+                } else {
+                    exchange.getResponseHeaders().set("Allow", "GET");
+                    sendJson(exchange, 405, Map.of("detail", "Method Not Allowed"));
+                }
                 return;
             }
             match = RUN.matcher(path);
@@ -330,6 +354,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     sendJson(exchange, 409, Map.of("detail", "Thread already has an active run"));
                     return;
                 }
+                completeWorkspaceChangesIfTerminal(active);
             }
             if (thread.bridge == null) {
                 thread.bridge = new HaifaRunBridge(binding);
@@ -343,8 +368,26 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                                 "Thread is already bound to a different model revision; create a new thread"));
                 return;
             }
-            HaifaRunBridge.StartedRun started =
-                    thread.bridge.start(threadId, message, Optional.ofNullable(thread.session));
+            WorkspaceBinding workspace = workspaceChanges.bindThreadWorkspace(
+                    DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId);
+            StagedRunChanges staged = workspaceChanges.stageRunChanges(
+                    DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId, workspace.workspaceId());
+            HaifaRunBridge.StartedRun started = null;
+            try {
+                started = thread.bridge.start(threadId, message, Optional.ofNullable(thread.session));
+                workspaceChanges.publishRunChanges(staged, started.runId().value());
+            } catch (RuntimeException failure) {
+                if (started != null) {
+                    try {
+                        thread.bridge.cancel(started.runId());
+                    } catch (RuntimeException ignored) {
+                        // Preserve the baseline publication failure at the HTTP boundary.
+                    }
+                }
+                workspaceChanges.discardRunChanges(staged);
+                sendJson(exchange, 500, Map.of("detail", "Run could not start with a workspace baseline"));
+                return;
+            }
             thread.session = started.session();
             thread.updatedAt = Instant.now();
             thread.activeRunId = started.runId().value();
@@ -362,14 +405,18 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             runs.put(run.runId.value(), run);
         }
 
-        streamRunEvents(
-                exchange,
-                thread,
-                run,
-                new ProjectionCursor(run.runId.value(), 0),
-                true,
-                text(body, "on_disconnect").orElse("cancel"),
-                true);
+        try {
+            streamRunEvents(
+                    exchange,
+                    thread,
+                    run,
+                    new ProjectionCursor(run.runId.value(), 0),
+                    true,
+                    text(body, "on_disconnect").orElse("cancel"),
+                    true);
+        } finally {
+            completeWorkspaceChangesIfTerminal(run);
+        }
     }
 
     private void joinRun(HttpExchange exchange, String threadId, String runId) throws IOException {
@@ -791,6 +838,222 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 .toList();
     }
 
+    private void getWorkspaceChanges(HttpExchange exchange, String threadId, String runId) throws IOException {
+        boolean includeFiles;
+        boolean includeDiff;
+        try {
+            includeFiles = queryBoolean(exchange, "include_files", true);
+            includeDiff = queryBoolean(exchange, "include_diff", true);
+        } catch (IllegalArgumentException invalid) {
+            sendJson(exchange, 422, Map.of("detail", invalid.getMessage()));
+            return;
+        }
+        RunRecord liveRun = runs.get(runId);
+        boolean liveRunVisible = liveRun != null && liveRun.threadId.equals(threadId);
+        if (liveRunVisible) {
+            completeWorkspaceChangesIfTerminal(liveRun);
+        }
+        WorkspaceBinding binding;
+        try {
+            binding = workspaceChanges.requireThreadWorkspace(DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId);
+        } catch (WorkspaceException missing) {
+            sendJson(exchange, 404, Map.of("detail", "Run " + runId + " not found"));
+            return;
+        }
+        WorkspaceChanges changes;
+        try {
+            changes = workspaceChanges.readRunChanges(
+                    DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId, binding.workspaceId(), runId);
+        } catch (WorkspaceException failure) {
+            if ((failure.error() == WorkspaceError.RUN_BASELINE_NOT_FOUND
+                    || failure.error() == WorkspaceError.RUN_CHANGES_NOT_COMPLETED) && liveRunVisible) {
+                sendJson(exchange, 200, emptyWorkspaceChanges());
+                return;
+            }
+            if (failure.error() == WorkspaceError.RUN_BASELINE_NOT_FOUND
+                    || failure.error() == WorkspaceError.OWNER_MISMATCH
+                    || failure.error() == WorkspaceError.WORKSPACE_NOT_FOUND) {
+                sendJson(exchange, 404, Map.of("detail", "Run " + runId + " not found"));
+                return;
+            }
+            sendJson(exchange, 500, Map.of("detail", "Workspace changes are unavailable"));
+            return;
+        }
+        // DeerFlow records no workspace-change event for a completed run whose snapshots
+        // are identical, so its read endpoint returns the same unavailable envelope as an
+        // active run rather than an available response with an empty file list.
+        if (changes.files().isEmpty()) {
+            sendJson(exchange, 200, emptyWorkspaceChanges());
+            return;
+        }
+        sendJson(exchange, 200, workspaceChangesResponse(changes, includeFiles, includeDiff));
+    }
+
+    private Map<String, Object> emptyWorkspaceChanges() {
+        return orderedMap(
+                "available", false,
+                "version", 1,
+                "summary", emptyWorkspaceSummary(false),
+                "files", List.of(),
+                "limits", Map.of());
+    }
+
+    private Map<String, Object> workspaceChangesResponse(
+            WorkspaceChanges changes, boolean includeFiles, boolean includeDiff) {
+        WorkspaceChangeLimits limits = workspaceChanges.workspaceChangeLimits();
+        Set<String> unavailable = changes.diffUnavailablePaths().stream()
+                .map(path -> path.value())
+                .collect(java.util.stream.Collectors.toCollection(HashSet::new));
+        Set<String> binaryPaths = changes.binaryPaths().stream()
+                .map(path -> path.value())
+                .collect(java.util.stream.Collectors.toCollection(HashSet::new));
+        String unified = changes.diff().unifiedDiff();
+        List<Map<String, Object>> files = new ArrayList<>();
+        int created = 0;
+        int modified = 0;
+        int deleted = 0;
+        int additions = 0;
+        int deletions = 0;
+        boolean large = false;
+        for (FileChange change : changes.files()) {
+            String status = switch (change.type()) {
+                case CREATE -> "created";
+                case DELETE -> "deleted";
+                case REPLACE, MOVE -> "modified";
+            };
+            if (change.type() == FileChangeType.CREATE) created++;
+            else if (change.type() == FileChangeType.DELETE) deleted++;
+            else modified++;
+            String logical = change.path().value();
+            FileVersion before = change.before();
+            FileVersion after = change.after();
+            boolean fileLarge = (before != null && before.size() > limits.maxFileBytes())
+                    || (after != null && after.size() > limits.maxFileBytes());
+            boolean sensitive = sensitivePath(logical);
+            String fragment = diffFragment(unified, logical);
+            boolean binary = binaryPath(logical) || binaryPaths.contains(logical);
+            String reason = sensitive ? "sensitive"
+                    : fileLarge ? "large"
+                    : binary ? "binary"
+                    : unavailable.contains(logical) ? "truncated"
+                    : null;
+            if (reason != null) {
+                fragment = "";
+            }
+            int fileAdditions = countDiffLines(fragment, '+');
+            int fileDeletions = countDiffLines(fragment, '-');
+            additions += fileAdditions;
+            deletions += fileDeletions;
+            large |= fileLarge;
+            if (includeFiles) {
+                Map<String, Object> file = new LinkedHashMap<>();
+                file.put("path", "/mnt/user-data/" + logical);
+                file.put("root", logical.substring(0, logical.indexOf('/')));
+                file.put("status", status);
+                file.put("binary", binary);
+                file.put("sensitive", sensitive);
+                file.put("size_before", before == null ? null : before.size());
+                file.put("size_after", after == null ? null : after.size());
+                file.put("sha256_before", before == null ? null : before.contentHash());
+                file.put("sha256_after", after == null ? null : after.contentHash());
+                file.put("diff", includeDiff ? virtualizeDiff(fragment) : "");
+                file.put("diff_truncated", "truncated".equals(reason));
+                file.put("diff_unavailable_reason", reason);
+                file.put("additions", fileAdditions);
+                file.put("deletions", fileDeletions);
+                file.put("symlink", false);
+                file.put("symlink_target_before", null);
+                file.put("symlink_target_after", null);
+                files.add(file);
+            }
+        }
+        Map<String, Object> summary = orderedMap(
+                "created", created,
+                "modified", modified,
+                "deleted", deleted,
+                "symlink_created", 0,
+                "additions", additions,
+                "deletions", deletions,
+                "truncated", changes.truncated() || large);
+        Map<String, Object> wireLimits = orderedMap(
+                "max_files", limits.maxFiles(),
+                "max_scanned_files", limits.maxFiles(),
+                "max_file_bytes_for_diff", limits.maxFileBytes(),
+                "max_total_diff_bytes", limits.maxOutputBytes());
+        return orderedMap(
+                "available", true,
+                "version", 1,
+                "summary", summary,
+                "files", files,
+                "limits", wireLimits);
+    }
+
+    private static String diffFragment(String unified, String path) {
+        String marker = "--- a/" + path + "\n+++ b/" + path + "\n";
+        int start = unified.indexOf(marker);
+        if (start < 0) return "";
+        int next = unified.indexOf("\n--- a/", start + marker.length());
+        return next < 0 ? unified.substring(start) : unified.substring(start, next + 1);
+    }
+
+    private static String virtualizeDiff(String diff) {
+        if (diff.isEmpty()) return diff;
+        return diff.replaceFirst("(?m)^--- a/", "--- a/mnt/user-data/")
+                .replaceFirst("(?m)^\\+\\+\\+ b/", "+++ b/mnt/user-data/");
+    }
+
+    private static int countDiffLines(String diff, char prefix) {
+        if (diff.isEmpty()) return 0;
+        int count = 0;
+        for (String line : diff.lines().toList()) {
+            if (!line.isEmpty() && line.charAt(0) == prefix
+                    && !(prefix == '+' && line.startsWith("+++ "))
+                    && !(prefix == '-' && line.startsWith("--- "))) count++;
+        }
+        return count;
+    }
+
+    private static boolean binaryPath(String path) {
+        String lower = path.toLowerCase(java.util.Locale.ROOT);
+        return BINARY_EXTENSIONS.stream().anyMatch(lower::endsWith);
+    }
+
+    private static boolean sensitivePath(String path) {
+        String lower = path.toLowerCase(java.util.Locale.ROOT);
+        String name = lower.substring(lower.lastIndexOf('/') + 1);
+        return name.equals(".env") || name.startsWith(".env.") || name.endsWith(".key")
+                || name.endsWith(".pem") || name.contains("api_key") || name.contains("apikey")
+                || name.contains("credential") || name.contains("password")
+                || name.contains("private_key") || name.contains("secret") || name.contains("token");
+    }
+
+    private static Map<String, Object> emptyWorkspaceSummary(boolean truncated) {
+        return orderedMap(
+                "created", 0,
+                "modified", 0,
+                "deleted", 0,
+                "symlink_created", 0,
+                "additions", 0,
+                "deletions", 0,
+                "truncated", truncated);
+    }
+
+    private boolean queryBoolean(HttpExchange exchange, String name, boolean fallback) {
+        Optional<String> value = queryValue(exchange, name);
+        if (value.isEmpty()) return fallback;
+        if (value.orElseThrow().equals("true")) return true;
+        if (value.orElseThrow().equals("false")) return false;
+        throw new IllegalArgumentException(name + " must be true or false");
+    }
+
+    private static Map<String, Object> orderedMap(Object... values) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (int index = 0; index < values.length; index += 2) {
+            result.put((String) values[index], values[index + 1]);
+        }
+        return result;
+    }
+
     private Optional<String> validateRunRequest(JsonNode body) {
         JsonNode modes = body.get("stream_mode");
         if (modes != null && !modes.isNull()) {
@@ -904,12 +1167,21 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
             RunRecord active = runs.get(record.activeRunId);
             if (active == null || active.bridge.snapshot(active.runId).status().isTerminal()) {
+                if (active != null) completeWorkspaceChangesIfTerminal(active);
                 record.activeRunId = null;
                 record.updatedAt = Instant.now();
                 return "idle";
             }
             return "busy";
         }
+    }
+
+    private void completeWorkspaceChangesIfTerminal(RunRecord run) {
+        if (!run.bridge.snapshot(run.runId).status().isTerminal()) return;
+        WorkspaceBinding binding = workspaceChanges.requireThreadWorkspace(
+                DeerFlowBootstrapApi.DEFAULT_USER_ID, run.threadId);
+        workspaceChanges.completeRunChanges(
+                DeerFlowBootstrapApi.DEFAULT_USER_ID, run.threadId, binding.workspaceId(), run.runId.value());
     }
 
     private JsonNode readBody(HttpExchange exchange) throws IOException {

@@ -22,7 +22,7 @@ final class WorkspaceRegistry {
     synchronized WorkspaceBinding bind(String ownerId, String threadId) {
         String owner = requireIdentity(ownerId, "ownerId");
         String thread = requireIdentity(threadId, "threadId");
-        WorkspaceId workspaceId = new WorkspaceId("ws-" + Hashing.sha256(owner + "\0" + thread).substring(0, 32));
+        WorkspaceId workspaceId = workspaceId(owner, thread);
         Path workspaceRoot = workspaceRoot(workspaceId);
         Path bindingFile = workspaceRoot.resolve(BINDING_FILE);
         if (Files.exists(bindingFile)) {
@@ -46,6 +46,17 @@ final class WorkspaceRegistry {
         } catch (IOException exception) {
             throw ioFailure("failed to persist workspace binding", exception);
         }
+    }
+
+    WorkspaceBinding require(String ownerId, String threadId) {
+        String owner = requireIdentity(ownerId, "ownerId");
+        String thread = requireIdentity(threadId, "threadId");
+        WorkspaceBinding binding = load(workspaceId(owner, thread));
+        if (!binding.ownerId().equals(owner) || !binding.threadId().equals(thread)) {
+            throw new WorkspaceException(WorkspaceError.OWNER_MISMATCH,
+                    "workspace identity does not match persisted binding");
+        }
+        return binding;
     }
 
     WorkspaceBinding requireOwner(String ownerId, WorkspaceId workspaceId) {
@@ -87,6 +98,10 @@ final class WorkspaceRegistry {
             throw new WorkspaceException(WorkspaceError.WORKSPACE_NOT_FOUND, "invalid workspace id");
         }
         return workspacesRoot.resolve(workspaceId.value());
+    }
+
+    private static WorkspaceId workspaceId(String owner, String thread) {
+        return new WorkspaceId("ws-" + Hashing.sha256(owner + "\0" + thread).substring(0, 32));
     }
 
     private static String requireIdentity(String value, String field) {
