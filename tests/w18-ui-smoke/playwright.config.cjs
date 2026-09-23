@@ -1,0 +1,34 @@
+const path = require("node:path");
+
+const { defineConfig, devices } = require(path.resolve(
+  __dirname,
+  "../../frontend/node_modules/@playwright/test",
+));
+
+const frontendPort = process.env.E2E_FRONTEND_PORT ?? "53018";
+const evidenceRoot = process.env.W18_EVIDENCE_DIR
+  ? path.resolve(process.env.W18_EVIDENCE_DIR)
+  : path.resolve(__dirname, "../../target/w18-ui-smoke-evidence/playwright");
+
+module.exports = defineConfig({
+  testDir: __dirname,
+  testMatch: "w18-ui-smoke.spec.cjs",
+  fullyParallel: false,
+  workers: 1,
+  retries: 0,
+  timeout: 60_000,
+  expect: { timeout: 20_000 },
+  outputDir: path.join(evidenceRoot, "artifacts"),
+  reporter: [
+    ["list"],
+    ["json", { outputFile: path.join(evidenceRoot, "results.json") }],
+  ],
+  use: {
+    baseURL:
+      process.env.E2E_APP_URL ?? `http://127.0.0.1:${frontendPort}`,
+    ...devices["Desktop Chrome"],
+    screenshot: "only-on-failure",
+    trace: "retain-on-failure",
+  },
+  projects: [{ name: "chromium", use: { browserName: "chromium" } }],
+});

@@ -61,6 +61,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         this.runModelResolver = runModelResolver;
     }
 
+    boolean hasThread(String threadId) {
+        return threads.containsKey(threadId);
+    }
+
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         try {

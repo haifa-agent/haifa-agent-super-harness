@@ -36,6 +36,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final ObjectMapper objectMapper;
     private final DeerFlowThreadRunApi threadRunApi;
     private final DeerFlowConfigurationApi configurationApi;
+    private final DeerFlowWorkspaceApi workspaceApi;
 
     private DeerFlowBootstrapApi(
             HttpServer server,
@@ -52,6 +53,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 testRunModelResolver == null
                         ? configurationApi::resolveRunModel
                         : testRunModelResolver);
+        this.workspaceApi = new DeerFlowWorkspaceApi(
+                objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
         registerRoutes();
     }
 
@@ -140,7 +143,11 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         server.createContext("/api/models", configurationApi);
         server.createContext("/api/managed-models", configurationApi);
         server.createContext("/api/agents", configurationApi);
-        server.createContext("/api/threads", threadRunApi);
+        server.createContext("/api/threads", exchange -> {
+            if (!workspaceApi.tryHandle(exchange)) {
+                threadRunApi.handle(exchange);
+            }
+        });
         server.createContext("/", this::notFound);
     }
 
