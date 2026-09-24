@@ -7,6 +7,7 @@ param(
     [int]$ProviderPort = 0,
     [string]$DataDirectory,
     [switch]$ActiveReconnect,
+    [switch]$Interaction,
     [switch]$LiveDeepSeek,
     [switch]$SkipBuild
 )
@@ -17,14 +18,16 @@ Set-StrictMode -Version Latest
 if ($GatewayPort -ne 38018 -or $FrontendPort -ne 53018 -or $ProviderPort -ne 0) {
     throw 'W18 slot 2 is fixed to Gateway=38018 and Frontend=53018; controlled Provider must use OS-assigned port 0.'
 }
-if ($ActiveReconnect -and $LiveDeepSeek) {
-    throw 'Active reconnect verification uses only the controlled provider.'
+if (@($ActiveReconnect, $Interaction, $LiveDeepSeek).Where({ $_ }).Count -gt 1) {
+    throw 'Active reconnect, Interaction, and live DeepSeek profiles are mutually exclusive.'
 }
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
     $DataDirectory = Join-Path $root $(if ($LiveDeepSeek) {
         'target/agent-slot-2-deepseek-data'
+    } elseif ($Interaction) {
+        'target/agent-slot-2-interaction-data'
     } else {
         'target/agent-slot-2-data'
     })
@@ -47,6 +50,8 @@ $evidenceRoot = Join-Path $root $(if ($LiveDeepSeek) {
     'target/w18-deepseek-web-l3/playwright'
 } elseif ($ActiveReconnect) {
     'target/w05-active-reconnect-evidence/playwright'
+} elseif ($Interaction) {
+    'target/w05-interaction-evidence/playwright'
 } else {
     'target/w18-ui-smoke-evidence/playwright'
 })
@@ -86,11 +91,16 @@ $managedEnvironment = @{
         'w18-deepseek-live.spec.cjs'
     } elseif ($ActiveReconnect) {
         'w05-active-reconnect.spec.cjs'
+    } elseif ($Interaction) {
+        'w05-interaction.spec.cjs'
     } else {
         'w18-ui-smoke.spec.cjs'
     })
-    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek -or $ActiveReconnect) { '120000' } else { '60000' })
-    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect) { 'on' } else { 'retain-on-failure' })
+    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction) { '120000' } else { '60000' })
+    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction) { 'on' } else { 'retain-on-failure' })
+    # Kept disabled through the ordinary build/test gate. The runner enables it
+    # only immediately before launching the dedicated guarded test process.
+    W05_INTERACTION_ACCEPTANCE = $null
 }
 $savedEnvironment = @{}
 foreach ($name in $managedEnvironment.Keys) {
@@ -137,7 +147,7 @@ try {
 
     $jar = Join-Path $root 'super-harness-server/target/super-harness-server-0.1.0-SNAPSHOT-exec.jar'
     $next = Join-Path $root 'frontend/node_modules/next/dist/bin/next'
-    if (-not (Test-Path -LiteralPath $jar -PathType Leaf)) {
+    if (-not $Interaction -and -not (Test-Path -LiteralPath $jar -PathType Leaf)) {
         throw 'Executable Haifa server JAR is missing; run without -SkipBuild.'
     }
     if (-not (Test-Path -LiteralPath $next -PathType Leaf)) {
@@ -185,13 +195,27 @@ try {
         }
     }
 
-    $gatewayProcess = Start-Process -FilePath (Get-Command java.exe).Source `
-        -ArgumentList @('-jar', $jar) `
-        -WorkingDirectory $root `
-        -RedirectStandardOutput $serverOut `
-        -RedirectStandardError $serverErr `
-        -PassThru `
-        -WindowStyle Hidden
+    if ($Interaction) {
+        # The fixture exists only on the test classpath. Surefire runs in the
+        # Maven JVM so the process tree remains attributable to this runner.
+        [Environment]::SetEnvironmentVariable('W05_INTERACTION_ACCEPTANCE', '1', 'Process')
+        $gatewayProcess = Start-Process -FilePath (Get-Command mvn.cmd).Source `
+            -ArgumentList @('-o', '-ntp', '-pl', 'super-harness-server', '-Dtest=InteractionAcceptanceServerTest', '-DforkCount=0', 'test') `
+            -WorkingDirectory $root `
+            -RedirectStandardOutput $serverOut `
+            -RedirectStandardError $serverErr `
+            -PassThru `
+            -WindowStyle Hidden
+    }
+    else {
+        $gatewayProcess = Start-Process -FilePath (Get-Command java.exe).Source `
+            -ArgumentList @('-jar', $jar) `
+            -WorkingDirectory $root `
+            -RedirectStandardOutput $serverOut `
+            -RedirectStandardError $serverErr `
+            -PassThru `
+            -WindowStyle Hidden
+    }
     $gatewayDeadline = (Get-Date).AddSeconds(30)
     do {
         Start-Sleep -Milliseconds 200
@@ -330,7 +354,22 @@ try {
 finally {
     foreach ($process in @($frontendProcess, $gatewayProcess, $providerProcess)) {
         if ($null -ne $process -and -not $process.HasExited) {
-            Stop-Process -InputObject $process -Force
+            $descendants = @{}
+            $queue = [Collections.Generic.Queue[int]]::new()
+            $queue.Enqueue($process.Id)
+            while ($queue.Count -gt 0) {
+                $parentPid = $queue.Dequeue()
+                foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$parentPid" -ErrorAction SilentlyContinue)) {
+                    if (-not $descendants.ContainsKey([int]$child.ProcessId)) {
+                        $descendants[[int]$child.ProcessId] = $child
+                        $queue.Enqueue([int]$child.ProcessId)
+                    }
+                }
+            }
+            foreach ($child in @($descendants.Values | Sort-Object CreationDate -Descending)) {
+                Stop-Process -Id ([int]$child.ProcessId) -Force -ErrorAction SilentlyContinue
+            }
+            Stop-Process -InputObject $process -Force -ErrorAction SilentlyContinue
             $null = $process.WaitForExit(10000)
         }
     }
