@@ -1140,7 +1140,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         response.put("created_at", record.createdAt.toString());
         response.put("updated_at", record.updatedAt.toString());
         response.put("metadata", record.metadata);
-        response.put("values", Map.of());
+        Object title = record.metadata.get("title");
+        response.put("values", title instanceof String ? Map.of("title", title) : Map.of());
         response.put("interrupts", Map.of());
         return response;
     }
@@ -1163,6 +1164,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     return response;
                 })
                 .toList();
+    }
+
+    boolean threadBelongsToProject(String threadId, String projectId) {
+        ThreadRecord record = threads.get(threadId);
+        return record != null && projectId.equals(record.metadata.get("deerflow_project_id"));
     }
 
     private String threadStatus(ThreadRecord record) {

@@ -259,6 +259,38 @@ final class DeerFlowWorkspaceApi {
     }
 
     private List<MultipartFile> parseMultipart(HttpExchange exchange) throws IOException {
+        return parseMultipart(exchange, "files", MAX_FILES);
+    }
+
+    MultipartFile parseSingleFile(HttpExchange exchange, String fieldName) throws IOException {
+        return parseMultipart(exchange, fieldName, 1).getFirst();
+    }
+
+    boolean tryAcquireUploadSlot() {
+        return uploadSlot.tryAcquire();
+    }
+
+    void releaseUploadSlot() {
+        uploadSlot.release();
+    }
+
+    Map<String, Object> attachProjectDocument(
+            String threadId, String filename, byte[] content, String mediaType) {
+        if (!threadExists.test(threadId)) {
+            throw new IllegalArgumentException("Thread not found");
+        }
+        WorkspaceBinding binding = workspace.bind(OWNER_ID, threadId);
+        UploadReceipt receipt = workspace.upload(OWNER_ID, binding.workspaceId(), filename, content, mediaType);
+        Map<String, Object> uploaded = uploadInfo(binding.threadId(), receipt, Optional.empty());
+        return orderedMap(
+                "filename", uploaded.get("filename"),
+                "size_bytes", uploaded.get("size"),
+                "virtual_path", uploaded.get("virtual_path"),
+                "artifact_url", uploaded.get("artifact_url"));
+    }
+
+    private List<MultipartFile> parseMultipart(HttpExchange exchange, String expectedField, int maxFiles)
+            throws IOException {
         String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
         if (contentType == null || !contentType.toLowerCase(Locale.ROOT).startsWith("multipart/form-data")) {
             throw new HttpFailure(422, "Content-Type must be multipart/form-data");
@@ -289,12 +321,12 @@ final class DeerFlowWorkspaceApi {
             }
         }
         byte[] body = readBounded(exchange.getRequestBody(), maxBody, declaredLength);
-        List<MultipartFile> files = decodeMultipart(body, boundary);
+        List<MultipartFile> files = decodeMultipart(body, boundary, expectedField, maxFiles);
         if (files.isEmpty()) {
             throw new HttpFailure(400, "No files provided");
         }
-        if (files.size() > MAX_FILES) {
-            throw new HttpFailure(413, "Too many files: maximum is " + MAX_FILES);
+        if (files.size() > maxFiles) {
+            throw new HttpFailure(413, "Too many files: maximum is " + maxFiles);
         }
         long total = 0;
         for (MultipartFile file : files) {
@@ -309,7 +341,8 @@ final class DeerFlowWorkspaceApi {
         return files;
     }
 
-    private List<MultipartFile> decodeMultipart(byte[] body, String boundary) {
+    private List<MultipartFile> decodeMultipart(
+            byte[] body, String boundary, String expectedField, int maxFiles) {
         byte[] delimiter = ("--" + boundary).getBytes(StandardCharsets.ISO_8859_1);
         byte[] nextDelimiter = concat(new byte[] {'\r', '\n'}, delimiter);
         byte[] headerEnd = new byte[] {'\r', '\n', '\r', '\n'};
@@ -350,15 +383,15 @@ final class DeerFlowWorkspaceApi {
             }
             String name = capture(FORM_NAME, disposition)
                     .orElseThrow(() -> new HttpFailure(422, "Multipart field name is missing"));
-            if (!name.equals("files")) {
+            if (!name.equals(expectedField)) {
                 throw new HttpFailure(422, "Unexpected multipart field: " + name);
             }
             String filename = capture(FORM_FILENAME, disposition)
                     .orElseThrow(() -> new HttpFailure(422, "Multipart filename is missing"));
             String mediaType = headers.getOrDefault("content-type", "application/octet-stream");
             files.add(new MultipartFile(filename, mediaType, Arrays.copyOfRange(body, contentStart, contentEnd)));
-            if (files.size() > MAX_FILES) {
-                throw new HttpFailure(413, "Too many files: maximum is " + MAX_FILES);
+            if (files.size() > maxFiles) {
+                throw new HttpFailure(413, "Too many files: maximum is " + maxFiles);
             }
             cursor = contentEnd + nextDelimiter.length;
         }
@@ -637,11 +670,11 @@ final class DeerFlowWorkspaceApi {
         void handle(HttpExchange exchange, WorkspaceBinding binding) throws IOException;
     }
 
-    private record MultipartFile(String filename, String mediaType, byte[] content) {}
+    record MultipartFile(String filename, String mediaType, byte[] content) {}
 
     private record ByteSelection(long start, int length, long end, int status, boolean partial) {}
 
-    private static final class HttpFailure extends RuntimeException {
+    static final class HttpFailure extends RuntimeException {
         private final int status;
         private final String contentRange;
 
@@ -653,6 +686,10 @@ final class DeerFlowWorkspaceApi {
             super(message);
             this.status = status;
             this.contentRange = contentRange;
+        }
+
+        int status() {
+            return status;
         }
     }
 }

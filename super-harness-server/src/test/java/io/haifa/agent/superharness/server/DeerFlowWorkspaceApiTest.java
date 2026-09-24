@@ -106,6 +106,17 @@ class DeerFlowWorkspaceApiTest {
     }
 
     @Test
+    void threadAndProjectUploadsShareOneBoundedParsingSlot() {
+        DeerFlowWorkspaceApi workspace =
+                new DeerFlowWorkspaceApi(json, dataDirectory.resolve("shared-slot"), ignored -> true);
+        assertThat(workspace.tryAcquireUploadSlot()).isTrue();
+        assertThat(workspace.tryAcquireUploadSlot()).isFalse();
+        workspace.releaseUploadSlot();
+        assertThat(workspace.tryAcquireUploadSlot()).isTrue();
+        workspace.releaseUploadSlot();
+    }
+
+    @Test
     void rejectsMissingThreadsUnexpectedFieldsTraversalAndUnsatisfiedRanges() throws Exception {
         byte[] value = "safe".getBytes(StandardCharsets.UTF_8);
         assertThat(upload("missing", "missing-boundary", List.of(

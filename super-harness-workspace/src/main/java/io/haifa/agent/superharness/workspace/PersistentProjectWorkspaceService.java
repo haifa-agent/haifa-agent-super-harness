@@ -235,7 +235,7 @@ public final class PersistentProjectWorkspaceService {
 
     public ProjectDocumentContent readProjectDocument(
             String ownerId, String projectId, String documentId, long offset, int maxBytes) {
-        if (offset < 0 || maxBytes < 1 || maxBytes > workspaceLimits.maxReadBytes()) {
+        if (offset < 0 || maxBytes < 1 || maxBytes > workspaceLimits.maxUploadBytes()) {
             throw new WorkspaceException(WorkspaceError.READ_OUT_OF_BOUNDS, "invalid project document read range");
         }
         Path project = requireProject(ownerId, projectId);
