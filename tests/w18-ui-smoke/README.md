@@ -12,6 +12,22 @@ pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 `
   -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow
 ```
 
+The W05 active-stream reconnect case uses the same controlled provider and fixed
+slot, but an independent spec and evidence directory:
+
+```powershell
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 `
+  -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow `
+  -ActiveReconnect -SkipBuild
+```
+
+It reloads the frozen page while the creator Run is still `running`, proves the
+SDK's initial observer join uses `Last-Event-ID: -1`, checks ordered/non-duplicate
+identified frames, waits for authoritative terminal `success`, and asserts that
+the assistant message is rendered exactly once. The Java Oracle separately covers
+retention gap plus authoritative recovery and the creator-cancel/observer-continue
+boundary.
+
 The explicitly authorized DeepSeek L3 variant uses the same runner and slot,
 but a separate data/evidence directory and one independent Playwright case:
 
@@ -82,5 +98,7 @@ page: non-empty assistant text rendered, the Run reached `success`, the stream
 contained `messages` and `end`, and a browser reload restored the answer. Its
 sanitized identities, timing, credential-safety checks, and artifact paths are
 recorded in `evidence/20260923-deepseek-web-l3-pass.json`. Active-stream
-disconnect/reconnect recovery and the DeerFlow-vs-Haifa runtime differential
-remain `NOT_RUN`.
+disconnect/reconnect against the controlled provider also passed twice; its
+sanitized identities and health data are recorded in
+`evidence/20260923-active-reconnect-pass.json`. Process-restart recovery and the
+DeerFlow-vs-Haifa runtime differential remain `NOT_RUN`.

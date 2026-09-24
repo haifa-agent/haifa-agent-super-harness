@@ -100,6 +100,14 @@ events.
 The compatibility server now covers real loopback SSE serialization, stable IDs,
 `Last-Event-ID` replay, duplicate replay, retention gap plus authoritative run view,
 durable `/state` recovery, distinct creator/join disconnect behavior, and terminal outcomes.
+The frozen LangGraph SDK's initial observer cursor (`Last-Event-ID: -1`) is accepted only as the
+before-first cursor; blank values, other negative values, decimals, foreign-run shapes, and
+non-zero sub-cursors still fail closed. A controlled-provider browser run proved an active creator
+reload with `on_disconnect=continue`, observer join, ordered `messages`/`end` delivery, one rendered
+assistant message, and terminal `success`. The browser case passed twice without retries and released
+its provider, Gateway, and frontend processes. The sanitized evidence is in
+`tests/w18-ui-smoke/evidence/20260923-active-reconnect-pass.json`.
+
 The unsupported Interaction card projection fails closed. `NOT_RUN`: process-restart reconstruction,
-HTTP Interaction submission/card rendering, real `updates`/`custom` payload projection, frozen
-frontend execution, configured provider execution, and differential DeerFlow/Haifa verification.
+HTTP Interaction submission/card rendering, real `updates`/`custom` payload projection, and
+differential DeerFlow/Haifa verification.

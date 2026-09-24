@@ -572,7 +572,12 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private ProjectionCursor parseSseCursor(String runId, String rawCursor) {
-        if (rawCursor == null || rawCursor.isBlank()) {
+        if (rawCursor == null) {
+            return new ProjectionCursor(runId, 0);
+        }
+        // The frozen LangGraph SDK uses -1 for the first observer join. Keep the
+        // internal cursor non-negative while preserving its before-first meaning.
+        if ("-1".equals(rawCursor)) {
             return new ProjectionCursor(runId, 0);
         }
         Matcher matcher = SSE_CURSOR.matcher(rawCursor);

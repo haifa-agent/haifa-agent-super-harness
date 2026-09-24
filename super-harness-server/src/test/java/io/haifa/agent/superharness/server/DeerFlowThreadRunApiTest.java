@@ -424,20 +424,26 @@ class DeerFlowThreadRunApiTest {
     void observerDisconnectNeverCancelsCreatorRun() throws Exception {
         createThread("thread-observer");
         HttpResponse<InputStream> creator = client.send(
-                runRequest("thread-observer", "__continue_short__", "continue"),
+                runRequest("thread-observer", "__slow__", "continue"),
                 HttpResponse.BodyHandlers.ofInputStream());
+        assertThat(creator.statusCode()).isEqualTo(200);
         String location = creator.headers().firstValue("content-location").orElseThrow();
 
         HttpResponse<InputStream> observer =
-                client.send(joinRequest(location, null), HttpResponse.BodyHandlers.ofInputStream());
+                client.send(joinRequest(location, "-1"), HttpResponse.BodyHandlers.ofInputStream());
+        assertThat(observer.statusCode()).isEqualTo(200);
         observer.body().close();
+        Thread.sleep(75);
+        assertThat(getJson(location).path("status").asText()).isEqualTo("running");
+        assertThat(postJson(location + "/cancel?wait=false&action=interrupt", "").statusCode())
+                .isEqualTo(202);
         String creatorTranscript;
         try (InputStream input = creator.body()) {
             creatorTranscript = new String(input.readAllBytes(), StandardCharsets.UTF_8);
         }
 
         assertThat(creatorTranscript).contains("event: end");
-        awaitStatus(location, "success");
+        awaitStatus(location, "interrupted");
     }
 
     @Test
@@ -494,6 +500,13 @@ class DeerFlowThreadRunApiTest {
         assertThat(invalidCursor.statusCode()).isEqualTo(409);
         assertThat(json.readTree(invalidCursor.body()).path("detail").asText())
                 .isEqualTo("Invalid Last-Event-ID");
+        for (String rejectedCursor : List.of("", "-2", "1.5-0", "other-run/1-0", "1-1")) {
+            HttpResponse<String> rejected = join(location, rejectedCursor);
+            assertThat(rejected.statusCode()).as(rejectedCursor).isEqualTo(409);
+            assertThat(json.readTree(rejected.body()).path("detail").asText())
+                    .as(rejectedCursor)
+                    .isEqualTo("Invalid Last-Event-ID");
+        }
     }
 
     private void createThread(String threadId) throws Exception {
