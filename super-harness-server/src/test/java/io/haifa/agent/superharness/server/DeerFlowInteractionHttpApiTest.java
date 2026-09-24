@@ -214,7 +214,7 @@ class DeerFlowInteractionHttpApiTest {
         Matcher matcher = Pattern.compile(
                         "event: " + Pattern.quote(event) + "\\ndata: ([^\\n]+)\\n")
                 .matcher(transcript);
-        assertThat(matcher.find()).isTrue();
+        assertThat(matcher.find()).as("SSE transcript: %s", transcript).isTrue();
         return json.readTree(matcher.group(1));
     }
 }

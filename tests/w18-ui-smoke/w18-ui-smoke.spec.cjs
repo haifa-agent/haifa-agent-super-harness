@@ -255,7 +255,27 @@ test.describe("W18 frozen UI -> Haifa local smoke", () => {
       "success",
     );
 
+    const messagesPageResponsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === "GET" &&
+        /\/api\/(?:langgraph\/)?threads\/[^/]+\/messages\/page$/.test(
+          new URL(response.url()).pathname,
+        ),
+    );
+    const historyResponsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        /\/api\/(?:langgraph\/)?threads\/[^/]+\/history$/.test(
+          new URL(response.url()).pathname,
+        ),
+    );
     await page.reload({ waitUntil: "domcontentloaded" });
+    const [messagesPageResponse, historyResponse] = await Promise.all([
+      messagesPageResponsePromise,
+      historyResponsePromise,
+    ]);
+    expect(messagesPageResponse.status()).toBe(200);
+    expect(historyResponse.status()).toBe(200);
     await expect(
       page.locator("#chat").getByText(`Controlled provider: ${prompt}`, {
         exact: true,
@@ -265,6 +285,10 @@ test.describe("W18 frozen UI -> Haifa local smoke", () => {
       prompt,
       ...identity,
       reloadedUrl: page.url(),
+      messagesPageStatus: messagesPageResponse.status(),
+      messagesPageUrl: messagesPageResponse.url(),
+      historyStatus: historyResponse.status(),
+      historyUrl: historyResponse.url(),
     });
   });
 });

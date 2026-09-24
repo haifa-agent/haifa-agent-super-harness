@@ -6,6 +6,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import io.haifa.agent.core.run.AgentRunId;
 import io.haifa.agent.core.run.AgentRunStatus;
+import io.haifa.agent.core.session.AgentSessionId;
 import io.haifa.agent.runtime.api.AgentRunEvent;
 import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
 import io.haifa.agent.runtime.api.AgentRunSnapshot;
@@ -38,10 +39,16 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import io.haifa.agent.sdk.conversation.ConversationTurn;
+import io.haifa.agent.sdk.conversation.ConversationTurnCursor;
+import io.haifa.agent.sdk.conversation.ConversationTurnQuery;
+import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -52,6 +59,7 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.crypto.SecretKey;
 
 /** Frozen DeerFlow thread/run compatibility routes backed by the public Haifa Agent SDK. */
 final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
@@ -82,12 +90,21 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             ".7z", ".avif", ".bmp", ".class", ".db", ".dll", ".dmg", ".doc", ".docx", ".exe",
             ".gif", ".gz", ".ico", ".jar", ".jpeg", ".jpg", ".mov", ".mp3", ".mp4", ".o",
             ".pdf", ".png", ".pyc", ".so", ".tar", ".webp", ".xls", ".xlsx", ".zip");
+    private static final int TURN_SCAN_PAGE_SIZE = 100;
+    private static final int MAXIMUM_TURN_SCAN_PAGES = 100;
+    private static final int RUN_LIST_LIMIT = 100;
+    private static final int HISTORY_MESSAGE_RETENTION = 200;
+    private static final int TERMINAL_RUN_CACHE_LIMIT = 8;
+    private static final java.time.Duration TERMINAL_EVENT_SETTLE_TIMEOUT =
+            java.time.Duration.ofSeconds(2);
 
     private final ObjectMapper json;
     private final Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver;
     private final Predicate<String> projectExists;
     private final PersistentProjectWorkspaceService workspaceChanges;
     private final List<? extends JavaTool<?, ?>> runTools;
+    private final PersistentThreadCatalog threadCatalog;
+    private final DurableHaifaFoundation foundation;
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
     private final Map<String, RunRecord> runs = new ConcurrentHashMap<>();
     private final Set<Thread> workspaceCompletionObservers = ConcurrentHashMap.newKeySet();
@@ -97,21 +114,21 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             ObjectMapper json,
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
             Predicate<String> projectExists,
-            PersistentProjectWorkspaceService workspaceChanges) {
-        this(json, runModelResolver, projectExists, workspaceChanges, List.of());
-    }
-
-    DeerFlowThreadRunApi(
-            ObjectMapper json,
-            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
-            Predicate<String> projectExists,
             PersistentProjectWorkspaceService workspaceChanges,
-            List<? extends JavaTool<?, ?>> runTools) {
+            Path dataDirectory,
+            SecretKey continuationKey,
+            List<? extends JavaTool<?, ?>> runTools)
+            throws IOException {
         this.json = json;
         this.runModelResolver = runModelResolver;
         this.projectExists = projectExists;
         this.workspaceChanges = workspaceChanges;
         this.runTools = List.copyOf(runTools);
+        this.threadCatalog = new PersistentThreadCatalog(json, dataDirectory);
+        this.foundation = new DurableHaifaFoundation(dataDirectory, continuationKey);
+        for (PersistentThreadCatalog.Entry entry : threadCatalog.list()) {
+            threads.put(entry.threadId(), new ThreadRecord(entry));
+        }
     }
 
     boolean hasThread(String threadId) {
@@ -192,6 +209,15 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             sendJson(exchange, 404, Map.of("detail", "Not Found"));
         } catch (MalformedRequestException malformed) {
             sendJson(exchange, 422, Map.of("detail", "Invalid JSON body"));
+        } catch (TranscriptScanLimitException exhausted) {
+            sendJson(
+                    exchange,
+                    503,
+                    Map.of(
+                            "detail",
+                            "Durable transcript exceeds the bounded scan budget; narrow the requested cursor"));
+        } catch (IllegalStateException unavailable) {
+            sendJson(exchange, 503, Map.of("detail", "Durable thread state is unavailable"));
         }
     }
 
@@ -222,6 +248,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
         ThreadRecord record = threads.computeIfAbsent(
                 threadId, ignored -> new ThreadRecord(threadId, metadata, Instant.now()));
+        persistThread(record);
         sendJson(exchange, 200, threadResponse(record));
     }
 
@@ -259,19 +286,30 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             sendJson(exchange, 422, Map.of("detail", "limit must be between 1 and 100"));
             return;
         }
+        Long beforeSequence = null;
         if (body.has("before") && !body.get("before").isNull()) {
-            sendJson(exchange, 422, Map.of("detail", "before history cursor is not implemented"));
-            return;
+            JsonNode before = body.get("before");
+            if (!before.isTextual() || !before.textValue().matches("turn-[1-9][0-9]*")) {
+                sendJson(exchange, 422, Map.of("detail", "before must be a checkpoint cursor"));
+                return;
+            }
+            try {
+                beforeSequence = Long.parseLong(before.textValue().substring("turn-".length()));
+            } catch (NumberFormatException overflow) {
+                sendJson(exchange, 422, Map.of("detail", "before must be a checkpoint cursor"));
+                return;
+            }
         }
-        if (threadRuns(threadId).isEmpty()) {
-            sendJson(exchange, 200, List.of());
-            return;
-        }
-        sendJson(exchange, 200, List.of(threadHistoryResponse(thread)));
+        int limit = limitNode == null ? 10 : limitNode.intValue();
+        List<Map<String, Object>> response = historyProjections(thread, limit, beforeSequence).stream()
+                .map(this::threadHistoryResponse)
+                .toList();
+        sendJson(exchange, 200, response);
     }
 
     private void listThreadMessagesPage(HttpExchange exchange, String threadId) throws IOException {
-        if (!threads.containsKey(threadId)) {
+        ThreadRecord thread = threads.get(threadId);
+        if (thread == null) {
             sendJson(exchange, 404, Map.of("detail", "Thread not found"));
             return;
         }
@@ -301,11 +339,28 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return;
         }
 
+        int pageLimit = limit.orElseThrow();
         Long beforeSequence = before;
-        List<Map<String, Object>> eligible = threadMessageRows(threadId).stream()
-                .filter(row -> beforeSequence == null || ((Long) row.get("seq")) < beforeSequence)
-                .toList();
-        int from = Math.max(0, eligible.size() - limit.orElseThrow());
+        List<Map<String, Object>> eligible = new ArrayList<>(scanTurns(
+                        thread, pageLimit + 2 * TERMINAL_RUN_CACHE_LIMIT + 3, beforeSequence)
+                .stream().map(this::messageRow).toList());
+        for (RunRecord run : runs.values()) {
+            if (!run.threadId.equals(threadId)) continue;
+            synchronized (run) {
+                if (run.interactionRequestMessage != null) {
+                    eligible.add(messageRow(run, run.interactionRequestSequence,
+                            run.createdAt, run.interactionRequestMessage));
+                }
+                if (run.acceptedInteractionResponse != null) {
+                    eligible.add(messageRow(run, run.interactionResponseSequence,
+                            run.bridge.snapshot(run.runId).updatedAt(),
+                            run.acceptedInteractionResponse.message()));
+                }
+            }
+        }
+        eligible.removeIf(row -> beforeSequence != null && ((Long) row.get("seq")) >= beforeSequence);
+        eligible.sort((left, right) -> Long.compare((Long) left.get("seq"), (Long) right.get("seq")));
+        int from = Math.max(0, eligible.size() - pageLimit);
         boolean hasMore = from > 0;
         List<Map<String, Object>> page = eligible.subList(from, eligible.size());
         Map<String, Object> response = new LinkedHashMap<>();
@@ -397,8 +452,19 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 completeWorkspaceChangesIfTerminal(active);
             }
             if (thread.bridge == null) {
-                thread.bridge = new HaifaRunBridge(binding, runTools);
-                thread.modelBindingIdentity = thread.bridge.bindingIdentity();
+                HaifaRunBridge bridge = new HaifaRunBridge(binding, runTools, foundation);
+                if (thread.modelBindingIdentity != null
+                        && !thread.modelBindingIdentity.equals(bridge.bindingIdentity())) {
+                    bridge.close();
+                    sendJson(
+                            exchange,
+                            409,
+                            Map.of(
+                                    "detail",
+                                    "Thread is already bound to a different model revision; create a new thread"));
+                    return;
+                }
+                attachBridge(thread, bridge);
             } else if (!thread.modelBindingIdentity.equals(binding.name() + "@" + binding.revision())) {
                 sendJson(
                         exchange,
@@ -435,6 +501,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 }
             }
             thread.session = started.session();
+            thread.persistedSessionId = started.session().sessionId();
             thread.updatedAt = Instant.now();
             thread.activeRunId = started.runId().value();
             thread.latestRunId = started.runId().value();
@@ -448,8 +515,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     thread.bridge,
                     Instant.now(),
                     humanSequence,
-                    workspaceRecordingEnabled);
+                    workspaceRecordingEnabled,
+                    requestedStreamModes(body));
             runs.put(run.runId.value(), run);
+            persistThread(thread);
         }
         observeWorkspaceCompletion(run);
 
@@ -557,6 +626,88 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
     }
 
+    private HaifaRunBridge bridgeForPersistedThread(ThreadRecord thread) {
+        synchronized (thread) {
+            if (thread.bridge != null) return thread.bridge;
+            HaifaRunBridge.ModelBinding binding = runModelResolver.apply(json.createObjectNode());
+            HaifaRunBridge bridge = new HaifaRunBridge(binding, List.of(), foundation);
+            boolean claimBinding = thread.modelBindingIdentity == null
+                    || thread.modelBindingIdentity.equals(bridge.bindingIdentity());
+            // Conversation and run reads are backed by the shared SQLite authority and do not
+            // execute the model. Preserve a historical binding across provider restarts so the
+            // transcript remains readable, while streamRun still rejects a new run whose current
+            // binding does not match the persisted identity.
+            attachBridge(thread, bridge, claimBinding);
+            return bridge;
+        }
+    }
+
+    private void attachBridge(ThreadRecord thread, HaifaRunBridge bridge) {
+        attachBridge(thread, bridge, true);
+    }
+
+    private void attachBridge(ThreadRecord thread, HaifaRunBridge bridge, boolean claimBinding) {
+        HaifaRunBridge previousBridge = thread.bridge;
+        String previousBinding = thread.modelBindingIdentity;
+        HaifaRunBridge.SessionState previousSession = thread.session;
+        long previousSequence = thread.nextMessageSequence;
+        try {
+            thread.bridge = bridge;
+            if (claimBinding) thread.modelBindingIdentity = bridge.bindingIdentity();
+            restoreSession(thread);
+        } catch (RuntimeException | Error failure) {
+            thread.bridge = previousBridge;
+            thread.modelBindingIdentity = previousBinding;
+            thread.session = previousSession;
+            thread.nextMessageSequence = previousSequence;
+            bridge.close();
+            throw failure;
+        }
+    }
+
+    private void restoreSession(ThreadRecord thread) {
+        if (thread.session != null || thread.persistedSessionId == null || thread.bridge == null) return;
+        var conversation = thread.bridge
+                .findConversation(thread.persistedSessionId)
+                .orElseThrow(() -> new IllegalStateException("persisted thread conversation is unavailable"));
+        long latestSequence = latestVisibleTurnSequence(thread, thread.bridge);
+        thread.session = new HaifaRunBridge.SessionState(conversation.sessionId(), conversation.revision());
+        thread.nextMessageSequence = latestSequence + 1;
+    }
+
+    private long latestVisibleTurnSequence(ThreadRecord thread, HaifaRunBridge bridge) {
+        long latest = 0;
+        Optional<ConversationTurnCursor> cursor = Optional.empty();
+        int pages = 0;
+        while (true) {
+            var page = bridge.turns(
+                    thread.persistedSessionId,
+                    new ConversationTurnQuery(cursor, TURN_SCAN_PAGE_SIZE));
+            pages++;
+            for (ConversationTurn turn : page.items()) {
+                if (turn.role() == io.haifa.agent.core.message.MessageRole.USER
+                        || turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT) {
+                    latest = Math.max(latest, turn.sequence());
+                }
+            }
+            if (page.nextCursor().isEmpty()) return latest;
+            requireAnotherScanPage(pages);
+            cursor = page.nextCursor();
+        }
+    }
+
+    private void persistThread(ThreadRecord thread) throws IOException {
+        synchronized (thread) {
+            threadCatalog.save(new PersistentThreadCatalog.Entry(
+                    thread.threadId,
+                    thread.metadata,
+                    thread.createdAt,
+                    thread.updatedAt,
+                    Optional.ofNullable(thread.persistedSessionId),
+                    Optional.ofNullable(thread.modelBindingIdentity)));
+        }
+    }
+
     private void joinRun(HttpExchange exchange, String threadId, String runId) throws IOException {
         if (queryValue(exchange, "action").isPresent()) {
             exchange.getResponseHeaders().set("Allow", "POST");
@@ -564,8 +715,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return;
         }
         ThreadRecord thread = threads.get(threadId);
-        RunRecord run = runs.get(runId);
-        if (thread == null || run == null || !run.threadId.equals(threadId)) {
+        RunRecord run = thread == null ? null : findOrRestoreRun(thread, runId).orElse(null);
+        if (run == null) {
             sendJson(exchange, 404, Map.of("detail", "Run " + runId + " not found"));
             return;
         }
@@ -612,6 +763,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
             ProjectionCursor delivered = initialCursor;
             long nextHeartbeat = System.nanoTime() + java.time.Duration.ofMillis(100).toNanos();
+            long terminalWithoutEventSince = 0;
             while (true) {
                 ReplayResult replay = run.projector.replayAfter(delivered);
                 if (replay instanceof ReplayResult.Gap gap) {
@@ -638,6 +790,19 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                         // DeerFlow's terminal rejoin behavior with an id-less end sentinel.
                         writeSse(output, "end", null, null);
                         return;
+                    }
+                    if (terminalWithoutEventSince == 0) {
+                        terminalWithoutEventSince = System.nanoTime();
+                    }
+                    if (System.nanoTime() - terminalWithoutEventSince
+                            < TERMINAL_EVENT_SETTLE_TIMEOUT.toNanos()) {
+                        try {
+                            Thread.sleep(10);
+                        } catch (InterruptedException exception) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                        continue;
                     }
                     // A public terminal snapshot without the matching durable lifecycle event
                     // would make resume ambiguous. Fail closed instead of inventing an end id.
@@ -672,7 +837,27 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 }
                 thread.updatedAt = Instant.now();
             }
+            persistThread(thread);
+            trimRunCache();
         }
+    }
+
+    private void trimRunCache() {
+        List<RunRecord> terminal = runs.values().stream()
+                .filter(run -> run.bridge.findRun(run.runId)
+                        .map(snapshot -> snapshot.status().isTerminal())
+                        .orElse(true))
+                .sorted(java.util.Comparator.comparing(run -> run.createdAt))
+                .toList();
+        int remove = terminal.size() - TERMINAL_RUN_CACHE_LIMIT;
+        for (int index = 0; index < remove; index++) {
+            RunRecord candidate = terminal.get(index);
+            runs.remove(candidate.runId.value(), candidate);
+        }
+    }
+
+    int cachedRunCount() {
+        return runs.size();
     }
 
     private Optional<AppendResult.Gap> synchronizeOnePage(RunRecord run) {
@@ -809,7 +994,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 || event.source().payload() instanceof RunEventPayloads.RunInputLifecycle) {
             if ((event.source().payload() instanceof RunEventPayloads.ToolLifecycle
                             || event.source().payload() instanceof RunEventPayloads.ResourceAvailable)
-                    && (run.interactionRequestId != null
+                    && (!runTools.isEmpty()
+                            || run.interactionRequestId != null
                             || run.bridge.pendingInteraction(run.runId).isPresent())) {
                 // Approval runs publish tool/checkpoint lifecycle records around the richer
                 // Interaction record. The card and authoritative SDK view are the frozen UI
@@ -831,7 +1017,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
         AgentRunSnapshot terminalSnapshot = run.bridge.snapshot(run.runId);
         if (event.terminalKind() == RunTerminalKind.COMPLETED
-                && terminalSnapshot.output().isPresent()) {
+                && terminalSnapshot.output().isPresent()
+                && run.streamModes.contains("messages-tuple")) {
             writeMessageDelta(output, run, terminalSnapshot.output().orElseThrow(), cursor);
         }
         if (event.terminalKind() == RunTerminalKind.FAILED) {
@@ -900,8 +1087,9 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     Map.of("detail", "Only wait=false/0&action=interrupt is implemented"));
             return;
         }
-        RunRecord run = runs.get(runId);
-        if (run == null || !run.threadId.equals(threadId)) {
+        ThreadRecord thread = threads.get(threadId);
+        RunRecord run = thread == null ? null : findOrRestoreRun(thread, runId).orElse(null);
+        if (run == null) {
             sendJson(exchange, 404, Map.of("detail", "Run " + runId + " not found"));
             return;
         }
@@ -920,8 +1108,9 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private void getRun(HttpExchange exchange, String threadId, String runId) throws IOException {
-        RunRecord run = runs.get(runId);
-        if (run == null || !run.threadId.equals(threadId)) {
+        ThreadRecord thread = threads.get(threadId);
+        RunRecord run = thread == null ? null : findOrRestoreRun(thread, runId).orElse(null);
+        if (run == null) {
             sendJson(exchange, 404, Map.of("detail", "Run " + runId + " not found"));
             return;
         }
@@ -929,23 +1118,13 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private void listRuns(HttpExchange exchange, String threadId) throws IOException {
-        if (!threads.containsKey(threadId)) {
+        ThreadRecord thread = threads.get(threadId);
+        if (thread == null) {
             sendJson(exchange, 404, Map.of("detail", "Thread not found"));
             return;
         }
-        Optional<Integer> limit = positiveQueryInteger(exchange, "limit", 10, 1000);
-        Optional<Integer> offset = nonNegativeQueryInteger(exchange, "offset", 0);
-        if (limit.isEmpty() || offset.isEmpty()) {
-            sendJson(exchange, 422, Map.of("detail", "Invalid run pagination"));
-            return;
-        }
-        Optional<String> status = queryValue(exchange, "status");
-        List<Map<String, Object>> response = threadRuns(threadId).stream()
-                .sorted((left, right) -> Long.compare(right.humanSequence, left.humanSequence))
+        List<Map<String, Object>> response = durableRuns(thread).stream()
                 .map(this::runResponse)
-                .filter(run -> status.map(expected -> expected.equals(run.get("status"))).orElse(true))
-                .skip(offset.orElseThrow())
-                .limit(limit.orElseThrow())
                 .toList();
         sendJson(exchange, 200, response);
     }
@@ -984,74 +1163,87 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private Map<String, Object> threadStateResponse(ThreadRecord thread) {
-        Map<String, Object> response = threadHistoryResponse(thread);
+        List<ConversationTurn> turns = scanTurns(thread, 200);
+        ConversationTurn checkpoint = turns.stream()
+                .filter(turn -> turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT)
+                .reduce((left, right) -> right)
+                .orElse(null);
+        Map<String, Object> response = checkpoint == null
+                ? emptyThreadHistoryResponse(thread, turns)
+                : threadHistoryResponse(new HistoryProjection(
+                        checkpoint,
+                        List.copyOf(turns),
+                        turns.stream()
+                                .filter(turn -> turn.role()
+                                        == io.haifa.agent.core.message.MessageRole.ASSISTANT)
+                                .map(ConversationTurn::sequence)
+                                .filter(sequence -> sequence < checkpoint.sequence())
+                                .max(Long::compareTo)
+                                .orElse(null)));
         response.put("checkpoint", Map.of());
         response.put("tasks", List.of());
         return response;
     }
 
-    private Map<String, Object> threadHistoryResponse(ThreadRecord thread) {
+    private Map<String, Object> emptyThreadHistoryResponse(
+            ThreadRecord thread, List<ConversationTurn> turns) {
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("values", Map.of("messages", threadMessages(thread.threadId)));
+        response.put("values", Map.of("messages", turns.stream().map(this::messageForTurn).toList()));
         response.put("next", List.of());
         response.put("metadata", Map.of());
-        response.put("checkpoint_id", thread.latestRunId);
+        response.put("checkpoint_id", null);
         response.put("parent_checkpoint_id", null);
         response.put("created_at", thread.updatedAt.toString());
         return response;
     }
 
-    private List<Map<String, Object>> threadMessages(String threadId) {
-        List<Map<String, Object>> messages = new ArrayList<>();
-        for (RunRecord run : threadRuns(threadId)) {
-            messages.add(messageForRun(
-                    "human-" + run.runId.value(), "human", run.humanMessage, run.runId.value()));
-            synchronized (run) {
-                if (run.interactionRequestMessage != null) {
-                    messages.add(run.interactionRequestMessage);
-                }
-                if (run.acceptedInteractionResponse != null) {
-                    messages.add(run.acceptedInteractionResponse.message());
-                }
-            }
-            run.bridge.snapshot(run.runId).output().ifPresent(output -> messages.add(messageForRun(
-                    "assistant-" + run.runId.value(), "ai", output, run.runId.value())));
-        }
-        return messages;
+    private Map<String, Object> threadHistoryResponse(HistoryProjection projection) {
+        ConversationTurn checkpoint = projection.checkpoint();
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put(
+                "values",
+                Map.of(
+                        "messages",
+                        projection.messages().stream().map(this::messageForTurn).toList()));
+        response.put("next", List.of());
+        response.put("metadata", Map.of());
+        response.put("checkpoint_id", historyCursor(checkpoint.sequence()));
+        response.put(
+                "parent_checkpoint_id",
+                projection.parentSequence() == null
+                        ? null
+                        : historyCursor(projection.parentSequence()));
+        response.put("created_at", checkpoint.createdAt().toString());
+        return response;
     }
 
-    private List<Map<String, Object>> threadMessageRows(String threadId) {
-        List<Map<String, Object>> rows = new ArrayList<>();
-        for (RunRecord run : threadRuns(threadId)) {
-            rows.add(messageRow(
-                    run,
-                    run.humanSequence,
-                    run.createdAt,
-                    message("human-" + run.runId.value(), "human", run.humanMessage)));
-            synchronized (run) {
-                if (run.interactionRequestMessage != null) {
-                    rows.add(messageRow(
-                            run,
-                            run.interactionRequestSequence,
-                            run.createdAt,
-                            run.interactionRequestMessage));
-                }
-                if (run.acceptedInteractionResponse != null) {
-                    rows.add(messageRow(
-                            run,
-                            run.interactionResponseSequence,
-                            run.bridge.snapshot(run.runId).updatedAt(),
-                            run.acceptedInteractionResponse.message()));
-                }
-            }
-            AgentRunSnapshot snapshot = run.bridge.snapshot(run.runId);
-            snapshot.output().ifPresent(output -> rows.add(messageRow(
-                    run,
-                    run.assistantSequence,
-                    snapshot.updatedAt(),
-                    message("assistant-" + run.runId.value(), "ai", output))));
+    private List<HistoryProjection> historyProjections(
+            ThreadRecord thread, int limit, Long exclusiveBeforeSequence) {
+        if (thread.persistedSessionId == null) return List.of();
+        HaifaRunBridge bridge = bridgeForPersistedThread(thread);
+        HistoryAccumulator accumulator = new HistoryAccumulator(limit, exclusiveBeforeSequence);
+        Optional<ConversationTurnCursor> cursor = Optional.empty();
+        int pages = 0;
+        while (true) {
+            var page = bridge.turns(
+                    thread.persistedSessionId,
+                    new ConversationTurnQuery(cursor, TURN_SCAN_PAGE_SIZE));
+            pages++;
+            page.items().forEach(accumulator::accept);
+            if (page.nextCursor().isEmpty()) return accumulator.newestFirst();
+            requireAnotherScanPage(pages);
+            cursor = page.nextCursor();
         }
-        return rows;
+    }
+
+    private Map<String, Object> messageRow(ConversationTurn turn) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("run_id", turn.runId().map(AgentRunId::value).orElse(null));
+        row.put("seq", turn.sequence());
+        row.put("content", messageForTurn(turn));
+        row.put("metadata", Map.of("caller", "lead_agent"));
+        row.put("created_at", turn.createdAt().toString());
+        return row;
     }
 
     private Map<String, Object> messageRow(
@@ -1065,11 +1257,157 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         return row;
     }
 
-    private List<RunRecord> threadRuns(String threadId) {
-        return runs.values().stream()
-                .filter(run -> run.threadId.equals(threadId))
-                .sorted((left, right) -> Long.compare(left.humanSequence, right.humanSequence))
-                .toList();
+    private Map<String, Object> messageForTurn(ConversationTurn turn) {
+        String type = turn.role() == io.haifa.agent.core.message.MessageRole.USER ? "human" : "ai";
+        Map<String, Object> projected = message(turn.messageId(), type, turn.text());
+        turn.runId().ifPresent(runId -> projected.put("run_id", runId.value()));
+        return projected;
+    }
+
+    private String historyCursor(long sequence) {
+        return "turn-" + sequence;
+    }
+
+    private List<ConversationTurn> scanTurns(ThreadRecord thread, int retention) {
+        return scanTurns(thread, retention, null);
+    }
+
+    private List<ConversationTurn> scanTurns(
+            ThreadRecord thread, int retention, Long exclusiveBeforeSequence) {
+        if (thread.persistedSessionId == null) return List.of();
+        HaifaRunBridge bridge = bridgeForPersistedThread(thread);
+        Deque<ConversationTurn> retained = new ArrayDeque<>(Math.min(retention, 256));
+        Optional<ConversationTurnCursor> cursor = Optional.empty();
+        int pages = 0;
+        while (true) {
+            var page = bridge.turns(
+                    thread.persistedSessionId,
+                    new ConversationTurnQuery(cursor, TURN_SCAN_PAGE_SIZE));
+            pages++;
+            for (ConversationTurn turn : page.items()) {
+                if (turn.role() != io.haifa.agent.core.message.MessageRole.USER
+                        && turn.role() != io.haifa.agent.core.message.MessageRole.ASSISTANT) {
+                    continue;
+                }
+                if (exclusiveBeforeSequence != null && turn.sequence() >= exclusiveBeforeSequence) continue;
+                retained.addLast(turn);
+                while (retained.size() > retention) retained.removeFirst();
+            }
+            if (page.nextCursor().isEmpty()) break;
+            requireAnotherScanPage(pages);
+            cursor = page.nextCursor();
+        }
+        return List.copyOf(retained);
+    }
+
+    private List<RunRecord> durableRuns(ThreadRecord thread) {
+        HaifaRunBridge bridge = bridgeForPersistedThread(thread);
+        List<RunRecord> result = new ArrayList<>();
+        for (ConversationTurn turn : newestRunTurns(thread, bridge)) {
+            restoreRunFromTurn(thread, turn, bridge).ifPresent(result::add);
+        }
+        return result;
+    }
+
+    private List<ConversationTurn> newestRunTurns(ThreadRecord thread, HaifaRunBridge bridge) {
+        if (thread.persistedSessionId == null) return List.of();
+        LinkedHashMap<String, ConversationTurn> retained = new LinkedHashMap<>();
+        Optional<ConversationTurnCursor> cursor = Optional.empty();
+        int pages = 0;
+        while (true) {
+            var page = bridge.turns(
+                    thread.persistedSessionId,
+                    new ConversationTurnQuery(cursor, TURN_SCAN_PAGE_SIZE));
+            pages++;
+            for (ConversationTurn turn : page.items()) {
+                if (turn.role() != io.haifa.agent.core.message.MessageRole.USER || turn.runId().isEmpty()) continue;
+                String runId = turn.runId().orElseThrow().value();
+                retained.remove(runId);
+                retained.put(runId, turn);
+                while (retained.size() > RUN_LIST_LIMIT) {
+                    retained.remove(retained.keySet().iterator().next());
+                }
+            }
+            if (page.nextCursor().isEmpty()) {
+                List<ConversationTurn> newestFirst = new ArrayList<>(retained.values());
+                Collections.reverse(newestFirst);
+                return List.copyOf(newestFirst);
+            }
+            requireAnotherScanPage(pages);
+            cursor = page.nextCursor();
+        }
+    }
+
+    private Optional<RunRecord> restoreRunFromTurn(
+            ThreadRecord thread, ConversationTurn turn, HaifaRunBridge bridge) {
+        AgentRunId requested = turn.runId().orElseThrow();
+        RunRecord cached = runs.get(requested.value());
+        if (cached != null && cached.threadId.equals(thread.threadId)) return Optional.of(cached);
+        if (bridge.findRun(requested).isEmpty()) return Optional.empty();
+        RunRecord restored = new RunRecord(
+                requested,
+                thread.threadId,
+                null,
+                turn.text(),
+                bridge,
+                turn.createdAt(),
+                turn.sequence(),
+                false,
+                Set.of("messages-tuple"));
+        runs.put(requested.value(), restored);
+        trimRunCache();
+        return Optional.of(restored);
+    }
+
+    private Optional<RunRecord> findOrRestoreRun(ThreadRecord thread, String runId) {
+        RunRecord cached = runs.get(runId);
+        if (cached != null && cached.threadId.equals(thread.threadId)) return Optional.of(cached);
+        if (thread.persistedSessionId == null) return Optional.empty();
+        HaifaRunBridge bridge = bridgeForPersistedThread(thread);
+        AgentRunId requested;
+        try {
+            requested = new AgentRunId(runId);
+        } catch (IllegalArgumentException invalid) {
+            return Optional.empty();
+        }
+        Optional<ConversationTurnCursor> cursor = Optional.empty();
+        int pages = 0;
+        while (true) {
+            var page = bridge.turns(
+                    thread.persistedSessionId,
+                    new ConversationTurnQuery(cursor, TURN_SCAN_PAGE_SIZE));
+            pages++;
+            for (ConversationTurn turn : page.items()) {
+                if (turn.role() == io.haifa.agent.core.message.MessageRole.USER
+                        && turn.runId().filter(requested::equals).isPresent()) {
+                    return restoreRunFromTurn(thread, turn, bridge);
+                }
+            }
+            if (page.nextCursor().isEmpty()) return Optional.empty();
+            requireAnotherScanPage(pages);
+            cursor = page.nextCursor();
+        }
+    }
+
+    static void requireAnotherScanPage(int completedPages) {
+        if (completedPages >= MAXIMUM_TURN_SCAN_PAGES) {
+            throw new TranscriptScanLimitException();
+        }
+    }
+
+    void resetTurnPageReads(String threadId) {
+        ThreadRecord thread = java.util.Objects.requireNonNull(threads.get(threadId));
+        bridgeForPersistedThread(thread).resetTurnPageReads();
+    }
+
+    long turnPageReads(String threadId) {
+        ThreadRecord thread = java.util.Objects.requireNonNull(threads.get(threadId));
+        return bridgeForPersistedThread(thread).turnPageReads();
+    }
+
+    boolean hasAttachedBridge(String threadId) {
+        ThreadRecord thread = threads.get(threadId);
+        return thread != null && thread.bridge != null;
     }
 
     private void getWorkspaceChanges(HttpExchange exchange, String threadId, String runId) throws IOException {
@@ -1280,7 +1618,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (modes.isTextual()) {
                 requested.add(modes.textValue());
             } else if (modes.isArray()) {
-                modes.forEach(mode -> requested.add(mode.asText()));
+                for (JsonNode mode : modes) {
+                    if (!mode.isTextual()) return Optional.of("stream_mode entries must be strings");
+                    requested.add(mode.textValue());
+                }
             } else {
                 return Optional.of("stream_mode must be a string or array");
             }
@@ -1303,6 +1644,15 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return Optional.of("Only multitask_strategy='reject' is implemented");
         }
         return Optional.empty();
+    }
+
+    private Set<String> requestedStreamModes(JsonNode body) {
+        JsonNode modes = body.get("stream_mode");
+        if (modes == null || modes.isNull()) return Set.of("messages-tuple");
+        if (modes.isTextual()) return Set.of(modes.textValue());
+        Set<String> requested = new java.util.LinkedHashSet<>();
+        modes.forEach(mode -> requested.add(mode.textValue()));
+        return Set.copyOf(requested);
     }
 
     private Optional<String> queryValue(HttpExchange exchange, String name) {
@@ -1328,20 +1678,6 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         try {
             int value = Integer.parseInt(raw.orElseThrow());
             return value >= 1 && value <= maximum ? Optional.of(value) : Optional.empty();
-        } catch (NumberFormatException invalid) {
-            return Optional.empty();
-        }
-    }
-
-    private Optional<Integer> nonNegativeQueryInteger(
-            HttpExchange exchange, String name, int defaultValue) {
-        Optional<String> raw = queryValue(exchange, name);
-        if (raw.isEmpty()) {
-            return Optional.of(defaultValue);
-        }
-        try {
-            int value = Integer.parseInt(raw.orElseThrow());
-            return value >= 0 ? Optional.of(value) : Optional.empty();
         } catch (NumberFormatException invalid) {
             return Optional.empty();
         }
@@ -1572,13 +1908,6 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 id);
     }
 
-    private Map<String, Object> messageForRun(
-            String id, String type, String content, String runId) {
-        Map<String, Object> result = message(id, type, content);
-        result.put("run_id", runId);
-        return result;
-    }
-
     private Map<String, Object> message(String id, String type, String content) {
         Map<String, Object> message = new LinkedHashMap<>();
         message.put("id", id);
@@ -1622,6 +1951,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     @Override
     public void close() {
+        // A client may consume the final SSE frame before the HTTP handler's
+        // finally block publishes its workspace snapshot. Flush terminal runs
+        // before interrupting completion observers or closing the SDK.
+        runs.values().forEach(this::completeWorkspaceChangesIfTerminal);
         closed = true;
         workspaceCompletionObservers.forEach(Thread::interrupt);
         threads.values().stream()
@@ -1640,6 +1973,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 break;
             }
         }
+        foundation.close();
     }
 
     private static final class ThreadRecord {
@@ -1648,6 +1982,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private final Instant createdAt;
         private volatile Instant updatedAt;
         private volatile HaifaRunBridge.SessionState session;
+        private volatile AgentSessionId persistedSessionId;
         private volatile HaifaRunBridge bridge;
         private volatile String modelBindingIdentity;
         private volatile String activeRunId;
@@ -1659,6 +1994,15 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             this.metadata = Collections.unmodifiableMap(new LinkedHashMap<>(metadata));
             this.createdAt = now;
             this.updatedAt = now;
+        }
+
+        private ThreadRecord(PersistentThreadCatalog.Entry entry) {
+            this.threadId = entry.threadId();
+            this.metadata = entry.metadata();
+            this.createdAt = entry.createdAt();
+            this.updatedAt = entry.updatedAt();
+            this.persistedSessionId = entry.sessionId().orElse(null);
+            this.modelBindingIdentity = entry.modelBindingIdentity().orElse(null);
         }
     }
 
@@ -1678,6 +2022,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private volatile String interactionRequestId;
         private Map<String, Object> interactionRequestMessage;
         private AcceptedInteractionResponse acceptedInteractionResponse;
+        private final Set<String> streamModes;
         private io.haifa.agent.runtime.api.RunEventCursor sdkCursor;
 
         private RunRecord(
@@ -1688,7 +2033,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 HaifaRunBridge bridge,
                 Instant createdAt,
                 long humanSequence,
-                boolean workspaceRecordingEnabled) {
+                boolean workspaceRecordingEnabled,
+                Set<String> streamModes) {
             this.runId = runId;
             this.threadId = threadId;
             this.assistantId = assistantId;
@@ -1703,6 +2049,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             this.humanSequence = humanSequence;
             this.workspaceRecordingEnabled = workspaceRecordingEnabled;
             this.assistantSequence = humanSequence + 1;
+            this.streamModes = Set.copyOf(streamModes);
         }
     }
 
@@ -1712,4 +2059,45 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             Map<String, Object> message) {}
 
     private static final class MalformedRequestException extends RuntimeException {}
+
+    static final class TranscriptScanLimitException extends RuntimeException {}
+
+    static final class HistoryAccumulator {
+        private final int limit;
+        private final Long exclusiveBeforeSequence;
+        private final Deque<ConversationTurn> messages = new ArrayDeque<>();
+        private final Deque<HistoryProjection> checkpoints = new ArrayDeque<>();
+        private Long parentSequence;
+
+        HistoryAccumulator(int limit, Long exclusiveBeforeSequence) {
+            this.limit = limit;
+            this.exclusiveBeforeSequence = exclusiveBeforeSequence;
+        }
+
+        void accept(ConversationTurn turn) {
+            if (turn.role() != io.haifa.agent.core.message.MessageRole.USER
+                    && turn.role() != io.haifa.agent.core.message.MessageRole.ASSISTANT) {
+                return;
+            }
+            if (exclusiveBeforeSequence != null && turn.sequence() >= exclusiveBeforeSequence) return;
+            messages.addLast(turn);
+            while (messages.size() > HISTORY_MESSAGE_RETENTION) messages.removeFirst();
+            if (turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT) {
+                checkpoints.addLast(new HistoryProjection(turn, List.copyOf(messages), parentSequence));
+                while (checkpoints.size() > limit) checkpoints.removeFirst();
+                parentSequence = turn.sequence();
+            }
+        }
+
+        List<HistoryProjection> newestFirst() {
+            List<HistoryProjection> result = new ArrayList<>(checkpoints);
+            Collections.reverse(result);
+            return List.copyOf(result);
+        }
+    }
+
+    record HistoryProjection(
+            ConversationTurn checkpoint,
+            List<ConversationTurn> messages,
+            Long parentSequence) {}
 }

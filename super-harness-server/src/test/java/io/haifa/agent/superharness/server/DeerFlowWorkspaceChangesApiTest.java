@@ -206,6 +206,7 @@ class DeerFlowWorkspaceChangesApiTest {
         HttpResponse<String> run = client.send(runRequest("thread-legacy-sensitive", "legacy snapshot"),
                 HttpResponse.BodyHandlers.ofString());
         assertThat(run.statusCode()).isEqualTo(200);
+        assertThat(run.body()).as("SSE transcript: %s", run.body()).contains("event: end");
         String location = run.headers().firstValue("content-location").orElseThrow();
         api.close();
 

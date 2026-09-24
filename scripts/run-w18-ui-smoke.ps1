@@ -2,6 +2,8 @@
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$SourceRepository = 'D:\workspace\haifa-agent-super-harness\deer-flow',
+    [ValidateRange(1, 3)]
+    [int]$AgentSlot = 2,
     [int]$GatewayPort = 38018,
     [int]$FrontendPort = 53018,
     [int]$ProviderPort = 0,
@@ -15,8 +17,10 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-if ($GatewayPort -ne 38018 -or $FrontendPort -ne 53018 -or $ProviderPort -ne 0) {
-    throw 'W18 slot 2 is fixed to Gateway=38018 and Frontend=53018; controlled Provider must use OS-assigned port 0.'
+$expectedGatewayPort = 18018 + (10000 * $AgentSlot)
+$expectedFrontendPort = 33018 + (10000 * $AgentSlot)
+if ($GatewayPort -ne $expectedGatewayPort -or $FrontendPort -ne $expectedFrontendPort -or $ProviderPort -ne 0) {
+    throw "W18 slot $AgentSlot requires Gateway=$expectedGatewayPort and Frontend=$expectedFrontendPort; controlled Provider must use OS-assigned port 0."
 }
 if (@($ActiveReconnect, $Interaction, $LiveDeepSeek).Where({ $_ }).Count -gt 1) {
     throw 'Active reconnect, Interaction, and live DeepSeek profiles are mutually exclusive.'
@@ -25,11 +29,11 @@ if (@($ActiveReconnect, $Interaction, $LiveDeepSeek).Where({ $_ }).Count -gt 1) 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
     $DataDirectory = Join-Path $root $(if ($LiveDeepSeek) {
-        'target/agent-slot-2-deepseek-data'
+        "target/agent-slot-$AgentSlot-deepseek-data"
     } elseif ($Interaction) {
-        'target/agent-slot-2-interaction-data'
+        "target/agent-slot-$AgentSlot-interaction-data"
     } else {
-        'target/agent-slot-2-data'
+        "target/agent-slot-$AgentSlot-data"
     })
 }
 $dataRoot = [IO.Path]::GetFullPath($DataDirectory).TrimEnd('\', '/')

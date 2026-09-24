@@ -1,9 +1,14 @@
 package io.haifa.agent.superharness.server;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.haifa.agent.core.content.TextPart;
+import io.haifa.agent.core.message.MessageRole;
+import io.haifa.agent.core.message.MessageVisibility;
+import io.haifa.agent.sdk.conversation.ConversationTurn;
 import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.URI;
@@ -13,10 +18,14 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,6 +40,7 @@ class DeerFlowThreadRunApiTest {
     Path dataDirectory;
     private DeerFlowBootstrapApi api;
     private URI baseUri;
+    private final SecretKey continuationKey = new SecretKeySpec(new byte[32], "AES");
 
     @Test
     void workspaceCompletionObservationHasAFiniteWallClockBound() {
@@ -47,17 +57,26 @@ class DeerFlowThreadRunApiTest {
 
     @BeforeEach
     void startServer() throws Exception {
+        startApi();
+    }
+
+    private void startApi() throws Exception {
+        startApi(LocalProbeModelTestSupport.binding());
+    }
+
+    private void startApi(HaifaRunBridge.ModelBinding binding) throws Exception {
         api = DeerFlowBootstrapApi.createForTests(
                 new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
                 dataDirectory,
-                ignored -> LocalProbeModelTestSupport.binding());
+                ignored -> binding,
+                continuationKey);
         api.start();
         baseUri = URI.create("http://127.0.0.1:" + api.address().getPort());
     }
 
     @AfterEach
     void stopServer() {
-        api.close();
+        if (api != null) api.close();
     }
 
     @Test
@@ -181,27 +200,43 @@ class DeerFlowThreadRunApiTest {
         assertThat(older.path("data")).hasSize(1);
         assertThat(older.path("data").get(0).path("seq").asLong()).isEqualTo(1);
 
+        JsonNode newestTwo = getJson("/api/threads/thread-projection/messages/page?limit=2");
+        JsonNode oldestTwo = getJson(
+                "/api/threads/thread-projection/messages/page?limit=2&before_seq="
+                        + newestTwo.path("next_before_seq").asLong());
+        assertThat(newestTwo.path("data").findValuesAsText("seq")).containsExactly("3", "4");
+        assertThat(oldestTwo.path("data").findValuesAsText("seq")).containsExactly("1", "2");
+        assertThat(oldestTwo.path("data").findValuesAsText("seq"))
+                .doesNotContainAnyElementsOf(newestTwo.path("data").findValuesAsText("seq"));
+
         HttpResponse<String> history = postJson(
                 "/api/threads/thread-projection/history", "{\"limit\":1}");
         assertThat(history.statusCode()).isEqualTo(200);
         JsonNode historyEntries = json.readTree(history.body());
         assertThat(historyEntries).hasSize(1);
-        assertThat(historyEntries.get(0).path("checkpoint_id").asText())
-                .isEqualTo(secondRunId);
+        String latestCheckpoint = historyEntries.get(0).path("checkpoint_id").asText();
+        assertThat(latestCheckpoint).matches("turn-[1-9][0-9]*");
         assertThat(historyEntries.get(0).path("values").path("messages")).hasSize(4);
         assertThat(historyEntries.get(0).path("values").path("messages").get(3).path("run_id").asText())
                 .isEqualTo(secondRunId);
 
-        JsonNode newestRun = getJson("/api/threads/thread-projection/runs?limit=1&offset=0");
-        assertThat(newestRun).hasSize(1);
+        JsonNode olderHistory = json.readTree(postJson(
+                        "/api/threads/thread-projection/history",
+                        "{\"limit\":1,\"before\":\"" + latestCheckpoint + "\"}")
+                .body());
+        assertThat(olderHistory).hasSize(1);
+        assertThat(olderHistory.get(0).path("checkpoint_id").asText())
+                .matches("turn-[1-9][0-9]*")
+                .isNotEqualTo(latestCheckpoint);
+
+        JsonNode newestRun = getJson("/api/threads/thread-projection/runs");
+        assertThat(newestRun).hasSize(2);
         assertThat(newestRun.get(0).path("run_id").asText()).isEqualTo(secondRunId);
         assertThat(newestRun.get(0).path("status").asText()).isEqualTo("success");
 
         assertThat(get("/api/threads/thread-projection/messages/page?after_seq=1").statusCode())
                 .isEqualTo(422);
         assertThat(get("/api/threads/thread-projection/messages/page?before_seq=bad").statusCode())
-                .isEqualTo(422);
-        assertThat(get("/api/threads/thread-projection/runs?offset=-1").statusCode())
                 .isEqualTo(422);
         assertThat(postJson("/api/threads/thread-projection/history", "{\"limit\":0}")
                         .statusCode())
@@ -211,6 +246,184 @@ class DeerFlowThreadRunApiTest {
                                 "{\"limit\":1,\"before\":\"unsupported\"}")
                         .statusCode())
                 .isEqualTo(422);
+    }
+
+    @Test
+    void historyAccumulatorFindsOneHundredCheckpointsAcrossMoreThanTwoHundredMessages() {
+        DeerFlowThreadRunApi.HistoryAccumulator accumulator =
+                new DeerFlowThreadRunApi.HistoryAccumulator(100, null);
+        for (int sequence = 1; sequence <= 250; sequence++) {
+            accumulator.accept(turn(
+                    sequence,
+                    sequence % 2 == 0 ? MessageRole.ASSISTANT : MessageRole.USER));
+        }
+
+        List<DeerFlowThreadRunApi.HistoryProjection> projections = accumulator.newestFirst();
+        assertThat(projections).hasSize(100);
+        assertThat(projections.getFirst().checkpoint().sequence()).isEqualTo(250);
+        assertThat(projections.getLast().checkpoint().sequence()).isEqualTo(52);
+        assertThat(projections).allSatisfy(
+                projection -> assertThat(projection.messages()).hasSizeLessThanOrEqualTo(200));
+
+        DeerFlowThreadRunApi.HistoryAccumulator before =
+                new DeerFlowThreadRunApi.HistoryAccumulator(3, 202L);
+        for (int sequence = 1; sequence <= 250; sequence++) {
+            before.accept(turn(
+                    sequence,
+                    sequence % 2 == 0 ? MessageRole.ASSISTANT : MessageRole.USER));
+        }
+        assertThat(before.newestFirst())
+                .extracting(projection -> projection.checkpoint().sequence())
+                .containsExactly(200L, 198L, 196L);
+    }
+
+    @Test
+    void transcriptForwardScanFailsClosedAtOneHundredSdkPages() {
+        DeerFlowThreadRunApi.requireAnotherScanPage(99);
+        assertThatThrownBy(() -> DeerFlowThreadRunApi.requireAnotherScanPage(100))
+                .isInstanceOf(DeerFlowThreadRunApi.TranscriptScanLimitException.class);
+    }
+
+    @Test
+    void sqliteAuthorityRestoresTranscriptHistoryAndRunsAfterProcessRestart() throws Exception {
+        createThread("thread-restart");
+        HttpResponse<String> first = client.send(
+                runRequest("thread-restart", "before restart one"),
+                HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> second = client.send(
+                runRequest("thread-restart", "before restart two"),
+                HttpResponse.BodyHandlers.ofString());
+        String firstRunId = first.headers().firstValue("content-location").orElseThrow().replaceFirst(".*/", "");
+        String secondRunId = second.headers().firstValue("content-location").orElseThrow().replaceFirst(".*/", "");
+
+        api.close();
+        api = null;
+        startApi();
+
+        JsonNode messages = getJson("/api/threads/thread-restart/messages/page?limit=10");
+        assertThat(messages.path("data")).hasSize(4);
+        assertThat(messages.findValuesAsText("run_id")).contains(firstRunId, secondRunId);
+        assertThat(messages.toString()).contains("before restart one", "before restart two");
+
+        JsonNode history = json.readTree(postJson(
+                        "/api/threads/thread-restart/history", "{\"limit\":2}")
+                .body());
+        assertThat(history).hasSize(2);
+        assertThat(history.get(0).path("checkpoint_id").asText()).matches("turn-[1-9][0-9]*");
+
+        JsonNode runs = getJson("/api/threads/thread-restart/runs");
+        assertThat(runs).hasSize(2);
+        assertThat(runs.findValuesAsText("run_id")).containsExactly(secondRunId, firstRunId);
+        assertThat(runs.findValuesAsText("status")).containsOnly("success");
+    }
+
+    @Test
+    void historicalTranscriptRemainsReadableWhenCurrentModelRevisionChanges() throws Exception {
+        createThread("thread-historical-binding");
+        HttpResponse<String> original = client.send(
+                runRequest("thread-historical-binding", "before provider restart"),
+                HttpResponse.BodyHandlers.ofString());
+        String runId = original.headers()
+                .firstValue("content-location")
+                .orElseThrow()
+                .replaceFirst(".*/", "");
+
+        api.close();
+        api = null;
+        HaifaRunBridge.ModelBinding originalBinding = LocalProbeModelTestSupport.binding();
+        startApi(new HaifaRunBridge.ModelBinding(
+                originalBinding.name(),
+                "2.0.0",
+                originalBinding.model(),
+                originalBinding.snapshot()));
+
+        HttpResponse<String> messages = get("/api/threads/thread-historical-binding/messages/page");
+        assertThat(messages.statusCode()).isEqualTo(200);
+        assertThat(messages.body()).contains("before provider restart", runId);
+        assertThat(postJson("/api/threads/thread-historical-binding/history", "{}")
+                        .statusCode())
+                .isEqualTo(200);
+        assertThat(get("/api/threads/thread-historical-binding/runs").statusCode()).isEqualTo(200);
+
+        HttpResponse<String> driftedRun = client.send(
+                runRequest("thread-historical-binding", "must not change binding"),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(driftedRun.statusCode()).isEqualTo(409);
+        assertThat(driftedRun.body()).contains("already bound to a different model revision");
+    }
+
+    @Test
+    void bareRunListReturnsMoreThanTenAndHotRunCacheRemainsBounded() throws Exception {
+        createThread("thread-many-runs");
+        List<String> runIds = new ArrayList<>();
+        for (int index = 0; index < 11; index++) {
+            HttpResponse<String> run = client.send(
+                    runRequest("thread-many-runs", "turn " + index),
+                    HttpResponse.BodyHandlers.ofString());
+            runIds.add(run.headers().firstValue("content-location").orElseThrow().replaceFirst(".*/", ""));
+        }
+
+        api.close();
+        api = null;
+        startApi();
+        api.resetTurnPageReads("thread-many-runs");
+
+        JsonNode runs = getJson("/api/threads/thread-many-runs/runs");
+        assertThat(runs).hasSize(11);
+        assertThat(runs.get(0).path("run_id").asText()).isEqualTo(runIds.getLast());
+        assertThat(runs.get(10).path("run_id").asText()).isEqualTo(runIds.getFirst());
+        assertThat(api.turnPageReads("thread-many-runs")).isEqualTo(1);
+        assertThat(api.cachedRunCount()).isLessThanOrEqualTo(8);
+    }
+
+    @Test
+    void failedSessionRestoreClosesAndRollsBackTheTentativeBridge() throws Exception {
+        api.close();
+        api = null;
+        HaifaRunBridge.ModelBinding binding = LocalProbeModelTestSupport.binding();
+        PersistentThreadCatalog catalog = new PersistentThreadCatalog(json, dataDirectory);
+        catalog.save(new PersistentThreadCatalog.Entry(
+                "thread-missing-session",
+                java.util.Map.of(),
+                Instant.parse("2026-09-24T00:00:00Z"),
+                Instant.parse("2026-09-24T00:00:01Z"),
+                Optional.of(new io.haifa.agent.core.session.AgentSessionId("missing-session")),
+                Optional.of(binding.name() + "@" + binding.revision())));
+        startApi();
+
+        assertThatThrownBy(() -> api.resetTurnPageReads("thread-missing-session"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("persisted thread conversation is unavailable");
+        assertThat(api.hasAttachedBridge("thread-missing-session")).isFalse();
+        HttpResponse<String> unavailable = get("/api/threads/thread-missing-session/messages/page");
+        assertThat(unavailable.statusCode()).isEqualTo(503);
+        assertThat(unavailable.body()).contains("Durable thread state is unavailable");
+        assertThat(api.hasAttachedBridge("thread-missing-session")).isFalse();
+    }
+
+    @Test
+    void updatesOnlyStreamDoesNotEmitMessagesAndRunOwnershipIsThreadIsolated() throws Exception {
+        createThread("thread-updates-only");
+        createThread("thread-isolated");
+        HttpResponse<String> updates = postJson(
+                "/api/threads/thread-updates-only/runs/stream",
+                """
+                {"input":{"messages":[{"type":"human","content":"no message event"}]},"stream_mode":["updates"],"on_disconnect":"continue"}
+                """);
+        String runId = updates.headers().firstValue("content-location").orElseThrow().replaceFirst(".*/", "");
+
+        assertThat(updates.statusCode()).isEqualTo(200);
+        assertThat(updates.body()).contains("event: metadata", "event: end");
+        assertThat(updates.body()).doesNotContain("event: messages\n", "event: messages-tuple");
+        assertThat(get("/api/threads/thread-isolated/runs/" + runId).statusCode()).isEqualTo(404);
+        assertThat(postJson(
+                                "/api/threads/thread-isolated/runs/" + runId
+                                        + "/cancel?wait=0&action=interrupt",
+                                "")
+                        .statusCode())
+                .isEqualTo(404);
+        assertThat(get("/api/threads/thread-isolated/runs/" + runId + "/stream").statusCode())
+                .isEqualTo(404);
     }
 
     @Test
@@ -525,6 +738,17 @@ class DeerFlowThreadRunApiTest {
     private void createThread(String threadId) throws Exception {
         assertThat(postJson("/api/threads", "{\"thread_id\":\"" + threadId + "\"}").statusCode())
                 .isEqualTo(200);
+    }
+
+    private ConversationTurn turn(long sequence, MessageRole role) {
+        return new ConversationTurn(
+                "message-" + sequence,
+                role,
+                Optional.empty(),
+                sequence,
+                List.of(new TextPart("turn " + sequence, "text/plain")),
+                MessageVisibility.USER_VISIBLE,
+                Instant.EPOCH.plusSeconds(sequence));
     }
 
     private HttpRequest runRequest(String threadId, String message) {

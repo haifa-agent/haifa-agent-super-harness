@@ -59,11 +59,15 @@ official `https://api.deepseek.com` endpoint, which selects Haifa's
 a real external model call and therefore must only be run when explicitly
 authorized.
 
-The runner owns only slot 2 gateway/frontend ports (`38018` and `53018`). The
+The runner defaults to slot 2 gateway/frontend ports (`38018` and `53018`). A
+subagent may pass its assigned `-AgentSlot`, `-GatewayPort`, and
+`-FrontendPort`; the runner verifies the registered port formula before
+starting anything. The
 controlled provider binds to `127.0.0.1:0`, publishes its actual address and PID
 through repo-local ready metadata, and is stopped by its exact process object.
 Both `SUPER_HARNESS_DATA_ROOT` and `SUPER_HARNESS_DATA_DIR` point at
-`target/agent-slot-2-data`.
+the selected `target/agent-slot-<n>-data` unless an in-worktree data directory is
+passed explicitly.
 
 The four Playwright cases are independent so a reload failure cannot skip
 cancellation evidence:
@@ -75,8 +79,9 @@ cancellation evidence:
 
 ## Latest captured result
 
-The 2026-09-23 slot 2 run passed all four independent Chromium cases against
-the packaged Haifa gateway and the unmodified frozen frontend:
+The 2026-09-24 slot 3 cold run and same-data-root warm restart each passed all
+four independent Chromium cases against the packaged Haifa gateway and the
+unmodified frozen frontend:
 
 - no-cookie local auth and the executable managed-model catalog;
 - Thread creation plus a real controlled-provider Run whose tuple payload was
@@ -86,25 +91,33 @@ the packaged Haifa gateway and the unmodified frozen frontend:
 - reload of a completed Thread with both human and assistant messages restored
   through `/messages/page` and `/history`.
 
-The sanitized identities and event cursor are recorded in
-`evidence/20260923-sse-projection-pass.json`. The runner keeps screenshots,
-traces, process logs, and response attachments under ignored
-`target/w18-ui-smoke-evidence/playwright` for local review and always stops the
-exact provider, gateway, and frontend processes it started.
+The initial cold execution used a fresh SQLite authority and took approximately
+254 seconds end-to-end, including the Maven package and frozen Next production
+build. Next reported 10.1 seconds compilation, 13.1 seconds TypeScript, and 4.9
+seconds static generation. After the final clean Java gate, the already-verified
+package and frontend build were exercised again from a new SQLite database:
+Playwright passed in 13.6 seconds (1.2/3.8/2.5/4.5 seconds) and the full runner
+took approximately 58 seconds. Its same-data-root warm restart passed in 16.0
+seconds (1.3/4.2/3.4/5.1 seconds) and took 60.821 seconds end-to-end. Neither
+latest execution retried or encountered a timeout or startup hang.
 
-The cold diagnostic run spent 36.463 seconds packaging Maven modules and the
-frozen Next build reported 101 seconds of compilation, 99 seconds of type
-checking, and 6.2 seconds generating static pages. It reached Playwright and
-failed on two exact assertion mismatches rather than a runner/Next hang or an
-infrastructure timeout; its trace, screenshot, error context, and three process
-logs were sufficient to identify the event-name and cancellation-query gaps.
-After the fixes, a warm run passed 4/4 in 21.0 seconds (3.7/4.0/3.5/4.0 seconds
-for auth, Run/SSE, cancel, and reload respectively) with zero retries. A second
-warm execution also passed 4/4 in 22.123 seconds
-(3.684/3.639/3.548/5.269 seconds) with zero retries; its complete runner
-lifecycle took 76.847 seconds. The repeat-run provider, Gateway, and frontend
-PIDs exited and ports `64182`, `38018`, and `53018` were released. No runner or
-Next hang, test timeout, or owned child-process residue was observed.
+After the warm run stopped, a third gateway-only process was started against
+the same data root and Credential Manager reference. It queried the oldest
+thread created by the cold run (not a warm-process cache entry):
+`/messages/page`, `/history`, and `/runs` each returned HTTP 200 with 2, 1, and
+1 durable records respectively. The gateway was then stopped by its exact PID
+and port `48018` was verified free. Historical reads deliberately remain
+available when a restarted controlled provider has a different ephemeral
+binding revision; starting a new Run on that old thread still fails with HTTP
+409 rather than silently changing its model binding.
+
+The reload evidence records HTTP 200 responses from both
+`/api/threads/{id}/messages/page` and
+`/api/langgraph/threads/{id}/history`; Run/SSE evidence records requested tuple
+payloads on wire event `messages`. Screenshots, traces, process logs, and JSON
+attachments are under ignored `target/w18-ui-smoke-evidence/playwright`. The
+runner stopped its exact provider, Gateway, and frontend processes after both
+runs; slot ports `48018`/`63018` and the two provider ports were verified free.
 
 The controlled-provider result remains L2 wiring evidence. On 2026-09-23 the
 separately authorized DeepSeek L3 case also passed once through the same frozen

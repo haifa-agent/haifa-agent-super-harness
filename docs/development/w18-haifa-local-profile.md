@@ -60,6 +60,49 @@ $env:ENVIRONMENT = 'development'
 java -jar super-harness-server/target/super-harness-server-0.1.0-SNAPSHOT-exec.jar
 ```
 
+The durable Haifa Runtime database uses AES-GCM only for protected model
+continuation payloads. On Windows, the first start for a data root that does
+not yet contain `runtime/haifa-agent.sqlite` provisions one random 256-bit key
+in Windows Credential Manager under
+`haifa:os:HAIFA_SUPER_HARNESS_CONTINUATION_KEY_<data-root-hash>`; the suffix is
+the first 16 hexadecimal characters of SHA-256 over the normalized absolute
+data-root path. This scopes key lifecycle to one canonical data root while
+letting later starts deterministically find the same credential. The server
+never prints or writes the key into the repository or data root. It never
+replaces an existing credential, and an existing Runtime database whose
+credential is unavailable fails closed rather than silently creating a new
+key.
+
+Linux/CI or an explicitly managed Windows launch can select an existing
+credential reference. For example, configure a secret environment variable
+outside the repository and point the server at it:
+
+```powershell
+$env:HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF = 'env://HARNESS_CONTINUATION_KEY'
+# HARNESS_CONTINUATION_KEY must already contain a Base64-encoded 256-bit key.
+```
+
+`HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF` accepts only `env://NAME` or
+`os://NAME`. An explicit reference is always operator-managed: if it is
+missing, even for a fresh data root, startup fails closed and does not create a
+credential under the supplied name. Only the implicit data-root-scoped Windows
+target may be provisioned on the first start of a new database. Missing,
+malformed, or non-256-bit credentials stop startup without exposing credential
+material.
+
+History, message paging, Run listing, and cold restoration read the public SDK
+conversation pages without retaining the whole transcript. Memory is bounded,
+but elapsed time is proportional to the visible transcript: at most 100 pages
+of 100 turns (10,000 turns) are scanned. If the requested answer cannot be
+proved within that budget, the gateway returns HTTP 503 rather than serving a
+partial page or silently truncating durable state.
+
+The persisted model-binding identity remains authoritative for future Runs.
+Historical transcript/history/Run reads may reopen the shared SQLite authority
+through the currently configured SDK assembly without executing that model;
+if the current binding revision differs, those reads remain available but a
+new Run on the historical thread returns HTTP 409 instead of rebinding it.
+
 Then start the frontend from another clean shell:
 
 ```powershell
@@ -93,12 +136,11 @@ These checks prevent accidental fallback configuration. They do not replace
 the later network-level differential test that blocks the reference backend and
 retains real Haifa Run/Tool/Artifact evidence.
 
-## Slot 2 browser smoke
+## Assigned-slot browser smoke
 
-The opt-in W18 browser harness uses the assigned gateway/frontend ports
-`38018`/`53018`, keeps both server data variables on
-`target/agent-slot-2-data`, and starts its controlled provider on an
-OS-assigned loopback port:
+The opt-in W18 browser harness uses the ports assigned by the orchestrator,
+keeps both server data variables on `target/agent-slot-<n>-data`, and starts its
+controlled provider on an OS-assigned loopback port:
 
 ```powershell
 pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 `
@@ -111,15 +153,18 @@ and executable catalog APIs before starting Playwright, records redacted
 evidence under `target/w18-ui-smoke-evidence`, and stops only its own exact
 process objects.
 
-On 2026-09-23, auth startup, the managed-model probe, and model discovery passed
-through the real frozen frontend profile. The independent Run/SSE, cancel, and
-reload cases all exposed the same W02 protocol gap before a Run was created:
-the frozen UI sent a human message with `content` as a text-block array, while
-`DeerFlowThreadRunApi.lastHumanMessage` only accepts textual `content`. The
-gateway therefore returned HTTP 422 with
-`input.messages requires a human message`. Sanitized request/response and the
-three created Thread IDs are checked in at
-`tests/w18-ui-smoke/evidence/20260923-run-stream-422.json`.
+On 2026-09-24, a slot 3 cold execution and a same-data-root warm restart both
+passed all four Chromium cases. The browser rendered a real SDK Run from wire
+event `messages`, sent `?wait=0&action=interrupt`, and restored the completed
+thread after a full process restart. Playwright explicitly captured HTTP 200
+network responses from `/messages/page` and `/history`; ignored local evidence
+is retained under `target/w18-ui-smoke-evidence/playwright`.
+
+A subsequent gateway-only restart selected the oldest cold-run thread from the
+same catalog and returned HTTP 200 from `/messages/page`, `/history`, and
+`/runs` with 2, 1, and 1 records. This proves the SQLite authority is used
+after both browser processes have exited rather than relying on a hot in-memory
+cache.
 
 ## Verified and not run
 
@@ -135,11 +180,10 @@ Verified in this slice:
 - frontend lint, TypeScript checks, and the production build (101 generated
   pages) pass.
 
-`FAIL`: real browser UI Run/SSE currently stops at the documented W02 HTTP 422
-compatibility gap. No Run or event ID was created.
-
-`NOT_RUN`: the actual cancel request and completed-thread reload assertion were
-not reached because Run creation failed. Reconnect/gap recovery, files, Browser
-WebSocket, real external provider/model/tool/artifact, and DeerFlow-vs-Haifa
-differential are also `NOT_RUN`. A successful launcher, auth case, or controlled
-model probe must not be reported as chat parity.
+Verified at runtime in this slice: real frozen UI auth/model discovery, Thread
+creation, Run/SSE rendering, cancellation, durable completed-thread reload,
+`/messages/page`, and `/history`, including one cold and one warm full process
+cycle with no retries. Reconnect/gap recovery, files, Browser WebSocket, a real
+external provider/model/tool/artifact, and DeerFlow-vs-Haifa differential remain
+`NOT_RUN`; the controlled loopback provider is deterministic contract evidence,
+not an external-provider claim.

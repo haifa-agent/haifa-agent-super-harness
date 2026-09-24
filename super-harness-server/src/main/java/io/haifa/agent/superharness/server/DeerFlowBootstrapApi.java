@@ -6,21 +6,33 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import io.haifa.agent.sdk.tool.JavaTool;
+import io.haifa.agent.auth.localmodel.WindowsCredentialManagerClient;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
 import io.haifa.agent.superharness.workspace.WorkspaceChangeLimits;
 import io.haifa.agent.superharness.workspace.WorkspaceLimits;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.file.Path;
+import java.security.GeneralSecurityException;
+import java.security.SecureRandom;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Function;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
 
 /** Minimal HTTP compatibility surface consumed during frozen DeerFlow UI bootstrap. */
 public final class DeerFlowBootstrapApi implements AutoCloseable {
+    static final String CONTINUATION_KEY_REFERENCE_ENVIRONMENT =
+            "HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF";
+    static final String DEFAULT_CONTINUATION_KEY_REFERENCE =
+            "os://HAIFA_SUPER_HARNESS_CONTINUATION_KEY";
     static final String DEFAULT_USER_ID = "default";
     static final String DEFAULT_USER_EMAIL = "default@test.local";
     static final List<String> DEFAULT_PERMISSIONS =
@@ -47,6 +59,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             HttpServer server,
             ExecutorService executor,
             Path dataDirectory,
+            SecretKey continuationKey,
             Function<JsonNode, HaifaRunBridge.ModelBinding> testRunModelResolver,
             List<? extends JavaTool<?, ?>> testRunTools)
             throws IOException {
@@ -63,6 +76,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                         : testRunModelResolver,
                 projectId -> projects.projectExists(DEFAULT_USER_ID, projectId),
                 projects,
+                dataDirectory,
+                continuationKey,
                 testRunTools);
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
@@ -72,15 +87,35 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
 
     public static DeerFlowBootstrapApi create(LocalServerConfiguration configuration)
             throws IOException {
-        return create(configuration, Path.of(".super-harness", "data").toAbsolutePath());
+        return create(
+                configuration,
+                Path.of(".super-harness", "data").toAbsolutePath(),
+                System.getenv());
     }
 
     static DeerFlowBootstrapApi create(LocalServerConfiguration configuration, Path dataDirectory)
             throws IOException {
+        return createWithKey(configuration, dataDirectory, generateContinuationKey(), null);
+    }
+
+    static DeerFlowBootstrapApi create(
+            LocalServerConfiguration configuration,
+            Path dataDirectory,
+            Map<String, String> environment)
+            throws IOException {
+        return createWithKey(configuration, dataDirectory, continuationKey(environment, dataDirectory), null);
+    }
+
+    private static DeerFlowBootstrapApi createWithKey(
+            LocalServerConfiguration configuration,
+            Path dataDirectory,
+            SecretKey continuationKey,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver)
+            throws IOException {
         HttpServer server = HttpServer.create(configuration.socketAddress(), 0);
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         server.setExecutor(executor);
-        return new DeerFlowBootstrapApi(server, executor, dataDirectory, null, List.of());
+        return new DeerFlowBootstrapApi(server, executor, dataDirectory, continuationKey, runModelResolver, List.of());
     }
 
     static DeerFlowBootstrapApi createForTests(
@@ -88,10 +123,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Path dataDirectory,
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver)
             throws IOException {
-        HttpServer server = HttpServer.create(configuration.socketAddress(), 0);
-        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-        server.setExecutor(executor);
-        return new DeerFlowBootstrapApi(server, executor, dataDirectory, runModelResolver, List.of());
+        return createWithKey(configuration, dataDirectory, generateContinuationKey(), runModelResolver);
     }
 
     static DeerFlowBootstrapApi createForInteractionTests(
@@ -103,7 +135,121 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         HttpServer server = HttpServer.create(configuration.socketAddress(), 0);
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         server.setExecutor(executor);
-        return new DeerFlowBootstrapApi(server, executor, dataDirectory, runModelResolver, tools);
+        return new DeerFlowBootstrapApi(server, executor, dataDirectory, generateContinuationKey(), runModelResolver, tools);
+    }
+
+    static DeerFlowBootstrapApi createForTests(
+            LocalServerConfiguration configuration,
+            Path dataDirectory,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            SecretKey continuationKey)
+            throws IOException {
+        return createWithKey(configuration, dataDirectory, continuationKey, runModelResolver);
+    }
+
+    private static SecretKey continuationKey(Map<String, String> environment, Path dataDirectory) {
+        return continuationKey(
+                environment, dataDirectory, WindowsCredentialManagerClient.defaultClient());
+    }
+
+    static SecretKey continuationKey(
+            Map<String, String> environment,
+            Path dataDirectory,
+            WindowsCredentialManagerClient credentials) {
+        boolean explicitReference = environment.containsKey(CONTINUATION_KEY_REFERENCE_ENVIRONMENT);
+        String reference = environment.getOrDefault(
+                CONTINUATION_KEY_REFERENCE_ENVIRONMENT, DEFAULT_CONTINUATION_KEY_REFERENCE);
+        String encoded;
+        if (reference.startsWith("env://")) {
+            String name = credentialName(reference, "env://");
+            encoded = environment.get(name);
+            if (encoded == null || encoded.isBlank()) {
+                throw new IllegalStateException("continuation key credential is unavailable");
+            }
+        } else if (reference.startsWith("os://")) {
+            String name = credentialName(reference, "os://");
+            if (reference.equals(DEFAULT_CONTINUATION_KEY_REFERENCE)) {
+                name = defaultOsCredentialName(dataDirectory);
+            }
+            String target = "haifa:os:" + name;
+            Optional<String> stored = credentials.read(target).filter(value -> !value.isBlank());
+            if (stored.isEmpty()) {
+                if (explicitReference) {
+                    throw new IllegalStateException("continuation key credential is unavailable");
+                }
+                Path database = dataDirectory.toAbsolutePath()
+                        .normalize()
+                        .resolve("runtime")
+                        .resolve("haifa-agent.sqlite");
+                if (java.nio.file.Files.exists(database)) {
+                    throw new IllegalStateException(
+                            "continuation key credential is unavailable for the existing Runtime database");
+                }
+                encoded = Base64.getEncoder().encodeToString(generateContinuationKey().getEncoded());
+                credentials.write(target, encoded);
+                String verified = credentials
+                        .read(target)
+                        .filter(value -> !value.isBlank())
+                        .orElseThrow(() -> new IllegalStateException(
+                                "continuation key credential could not be verified after provisioning"));
+                if (!java.security.MessageDigest.isEqual(
+                        encoded.getBytes(java.nio.charset.StandardCharsets.US_ASCII),
+                        verified.getBytes(java.nio.charset.StandardCharsets.US_ASCII))) {
+                    throw new IllegalStateException(
+                            "continuation key credential could not be verified after provisioning");
+                }
+            } else {
+                encoded = stored.orElseThrow();
+            }
+        } else {
+            throw new IllegalArgumentException(
+                    CONTINUATION_KEY_REFERENCE_ENVIRONMENT + " must use env:// or os://");
+        }
+        try {
+            byte[] key = Base64.getDecoder().decode(encoded.trim());
+            if (key.length != 32) {
+                throw new IllegalArgumentException("continuation key credential must contain a 256-bit key");
+            }
+            return new SecretKeySpec(key, "AES");
+        } catch (IllegalArgumentException invalid) {
+            if (invalid.getMessage() != null && invalid.getMessage().startsWith("continuation key credential")) {
+                throw invalid;
+            }
+            throw new IllegalArgumentException("continuation key credential is not valid Base64", invalid);
+        }
+    }
+
+    private static String credentialName(String reference, String prefix) {
+        String name = reference.substring(prefix.length());
+        if (!name.matches("[A-Za-z_][A-Za-z0-9_-]*")) {
+            throw new IllegalArgumentException("continuation key credential reference is invalid");
+        }
+        return name;
+    }
+
+    static String defaultOsCredentialName(Path dataDirectory) {
+        String canonicalIdentity = dataDirectory.toAbsolutePath()
+                .normalize()
+                .toString()
+                .toLowerCase(java.util.Locale.ROOT);
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(canonicalIdentity.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String suffix = java.util.HexFormat.of().formatHex(digest, 0, 8);
+            return "HAIFA_SUPER_HARNESS_CONTINUATION_KEY_" + suffix;
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is required", impossible);
+        }
+    }
+
+    private static SecretKey generateContinuationKey() {
+        try {
+            KeyGenerator generator = KeyGenerator.getInstance("AES");
+            generator.init(256, new SecureRandom());
+            return generator.generateKey();
+        } catch (GeneralSecurityException exception) {
+            throw new IllegalStateException("AES-256 is required", exception);
+        }
     }
 
     public void start() {
@@ -116,6 +262,22 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
 
     DeerFlowThreadRunApi threadRunApi() {
         return threadRunApi;
+    }
+
+    int cachedRunCount() {
+        return threadRunApi.cachedRunCount();
+    }
+
+    void resetTurnPageReads(String threadId) {
+        threadRunApi.resetTurnPageReads(threadId);
+    }
+
+    long turnPageReads(String threadId) {
+        return threadRunApi.turnPageReads(threadId);
+    }
+
+    boolean hasAttachedBridge(String threadId) {
+        return threadRunApi.hasAttachedBridge(threadId);
     }
 
     @Override
