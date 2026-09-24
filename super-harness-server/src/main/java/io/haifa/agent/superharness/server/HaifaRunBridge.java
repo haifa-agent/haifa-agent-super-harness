@@ -7,6 +7,9 @@ import io.haifa.agent.model.api.AgentChatModel;
 import io.haifa.agent.model.api.ResolvedModelSnapshot;
 import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
 import io.haifa.agent.runtime.api.AgentRunSnapshot;
+import io.haifa.agent.runtime.api.InteractionResponseReceipt;
+import io.haifa.agent.runtime.api.InteractionResponseSubmission;
+import io.haifa.agent.runtime.api.InteractionView;
 import io.haifa.agent.runtime.api.RunEventCursor;
 import io.haifa.agent.runtime.api.RunEventPage;
 import io.haifa.agent.sdk.api.HaifaAgent;
@@ -76,6 +79,14 @@ final class HaifaRunBridge implements AutoCloseable {
 
     RunEventPage events(AgentRunId runId, RunEventCursor cursor, int limit) {
         return agent.runs().events(runId, cursor, limit);
+    }
+
+    Optional<InteractionView> pendingInteraction(AgentRunId runId) {
+        return agent.runs().pendingInteraction(runId);
+    }
+
+    InteractionResponseReceipt respond(InteractionResponseSubmission submission) {
+        return agent.runs().respond(submission);
     }
 
     boolean cancel(AgentRunId runId) {

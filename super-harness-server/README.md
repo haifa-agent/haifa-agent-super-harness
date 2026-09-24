@@ -42,6 +42,15 @@ API. `Last-Event-ID` replays the bounded tail idempotently. An expired cursor em
 durable messages before the client rejoins at the retained tail. Creator disconnect obeys
 `cancel|continue`, while an observer join disconnect never cancels the run.
 
+The W05 compatibility slice also recognizes the frozen hidden-human-response shape on the same
+`runs/stream` endpoint. When the public SDK exposes a pending approval Interaction, the server
+projects an `ask_clarification` tool message with a v1 `single_choice` card, validates the exact
+request/source/action on reply, and resumes that same SDK Run through `AgentRuns.respond`. The SDK
+remains the lifecycle and idempotency authority. An identical retry is first verified as SDK
+`DUPLICATE` and then returns HTTP 409 rather than manufacturing a cursorless success stream; a
+different, stale, malformed, or cross-thread response also fails closed. The accepted hidden reply
+is only an in-process `RunRecord` UI read-model cache, not durable Interaction storage.
+
 W03 now persists owner-scoped managed-model and custom-agent configuration under the repository-
 local data directory. Writes are serialized and atomically replaced, model updates require the
 frozen `expected_revision`, credentials are AES-GCM encrypted at rest and never returned, and
@@ -73,8 +82,8 @@ in-memory Haifa Conversation remains coherent; after a model revision changes, t
 create a new thread. The controlled loopback provider remains L2 protocol evidence; real-provider
 evidence must be reported separately from an explicitly enabled live test using an OS credential.
 Process-restart reconstruction, `updates` and `custom` event
-projection, HTTP interaction submission/card projection, full history, Project/archive/conversion/upload
-deletion, same-UI differential
+projection, production Tool wiring, full history, Project/archive/conversion/upload deletion,
+same-UI differential
 verification, and account authentication are **NOT_RUN**. Unsupported Interaction projection fails
 closed instead of manufacturing a card. Cancel currently implements the frozen UI's actual
 `wait=false&action=interrupt` request; blocking wait and rollback are rejected rather than
@@ -118,6 +127,17 @@ Run the contract and real-socket integration tests with:
 ```powershell
 mvn -pl super-harness-server -am test
 ```
+
+The opt-in W05 browser profile registers its executable mutation fixture only from
+`src/test/java`; the normal executable JAR and normal bootstrap still register no tools:
+
+```powershell
+pwsh -NoProfile -File scripts/run-w05-interaction-smoke.ps1
+```
+
+This is acceptance evidence for the frozen card/HTTP wiring, not evidence that a product Tool is
+configured. Cross-process restart recovery remains `NOT_RUN` with the surrounding in-memory
+Thread/Run projection.
 
 The explicit DeepSeek L3 test uses only the Windows Credential Manager entry referenced by
 `os://DEEPSEEK_API_KEY`; it never reads an env file. Run it in the assigned isolated slot with:

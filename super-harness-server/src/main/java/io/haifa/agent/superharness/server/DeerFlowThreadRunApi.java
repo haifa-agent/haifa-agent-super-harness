@@ -9,7 +9,12 @@ import io.haifa.agent.core.run.AgentRunStatus;
 import io.haifa.agent.runtime.api.AgentRunEvent;
 import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
 import io.haifa.agent.runtime.api.AgentRunSnapshot;
+import io.haifa.agent.runtime.api.InteractionResponseReceiptStatus;
+import io.haifa.agent.runtime.api.InteractionResponseSubmission;
+import io.haifa.agent.runtime.api.InteractionState;
+import io.haifa.agent.runtime.api.InteractionView;
 import io.haifa.agent.runtime.api.RunEventPayloads;
+import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.project.changeset.FileChange;
 import io.haifa.agent.project.changeset.FileChangeType;
 import io.haifa.agent.project.changeset.FileVersion;
@@ -77,6 +82,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private final Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver;
     private final Predicate<String> projectExists;
     private final PersistentProjectWorkspaceService workspaceChanges;
+    private final List<? extends JavaTool<?, ?>> runTools;
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
     private final Map<String, RunRecord> runs = new ConcurrentHashMap<>();
 
@@ -85,10 +91,20 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
             Predicate<String> projectExists,
             PersistentProjectWorkspaceService workspaceChanges) {
+        this(json, runModelResolver, projectExists, workspaceChanges, List.of());
+    }
+
+    DeerFlowThreadRunApi(
+            ObjectMapper json,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            Predicate<String> projectExists,
+            PersistentProjectWorkspaceService workspaceChanges,
+            List<? extends JavaTool<?, ?>> runTools) {
         this.json = json;
         this.runModelResolver = runModelResolver;
         this.projectExists = projectExists;
         this.workspaceChanges = workspaceChanges;
+        this.runTools = List.copyOf(runTools);
     }
 
     boolean hasThread(String threadId) {
@@ -338,6 +354,23 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             sendJson(exchange, 422, Map.of("detail", "input.messages requires a human message"));
             return;
         }
+        Optional<DeerFlowInteractionHttpProjection.FrozenResponse> interactionResponse;
+        try {
+            interactionResponse = DeerFlowInteractionHttpProjection.parseResponse(
+                    body.path("input").path("messages"));
+        } catch (IllegalArgumentException invalid) {
+            sendJson(exchange, 422, Map.of("detail", invalid.getMessage()));
+            return;
+        }
+        if (interactionResponse.isPresent()) {
+            respondToInteraction(
+                    exchange,
+                    thread,
+                    interactionResponse.orElseThrow(),
+                    message,
+                    text(body, "on_disconnect").orElse("cancel"));
+            return;
+        }
         HaifaRunBridge.ModelBinding binding;
         try {
             binding = runModelResolver.apply(body);
@@ -357,7 +390,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 completeWorkspaceChangesIfTerminal(active);
             }
             if (thread.bridge == null) {
-                thread.bridge = new HaifaRunBridge(binding);
+                thread.bridge = new HaifaRunBridge(binding, runTools);
                 thread.modelBindingIdentity = thread.bridge.bindingIdentity();
             } else if (!thread.modelBindingIdentity.equals(binding.name() + "@" + binding.revision())) {
                 sendJson(
@@ -413,6 +446,96 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     new ProjectionCursor(run.runId.value(), 0),
                     true,
                     text(body, "on_disconnect").orElse("cancel"),
+                    true);
+        } finally {
+            completeWorkspaceChangesIfTerminal(run);
+        }
+    }
+
+    private void respondToInteraction(
+            HttpExchange exchange,
+            ThreadRecord thread,
+            DeerFlowInteractionHttpProjection.FrozenResponse response,
+            String submittedText,
+            String onDisconnect)
+            throws IOException {
+        RunRecord run;
+        synchronized (thread) {
+            String candidateRunId = thread.activeRunId != null
+                    ? thread.activeRunId
+                    : thread.latestRunId;
+            run = candidateRunId == null ? null : runs.get(candidateRunId);
+            if (run == null || !run.threadId.equals(thread.threadId)) {
+                sendJson(exchange, 409, Map.of("detail", "Thread has no matching Interaction"));
+                return;
+            }
+            synchronized (run) {
+                if (run.acceptedInteractionResponse != null) {
+                    if (!run.acceptedInteractionResponse.response().equals(response)) {
+                        sendJson(
+                                exchange,
+                                409,
+                                Map.of("detail", "Interaction already has a different response"));
+                        return;
+                    }
+                    try {
+                        var receipt = run.bridge.respond(
+                                run.acceptedInteractionResponse.submission());
+                        if (receipt.status() != InteractionResponseReceiptStatus.DUPLICATE) {
+                            sendJson(
+                                    exchange,
+                                    409,
+                                    Map.of("detail", "Interaction duplicate was not acknowledged"));
+                            return;
+                        }
+                    } catch (RuntimeException rejected) {
+                        sendJson(exchange, 409, Map.of("detail", "Interaction response was rejected"));
+                        return;
+                    }
+                    sendJson(exchange, 409, Map.of("detail", "Interaction response already accepted"));
+                    return;
+                } else {
+                    Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
+                    if (pending.isEmpty()
+                            || run.interactionRequestId == null
+                            || !run.interactionRequestId.equals(response.requestId())) {
+                        sendJson(exchange, 409, Map.of("detail", "Thread has no matching Interaction"));
+                        return;
+                    }
+                    InteractionResponseSubmission submission;
+                    try {
+                        submission = DeerFlowInteractionHttpProjection.submission(
+                                pending.orElseThrow(), response, Instant.now());
+                        var receipt = run.bridge.respond(submission);
+                        if (receipt.status() == InteractionResponseReceiptStatus.DUPLICATE) {
+                            sendJson(
+                                    exchange,
+                                    409,
+                                    Map.of("detail", "Interaction response projection is unavailable"));
+                            return;
+                        }
+                    } catch (RuntimeException rejected) {
+                        sendJson(exchange, 409, Map.of("detail", "Interaction response was rejected"));
+                        return;
+                    }
+                    Map<String, Object> responseMessage =
+                            DeerFlowInteractionHttpProjection.responseMessage(
+                                    response, submittedText, run.runId.value());
+                    run.acceptedInteractionResponse = new AcceptedInteractionResponse(
+                            response, submission, responseMessage);
+                    thread.updatedAt = Instant.now();
+                }
+            }
+        }
+
+        try {
+            streamRunEvents(
+                    exchange,
+                    thread,
+                    run,
+                    run.projector.head(),
+                    true,
+                    onDisconnect,
                     true);
         } finally {
             completeWorkspaceChangesIfTerminal(run);
@@ -483,7 +606,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 ReplayResult.Events events = (ReplayResult.Events) replay;
                 for (ProjectedRunEvent event : events.events()) {
                     delivered = event.cursor();
-                    if (writeProjectedEvent(output, run, event)) {
+                    if (writeProjectedEvent(output, thread, run, event)) {
                         return;
                     }
                 }
@@ -591,26 +714,93 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
     }
 
-    private boolean writeProjectedEvent(OutputStream output, RunRecord run, ProjectedRunEvent event)
+    private boolean writeProjectedEvent(
+            OutputStream output, ThreadRecord thread, RunRecord run, ProjectedRunEvent event)
             throws IOException {
         String cursor = sseCursor(event.cursor());
         if (event.interaction().isPresent()) {
-            // The frozen human-input card requires a richer request payload than the public
-            // lifecycle event exposes. Never invent labels/options or claim support.
+            var projected = event.interaction().orElseThrow();
+            if (projected.state() != InteractionState.PENDING) {
+                return false;
+            }
+            Map<String, Object> requestMessage;
+            synchronized (thread) {
+                synchronized (run) {
+                    if (run.interactionRequestMessage == null) {
+                        Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
+                        if (pending.isEmpty()
+                                || !pending.orElseThrow()
+                                        .requestId()
+                                        .value()
+                                        .equals(projected.requestId())) {
+                            writeSse(
+                                    output,
+                                    "error",
+                                    Map.of(
+                                            "code", "interaction_view_unavailable",
+                                            "request_id", projected.requestId(),
+                                            "message", "Pending Interaction view is unavailable"),
+                                    cursor);
+                            return true;
+                        }
+                        try {
+                            run.interactionRequestMessage =
+                                    DeerFlowInteractionHttpProjection.requestMessage(
+                                            pending.orElseThrow(), run.runId.value());
+                        } catch (IllegalArgumentException unsupported) {
+                            writeSse(
+                                    output,
+                                    "error",
+                                    Map.of(
+                                            "code", "unsupported_interaction_projection",
+                                            "request_id", projected.requestId(),
+                                            "message", unsupported.getMessage()),
+                                    cursor);
+                            return true;
+                        }
+                        run.interactionRequestId = projected.requestId();
+                        run.interactionRequestSequence = run.humanSequence + 1;
+                        run.interactionResponseSequence = run.humanSequence + 2;
+                        run.assistantSequence = run.humanSequence + 3;
+                        thread.nextMessageSequence += 2;
+                    } else if (!projected.requestId().equals(run.interactionRequestId)) {
+                        writeSse(
+                                output,
+                                "error",
+                                Map.of(
+                                        "code", "multiple_interactions_unsupported",
+                                        "request_id", projected.requestId(),
+                                        "message", "Only one Interaction per Run is supported"),
+                                cursor);
+                        return true;
+                    }
+                    requestMessage = run.interactionRequestMessage;
+                }
+            }
             writeSse(
                     output,
-                    "error",
-                    Map.of(
-                            "code", "unsupported_interaction_projection",
-                            "request_id", event.interaction().orElseThrow().requestId(),
-                            "message", "Interaction SSE projection is not implemented"),
+                    "messages",
+                    List.of(requestMessage, Map.of("langgraph_node", "tools")),
                     cursor);
+            // Frozen HumanInputCard disables itself while useStream is loading. End this
+            // transport while the SDK-owned Run remains waiting; the hidden reply reopens the
+            // same Run and streams its continuation.
+            writeSse(output, "end", null, null);
             return true;
         }
         if (event.source().payload() instanceof RunEventPayloads.ToolLifecycle
                 || event.source().payload() instanceof RunEventPayloads.ResourceAvailable
                 || event.source().payload() instanceof RunEventPayloads.DeliveryLifecycle
                 || event.source().payload() instanceof RunEventPayloads.RunInputLifecycle) {
+            if ((event.source().payload() instanceof RunEventPayloads.ToolLifecycle
+                            || event.source().payload() instanceof RunEventPayloads.ResourceAvailable)
+                    && (run.interactionRequestId != null
+                            || run.bridge.pendingInteraction(run.runId).isPresent())) {
+                // Approval runs publish tool/checkpoint lifecycle records around the richer
+                // Interaction record. The card and authoritative SDK view are the frozen UI
+                // surface; these supporting records carry no additional card state.
+                return false;
+            }
             writeSse(
                     output,
                     "error",
@@ -801,6 +991,14 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         for (RunRecord run : threadRuns(threadId)) {
             messages.add(messageForRun(
                     "human-" + run.runId.value(), "human", run.humanMessage, run.runId.value()));
+            synchronized (run) {
+                if (run.interactionRequestMessage != null) {
+                    messages.add(run.interactionRequestMessage);
+                }
+                if (run.acceptedInteractionResponse != null) {
+                    messages.add(run.acceptedInteractionResponse.message());
+                }
+            }
             run.bridge.snapshot(run.runId).output().ifPresent(output -> messages.add(messageForRun(
                     "assistant-" + run.runId.value(), "ai", output, run.runId.value())));
         }
@@ -815,10 +1013,26 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     run.humanSequence,
                     run.createdAt,
                     message("human-" + run.runId.value(), "human", run.humanMessage)));
+            synchronized (run) {
+                if (run.interactionRequestMessage != null) {
+                    rows.add(messageRow(
+                            run,
+                            run.interactionRequestSequence,
+                            run.createdAt,
+                            run.interactionRequestMessage));
+                }
+                if (run.acceptedInteractionResponse != null) {
+                    rows.add(messageRow(
+                            run,
+                            run.interactionResponseSequence,
+                            run.bridge.snapshot(run.runId).updatedAt(),
+                            run.acceptedInteractionResponse.message()));
+                }
+            }
             AgentRunSnapshot snapshot = run.bridge.snapshot(run.runId);
             snapshot.output().ifPresent(output -> rows.add(messageRow(
                     run,
-                    run.humanSequence + 1,
+                    run.assistantSequence,
                     snapshot.updatedAt(),
                     message("assistant-" + run.runId.value(), "ai", output))));
         }
@@ -1391,6 +1605,12 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private final BoundedRunEventProjector projector;
         private final Instant createdAt;
         private final long humanSequence;
+        private long assistantSequence;
+        private long interactionRequestSequence;
+        private long interactionResponseSequence;
+        private volatile String interactionRequestId;
+        private Map<String, Object> interactionRequestMessage;
+        private AcceptedInteractionResponse acceptedInteractionResponse;
         private io.haifa.agent.runtime.api.RunEventCursor sdkCursor;
 
         private RunRecord(
@@ -1413,8 +1633,14 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             this.sdkCursor = bridge.beforeFirstEvent(runId);
             this.createdAt = createdAt;
             this.humanSequence = humanSequence;
+            this.assistantSequence = humanSequence + 1;
         }
     }
+
+    private record AcceptedInteractionResponse(
+            DeerFlowInteractionHttpProjection.FrozenResponse response,
+            InteractionResponseSubmission submission,
+            Map<String, Object> message) {}
 
     private static final class MalformedRequestException extends RuntimeException {}
 }

@@ -28,6 +28,20 @@ the assistant message is rendered exactly once. The Java Oracle separately cover
 retention gap plus authoritative recovery and the creator-cancel/observer-continue
 boundary.
 
+The W05 Interaction acceptance profile uses a guarded test-classpath server entry point. It adds
+one approval-gated JavaTool fixture without changing the executable JAR or normal bootstrap:
+
+```powershell
+pwsh -NoProfile -File scripts/run-w05-interaction-smoke.ps1
+```
+
+It runs the unmodified frozen card twice: approve and reject. Both cases capture the exact hidden
+`human_input_response` POST, require the same SDK Run in both `Content-Location` responses, wait
+for terminal `success`, and reload the page to prove the answered card closes from the same-process
+message read model. The SDK duplicate path is intentionally covered by the HTTP test as a 409, not
+as a fabricated replay stream. This profile is fixture evidence only; product Tool configuration
+and process-restart restoration remain `NOT_RUN`.
+
 The explicitly authorized DeepSeek L3 variant uses the same runner and slot,
 but a separate data/evidence directory and one independent Playwright case:
 
@@ -102,3 +116,15 @@ disconnect/reconnect against the controlled provider also passed twice; its
 sanitized identities and health data are recorded in
 `evidence/20260923-active-reconnect-pass.json`. Process-restart recovery and the
 DeerFlow-vs-Haifa runtime differential remain `NOT_RUN`.
+
+The 2026-09-24 Interaction browser profile passed approve/reject twice with zero retries. The full
+run took 133.155 seconds (including Maven reactor and frozen Next build); Playwright cases took
+5.5/3.9 seconds. The immediate `-SkipBuild` repeat took 62.617 seconds end-to-end and 5.915/3.372
+seconds per case. The first harness attempt exposed an early acceptance flag during Maven package;
+the second exposed a manually built Next rewrite fixed to port 8001. Both failed before product
+assertions, retained trace/screenshot/log evidence, and released all owned processes. The fixed
+runner keeps the flag off during ordinary tests and builds Next with the assigned 38018 gateway.
+The sanitized identities and health summary are recorded in
+`evidence/20260924-interaction-http-pass.json`.
+After a full six-module `mvn clean test` (90 tests, zero failures), a final browser execution also
+passed 2/2 in 8.1 seconds (3.516/3.044 seconds) and 47.806 seconds for the complete runner lifecycle.

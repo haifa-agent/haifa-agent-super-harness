@@ -1,0 +1,96 @@
+{
+  "capturedAt": "2026-09-24T10:06:10+08:00",
+  "profile": "test-classpath-only-interaction-fixture",
+  "gateway": "http://127.0.0.1:38018",
+  "frontend": "http://127.0.0.1:53018",
+  "dataDirectory": "target/agent-slot-2-interaction-data",
+  "controlledProvider": "127.0.0.1:0",
+  "retries": 0,
+  "cold": {
+    "totalSeconds": 133.155,
+    "mavenReactorSeconds": 29.893,
+    "playwrightSeconds": 11.8,
+    "approveSeconds": 5.5,
+    "rejectSeconds": 3.9,
+    "approve": {
+      "threadId": "55ab33d0-9481-43e7-8ba5-eea494e2a5e4",
+      "runId": "01a0d128-321d-7e14-8135-4f4bed6e0c0c",
+      "requestId": "01a0d128-32f6-70b1-84b3-3c89988d9893",
+      "terminalStatus": "success"
+    },
+    "reject": {
+      "threadId": "0afc34da-5e4c-451d-8e3e-11e2c8c5e358",
+      "runId": "01a0d128-46b3-74a2-970f-403405e16e49",
+      "requestId": "01a0d128-46ca-731d-9f2d-aac2e9302094",
+      "terminalStatus": "success"
+    }
+  },
+  "warm": {
+    "totalSeconds": 62.617,
+    "playwrightSeconds": 11.3,
+    "approveSeconds": 5.915,
+    "rejectSeconds": 3.372,
+    "approve": {
+      "threadId": "6aa9e122-0f2b-457b-861b-bcd820af32cf",
+      "runId": "01a0d129-9d50-7ffd-a5c8-de4a22fa3453",
+      "requestId": "01a0d129-9e31-7263-bf3b-c232708f0508",
+      "terminalStatus": "success"
+    },
+    "reject": {
+      "threadId": "2087b188-dc6d-4928-b5e3-15e423c70126",
+      "runId": "01a0d129-b4aa-7ebd-96a8-97443f6cd218",
+      "requestId": "01a0d129-b4b5-7267-b6b2-cb3b2c5ff266",
+      "terminalStatus": "success"
+    }
+  },
+  "postClean": {
+    "fullMavenCleanTestSeconds": 30.558,
+    "fullMavenTests": 90,
+    "fullMavenFailures": 0,
+    "browserTotalSeconds": 47.806,
+    "playwrightSeconds": 8.1,
+    "approveSeconds": 3.516,
+    "rejectSeconds": 3.044,
+    "approve": {
+      "threadId": "fa7286bd-bbe3-483d-9689-14cd28533a0e",
+      "runId": "01a0d12d-6449-7ee6-9d9f-e7b03949a4a1",
+      "requestId": "01a0d12d-64d1-76ee-9ea9-8c7fbcc8e98b",
+      "terminalStatus": "success"
+    },
+    "reject": {
+      "threadId": "34897968-fc52-47b5-b6e3-e91bbcdad58c",
+      "runId": "01a0d12d-71e1-7453-a417-bd81754cd561",
+      "requestId": "01a0d12d-71ea-7290-bf83-6bee8cb171e2",
+      "terminalStatus": "success"
+    }
+  },
+  "assertions": {
+    "sameRunResume": true,
+    "hiddenResponseExactShape": true,
+    "approveAndReject": true,
+    "reloadAnsweredCard": true,
+    "portsReleased": [38018, 53018],
+    "ownedChildrenReleased": true
+  },
+  "diagnostics": [
+    {
+      "phase": "runner-build",
+      "status": "fixed",
+      "cause": "acceptance flag was enabled before ordinary Maven package",
+      "productAssertionReached": false,
+      "artifactsUsable": true
+    },
+    {
+      "phase": "frontend-rewrite",
+      "status": "fixed",
+      "cause": "manual Next build omitted the assigned internal gateway environment",
+      "productAssertionReached": false,
+      "artifactsUsable": true
+    }
+  ],
+  "notRun": [
+    "production Tool wiring",
+    "process-restart Interaction recovery",
+    "real external provider Interaction"
+  ]
+}

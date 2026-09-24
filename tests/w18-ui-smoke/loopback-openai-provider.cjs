@@ -39,6 +39,20 @@ function lastUserText(body) {
     .at(-1) ?? "";
 }
 
+function toolNames(body) {
+  if (!Array.isArray(body.tools)) return [];
+  return body.tools
+    .map((tool) => tool?.function?.name)
+    .filter((name) => typeof name === "string");
+}
+
+function hasToolResult(body) {
+  return (
+    Array.isArray(body.messages) &&
+    body.messages.some((message) => message?.role === "tool")
+  );
+}
+
 function frame(response, value) {
   response.write(`data: ${typeof value === "string" ? value : JSON.stringify(value)}\n\n`);
 }
@@ -78,7 +92,9 @@ const server = http.createServer((request, response) => {
     }
 
     const prompt = lastUserText(body);
-    const probe = Array.isArray(body.tools) && body.tools.length > 0;
+    const offeredTools = toolNames(body);
+    const probe = offeredTools.includes("connection_check");
+    const interaction = offeredTools.includes("mutating_probe");
     console.log(
       JSON.stringify({
         type: "provider_request",
@@ -86,6 +102,7 @@ const server = http.createServer((request, response) => {
         model: body.model ?? null,
         stream: body.stream === true,
         probe,
+        interaction,
         prompt,
         authorization: /^Bearer\s+\S+$/i.test(request.headers.authorization ?? ""),
       }),
@@ -122,6 +139,56 @@ const server = http.createServer((request, response) => {
         model: "w18-controlled-model",
         choices: [],
         usage: { prompt_tokens: 2, completion_tokens: 1 },
+      });
+      frame(response, "[DONE]");
+      response.end();
+      return;
+    }
+
+    if (interaction && prompt.startsWith("w05-interaction-") && !hasToolResult(body)) {
+      const id = `w05-interaction-${Date.now()}`;
+      frame(response, {
+        id,
+        model: "w18-controlled-model",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "w05-mutating-call",
+                  type: "function",
+                  function: {
+                    name: "mutating_probe",
+                    arguments: '{"value":"browser-approved"}',
+                  },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      });
+      frame(response, {
+        id,
+        model: "w18-controlled-model",
+        choices: [],
+        usage: { prompt_tokens: 4, completion_tokens: 2 },
+      });
+      frame(response, "[DONE]");
+      response.end();
+      return;
+    }
+
+    if (interaction && prompt.startsWith("w05-interaction-") && hasToolResult(body)) {
+      const id = `w05-interaction-final-${Date.now()}`;
+      frame(response, completionChunk(id, `Interaction resolved: ${prompt}`, "stop"));
+      frame(response, {
+        id,
+        model: "w18-controlled-model",
+        choices: [],
+        usage: { prompt_tokens: 6, completion_tokens: 4 },
       });
       frame(response, "[DONE]");
       response.end();
