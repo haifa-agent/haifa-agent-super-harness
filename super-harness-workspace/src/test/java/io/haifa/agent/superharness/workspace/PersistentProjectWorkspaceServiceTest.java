@@ -229,6 +229,108 @@ class PersistentProjectWorkspaceServiceTest {
     }
 
     @Test
+    void sensitiveSegmentsAreMetadataOnlyAndNeverPersistContentOrContentHash() throws Exception {
+        RestrictedWorkspaceService workspace = workspace();
+        WorkspaceBinding binding = workspace.bind("owner-a", "thread-sensitive");
+        byte[] before = bytes("alpha-secret-value\n");
+        byte[] after = bytes("bravo-secret-value\n");
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(),
+                "workspace/secrets/config.json", before, Optional.empty());
+        PersistentProjectWorkspaceService changes = projects();
+
+        changes.beginRunChanges("owner-a", "thread-sensitive", binding.workspaceId(), "run-sensitive");
+        Path runRoot = baseline(binding, "run-sensitive").getParent();
+        assertThat(Files.list(runRoot.resolve("payloads"))).isEmpty();
+        String baseline = Files.readString(runRoot.resolve("baseline.properties"));
+        assertThat(baseline)
+                .doesNotContain(new String(before, StandardCharsets.UTF_8))
+                .doesNotContain(Hashing.sha256(before));
+
+        Thread.sleep(5);
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(),
+                "workspace/secrets/config.json", after, Optional.of(Hashing.sha256(before)));
+        changes.completeRunChanges("owner-a", "thread-sensitive", binding.workspaceId(), "run-sensitive");
+
+        WorkspaceChanges result = changes.readRunChanges(
+                "owner-a", "thread-sensitive", binding.workspaceId(), "run-sensitive");
+        assertThat(result.sensitivePaths()).extracting(ProjectPath::value)
+                .containsExactly("workspace/secrets/config.json");
+        assertThat(result.diff().unifiedDiff()).isEmpty();
+        assertThat(result.lineCounts().get(ProjectPath.of("workspace/secrets/config.json")))
+                .isEqualTo(new WorkspaceLineCounts(0, 0));
+        assertThat(Files.list(runRoot.resolve("completed/payloads"))).isEmpty();
+        String completed = Files.readString(runRoot.resolve("completed/baseline.properties"));
+        assertThat(completed)
+                .doesNotContain(new String(after, StandardCharsets.UTF_8))
+                .doesNotContain(Hashing.sha256(after));
+        assertThat(WorkspaceSensitivePath.matches("workspace/API_TOKEN/data.json")).isTrue();
+        assertThat(WorkspaceSensitivePath.matches("outputs/public/result.txt")).isFalse();
+    }
+
+    @Test
+    void masksLegacySensitiveSnapshotsWithoutReadingTheirPersistedPayloads() throws Exception {
+        RestrictedWorkspaceService workspace = workspace();
+        WorkspaceBinding binding = workspace.bind("owner-a", "thread-legacy-sensitive");
+        byte[] before = bytes("legacy secret before\n");
+        byte[] after = bytes("legacy secret after\n");
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(), "workspace/public.json", before,
+                Optional.empty());
+        PersistentProjectWorkspaceService changes = projects();
+
+        changes.beginRunChanges("owner-a", "thread-legacy-sensitive", binding.workspaceId(),
+                "run-legacy-sensitive");
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(), "workspace/public.json", after,
+                Optional.of(Hashing.sha256(before)));
+        changes.completeRunChanges("owner-a", "thread-legacy-sensitive", binding.workspaceId(),
+                "run-legacy-sensitive");
+
+        Path baseline = baseline(binding, "run-legacy-sensitive");
+        Path completed = baseline.getParent().resolve("completed/baseline.properties");
+        String beforeHash = renameLegacySnapshotPath(
+                baseline, "workspace/public.json", "workspace/secrets/config.json");
+        String afterHash = renameLegacySnapshotPath(
+                completed, "workspace/public.json", "workspace/secrets/config.json");
+        Files.delete(baseline.getParent().resolve("payloads").resolve(beforeHash));
+        Files.delete(completed.getParent().resolve("payloads").resolve(afterHash));
+
+        WorkspaceChanges result = changes.readRunChanges(
+                "owner-a", "thread-legacy-sensitive", binding.workspaceId(), "run-legacy-sensitive");
+        assertThat(result.files()).hasSize(1);
+        assertThat(result.files().getFirst().before().contentHash()).isEqualTo("sensitive");
+        assertThat(result.files().getFirst().after().contentHash()).isEqualTo("sensitive");
+        assertThat(result.sensitivePaths()).extracting(ProjectPath::value)
+                .containsExactly("workspace/secrets/config.json");
+        assertThat(result.diff().unifiedDiff()).isEmpty();
+        assertThat(result.lineCounts().get(ProjectPath.of("workspace/secrets/config.json")))
+                .isEqualTo(new WorkspaceLineCounts(0, 0));
+    }
+
+    @Test
+    void countsHeaderLikeContentByPositionAndKeepsCountsWhenAggregateDiffIsTruncated() {
+        WorkspaceLimits largerWorkspace = new WorkspaceLimits(512, 512, 64);
+        WorkspaceChangeLimits tinyOutput = new WorkspaceChangeLimits(20, 256, 48);
+        RestrictedWorkspaceService workspace = new RestrictedWorkspaceService(storageRoot, largerWorkspace);
+        PersistentProjectWorkspaceService changes =
+                new PersistentProjectWorkspaceService(storageRoot, largerWorkspace, tinyOutput);
+        WorkspaceBinding binding = workspace.bind("owner-a", "thread-counts");
+        byte[] before = bytes("-- deleted header-like content\n");
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(), "workspace/counts.txt", before,
+                Optional.empty());
+        changes.beginRunChanges("owner-a", "thread-counts", binding.workspaceId(), "run-counts");
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(), "workspace/counts.txt",
+                bytes("++ added header-like content\n"), Optional.of(Hashing.sha256(before)));
+        changes.completeRunChanges("owner-a", "thread-counts", binding.workspaceId(), "run-counts");
+
+        WorkspaceChanges result = changes.readRunChanges(
+                "owner-a", "thread-counts", binding.workspaceId(), "run-counts");
+        ProjectPath path = ProjectPath.of("workspace/counts.txt");
+        assertThat(result.diff().unifiedDiff()).isEmpty();
+        assertThat(result.diffUnavailablePaths()).containsExactly(path);
+        assertThat(result.lineCounts().get(path)).isEqualTo(new WorkspaceLineCounts(1, 1));
+        assertThat(result.truncated()).isTrue();
+    }
+
+    @Test
     void combinesPublishedReadWriteSearchAndDiffContractsWithBoundedFailures() {
         RestrictedWorkspaceService workspace = workspace();
         WorkspaceBinding binding = workspace.bind("owner-a", "thread-1");
@@ -372,6 +474,19 @@ class PersistentProjectWorkspaceServiceTest {
         try (var output = Files.newOutputStream(path, StandardOpenOption.TRUNCATE_EXISTING)) {
             properties.store(output, "tampered by negative test");
         }
+    }
+
+    private static String renameLegacySnapshotPath(Path baseline, String from, String to) throws IOException {
+        Properties properties = load(baseline);
+        String fromKey = "file." + Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(from.getBytes(StandardCharsets.UTF_8));
+        String toKey = "file." + Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(to.getBytes(StandardCharsets.UTF_8));
+        String legacyValue = properties.remove(fromKey).toString();
+        assertThat(legacyValue).matches("\\d+:[0-9a-f]{64}");
+        properties.setProperty(toKey, legacyValue);
+        store(properties, baseline);
+        return legacyValue.substring(legacyValue.indexOf(':') + 1);
     }
 
     private static void assertError(WorkspaceError expected, ThrowingAction action) {

@@ -99,6 +99,10 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         return server.getAddress();
     }
 
+    DeerFlowThreadRunApi threadRunApi() {
+        return threadRunApi;
+    }
+
     @Override
     public void close() {
         server.stop(0);

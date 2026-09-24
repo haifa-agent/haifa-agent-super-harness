@@ -24,6 +24,7 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -36,6 +37,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Stream;
 
 /**
@@ -43,6 +46,7 @@ import java.util.stream.Stream;
  * published Haifa project-api values for changes and diffs.
  */
 public final class PersistentProjectWorkspaceService {
+    private static final Logger LOGGER = Logger.getLogger(PersistentProjectWorkspaceService.class.getName());
     private static final String BINDING_FILE = "binding.properties";
     private static final String BASELINE_FILE = "baseline.properties";
     private static final String COMPLETED_DIR = "completed";
@@ -300,25 +304,26 @@ public final class PersistentProjectWorkspaceService {
         Map<String, FileState> baseline = scan(registry.userDataRoot(workspaceId));
         String token = UUID.randomUUID().toString();
         Path temporary = stagedRoot(token);
-        WorkspaceRegistry.createDirectories(temporary.resolve("payloads"));
-        Properties properties = new Properties();
-        properties.setProperty("ownerId", binding.ownerId());
-        properties.setProperty("threadId", binding.threadId());
-        properties.setProperty("workspaceId", binding.workspaceId().value());
-        properties.setProperty("stageToken", token);
-        properties.setProperty("processId", Long.toString(ProcessHandle.current().pid()));
-        properties.setProperty("createdAt", Instant.now().toString());
-        for (FileState state : baseline.values()) {
-            String key = "file." + Base64.getUrlEncoder().withoutPadding()
-                    .encodeToString(state.path().getBytes(StandardCharsets.UTF_8));
-            properties.setProperty(key, state.size() + ":" + state.sha256());
-            Path payload = temporary.resolve("payloads").resolve(state.sha256());
-            if (!Files.exists(payload)) {
-                writeNew(payload, state.bytes());
+        try {
+            WorkspaceRegistry.createDirectories(temporary.resolve("payloads"));
+            Properties properties = new Properties();
+            properties.setProperty("ownerId", binding.ownerId());
+            properties.setProperty("threadId", binding.threadId());
+            properties.setProperty("workspaceId", binding.workspaceId().value());
+            properties.setProperty("stageToken", token);
+            properties.setProperty("processId", Long.toString(ProcessHandle.current().pid()));
+            properties.setProperty("createdAt", Instant.now().toString());
+            persistFileStates(properties, temporary, baseline);
+            storeNew(properties, temporary.resolve(BASELINE_FILE), "Super Harness workspace change baseline");
+            return new StagedRunChanges(token);
+        } catch (RuntimeException failure) {
+            try {
+                deleteStage(temporary);
+            } catch (RuntimeException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
             }
+            throw failure;
         }
-        storeNew(properties, temporary.resolve(BASELINE_FILE), "Super Harness workspace change baseline");
-        return new StagedRunChanges(token);
     }
 
     public synchronized void publishRunChanges(StagedRunChanges staged, String runId) {
@@ -358,7 +363,11 @@ public final class PersistentProjectWorkspaceService {
         if (staged == null || staged.token == null || !staged.token.matches("[0-9a-f-]{36}")) {
             return;
         }
-        deleteStage(stagedRoot(staged.token));
+        try {
+            deleteStage(stagedRoot(staged.token));
+        } catch (RuntimeException ignored) {
+            // Workspace recording is diagnostic evidence and cannot alter the Run outcome.
+        }
     }
 
     /** Persist the post-run snapshot once; later runs cannot change this run's evidence. */
@@ -385,25 +394,22 @@ public final class PersistentProjectWorkspaceService {
         properties.setProperty("threadId", binding.threadId());
         properties.setProperty("workspaceId", binding.workspaceId().value());
         properties.setProperty("runId", run);
-        for (FileState state : after.values()) {
-            String key = "file." + Base64.getUrlEncoder().withoutPadding()
-                    .encodeToString(state.path().getBytes(StandardCharsets.UTF_8));
-            properties.setProperty(key, state.size() + ":" + state.sha256());
-            Path payload = temporary.resolve("payloads").resolve(state.sha256());
-            if (!Files.exists(payload)) writeNew(payload, state.bytes());
-        }
-        storeNew(properties, temporary.resolve(BASELINE_FILE), "Super Harness completed workspace changes");
         try {
+            persistFileStates(properties, temporary, after);
+            storeNew(properties, temporary.resolve(BASELINE_FILE), "Super Harness completed workspace changes");
             try {
                 Files.move(temporary, completed, StandardCopyOption.ATOMIC_MOVE);
             } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
                 Files.move(temporary, completed);
             }
         } catch (FileAlreadyExistsException raced) {
-            deleteTreeWithin(root, temporary, "\\.completed-[0-9a-f-]{36}");
+            deleteTreeBestEffort(root, temporary, "\\.completed-[0-9a-f-]{36}");
         } catch (IOException failure) {
-            deleteTreeWithin(root, temporary, "\\.completed-[0-9a-f-]{36}");
+            deleteTreeBestEffort(root, temporary, "\\.completed-[0-9a-f-]{36}");
             throw WorkspaceRegistry.ioFailure("failed to publish completed workspace changes", failure);
+        } catch (RuntimeException failure) {
+            deleteTreeBestEffort(root, temporary, "\\.completed-[0-9a-f-]{36}");
+            throw failure;
         }
     }
 
@@ -427,20 +433,31 @@ public final class PersistentProjectWorkspaceService {
         List<DiffFile> diffFiles = new ArrayList<>();
         List<ProjectPath> unavailable = new ArrayList<>();
         List<ProjectPath> binary = new ArrayList<>();
+        List<ProjectPath> sensitive = new ArrayList<>();
+        Map<ProjectPath, WorkspaceLineCounts> lineCounts = new LinkedHashMap<>();
         int diffOutputBytes = 0;
         boolean truncated = false;
         for (String pathValue : paths) {
             FileState oldState = before.get(pathValue);
             FileState newState = after.get(pathValue);
-            if (oldState != null && newState != null && oldState.sha256().equals(newState.sha256())) {
+            if (oldState != null && newState != null && oldState.sameFile(newState)) {
                 continue;
             }
+            boolean sensitivePath = WorkspaceSensitivePath.matches(pathValue)
+                    || (oldState != null && oldState.sensitive())
+                    || (newState != null && newState.sensitive());
             ProjectPath path = ProjectPath.of(pathValue);
             FileVersion oldVersion = oldState == null ? null : oldState.version();
             FileVersion newVersion = newState == null ? null : newState.version();
             FileChangeType type = oldState == null ? FileChangeType.CREATE
                     : newState == null ? FileChangeType.DELETE : FileChangeType.REPLACE;
             changes.add(new FileChange(type, path, null, oldVersion, newVersion));
+            if (sensitivePath) {
+                unavailable.add(path);
+                sensitive.add(path);
+                lineCounts.put(path, new WorkspaceLineCounts(0, 0));
+                continue;
+            }
             if ((oldState != null && oldState.size() > changeLimits.maxFileBytes())
                     || (newState != null && newState.size() > changeLimits.maxFileBytes())) {
                 unavailable.add(path);
@@ -450,10 +467,9 @@ public final class PersistentProjectWorkspaceService {
             Optional<String> newText = newState == null ? Optional.of("") : decodeText(newState.bytes());
             if (oldText.isPresent() && newText.isPresent()) {
                 DiffFile candidate = new DiffFile(path, oldText.orElseThrow(), newText.orElseThrow());
-                DiffResult single;
+                BoundedDiffService.FileDiff single;
                 try {
-                    single = diffs.diff(new DiffRequest(
-                            List.of(candidate), 1, changeLimits.maxFileBytes(), changeLimits.maxOutputBytes()));
+                    single = diffs.diffFile(candidate, changeLimits.maxFileBytes());
                 } catch (WorkspaceException failure) {
                     if (failure.error() != WorkspaceError.FILE_TOO_LARGE) {
                         throw failure;
@@ -462,6 +478,7 @@ public final class PersistentProjectWorkspaceService {
                     truncated = true;
                     continue;
                 }
+                lineCounts.put(path, new WorkspaceLineCounts(single.additions(), single.deletions()));
                 if ((long) diffOutputBytes + single.outputBytes() <= changeLimits.maxOutputBytes()) {
                     diffFiles.add(candidate);
                     diffOutputBytes += single.outputBytes();
@@ -472,11 +489,12 @@ public final class PersistentProjectWorkspaceService {
             } else {
                 unavailable.add(path);
                 binary.add(path);
+                lineCounts.put(path, new WorkspaceLineCounts(0, 0));
             }
         }
         DiffResult diff = diffs.diff(new DiffRequest(diffFiles, changeLimits.maxFiles(),
                 changeLimits.maxFileBytes(), changeLimits.maxOutputBytes()));
-        return new WorkspaceChanges(changes, diff, unavailable, binary, truncated);
+        return new WorkspaceChanges(changes, diff, unavailable, binary, sensitive, lineCounts, truncated);
     }
 
     public DiffResult diff(DiffRequest request) {
@@ -624,12 +642,23 @@ public final class PersistentProjectWorkspaceService {
                                 "workspace change scan exceeds file-count limit");
                     }
                     RestrictedWorkspaceService.ensureNoLinks(userDataRoot, path);
-                    byte[] bytes = RestrictedWorkspaceService.readAllVerified(userDataRoot, path,
-                            workspaceLimits.maxWorkingFileBytes());
                     String logical = userDataRoot.relativize(path).toString()
                             .replace(java.io.File.separatorChar, '/');
                     logical = LogicalWorkspacePath.normalize(logical);
-                    states.put(logical, new FileState(logical, bytes.length, Hashing.sha256(bytes), bytes));
+                    BasicFileAttributes attributes = Files.readAttributes(
+                            path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                    boolean sensitive = WorkspaceSensitivePath.matches(logical);
+                    if (sensitive) {
+                        states.put(logical, new FileState(logical, attributes.size(),
+                                attributes.lastModifiedTime().to(java.util.concurrent.TimeUnit.NANOSECONDS),
+                                null, null, true));
+                    } else {
+                        byte[] bytes = RestrictedWorkspaceService.readAllVerified(userDataRoot, path,
+                                workspaceLimits.maxWorkingFileBytes());
+                        states.put(logical, new FileState(logical, bytes.length,
+                                attributes.lastModifiedTime().to(java.util.concurrent.TimeUnit.NANOSECONDS),
+                                Hashing.sha256(bytes), bytes, false));
+                    }
                 }
             } catch (IOException exception) {
                 throw WorkspaceRegistry.ioFailure("failed to scan workspace changes", exception);
@@ -643,24 +672,41 @@ public final class PersistentProjectWorkspaceService {
         properties.stringPropertyNames().stream().filter(key -> key.startsWith("file.")).sorted().forEach(key -> {
             String path;
             long size;
-            String hash;
+            String hash = null;
+            long modifiedNanos = 0;
+            boolean sensitive = false;
             try {
                 path = new String(Base64.getUrlDecoder().decode(key.substring(5)), StandardCharsets.UTF_8);
                 if (!LogicalWorkspacePath.normalize(path).equals(path)) {
                     throw new IllegalArgumentException("non-canonical path");
                 }
-                String[] value = properties.getProperty(key).split(":", 2);
-                if (value.length != 2 || !value[1].matches("[0-9a-f]{64}")) {
-                    throw new IllegalArgumentException("invalid baseline entry");
+                String value = properties.getProperty(key);
+                String[] fields = value.split(":", 3);
+                boolean metadataOnly = fields.length == 3 && fields[0].equals("S");
+                sensitive = metadataOnly || WorkspaceSensitivePath.matches(path);
+                if (metadataOnly) {
+                    size = Long.parseLong(fields[1]);
+                    modifiedNanos = Long.parseLong(fields[2]);
+                    if (modifiedNanos < 0) throw new IllegalArgumentException("invalid sensitive mtime");
+                } else {
+                    if (fields.length != 2 || !fields[1].matches("[0-9a-f]{64}")) {
+                        throw new IllegalArgumentException("invalid baseline entry");
+                    }
+                    size = Long.parseLong(fields[0]);
+                    hash = fields[1];
                 }
-                size = Long.parseLong(value[0]);
                 if (size < 0 || size > workspaceLimits.maxWorkingFileBytes()) {
                     throw new IllegalArgumentException("invalid baseline size");
                 }
-                hash = value[1];
             } catch (RuntimeException exception) {
                 throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY,
                         "run baseline metadata is corrupt", exception);
+            }
+            if (sensitive) {
+                // Legacy snapshots persisted sensitive paths as size:hash plus a payload. Keep the
+                // hash only as an internal comparison token; never resolve or read that payload.
+                states.put(path, new FileState(path, size, modifiedNanos, hash, null, true));
+                return;
             }
             Path payload = runRoot.resolve("payloads").resolve(hash);
             if (!Files.isRegularFile(payload, LinkOption.NOFOLLOW_LINKS)) {
@@ -673,9 +719,23 @@ public final class PersistentProjectWorkspaceService {
                 throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY,
                         "run baseline payload does not match persisted metadata");
             }
-            states.put(path, new FileState(path, size, hash, bytes));
+            states.put(path, new FileState(path, size, 0, hash, bytes, false));
         });
         return states;
+    }
+
+    private static void persistFileStates(Properties properties, Path root, Map<String, FileState> states) {
+        for (FileState state : states.values()) {
+            String key = "file." + Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(state.path().getBytes(StandardCharsets.UTF_8));
+            if (state.sensitive()) {
+                properties.setProperty(key, "S:" + state.size() + ":" + state.modifiedNanos());
+                continue;
+            }
+            properties.setProperty(key, state.size() + ":" + state.sha256());
+            Path payload = root.resolve("payloads").resolve(state.sha256());
+            if (!Files.exists(payload)) writeNew(payload, state.bytes());
+        }
     }
 
     private Path requireProject(String ownerId, String projectId) {
@@ -839,11 +899,12 @@ public final class PersistentProjectWorkspaceService {
                     .limit(MAX_ABANDONED_STAGES + 1L)
                     .toList();
         } catch (IOException failure) {
-            throw WorkspaceRegistry.ioFailure("failed to inspect staged run baselines", failure);
+            LOGGER.log(Level.WARNING, "failed to inspect staged run baselines", failure);
+            return;
         }
         if (stages.size() > MAX_ABANDONED_STAGES) {
-            throw new WorkspaceException(WorkspaceError.IO_FAILURE,
-                    "staged run baseline cleanup exceeds the bounded stage limit");
+            LOGGER.warning("staged run baseline cleanup reached its bounded inspection limit");
+            stages = stages.subList(0, MAX_ABANDONED_STAGES);
         }
         Instant now = Instant.now();
         for (Path stage : stages) {
@@ -857,10 +918,19 @@ public final class PersistentProjectWorkspaceService {
                         .map(ProcessHandle::isAlive)
                         .orElse(false);
                 if (!originatingProcessAlive || createdAt.plus(STAGE_MAX_AGE).isBefore(now)) {
-                    deleteStage(stage);
+                    try {
+                        deleteStage(stage);
+                    } catch (RuntimeException cleanupFailure) {
+                        LOGGER.log(Level.WARNING, "failed to remove an abandoned staged baseline", cleanupFailure);
+                    }
                 }
             } catch (RuntimeException corrupt) {
-                deleteStage(stage);
+                try {
+                    deleteStage(stage);
+                } catch (RuntimeException cleanupFailure) {
+                    corrupt.addSuppressed(cleanupFailure);
+                    LOGGER.log(Level.WARNING, "failed to remove a corrupt staged baseline", corrupt);
+                }
             }
         }
     }
@@ -892,6 +962,14 @@ public final class PersistentProjectWorkspaceService {
             }
         } catch (IOException failure) {
             throw WorkspaceRegistry.ioFailure("failed to clean staged run baseline", failure);
+        }
+    }
+
+    private static void deleteTreeBestEffort(Path parent, Path target, String filenamePattern) {
+        try {
+            deleteTreeWithin(parent, target, filenamePattern);
+        } catch (RuntimeException cleanupFailure) {
+            LOGGER.log(Level.WARNING, "failed to remove temporary workspace change evidence", cleanupFailure);
         }
     }
 
@@ -1003,18 +1081,30 @@ public final class PersistentProjectWorkspaceService {
         }
     }
 
-    private record FileState(String path, long size, String sha256, byte[] bytes) {
+    private record FileState(
+            String path, long size, long modifiedNanos, String sha256, byte[] bytes, boolean sensitive) {
         private FileState {
-            bytes = bytes.clone();
+            bytes = bytes == null ? null : bytes.clone();
         }
 
         @Override
         public byte[] bytes() {
-            return bytes.clone();
+            return bytes == null ? null : bytes.clone();
         }
 
         FileVersion version() {
-            return new FileVersion(FileType.FILE, size, sha256);
+            return new FileVersion(FileType.FILE, size, sensitive ? "sensitive" : sha256);
+        }
+
+        boolean sameFile(FileState other) {
+            if (sensitive || other.sensitive) {
+                if (sensitive != other.sensitive || size != other.size) return false;
+                if (sha256 != null || other.sha256 != null) {
+                    return sha256 != null && sha256.equals(other.sha256);
+                }
+                return modifiedNanos == other.modifiedNanos;
+            }
+            return sha256.equals(other.sha256);
         }
     }
 }

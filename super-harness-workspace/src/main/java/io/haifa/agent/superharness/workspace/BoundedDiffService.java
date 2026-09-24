@@ -28,7 +28,8 @@ public final class BoundedDiffService {
                 continue;
             }
             changed++;
-            String fragment = renderFile(file);
+            FileDiff fragmentResult = diffFile(file, request.maxFileBytes());
+            String fragment = fragmentResult.rendered();
             int fragmentBytes = fragment.getBytes(StandardCharsets.UTF_8).length;
             if ((long) outputBytes + fragmentBytes > request.maxOutputBytes()) {
                 throw new WorkspaceException(WorkspaceError.FILE_TOO_LARGE, "diff output exceeds configured limit");
@@ -40,6 +41,27 @@ public final class BoundedDiffService {
         return new DiffResult(unifiedDiff, changed, outputBytes,
                 Hashing.sha256(unifiedDiff.getBytes(StandardCharsets.UTF_8)));
     }
+
+    FileDiff diffFile(DiffFile file, int maxFileBytes) {
+        int beforeBytes = file.before().getBytes(StandardCharsets.UTF_8).length;
+        int afterBytes = file.after().getBytes(StandardCharsets.UTF_8).length;
+        if (beforeBytes > maxFileBytes || afterBytes > maxFileBytes) {
+            throw new WorkspaceException(WorkspaceError.FILE_TOO_LARGE, "diff input exceeds per-file limit");
+        }
+        String rendered = renderFile(file);
+        int additions = 0;
+        int deletions = 0;
+        List<String> lines = rendered.lines().toList();
+        for (int index = 2; index < lines.size(); index++) {
+            String line = lines.get(index);
+            if (line.startsWith("+")) additions++;
+            else if (line.startsWith("-")) deletions++;
+        }
+        return new FileDiff(rendered, additions, deletions,
+                rendered.getBytes(StandardCharsets.UTF_8).length);
+    }
+
+    record FileDiff(String rendered, int additions, int deletions, int outputBytes) {}
 
     private static String renderFile(DiffFile file) {
         StringBuilder output = new StringBuilder();

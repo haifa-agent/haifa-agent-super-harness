@@ -32,6 +32,19 @@ class DeerFlowThreadRunApiTest {
     private DeerFlowBootstrapApi api;
     private URI baseUri;
 
+    @Test
+    void workspaceCompletionObservationHasAFiniteWallClockBound() {
+        assertThat(DeerFlowThreadRunApi.WORKSPACE_COMPLETION_OBSERVER_MAX_WAIT)
+                .isEqualTo(Duration.ofHours(24));
+        assertThat(DeerFlowThreadRunApi.WORKSPACE_COMPLETION_OBSERVER_INITIAL_POLL)
+                .isEqualTo(Duration.ofMillis(25));
+        assertThat(DeerFlowThreadRunApi.WORKSPACE_COMPLETION_OBSERVER_MAX_POLL)
+                .isEqualTo(Duration.ofSeconds(1));
+        assertThat(DeerFlowThreadRunApi.nextWorkspaceCompletionPollMillis(25)).isEqualTo(50);
+        assertThat(DeerFlowThreadRunApi.nextWorkspaceCompletionPollMillis(800)).isEqualTo(1_000);
+        assertThat(DeerFlowThreadRunApi.nextWorkspaceCompletionPollMillis(1_000)).isEqualTo(1_000);
+    }
+
     @BeforeEach
     void startServer() throws Exception {
         api = DeerFlowBootstrapApi.createForTests(

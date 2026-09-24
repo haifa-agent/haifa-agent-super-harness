@@ -28,9 +28,11 @@ import io.haifa.agent.superharness.workspace.WorkspaceChangeLimits;
 import io.haifa.agent.superharness.workspace.WorkspaceChanges;
 import io.haifa.agent.superharness.workspace.WorkspaceError;
 import io.haifa.agent.superharness.workspace.WorkspaceException;
+import io.haifa.agent.superharness.workspace.WorkspaceLineCounts;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -68,6 +70,9 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final Pattern SSE_CURSOR = Pattern.compile("^(\\d+)-0$");
     private static final int EVENT_RETENTION_CAPACITY = 8;
     private static final int EVENT_PAGE_SIZE = 4;
+    static final Duration WORKSPACE_COMPLETION_OBSERVER_MAX_WAIT = Duration.ofHours(24);
+    static final Duration WORKSPACE_COMPLETION_OBSERVER_INITIAL_POLL = Duration.ofMillis(25);
+    static final Duration WORKSPACE_COMPLETION_OBSERVER_MAX_POLL = Duration.ofSeconds(1);
     private static final Set<String> BINARY_EXTENSIONS = Set.of(
             ".7z", ".avif", ".bmp", ".class", ".db", ".dll", ".dmg", ".doc", ".docx", ".exe",
             ".gif", ".gz", ".ico", ".jar", ".jpeg", ".jpg", ".mov", ".mp3", ".mp4", ".o",
@@ -79,6 +84,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private final PersistentProjectWorkspaceService workspaceChanges;
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
     private final Map<String, RunRecord> runs = new ConcurrentHashMap<>();
+    private final Set<Thread> workspaceCompletionObservers = ConcurrentHashMap.newKeySet();
+    private volatile boolean closed;
 
     DeerFlowThreadRunApi(
             ObjectMapper json,
@@ -368,25 +375,31 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                                 "Thread is already bound to a different model revision; create a new thread"));
                 return;
             }
-            WorkspaceBinding workspace = workspaceChanges.bindThreadWorkspace(
-                    DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId);
-            StagedRunChanges staged = workspaceChanges.stageRunChanges(
-                    DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId, workspace.workspaceId());
-            HaifaRunBridge.StartedRun started = null;
+            StagedRunChanges staged = null;
+            try {
+                WorkspaceBinding workspace = workspaceChanges.bindThreadWorkspace(
+                        DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId);
+                staged = workspaceChanges.stageRunChanges(
+                        DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId, workspace.workspaceId());
+            } catch (RuntimeException ignored) {
+                // DeerFlow treats workspace capture as diagnostic evidence: it cannot block the Run.
+            }
+            HaifaRunBridge.StartedRun started;
             try {
                 started = thread.bridge.start(threadId, message, Optional.ofNullable(thread.session));
-                workspaceChanges.publishRunChanges(staged, started.runId().value());
             } catch (RuntimeException failure) {
-                if (started != null) {
-                    try {
-                        thread.bridge.cancel(started.runId());
-                    } catch (RuntimeException ignored) {
-                        // Preserve the baseline publication failure at the HTTP boundary.
-                    }
-                }
                 workspaceChanges.discardRunChanges(staged);
-                sendJson(exchange, 500, Map.of("detail", "Run could not start with a workspace baseline"));
+                sendJson(exchange, 500, Map.of("detail", "Run could not start"));
                 return;
+            }
+            boolean workspaceRecordingEnabled = false;
+            if (staged != null) {
+                try {
+                    workspaceChanges.publishRunChanges(staged, started.runId().value());
+                    workspaceRecordingEnabled = true;
+                } catch (RuntimeException ignored) {
+                    workspaceChanges.discardRunChanges(staged);
+                }
             }
             thread.session = started.session();
             thread.updatedAt = Instant.now();
@@ -401,9 +414,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     message,
                     thread.bridge,
                     Instant.now(),
-                    humanSequence);
+                    humanSequence,
+                    workspaceRecordingEnabled);
             runs.put(run.runId.value(), run);
         }
+        observeWorkspaceCompletion(run);
 
         try {
             streamRunEvents(
@@ -912,6 +927,9 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         Set<String> binaryPaths = changes.binaryPaths().stream()
                 .map(path -> path.value())
                 .collect(java.util.stream.Collectors.toCollection(HashSet::new));
+        Set<String> sensitivePaths = changes.sensitivePaths().stream()
+                .map(path -> path.value())
+                .collect(java.util.stream.Collectors.toCollection(HashSet::new));
         String unified = changes.diff().unifiedDiff();
         List<Map<String, Object>> files = new ArrayList<>();
         int created = 0;
@@ -934,7 +952,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             FileVersion after = change.after();
             boolean fileLarge = (before != null && before.size() > limits.maxFileBytes())
                     || (after != null && after.size() > limits.maxFileBytes());
-            boolean sensitive = sensitivePath(logical);
+            boolean sensitive = sensitivePaths.contains(logical);
             String fragment = diffFragment(unified, logical);
             boolean binary = binaryPath(logical) || binaryPaths.contains(logical);
             String reason = sensitive ? "sensitive"
@@ -945,8 +963,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (reason != null) {
                 fragment = "";
             }
-            int fileAdditions = countDiffLines(fragment, '+');
-            int fileDeletions = countDiffLines(fragment, '-');
+            WorkspaceLineCounts counts = changes.lineCounts().getOrDefault(
+                    change.path(), new WorkspaceLineCounts(0, 0));
+            int fileAdditions = counts.additions();
+            int fileDeletions = counts.deletions();
             additions += fileAdditions;
             deletions += fileDeletions;
             large |= fileLarge;
@@ -959,8 +979,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 file.put("sensitive", sensitive);
                 file.put("size_before", before == null ? null : before.size());
                 file.put("size_after", after == null ? null : after.size());
-                file.put("sha256_before", before == null ? null : before.contentHash());
-                file.put("sha256_after", after == null ? null : after.contentHash());
+                file.put("sha256_before", before == null || sensitive ? null : before.contentHash());
+                file.put("sha256_after", after == null || sensitive ? null : after.contentHash());
                 file.put("diff", includeDiff ? virtualizeDiff(fragment) : "");
                 file.put("diff_truncated", "truncated".equals(reason));
                 file.put("diff_unavailable_reason", reason);
@@ -1007,29 +1027,9 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 .replaceFirst("(?m)^\\+\\+\\+ b/", "+++ b/mnt/user-data/");
     }
 
-    private static int countDiffLines(String diff, char prefix) {
-        if (diff.isEmpty()) return 0;
-        int count = 0;
-        for (String line : diff.lines().toList()) {
-            if (!line.isEmpty() && line.charAt(0) == prefix
-                    && !(prefix == '+' && line.startsWith("+++ "))
-                    && !(prefix == '-' && line.startsWith("--- "))) count++;
-        }
-        return count;
-    }
-
     private static boolean binaryPath(String path) {
         String lower = path.toLowerCase(java.util.Locale.ROOT);
         return BINARY_EXTENSIONS.stream().anyMatch(lower::endsWith);
-    }
-
-    private static boolean sensitivePath(String path) {
-        String lower = path.toLowerCase(java.util.Locale.ROOT);
-        String name = lower.substring(lower.lastIndexOf('/') + 1);
-        return name.equals(".env") || name.startsWith(".env.") || name.endsWith(".key")
-                || name.endsWith(".pem") || name.contains("api_key") || name.contains("apikey")
-                || name.contains("credential") || name.contains("password")
-                || name.contains("private_key") || name.contains("secret") || name.contains("token");
     }
 
     private static Map<String, Object> emptyWorkspaceSummary(boolean truncated) {
@@ -1181,12 +1181,59 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
     }
 
-    private void completeWorkspaceChangesIfTerminal(RunRecord run) {
-        if (!run.bridge.snapshot(run.runId).status().isTerminal()) return;
-        WorkspaceBinding binding = workspaceChanges.requireThreadWorkspace(
-                DeerFlowBootstrapApi.DEFAULT_USER_ID, run.threadId);
-        workspaceChanges.completeRunChanges(
-                DeerFlowBootstrapApi.DEFAULT_USER_ID, run.threadId, binding.workspaceId(), run.runId.value());
+    private boolean completeWorkspaceChangesIfTerminal(RunRecord run) {
+        try {
+            if (!run.bridge.snapshot(run.runId).status().isTerminal()) return false;
+            if (!run.workspaceRecordingEnabled) return true;
+            WorkspaceBinding binding = workspaceChanges.requireThreadWorkspace(
+                    DeerFlowBootstrapApi.DEFAULT_USER_ID, run.threadId);
+            workspaceChanges.completeRunChanges(
+                    DeerFlowBootstrapApi.DEFAULT_USER_ID, run.threadId, binding.workspaceId(), run.runId.value());
+            return true;
+        } catch (RuntimeException ignored) {
+            // Recording is best-effort and must never replace the authoritative Run/SSE outcome.
+            return false;
+        }
+    }
+
+    private void observeWorkspaceCompletion(RunRecord run) {
+        if (!run.workspaceRecordingEnabled || closed) return;
+        Thread observer = Thread.ofVirtual()
+                .name("super-harness-workspace-completion-" + run.runId.value())
+                .unstarted(() -> {
+                    try {
+                        long startedNanos = System.nanoTime();
+                        long maxWaitNanos = WORKSPACE_COMPLETION_OBSERVER_MAX_WAIT.toNanos();
+                        long pollMillis = WORKSPACE_COMPLETION_OBSERVER_INITIAL_POLL.toMillis();
+                        while (!closed
+                                && System.nanoTime() - startedNanos < maxWaitNanos
+                                && !run.bridge.snapshot(run.runId).status().isTerminal()) {
+                            Thread.sleep(pollMillis);
+                            pollMillis = nextWorkspaceCompletionPollMillis(pollMillis);
+                        }
+                        if (closed || System.nanoTime() - startedNanos >= maxWaitNanos) return;
+                        for (int attempt = 0; !closed && attempt < 3; attempt++) {
+                            if (completeWorkspaceChangesIfTerminal(run)) break;
+                            Thread.sleep(50);
+                        }
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    } catch (RuntimeException ignored) {
+                        // A recorder or snapshot fault cannot mutate the Run result.
+                    } finally {
+                        workspaceCompletionObservers.remove(Thread.currentThread());
+                    }
+                });
+        workspaceCompletionObservers.add(observer);
+        observer.start();
+    }
+
+    static long nextWorkspaceCompletionPollMillis(long currentMillis) {
+        return Math.min(WORKSPACE_COMPLETION_OBSERVER_MAX_POLL.toMillis(), currentMillis * 2);
+    }
+
+    int workspaceCompletionObserverCount() {
+        return workspaceCompletionObservers.size();
     }
 
     private JsonNode readBody(HttpExchange exchange) throws IOException {
@@ -1355,11 +1402,24 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     @Override
     public void close() {
+        closed = true;
+        workspaceCompletionObservers.forEach(Thread::interrupt);
         threads.values().stream()
                 .map(thread -> thread.bridge)
                 .filter(java.util.Objects::nonNull)
                 .distinct()
                 .forEach(HaifaRunBridge::close);
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+        for (Thread observer : List.copyOf(workspaceCompletionObservers)) {
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) break;
+            try {
+                observer.join(java.time.Duration.ofNanos(remaining));
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
     }
 
     private static final class ThreadRecord {
@@ -1391,6 +1451,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private final BoundedRunEventProjector projector;
         private final Instant createdAt;
         private final long humanSequence;
+        private final boolean workspaceRecordingEnabled;
         private io.haifa.agent.runtime.api.RunEventCursor sdkCursor;
 
         private RunRecord(
@@ -1400,7 +1461,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 String humanMessage,
                 HaifaRunBridge bridge,
                 Instant createdAt,
-                long humanSequence) {
+                long humanSequence,
+                boolean workspaceRecordingEnabled) {
             this.runId = runId;
             this.threadId = threadId;
             this.assistantId = assistantId;
@@ -1413,6 +1475,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             this.sdkCursor = bridge.beforeFirstEvent(runId);
             this.createdAt = createdAt;
             this.humanSequence = humanSequence;
+            this.workspaceRecordingEnabled = workspaceRecordingEnabled;
         }
     }
 
