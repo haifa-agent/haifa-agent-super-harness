@@ -6,6 +6,7 @@ param(
     [int]$FrontendPort = 53018,
     [int]$ProviderPort = 0,
     [string]$DataDirectory,
+    [switch]$ActiveReconnect,
     [switch]$LiveDeepSeek,
     [switch]$SkipBuild
 )
@@ -15,6 +16,9 @@ Set-StrictMode -Version Latest
 
 if ($GatewayPort -ne 38018 -or $FrontendPort -ne 53018 -or $ProviderPort -ne 0) {
     throw 'W18 slot 2 is fixed to Gateway=38018 and Frontend=53018; controlled Provider must use OS-assigned port 0.'
+}
+if ($ActiveReconnect -and $LiveDeepSeek) {
+    throw 'Active reconnect verification uses only the controlled provider.'
 }
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
@@ -41,6 +45,8 @@ foreach ($port in @($GatewayPort, $FrontendPort)) {
 $null = New-Item -ItemType Directory -Force -Path $dataRoot
 $evidenceRoot = Join-Path $root $(if ($LiveDeepSeek) {
     'target/w18-deepseek-web-l3/playwright'
+} elseif ($ActiveReconnect) {
+    'target/w05-active-reconnect-evidence/playwright'
 } else {
     'target/w18-ui-smoke-evidence/playwright'
 })
@@ -76,9 +82,15 @@ $managedEnvironment = @{
     W18_EVIDENCE_DIR = $evidenceRoot
     W18_PROVIDER_URL = $null
     W18_MODEL_NAME = $(if ($LiveDeepSeek) { 'w18-deepseek-live' } else { 'w18-controlled' })
-    W18_PLAYWRIGHT_SPEC = $(if ($LiveDeepSeek) { 'w18-deepseek-live.spec.cjs' } else { 'w18-ui-smoke.spec.cjs' })
-    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek) { '120000' } else { '60000' })
-    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek) { 'on' } else { 'retain-on-failure' })
+    W18_PLAYWRIGHT_SPEC = $(if ($LiveDeepSeek) {
+        'w18-deepseek-live.spec.cjs'
+    } elseif ($ActiveReconnect) {
+        'w05-active-reconnect.spec.cjs'
+    } else {
+        'w18-ui-smoke.spec.cjs'
+    })
+    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek -or $ActiveReconnect) { '120000' } else { '60000' })
+    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect) { 'on' } else { 'retain-on-failure' })
 }
 $savedEnvironment = @{}
 foreach ($name in $managedEnvironment.Keys) {

@@ -1,0 +1,88 @@
+{
+  "captured_at": "2026-09-23T19:18:34+08:00",
+  "result": "PASS",
+  "runtime": {
+    "gateway": "http://127.0.0.1:38018",
+    "frontend": "http://127.0.0.1:53018",
+    "data_directory": "target/agent-slot-2-data",
+    "provider_kind": "process-local OpenAI-compatible test provider",
+    "provider_port_policy": "127.0.0.1:0"
+  },
+  "cold_diagnostic": {
+    "result": "EXPECTED_FAIL_BEFORE_FIX",
+    "runner_elapsed_seconds": 323.394,
+    "profile_verifier_observed_seconds": 44,
+    "combined_maven_and_next_build_observed_seconds": 245,
+    "next_reported_seconds": {
+      "compile": 65,
+      "typescript": 90,
+      "static_pages": 7.1
+    },
+    "readiness_observed_seconds": 3,
+    "playwright_case_seconds": 7.6,
+    "failure": "frozen SDK joined with Last-Event-ID -1 and Gateway returned 409 Invalid Last-Event-ID",
+    "failure_artifacts": ["trace", "screenshot", "error-context", "provider log", "gateway log", "frontend log"]
+  },
+  "first_pass": {
+    "thread_id": "ff807f33-8767-4f54-bdfe-5718e55d1233",
+    "run_id": "01a0cdfa-e24d-74db-b01a-f8666f357ff4",
+    "run_status_before_reload": "running",
+    "last_event_id": "-1",
+    "join_status": 200,
+    "identified_events": ["messages@11-0", "end@11-0"],
+    "terminal_status": "success",
+    "rendered_assistant_occurrences": 1,
+    "playwright_case_seconds": 11.9,
+    "playwright_total_seconds": 14.5,
+    "runner_elapsed_seconds": 60.897,
+    "retries": 0,
+    "controlled_provider_port": 59224,
+    "ports_released": [38018, 53018, 59224]
+  },
+  "repeat_pass": {
+    "thread_id": "b7e2be1e-95c7-49ed-9a06-6175acbed1f7",
+    "run_id": "01a0cdfd-016d-70b1-8eff-3c57241fa84a",
+    "run_status_before_reload": "running",
+    "last_event_id": "-1",
+    "join_status": 200,
+    "identified_events": ["messages@11-0", "end@11-0"],
+    "terminal_status": "success",
+    "rendered_assistant_occurrences": 1,
+    "playwright_case_seconds": 11.5,
+    "playwright_total_seconds": 14.1,
+    "runner_elapsed_seconds": 56.06,
+    "retries": 0,
+    "controlled_provider_port": 58688,
+    "ports_released": [38018, 53018, 58688]
+  },
+  "oracle_coverage": [
+    "retention gap plus authoritative terminal state",
+    "observer disconnect never cancels the creator Run",
+    "creator on_disconnect=cancel reaches interrupted",
+    "invalid cursor shapes fail closed"
+  ],
+  "verification": {
+    "verified_at": "2026-09-24T09:13:04+08:00",
+    "thread_run_suite_repeats": 3,
+    "thread_run_suite_each": "16 passed, 0 failed",
+    "full_maven": "85 tests, 0 failures, 0 errors, 1 skipped opt-in live test",
+    "full_maven_seconds": 41.492,
+    "gap_run_id": "01a0d0f8-f943-739b-927c-b21cb0213b40",
+    "frontend_check": "PASS",
+    "frozen_contracts": "PASS",
+    "haifa_frontend_profile": "PASS"
+  },
+  "process_health": {
+    "warm_runs_passed": 2,
+    "runner_or_next_hang": false,
+    "timeout": false,
+    "failure_artifacts_were_usable": true,
+    "residual_owned_processes": false
+  },
+  "not_run": [
+    "process-restart reconstruction",
+    "HTTP Interaction submission and card rendering",
+    "real updates and custom payload projection",
+    "DeerFlow-versus-Haifa runtime differential"
+  ]
+}
