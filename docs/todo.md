@@ -19,3 +19,13 @@
   - 2026-09-25 switch validation: `mvn -o -ntp clean verify` BUILD SUCCESS, 119 tests, 0 failure/error, 2 intentional skips; `dependency:list` resolves every `io.haifa` artifact at `0.1.2-SNAPSHOT`. `verify-clean-consumer.ps1`, Playwright UI regression and real-provider smoke: `NOT_RUN`.
   - There is no baseline branch for 0.1.2: every SDK gap fix branches `feat-*` from HA `dev`, opens its PR against `dev`, is republished to the local Maven repository, and needs a human-merged PR recorded here; agents must not merge it.
   - `DeerFlowConfigurationApi` still labels the managed provider version `0.1.1-SNAPSHOT`; it is part of the model configuration digest, so changing it needs a data-root compatibility decision first.
+
+# HA 038 integration branch `feat-012-sh-sdk-gaps`
+
+The HA coordinator merges 038-01 (Memory) and 038-02 (parent-child) sub-branches into `feat-012-sh-sdk-gaps`; the integration branch then goes to HA `dev` by a human-merged PR. Each merge is republished locally as `0.1.2-SNAPSHOT` and gated here.
+
+- [x] 038-01a memory governance removal — HA `12c24127` on `feat-012-sh-sdk-gaps` (squashed). 2026-09-25: HA `install -DskipTests` PASS; `javap` confirms removed `MemoryConflict`/`MemoryTombstone`/`MemoryAuditSink` and `resolveConflict`/`requestPurge`/`evaluateExpiry` are absent; Super Harness `mvn -o -ntp clean verify` BUILD SUCCESS, 119 tests, 0 failure/error, 2 intentional skips. Super Harness Java sources use none of the removed API.
+- [ ] 038-01b memory direct CRUD and AGENT scope — in progress.
+- [ ] 038-02a minimal parent-child delegation — in progress.
+- [ ] 038-02b SDK run input (steer) — in progress.
+- [ ] Integration branch → HA `dev` PR, human merge — NOT_RUN.
