@@ -1,7 +1,7 @@
 
 # Haifa Super Harness
 
-Independent Java 21 product foundation for the frozen DeerFlow parity program. The repository consumes Haifa Agent only through the published `io.haifa:haifa-agent-bom:0.1.1-SNAPSHOT` and public JARs in Maven repositories; it has no source-path dependency on the Haifa Agent checkout.
+Independent Java 21 product foundation for the frozen DeerFlow parity program. The repository consumes Haifa Agent only through the published `io.haifa:haifa-agent-bom:0.1.2-SNAPSHOT` and public JARs in Maven repositories; it has no source-path dependency on the Haifa Agent checkout.
 
 ## W01 foundation
 

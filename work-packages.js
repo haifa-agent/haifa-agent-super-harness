@@ -8,7 +8,7 @@ window.WORK_PACKAGES_DATA = {
     "deerFlowCommit": "e545c28ac301e6f9feae247c513d8ea8f83df294",
     "deerFlowState": "clean_detached_head",
     "preservedStash": "stash@{0}: pre-super-harness-snapshot-20260922-150524",
-    "haifaSdkVersion": "0.1.1-SNAPSHOT",
+    "haifaSdkVersion": "0.1.2-SNAPSHOT",
     "evidenceGatePassed": 1
   },
   "worktrees": [

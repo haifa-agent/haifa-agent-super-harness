@@ -42,7 +42,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** Adapter that exposes only public Haifa Agent 0.1.1 SDK types to the HTTP boundary. */
+/** Adapter that exposes only public Haifa Agent SDK types to the HTTP boundary. */
 final class HaifaRunBridge implements AutoCloseable {
     private final HaifaAgent agent;
     private final ModelBinding binding;
