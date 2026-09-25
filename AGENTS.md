@@ -3,7 +3,7 @@
 - 以 `private-docs/roadmap/35-super-harness-deerflow-parity.md` 及其产品、PRD 配套目录为范围与验收依据。
 - DeerFlow 前后端固定为 `bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294`，禁止随 `main` 漂移。
 - 仅通过本地 Maven 仓库消费 Haifa Agent 公开 JAR/BOM `0.1.2-SNAPSHOT`（HA 0.1.2 开发线专门承接本项目 SDK 功能缺口，见 `private-docs/prompts/038-*`），禁止源码路径依赖、复制 SDK 或依赖产品 JAR。
-- 如验收过程中确认必须完善上游 Haifa Agent SDK，只能在 `D:\workspace\haifa-agent` 仓库以 `dev`（HA `0.1.2-SNAPSHOT`，不设 baseline 分支）为起点，为每个功能创建独立 worktree 和新的 `feat-*` 开发分支；禁止直接修改或提交到 `dev`，完成后须将公开 JAR/BOM 发布到本地 Maven 仓库并由本项目继续按 `0.1.2-SNAPSHOT` 坐标消费，同时记录 SDK commit、发布与回归证据；开发与验证完成后，必须从该 `feat-*` 分支向 `dev` 发起 GitHub PR，在 Haifa Agent Super Harness 仓库的 `docs/todo.md` 更新对应任务与 PR/验证状态，并明确提醒人工审查合并，任何智能体不得自行合并该 PR。
+- 如验收过程中确认必须完善上游 Haifa Agent SDK，只能在 `D:\workspace\haifa-agent` 仓库以 `dev`（HA `0.1.2-SNAPSHOT`，默认不设 baseline 分支；038-01/038-02 例外，由 HA 主控经集成分支 `feat-012-sh-sdk-gaps` 汇合后再合入 `dev`）为起点，为每个功能创建独立 worktree 和新的 `feat-*` 开发分支；禁止直接修改或提交到 `dev`，完成后须将公开 JAR/BOM 发布到本地 Maven 仓库并由本项目继续按 `0.1.2-SNAPSHOT` 坐标消费，同时记录 SDK commit、发布与回归证据；开发与验证完成后，必须从该 `feat-*` 分支向 `dev` 发起 GitHub PR，在 Haifa Agent Super Harness 仓库的 `docs/todo.md` 更新对应任务与 PR/验证状态，并明确提醒人工审查合并，任何智能体不得自行合并该 PR。
 - 直接复用冻结的 DeerFlow 前端并由 Haifa 后端兼容其真实 REST/SSE/WS/文件/auth 协议，禁止自研平行 UI 或回落 DeerFlow 后端。
 - Haifa Agent Super Harness 为同一功能引入的领域模型复杂度必须与冻结 DeerFlow 的对应实现保持平衡或更低，禁止为了协议兼容复制、叠加或扩张不必要的领域对象、状态机、持久化概念和抽象层；若有证据表明只有更高的领域复杂度才能实现验收范围，执行智能体必须在编码前提交包含 DeerFlow 对照、复杂度增量、不可替代原因、风险与简化备选的设计说明，先经主控 Agent 评审，再等待人工裁决，未获人工明确同意不得实施或合入。
 - 每个工作包使用独立 branch/worktree、端口和数据目录；提交前运行相关测试并保留真实 Run/Tool/Artifact 证据，禁止为绿灯放宽断言。
