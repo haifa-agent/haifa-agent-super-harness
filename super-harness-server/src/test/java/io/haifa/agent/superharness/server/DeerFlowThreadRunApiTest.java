@@ -517,6 +517,31 @@ class DeerFlowThreadRunApiTest {
     }
 
     @Test
+    void metadataIsPublishedOnlyAfterTheDurableRunHasStarted() throws Exception {
+        // DeerFlow's worker calls try_start (pending -> running) before publishing
+        // `metadata`; the frozen UI reads the Run and history as soon as it sees it.
+        createThread("thread-start-order");
+        HttpResponse<InputStream> stream = client.send(
+                runRequest("thread-start-order", "__slow__"), HttpResponse.BodyHandlers.ofInputStream());
+        String location = stream.headers().firstValue("content-location").orElseThrow();
+        try (InputStream input = stream.body()) {
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(input, StandardCharsets.UTF_8));
+            assertThat(reader.readLine()).isEqualTo("event: metadata");
+
+            assertThat(getJson(location).path("status").asText()).isEqualTo("running");
+            HttpResponse<String> history = postJson(
+                    "/api/threads/thread-start-order/history", "{\"limit\":10}");
+            assertThat(history.statusCode()).isEqualTo(200);
+            assertThat(history.body()).contains("__slow__");
+
+            assertThat(postJson(location + "/cancel?wait=false&action=interrupt", "").statusCode())
+                    .isEqualTo(202);
+        }
+        awaitStatus(location, "interrupted");
+    }
+
+    @Test
     void cancelAcceptsFrozenSdkNumericFalseButRejectsTruthyWait() throws Exception {
         createThread("thread-sdk-cancel-query");
         HttpResponse<InputStream> stream = client.send(

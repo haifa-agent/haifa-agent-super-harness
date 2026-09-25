@@ -97,6 +97,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final int TERMINAL_RUN_CACHE_LIMIT = 8;
     private static final java.time.Duration TERMINAL_EVENT_SETTLE_TIMEOUT =
             java.time.Duration.ofSeconds(2);
+    static final Duration RUN_START_TIMEOUT = Duration.ofSeconds(5);
 
     private final ObjectMapper json;
     private final Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver;
@@ -301,9 +302,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
         }
         int limit = limitNode == null ? 10 : limitNode.intValue();
-        List<Map<String, Object>> response = historyProjections(thread, limit, beforeSequence).stream()
-                .map(this::threadHistoryResponse)
-                .toList();
+        List<Map<String, Object>> response = new ArrayList<>(
+                historyProjections(thread, limit, beforeSequence).stream()
+                        .map(this::threadHistoryResponse)
+                        .toList());
+        if (beforeSequence == null) overlayHistoryHead(thread, response, limit);
         sendJson(exchange, 200, response);
     }
 
@@ -341,11 +344,16 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
         int pageLimit = limit.orElseThrow();
         Long beforeSequence = before;
-        List<Map<String, Object>> eligible = new ArrayList<>(scanTurns(
-                        thread, pageLimit + 2 * TERMINAL_RUN_CACHE_LIMIT + 3, beforeSequence)
-                .stream().map(this::messageRow).toList());
+        List<ConversationTurn> durableTurns = scanTurns(
+                thread, pageLimit + 2 * TERMINAL_RUN_CACHE_LIMIT + 3, beforeSequence);
+        List<Map<String, Object>> eligible = new ArrayList<>(
+                durableTurns.stream().map(this::messageRow).toList());
+        Set<String> durableHumanRuns = durableHumanRunIds(durableTurns);
         for (RunRecord run : runs.values()) {
             if (!run.threadId.equals(threadId)) continue;
+            if (isInFlightWithoutDurableHuman(run, durableHumanRuns)) {
+                eligible.add(messageRow(run, run.humanSequence, run.createdAt, pendingHumanMessage(run)));
+            }
             synchronized (run) {
                 if (run.interactionRequestMessage != null) {
                     eligible.add(messageRow(run, run.interactionRequestSequence,
@@ -733,6 +741,25 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         streamRunEvents(exchange, thread, run, cursor, false, "continue", false);
     }
 
+    /**
+     * DeerFlow moves a Run from pending to running before it publishes {@code metadata}, and the
+     * frozen UI reads the Run as soon as it sees that frame. The durable SDK admits a Run as
+     * pending, so wait (bounded) for it to leave admission before the first frame is written.
+     */
+    private void awaitRunStart(RunRecord run) {
+        long deadline = System.nanoTime() + RUN_START_TIMEOUT.toNanos();
+        while (System.nanoTime() < deadline) {
+            AgentRunStatus status = run.bridge.snapshot(run.runId).status();
+            if (status != AgentRunStatus.PENDING && status != AgentRunStatus.QUEUED) return;
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
     private void streamRunEvents(
             HttpExchange exchange,
             ThreadRecord thread,
@@ -751,6 +778,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     "Content-Location",
                     "/api/threads/" + run.threadId + "/runs/" + run.runId.value());
         }
+        if (creator) awaitRunStart(run);
         exchange.sendResponseHeaders(200, 0);
 
         try (OutputStream output = exchange.getResponseBody()) {
@@ -1180,6 +1208,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                                 .filter(sequence -> sequence < checkpoint.sequence())
                                 .max(Long::compareTo)
                                 .orElse(null)));
+        response.put("values", Map.of("messages", overlaidMessages(thread, turns)));
         response.put("checkpoint", Map.of());
         response.put("tasks", List.of());
         return response;
@@ -1266,6 +1295,105 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private String historyCursor(long sequence) {
         return "turn-" + sequence;
+    }
+
+    /**
+     * The SDK transcript only gains a Run's user turn once the Run commits it, while DeerFlow
+     * checkpoints the human input before the agent starts. Cached Runs still carry what the
+     * transcript lacks: the in-flight human message and the Interaction request/response,
+     * which belong directly after that Run's human message.
+     */
+    private List<Map<String, Object>> overlaidMessages(
+            ThreadRecord thread, List<ConversationTurn> turns) {
+        Map<String, RunRecord> cached = new LinkedHashMap<>();
+        runs.values().stream()
+                .filter(run -> run.threadId.equals(thread.threadId))
+                .sorted((left, right) -> Long.compare(left.humanSequence, right.humanSequence))
+                .forEach(run -> cached.put(run.runId.value(), run));
+        Set<String> durableHumanRuns = durableHumanRunIds(turns);
+        List<Map<String, Object>> messages = new ArrayList<>();
+        for (ConversationTurn turn : turns) {
+            messages.add(messageForTurn(turn));
+            if (turn.role() == io.haifa.agent.core.message.MessageRole.USER && turn.runId().isPresent()) {
+                RunRecord run = cached.get(turn.runId().orElseThrow().value());
+                if (run != null) addInteractionMessages(run, messages);
+            }
+        }
+        for (RunRecord run : cached.values()) {
+            if (!isInFlightWithoutDurableHuman(run, durableHumanRuns)) continue;
+            messages.add(pendingHumanMessage(run));
+            addInteractionMessages(run, messages);
+        }
+        return messages;
+    }
+
+    private void overlayHistoryHead(
+            ThreadRecord thread, List<Map<String, Object>> response, int limit) {
+        List<ConversationTurn> turns = scanTurns(thread, HISTORY_MESSAGE_RETENTION);
+        List<Map<String, Object>> messages = overlaidMessages(thread, turns);
+        Set<String> answeredRuns = new HashSet<>();
+        for (ConversationTurn turn : turns) {
+            if (turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT) {
+                turn.runId().ifPresent(runId -> answeredRuns.add(runId.value()));
+            }
+        }
+        // A Run whose answer is not yet in the transcript has no durable checkpoint; DeerFlow
+        // would already expose its input checkpoint, so project one from the overlay.
+        Optional<RunRecord> inFlight = runs.values().stream()
+                .filter(run -> run.threadId.equals(thread.threadId))
+                .filter(run -> !answeredRuns.contains(run.runId.value()))
+                .filter(run -> !run.bridge.snapshot(run.runId).status().isTerminal())
+                .max((left, right) -> Long.compare(left.humanSequence, right.humanSequence));
+        if (inFlight.isEmpty()) {
+            if (response.isEmpty()) return;
+            long headSequence = Long.parseLong(
+                    ((String) response.getFirst().get("checkpoint_id")).substring("turn-".length()));
+            List<ConversationTurn> headTurns = turns.stream()
+                    .filter(turn -> turn.sequence() <= headSequence)
+                    .toList();
+            response.getFirst().put("values", Map.of("messages", overlaidMessages(thread, headTurns)));
+            return;
+        }
+        RunRecord run = inFlight.orElseThrow();
+        Map<String, Object> head = new LinkedHashMap<>();
+        head.put("values", Map.of("messages", messages));
+        head.put("next", List.of());
+        head.put("metadata", Map.of());
+        head.put("checkpoint_id", historyCursor(run.humanSequence));
+        head.put("parent_checkpoint_id", response.isEmpty() ? null : response.getFirst().get("checkpoint_id"));
+        head.put("created_at", run.createdAt.toString());
+        response.addFirst(head);
+        while (response.size() > limit) response.removeLast();
+    }
+
+    private Set<String> durableHumanRunIds(List<ConversationTurn> turns) {
+        Set<String> result = new HashSet<>();
+        for (ConversationTurn turn : turns) {
+            if (turn.role() == io.haifa.agent.core.message.MessageRole.USER) {
+                turn.runId().ifPresent(runId -> result.add(runId.value()));
+            }
+        }
+        return result;
+    }
+
+    private boolean isInFlightWithoutDurableHuman(RunRecord run, Set<String> durableHumanRuns) {
+        return !durableHumanRuns.contains(run.runId.value())
+                && !run.bridge.snapshot(run.runId).status().isTerminal();
+    }
+
+    private Map<String, Object> pendingHumanMessage(RunRecord run) {
+        Map<String, Object> message = message("human-" + run.runId.value(), "human", run.humanMessage);
+        message.put("run_id", run.runId.value());
+        return message;
+    }
+
+    private void addInteractionMessages(RunRecord run, List<Map<String, Object>> messages) {
+        synchronized (run) {
+            if (run.interactionRequestMessage != null) messages.add(run.interactionRequestMessage);
+            if (run.acceptedInteractionResponse != null) {
+                messages.add(run.acceptedInteractionResponse.message());
+            }
+        }
     }
 
     private List<ConversationTurn> scanTurns(ThreadRecord thread, int retention) {

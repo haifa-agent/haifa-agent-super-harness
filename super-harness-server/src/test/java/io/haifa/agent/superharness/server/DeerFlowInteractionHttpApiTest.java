@@ -77,10 +77,24 @@ class DeerFlowInteractionHttpApiTest {
         assertThat(toolInvocations).hasValue(0);
         assertThat(getJson(location).path("status").asText()).isEqualTo("interrupted");
 
+        // The frozen UI reloads history while the card waits; the human input must precede it
+        // or the card is rendered as already answered.
+        HttpResponse<String> pendingHistory =
+                postJson("/api/threads/interaction-thread/history", "{\"limit\":10}");
+        assertThat(pendingHistory.statusCode()).isEqualTo(200);
+        JsonNode pendingMessages = json.readTree(pendingHistory.body())
+                .get(0).path("values").path("messages");
+        assertThat(pendingMessages).hasSize(2);
+        assertThat(pendingMessages.get(0).path("type").asText()).isEqualTo("human");
+        assertThat(pendingMessages.get(1).path("type").asText()).isEqualTo("tool");
+        assertThat(pendingMessages.get(0).path("content").asText()).isEqualTo("request approval");
+        assertThat(pendingMessages.get(1).path("artifact").path("human_input").path("request_id").asText())
+                .isEqualTo(requestId);
+
         String responseBody = hiddenResponseBody(requestId, "approve", "approve");
         HttpResponse<String> resumed =
                 postJson("/api/threads/interaction-thread/runs/stream", responseBody);
-        assertThat(resumed.statusCode()).isEqualTo(200);
+        assertThat(resumed.statusCode()).as(resumed.body()).isEqualTo(200);
         assertThat(resumed.headers().firstValue("content-location")).contains(location);
         assertThat(resumed.body()).contains("event: messages");
         assertThat(resumed.body()).contains("interaction resolved");
