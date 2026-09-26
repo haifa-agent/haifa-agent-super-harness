@@ -39,6 +39,14 @@ function lastUserText(body) {
     .at(-1) ?? "";
 }
 
+function syntheticUserText(raw) {
+  // The frozen DeerFlow graph frames the user message before invoking the
+  // model. Preserve that raw input in the provider log while returning the
+  // same deterministic fixture answer for both backend combinations.
+  const framed = /^--- BEGIN USER INPUT ---\r?\n([\s\S]*?)\r?\n--- END USER INPUT ---$/.exec(raw.trim());
+  return framed ? framed[1] : raw;
+}
+
 function toolNames(body) {
   if (!Array.isArray(body.tools)) return [];
   return body.tools
@@ -91,7 +99,8 @@ const server = http.createServer((request, response) => {
       return;
     }
 
-    const prompt = lastUserText(body);
+    const rawPrompt = lastUserText(body);
+    const prompt = syntheticUserText(rawPrompt);
     const offeredTools = toolNames(body);
     const probe = offeredTools.includes("connection_check");
     const interaction = offeredTools.includes("mutating_probe");
@@ -104,9 +113,26 @@ const server = http.createServer((request, response) => {
         probe,
         interaction,
         prompt,
+        rawPrompt,
         authorization: /^Bearer\s+\S+$/i.test(request.headers.authorization ?? ""),
       }),
     );
+
+    if (body.stream !== true && !probe) {
+      sendJson(response, 200, {
+        id: `w18-nonstream-${Date.now()}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: "w18-controlled-model",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: `Controlled provider: ${prompt}` },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 },
+      });
+      return;
+    }
 
     response.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
@@ -196,7 +222,7 @@ const server = http.createServer((request, response) => {
     }
 
     const id = `w18-run-${Date.now()}`;
-    if (prompt === "__slow__") {
+    if (prompt === "__slow__" || prompt === "__slow_differential__") {
       let emitted = 0;
       const timer = setInterval(() => {
         if (response.destroyed || response.writableEnded) {
@@ -216,7 +242,7 @@ const server = http.createServer((request, response) => {
           frame(response, "[DONE]");
           response.end();
         }
-      }, 25);
+      }, prompt === "__slow_differential__" ? 100 : 25);
       response.on("close", () => clearInterval(timer));
       return;
     }

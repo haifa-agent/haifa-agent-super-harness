@@ -54,6 +54,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final DeerFlowConfigurationApi configurationApi;
     private final DeerFlowWorkspaceApi workspaceApi;
     private final DeerFlowProjectApi projectApi;
+    private final DeerFlowInputPolishApi inputPolishApi;
 
     private DeerFlowBootstrapApi(
             HttpServer server,
@@ -69,11 +70,13 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.configurationApi = new DeerFlowConfigurationApi(objectMapper, dataDirectory);
         PersistentProjectWorkspaceService projects = new PersistentProjectWorkspaceService(
                 dataDirectory.resolve("workspace"), WorkspaceLimits.defaults(), WorkspaceChangeLimits.defaults());
-        this.threadRunApi = new DeerFlowThreadRunApi(
-                objectMapper,
+        Function<JsonNode, HaifaRunBridge.ModelBinding> modelResolver =
                 testRunModelResolver == null
                         ? configurationApi::resolveRunModel
-                        : testRunModelResolver,
+                        : testRunModelResolver;
+        this.threadRunApi = new DeerFlowThreadRunApi(
+                objectMapper,
+                modelResolver,
                 projectId -> projects.projectExists(DEFAULT_USER_ID, projectId),
                 projects,
                 dataDirectory,
@@ -82,6 +85,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
         this.projectApi = new DeerFlowProjectApi(objectMapper, projects, threadRunApi, workspaceApi);
+        this.inputPolishApi = new DeerFlowInputPolishApi(objectMapper, modelResolver);
         registerRoutes();
     }
 
@@ -344,6 +348,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         server.createContext("/api/models", configurationApi);
         server.createContext("/api/managed-models", configurationApi);
         server.createContext("/api/agents", configurationApi);
+        server.createContext(DeerFlowInputPolishApi.PATH, inputPolishApi);
         server.createContext("/api/projects", projectApi);
         server.createContext("/api/threads", exchange -> {
             if (!workspaceApi.tryHandle(exchange)) {

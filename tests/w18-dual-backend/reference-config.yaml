@@ -1,0 +1,27 @@
+# Test-only, local L2 DeerFlow profile. Paths and provider URL are supplied by
+# the slot-3 runner; this is not a product or live-model configuration.
+log_level: warning
+models:
+  - name: w18-controlled
+    display_name: W18 Controlled Loopback
+    use: langchain_openai:ChatOpenAI
+    model: w18-controlled-model
+    api_key: w18-loopback-only
+    base_url: $W18_PROVIDER_BASE_URL
+sandbox:
+  use: deerflow.sandbox.local:LocalSandboxProvider
+skills:
+  path: $W18_REFERENCE_SKILLS_ROOT
+  container_path: /mnt/skills
+tool_groups: []
+tools: []
+memory:
+  enabled: false
+  injection_enabled: false
+summarization:
+  enabled: false
+agents_api:
+  enabled: true
+database:
+  backend: sqlite
+  sqlite_dir: $W18_REFERENCE_DB_ROOT
