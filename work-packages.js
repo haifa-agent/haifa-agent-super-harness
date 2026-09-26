@@ -1,6 +1,6 @@
 window.WORK_PACKAGES_DATA = {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-26T21:37:00+08:00",
+  "updatedAt": "2026-09-26T21:59:40+08:00",
   "source": "private-docs/roadmap/35-super-harness-deerflow-parity.md",
   "baseline": {
     "phase": "Wave A",
@@ -12,8 +12,8 @@ window.WORK_PACKAGES_DATA = {
     "evidenceGatePassed": 1
   },
   "recentWorkPlan": {
-    "updatedAt": "2026-09-26T21:37:00+08:00",
-    "focus": "主控已完成 W05/W18/W03 三切片合入、HA 0.1.2-SNAPSHOT 空缓存消费复验及 W04 合入态冻结 UI 双轮回归；主服务仍供人工验收。当前 P0 是定位 W05 Interaction 重启用例的间歇 409，随后推进 W05 生产 Tool/多类型交互；W03、W04、W18 仍有各自整包尾项，不能提前关单。",
+    "updatedAt": "2026-09-26T21:59:40+08:00",
+    "focus": "主服务 18018/33018 继续供人工验收。W05 409 根因、W00 全量消费/许可、W03 title/suggestions 已在三个隔离 lane 并行开发，其中 W03 由 OpenCode deepseek/deepseek-flash 承担；主控复审、合入并随后自领 W03 同会话换模型。W18 文件/Interaction 差分提示词已备，待槽位 3 与前置功能释放后交 OpenCode，使本轮四个子任务中两项由其承担。工作包仍按证据逐项验收，不提前关单。",
     "items": [
       {
         "id": "NEXT-01",
@@ -21,8 +21,8 @@ window.WORK_PACKAGES_DATA = {
         "title": "W05 Interaction 尾项与间歇测试",
         "status": "in_progress",
         "workPackages": ["W05"],
-        "owner": "主控 /root 规划复现与后续派单",
-        "nextAction": "保留空缓存门禁 409 失败证据并复现/定位；设计下一切片覆盖生产 Tool、非 approval/多 Interaction 与真正独立 OS 进程重启，逐项对照冻结协议。",
+        "owner": "/root/w05_restart_409 · codex/w05-restart-interaction-409 · 槽位1 28018/43018；主控复审",
+        "nextAction": "按 W05-RestartInteraction409-Developing.md 复现/定位并修复合法 Interaction 回复偶发 409；保留首次失败证据。修复合入后再安排生产 Tool、非 approval/多 Interaction 和跨 OS 进程尾项。",
         "doneWhen": "间歇用例的根因和修复有稳定回归证据；真实生产 Tool 与剩余 Interaction 语义获得 HTTP/SSE/Run/Tool 证据，整包退出条件另行复核。",
         "dependency": "3ab6d93 已合入 main@cc971c7；主线 clean verify 111 项、主端口 smoke、W18 Haifa 4/4×2 PASS。首次 clean-consumer 111 项中本用例返回 409；定向 4/4、二次空缓存全 6 模块 PASS，根因未定，首次 FAIL 保留。"
       },
@@ -43,8 +43,8 @@ window.WORK_PACKAGES_DATA = {
         "title": "W18 双后端文件/Interaction 尾项",
         "status": "pending",
         "workPackages": ["W18"],
-        "owner": "主控 /root 规划，待分配",
-        "nextAction": "保留已完成的 text/SSE/cancel/reload 双后端切片；另写派单提示词，覆盖上传→生产文件 Tool→下载 hash、Interaction 与 WS/文件边界，不用脚本 fixture 冒充产品能力。",
+        "owner": "待槽位3释放后派 OpenCode deepseek/deepseek-flash；主控复审",
+        "nextAction": "W18-FileInteractionDifferential-Pending.md 已备；待 W03 OpenCode 提交及 W05 前置复核后用槽位3开展上传→生产文件 Tool→下载 hash、Interaction 与 WS/文件边界差分，不用脚本 fixture 冒充产品能力。",
         "doneWhen": "剩余双后端场景取得冻结 UI、真实网络目标、Run/Tool/Artifact/hash 与同脚本重复证据；无法运行的项明确 NOT_RUN。",
         "dependency": "runner 0ee36ed 已合入 main@f47b425；DeerFlow 参考 4/4×3，Haifa 合入 W05 后 4/4×2 PASS，分别 92/84 秒，端口释放。原 main@045e8e0 3/4×3 FAIL 保留为历史。"
       },
@@ -54,8 +54,9 @@ window.WORK_PACKAGES_DATA = {
         "title": "W03 title/suggestions 与冻结 UI 消费",
         "status": "pending",
         "workPackages": ["W03"],
-        "owner": "主控 /root 设计；下一可独立切片优先评估 OpenCode",
-        "nextAction": "为 title/suggestions 与冻结 UI 调用链写新提示词；优先评估把有界后端切片交给 OpenCode，以实现后续约一半新开发任务由 OpenCode 承担的目标。已完成的 Input Polish 后端另补主端口受控成功路径或可用槽位 UI 验证，勿为试点切换系统端口。",
+        "status": "in_progress",
+        "owner": "OpenCode deepseek/deepseek-flash · codex/w03-title-suggestions-opencode · 槽位3 48018/63018；主控复审",
+        "nextAction": "按 W03-TitleSuggestions-Developing.md 补真实 title/suggestions 和冻结 UI 消费；主控随后补 Input Polish UI 缺口并复核。",
         "doneWhen": "title/suggestions 和 polish 的冻结 UI 消费、异常语义及模型/凭据边界通过真实受控 Provider 与浏览器验证；W03 整包另审。",
         "dependency": "OpenCode 使用 deepseek/deepseek-flash 提交 acf8061，经主控复审、分支 clean verify、controlled-provider 2/2×2 后合入 main@85b2a5b；同源空输入 400 PASS。槽位 2 的 53018 被 NAT 排除，UI smoke NOT_RUN。"
       },
@@ -63,9 +64,9 @@ window.WORK_PACKAGES_DATA = {
         "id": "NEXT-03",
         "priority": "P1",
         "title": "W00 增量协议种子退出复核",
-        "status": "pending",
+        "status": "in_progress",
         "workPackages": ["W00"],
-        "owner": "主控复验",
+        "owner": "/root/w00_inventory · codex/w00-consumer-inventory · 槽位2 38018/53018；主控复验",
         "nextAction": "补齐浏览器/SSR/BFF 的剩余 REST/WS/文件/auth 实际消费面、条件注册和参考配置，并完成嵌套依赖、字体、图片、品牌资产许可审计；保持静态 Oracle 与运行互通分层。",
         "doneWhen": "路线图 W00 所要求的调用清单、来源/许可、参考配置与首批有效 Oracle 均有源码绑定和门禁证据后，主控才复核是否待验收；运行差分属于 W18，不能混同。",
         "dependency": "2026-09-26 主控复核：28 个 surfaces、7 个资源及 13 项正/负门禁 PASS；manifest.known_not_covered 明示 agents/project/trash/skills/MCP/schedules/channels/console/batches 和多种 mutation 未盘全，resource-seed 仅验证根 MIT，嵌套依赖/字体/图片/品牌许可未审，因此 W00 仍 in_progress。"
@@ -74,12 +75,12 @@ window.WORK_PACKAGES_DATA = {
         "id": "NEXT-04",
         "priority": "P1",
         "title": "W03 同一 Conversation 切换模型",
-        "status": "blocked",
+        "status": "pending",
         "workPackages": ["W03"],
-        "owner": "待分配",
-        "nextAction": "取得 038-03 实施授权后，按 SH 服务层的模型绑定限制写失败用例；同时补 title/polish/suggestions 和冻结 UI 差分。",
+        "owner": "主控 /root 自领，待 W05 准入/恢复修复复审后开工",
+        "nextAction": "W03-ConversationModelSwitch-Pending.md 已备；按 038-03 设计在 SH 服务层写失败先行用例并解除单 Thread 模型锁定，复核 SDK 结构化 Tool 历史、互斥和重启恢复。",
         "doneWhen": "同一 Conversation 的多轮不同模型真实运行通过，历史与工具连续，且没有新增不必要的领域模型。",
-        "dependency": "038-03 当前仅为设计提示词，尚待实施授权；可与 W05 修复并行规划。"
+        "dependency": "本轮用户要求实施，038-03 仅提供方案非功能证据；当前等待 W05 对同一 DeerFlowThreadRunApi 准入/恢复路径的修复结果，避免并发改同一边界。"
       },
       {
         "id": "NEXT-05",
@@ -117,13 +118,13 @@ window.WORK_PACKAGES_DATA = {
       {
         "id": "NEXT-08",
         "priority": "P2",
-        "title": "裁定 W04 完整 parity 尾项边界",
-        "status": "blocked",
+        "title": "W04 原范围裁决完成",
+        "status": "complete",
         "workPackages": ["W04"],
-        "owner": "主控已提出方案，待人工裁决",
-        "nextAction": "阅读 private-docs/prompts/39-deerflow-parity-delivery/W04-Developing/W04-ScopeDecision-Developing.md 并请人工裁定：保持原整包退出条件，或另立不改变 W04 状态的本地演示里程碑；未经裁决不改路线图/PRD。",
-        "doneWhen": "如需调整本期/长期验收口径，先由人工明确选择，再同步路线图、PRD、Dashboard；未裁定前 W04 保持进行中。",
-        "dependency": "主控提案已提交待审：合入态 W04 UI 2/2×2 PASS；archive/转换/删除/预览/25 MiB 仍未做。建议保持原 W04 口径，Demo 可另设里程碑但不关整包。"
+        "owner": "主控 /root；人工已裁决",
+        "nextAction": "按已批准的原 W04 退出条件继续安排 archive/restore/delete、转换、预览及 25 MiB 等尾项；如需单列 Demo 里程碑，另行提出，不借此关闭 W04。",
+        "doneWhen": "人工已同意主控建议选项 1：维持原 W04 整包验收口径，主路径只作切片证据；裁决任务完成，W04 工作包仍 in_progress。",
+        "dependency": "人工于 2026-09-26 同意 private-docs/prompts/39-deerflow-parity-delivery/W04-Developing/W04-ScopeDecision-Finished.md 的选项 1；合入态 W04 UI 2/2×2 PASS，archive/转换/删除/预览/25 MiB 未完成；无需改路线图/PRD。"
       }
     ]
   },
@@ -226,14 +227,16 @@ window.WORK_PACKAGES_DATA = {
     { "at": "2026-09-26T19:14:04+08:00", "title": "W05 review 修复切片提交，待主控集成", "detail": "子智能体在 codex/w05-message-identity-steer 提交 77eef34：默认 reject 与显式 Haifa Steer Header 分离、SSE 错误脱敏、长 Run 消息 ID 稳定、UI runner -am；最终 verify 92/0/2，Interaction 冷/热各 2/2、ActiveReconnect 隔离根冷/热各 1/1，契约与 W24 41 断言 PASS。既有 workspace 间歇失败根因未定位，真实模型及冻结 UI Steer NOT_RUN；分支未合入主线，W05 整包仍 in_progress。" },
     { "at": "2026-09-26T21:09:00+08:00", "title": "主控复核 W05/W18/W03 合入与差分结果", "detail": "W05 3ab6d93、W18 runner 0ee36ed、OpenCode W03 Input Polish acf8061 分别合入 main@cc971c7/f47b425/85b2a5b；主线 clean verify server 111/0 fail/2 skip，18018/33018 主服务健康。W18 参考 4/4×3、Haifa 合入态 4/4×2 PASS，旧 3/4×3 FAIL 保留。首次 clean-consumer 因 W05 重启 Interaction 返回 409 FAIL，定向复跑 4/4 PASS，根因待查；三个整包均保持 in_progress。" },
     { "at": "2026-09-26T21:24:00+08:00", "title": "SDK 空缓存消费与 W04 主线 UI 回归复验", "detail": "HA c0e2c1c6 的 0.1.2-SNAPSHOT 公开 JAR/BOM 在本仓二次空缓存 verify 全 6 模块 PASS、server 111/0/2、双 Child 1/1；首次 W05 Interaction 409 FAIL 保留为间歇问题。W04 主树因同目录 Next dev 单实例保护未运行断言，已在独立 codex/w04-main-regression@c7d6c6e 以同代码完成 2/2×2 PASS，零重试、端口释放；17 份原始日志复制到外置 local-tmp 并逐一哈希核对。" },
-    { "at": "2026-09-26T21:30:00+08:00", "title": "W00 原范围退出复核：暂不转待验收", "detail": "主控原样复跑合同正/负门禁 13/13 PASS；28 个消费面与 7 个资源只是有效种子，manifest 明示剩余 agents/project/trash/skills/MCP/schedules/channels/console/batches 等路由未盘全，根 MIT 之外的依赖/字体/图片/品牌许可未审。W00 仍 in_progress，静态 Oracle 不冒充运行差分。" }
+    { "at": "2026-09-26T21:30:00+08:00", "title": "W00 原范围退出复核：暂不转待验收", "detail": "主控原样复跑合同正/负门禁 13/13 PASS；28 个消费面与 7 个资源只是有效种子，manifest 明示剩余 agents/project/trash/skills/MCP/schedules/channels/console/batches 等路由未盘全，根 MIT 之外的依赖/字体/图片/品牌许可未审。W00 仍 in_progress，静态 Oracle 不冒充运行差分。" },
+    { "at": "2026-09-26T21:47:00+08:00", "title": "W04 原范围裁决经人工同意", "detail": "人工同意主控建议选项 1：继续按原路线图开发验收 W04，已通过主路径仅作切片证据，W04 保持 in_progress；如需另设 Demo 里程碑须再次明确提出，当前不修改路线图或 PRD。裁决任务文件转 Finished，工作包目录继续 Developing。" },
+    { "at": "2026-09-26T21:59:40+08:00", "title": "W05/W00/W03 三条后续 lane 派发", "detail": "主控先提交私有设计提示词 bebc82a、11c7a23，再从 main@7ac4af6 建三个独立 worktree：W05 409 根因用 Codex 槽位1 28018/43018，W00 消费/许可用 Codex 槽位2 38018/53018，W03 title/suggestions 用 OpenCode deepseek/deepseek-flash 槽位3 48018/63018。主服务 18018/33018 保留。W03 同会话换模型由主控待 W05 修复后实施；W18 差分计划给下一轮 OpenCode。当前仅派发，未宣称实现或测试 PASS。" }
   ],
   "workPackages": [
     { "id": "W00", "title": "固定快照、前端消费协议与资源种子", "wave": "A", "lane": "G · 协议/Verifier", "state": "in_progress", "startedAt": "2026-09-22T15:18:36+08:00", "completedAt": null, "prerequisites": [], "branch": "codex/w00-oracle-wave2", "owner": "/root", "summary": "冻结消费面/资源种子及两轮 core REST/Error/SSE Oracle 已集成，28 个 surfaces、7 个资源和 13 项正/负门禁可复验；但源码清单明确未盘全 agents/project/trash/skills/MCP/schedules/channels/console/batches 等剩余消费面，根 MIT 之外的依赖/字体/图片/品牌许可也未审。按原路线图退出条件仍为进行中，运行差分归 W18。", "evidence": ["protocol seed f901baf + 213a4be; expansion cd45adf / main b1352a4; wave2 18bd681 / main 60a5022","28 surfaces + 18 core contracts + 19 source-derived fixtures PASS against frozen e545c28","13 positive/negative verifier gates PASS；wrong SHA、missing source、runtime escalation 与 schema drift fail closed","messages request→wire event、history/messages-page/runs-list、Project config/CRUD/threads、workspace-changes empty/query: SOURCE_VERIFIED + STATIC_CONTRACT_VERIFIED","7 resources: SOURCE_VERIFIED; W18 imported assets split from dedicated parity fixtures","implementation NOT_ASSESSED / runtime NOT_RUN are independently enforced","reference DeerFlow runtime、WS、live reconnect 与 full differential: NOT_RUN","2026-09-26 主控退出复核：tests/contracts/verify-deerflow-contracts.ps1 13/13 PASS；frontend-consumer-manifest.json 的 known_not_covered 明示剩余 REST/注册分支与消息 schema 未完成，resource-seed.json 的 license_review 只验证根 MIT，第三方/字体/图片/品牌义务未结；W00 不进入待验收，runtime differential 属 W18"], "exit": "固定同 SHA 前后端；形成 REST/SSE/WS/文件/auth/SSR 调用清单、来源许可与首批 Oracle。" },
     { "id": "W01", "title": "独立仓、JAR、上游 UI 与 Harness v0", "wave": "A", "lane": "底座/发布/Verifier", "state": "complete", "startedAt": "2026-09-22T15:11:34+08:00", "completedAt": "2026-09-22T16:39:59+08:00", "prerequisites": ["W00"], "branch": "codex/w01-foundation", "owner": "/root/w01_foundation", "summary": "独立 Java 21 Parent/BOM、公开 JAR 消费、真实 Run→Tool→Artifact smoke 与最小 fail-closed Harness 已完成。冻结前端导入由 W18 切片提供。", "evidence": ["branch 2784282 / main f0759b9", "mvn -o -ntp verify: 7 tests PASS", "empty consumer cache verify: PASS", "Run 01a0c863-56fb-7cee-b2c9-7cb5bb7368e8 / Tool artifact_render / Artifact w01-artifact-1 / SHA-256 8c2487ab..."], "exit": "独立 Parent/BOM；空缓存解析公开 JAR；最小 Harness 能识别故意失败与缺证据。" },
     { "id": "W02", "title": "本地身份、上游主协议与基础聊天", "wave": "A", "lane": "后端/联调", "state": "complete", "startedAt": "2026-09-22T17:47:00+08:00", "completedAt": "2026-09-26T13:44:00+08:00", "prerequisites": ["W01"], "branch": "codex/w02-content-blocks", "owner": "/root", "summary": "本地身份、模型目录、Thread/Run/SSE/cancel 与冻结前端真实文本对话已具备完整退出证据，人工体验验收通过，正式关单；重启历史归 W18、Interaction 归 W05，不作为 W02 阻断项。", "evidence": ["auth/me、setup-status、features、models 真实 socket 与同源前端接口 PASS；仅 loopback/开发免登录，伪造 owner/user_id/system_role 被拒", "真实 Haifa SDK Thread/Run/SSE/cancel；Content-Location、metadata/messages/end、取消 wait=false→interrupted 与 Thread busy→idle PASS", "冻结 UI text content block 与 string 输入兼容；畸形/未知/混合块 fail closed，未知图片块仍 422", "W18 受控 provider 冻结 UI Playwright 双跑 4/4 + 4/4 PASS，包含消息渲染/页面重载/cancel，0 retry；W05 active reconnect 双跑及提交后回归 PASS", "主线真实 DeepSeek Web Thread d78e1eec-3150-4a04-87ad-9c52aa64c5b8 / Run 01a0cc6d-592a-7685-95fa-b22b7d6bb848 success，UI 非空回复与刷新恢复 PASS；无 DeerFlow backend fallback", "合并态主线 d107d59 clean verify 93 tests、0 failure/error、1 opt-in live skip；同源 33018 auth/page 200，真实 DeepSeek Run 01a0d107-f640-7f1d-9008-8afebba0ff5c success、SSE metadata/messages/end", "人工体验验收通过：真实 DeepSeek 文本对话、SSE、cancel 与页面刷新恢复无明显 UX/协议问题；重启历史归 W18、Interaction 归 W05，退出条件全部满足，正式关单 PASS"], "exit": "auth/me、模型目录、Thread、Run、SSE、取消；同一 UI 真实运行且阻断 DeerFlow 回落。" },
     { "id": "W03", "title": "Agent、Model、模式与配置后端", "wave": "B", "lane": "E · 后端", "state": "in_progress", "startedAt": "2026-09-22T21:29:31+08:00", "completedAt": null, "prerequisites": ["W02"], "branch": "codex/w03-input-polish-opencode", "owner": "/root", "summary": "Managed Model、Agent、SOUL、配置模型 Run、OS credential_ref 与 DeepSeek 官方方言已集成；OpenCode Input Polish 后端 acf8061 经主控复审合入 main@85b2a5b，受控 Provider 与同源空输入负例通过。title/suggestions、同一 Conversation 换模型和冻结 UI 消费仍待验收，整包保持进行中。", "evidence": ["config 24c4127; Run binding b6b70f2 / main 1c0cb7c; DeepSeek 98bb4f1 / main def3c2b","main mvn -o -ntp clean verify: 62 passed, 1 opt-in L3 skipped; explicit L3 1/1 PASS","Windows Credential Manager target write/existence + public LocalModelCredentialResolver os://DEEPSEEK_API_KEY read PASS; secret scan PASS","real DeepSeek streaming tool-call probe PASS; main Run 01a0cb51-6f1f-7095-873b-1cc3ef26a65a PASS with model_calls=2/tool_calls=1","credential_ref accepts only os://NAME and wins over api_key；responses expose only has_credential/source；OS secret absent from JSON/ciphertext","exact https://api.deepseek.com → SDK deepseek-openai-chat + thinking=disabled；probe/Run share binding, snapshot, credential ref and dialect","explicit model > Agent model > first executable；thread name@revision drift 409；Run/SSE/cancel/reconnect 复用 W02/W05 bridge/projector","相对冻结 DeerFlow 仅增加可选 ref 标量与确定性选择，无 credential entity/table/cache/state machine；复杂度平衡或更低","main 18018 configured deepseek-main via OS ref；title/suggestions、同一 Conversation 换模型及完整冻结 UI 差分：NOT_RUN","OpenCode --model deepseek/deepseek-flash 提交 acf8061，主线 85b2a5b；Input Polish 定向 14/14、分支全仓 clean verify 96 server/0 fail/2 skip、controlled-provider 2/2×2 PASS；主线 clean verify 111 server/0 fail/2 skip，同源 /api/input-polish 空输入 400；付费模型未调用，槽位 2 UI 因 NAT 排除 NOT_RUN"], "exit": "复用上游页面，提供 SOUL/config/probe/模式/默认值及实际模型合约。" },
-    { "id": "W04", "title": "Workspace、Upload、Project 与变化", "wave": "A", "lane": "B · Workspace/Artifact", "state": "in_progress", "startedAt": "2026-09-22T17:47:00+08:00", "completedAt": null, "prerequisites": ["W02"], "branch": "codex/w04-frozen-ui-files", "owner": "/root", "summary": "受限持久 Workspace、上传/Artifact、Project 文档及 workspace-changes HTTP 已集成；冻结 UI 文件、引用、下载与差异面板在 HA 0.1.2-SNAPSHOT 更新后合入态同代码独立工作树双轮 2/2×2 PASS。archive/restore/delete、转换、预览和 25 MiB 等整包退出条件尚未满足。", "evidence": ["core workspace 73b9e72; file HTTP 8e488b3 + 1895d64; Project f372866; changes 5238485; hardening 64e4358 + 7eff317 / main d107d59; frozen UI files 27b4a84","唯一 persistent shelf 与 owner authority；Project 文档 list/upload/content Range/download/同项目 attach 复用既有 workspace，无第二套领域模型","敏感路径读取/哈希前识别、旧快照安全读取；recorder 故障不阻断 Run/SSE；detached Run 有界观察、diff 计数修正","主线真实 DeepSeek Run 01a0d107-f640-7f1d-9008-8afebba0ff5c success、SSE metadata/messages/end、同源 workspace-changes 200","分支 clean verify 96 tests、0 failure/error、1 opt-in skip；冻结合同门禁 PASS；diff/secret scan PASS，28018/43018 释放","最终 SHA 冻结 UI Playwright 2/2 PASS、零重试、18.081s/17.662s：Project 文档上传/206 预览/下载/attach、聊天引用、Run/SSE、Artifact Range、Workspace changes diff；trace/log target/w04-frozen-ui-files-evidence","Project archive/restore/delete、document conversion/trash/delete/from-thread/thread-files、PDF/二进制预览、25MiB 浏览器极限：NOT_RUN","2026-09-25 main@699cefd 合并态 W04 冻结 UI：cold 2/2 PASS（197s），warm 1/2（234s），首个 attempt 在第二条 __slow__ 未提交、waitForResponse 120s 超时，同 run 的 repeat 通过；判定为间歇性，待与 W05 run 状态回归一并排查","修复分支 b720d42 上 W04 冻结 UI 2/2 + 2/2 PASS（93s/101s，0 retry，端口清理）；此前主线 warm 间歇超时本次未复现","2026-09-26 main@c7d6c6e 同代码独立 codex/w04-main-regression：冻结来源 981 文件/21,172,960 字节/inventory 1fc6b2e4...f8a3 PASS；W04 UI runner 2/2×2 PASS，首轮 142 秒/冷编译 30.4 秒、二轮 106 秒/冷编译 10.4 秒，0 retry，28018/43018 已释放；target 原始日志 17 文件逐一哈希一致复制至 local-tmp/slot-1-w04-main-20260926/evidence","主工作树同目录启动第二个 Next dev 时因 33018 已运行而报 Another next dev server is already running；这是 UI 断言未执行的环境失败，原始日志保存在主树 local-tmp/slot-1-w04-main-20260926/evidence；未停止主服务，独立工作树双跑通过"], "exit": "上传、引用路径、读写搜索 diff 与真实文件/hash/越界/失败验证。" },
+    { "id": "W04", "title": "Workspace、Upload、Project 与变化", "wave": "A", "lane": "B · Workspace/Artifact", "state": "in_progress", "startedAt": "2026-09-22T17:47:00+08:00", "completedAt": null, "prerequisites": ["W02"], "branch": "codex/w04-frozen-ui-files", "owner": "/root", "summary": "受限持久 Workspace、上传/Artifact、Project 文档及 workspace-changes HTTP 已集成；冻结 UI 文件、引用、下载与差异面板在 HA 0.1.2-SNAPSHOT 更新后合入态同代码独立工作树双轮 2/2×2 PASS。archive/restore/delete、转换、预览和 25 MiB 等整包退出条件尚未满足。", "evidence": ["core workspace 73b9e72; file HTTP 8e488b3 + 1895d64; Project f372866; changes 5238485; hardening 64e4358 + 7eff317 / main d107d59; frozen UI files 27b4a84","唯一 persistent shelf 与 owner authority；Project 文档 list/upload/content Range/download/同项目 attach 复用既有 workspace，无第二套领域模型","敏感路径读取/哈希前识别、旧快照安全读取；recorder 故障不阻断 Run/SSE；detached Run 有界观察、diff 计数修正","主线真实 DeepSeek Run 01a0d107-f640-7f1d-9008-8afebba0ff5c success、SSE metadata/messages/end、同源 workspace-changes 200","分支 clean verify 96 tests、0 failure/error、1 opt-in skip；冻结合同门禁 PASS；diff/secret scan PASS，28018/43018 释放","最终 SHA 冻结 UI Playwright 2/2 PASS、零重试、18.081s/17.662s：Project 文档上传/206 预览/下载/attach、聊天引用、Run/SSE、Artifact Range、Workspace changes diff；trace/log target/w04-frozen-ui-files-evidence","Project archive/restore/delete、document conversion/trash/delete/from-thread/thread-files、PDF/二进制预览、25MiB 浏览器极限：NOT_RUN","2026-09-25 main@699cefd 合并态 W04 冻结 UI：cold 2/2 PASS（197s），warm 1/2（234s），首个 attempt 在第二条 __slow__ 未提交、waitForResponse 120s 超时，同 run 的 repeat 通过；判定为间歇性，待与 W05 run 状态回归一并排查","修复分支 b720d42 上 W04 冻结 UI 2/2 + 2/2 PASS（93s/101s，0 retry，端口清理）；此前主线 warm 间歇超时本次未复现","2026-09-26 main@c7d6c6e 同代码独立 codex/w04-main-regression：冻结来源 981 文件/21,172,960 字节/inventory 1fc6b2e4...f8a3 PASS；W04 UI runner 2/2×2 PASS，首轮 142 秒/冷编译 30.4 秒、二轮 106 秒/冷编译 10.4 秒，0 retry，28018/43018 已释放；target 原始日志 17 文件逐一哈希一致复制至 local-tmp/slot-1-w04-main-20260926/evidence","主工作树同目录启动第二个 Next dev 时因 33018 已运行而报 Another next dev server is already running；这是 UI 断言未执行的环境失败，原始日志保存在主树 local-tmp/slot-1-w04-main-20260926/evidence；未停止主服务，独立工作树双跑通过","2026-09-26 人工同意 W04 ScopeDecision 选项 1：原整包退出条件不变，主路径 PASS 仅为切片证据；Demo 里程碑若需单列须另行提出，W04 保持 in_progress"], "exit": "上传、引用路径、读写搜索 diff 与真实文件/hash/越界/失败验证。" },
     { "id": "W05", "title": "上游事件、Interaction 与单机收敛", "wave": "A", "lane": "A · Run/事件", "state": "in_progress", "startedAt": "2026-09-22T19:05:00+08:00", "completedAt": null, "prerequisites": ["W02"], "branch": "codex/w05-message-identity-steer", "owner": "/root", "summary": "durable SSE、稳定消息身份、gap/断线重连、显式 Steer 与 approval Interaction 同 Run 等待/回复已由 3ab6d93 合入 main@cc971c7；主线 clean verify 111 项、主端口 smoke 与 W18 Haifa active reload 双跑通过。生产 Tool、真正独立进程 Interaction 恢复、非 approval/多 Interaction 和间歇性重启测试 409 根因仍待验证，整包保持进行中。", "evidence": ["active reconnect branch d12a5ca；Interaction branch b852587；公开 SDK AgentRuns.events/view/pendingInteraction/respond，无 request→run 表或平行状态机","SSE id 绑定 durable AgentRunEvent.sequence；gap earliest/latest+authoritative view，Last-Event-ID 精确 -1 before-first；其他非法 cursor 409","冻结 UI running reload→join -1/200→messages/end→success 双跑+提交后复跑 PASS，0 retry，trace/log target/w05-active-reconnect-evidence/playwright","批准/拒绝隐藏 human response→SDK pendingInteraction/respond→同一 Run success；重复请求由 SDK DUPLICATE 后 HTTP 409，跨线程/冲突/畸形 fail closed；正常 bootstrap 零 tools，fixture 仅测试类路径","Interaction 分支 clean test 90 tests、0 failure；定向 19/19 连续三次 PASS；主线合并态 test 101 tests、0 failure/error、2 intentional skip","冻结 UI Interaction cold/warm/post-clean 共 6/6 PASS、0 retry；trace/screenshot/log target/w05-interaction-evidence/playwright；首轮曾遇一次 HTTP 500 且 body 未保留，随后三次定向及 clean 未复现，诊断局限保留","生产 Tool wiring、跨进程 Interaction 恢复、非 approval/input contract、同 Run 多 Interaction、updates/custom payload、DeerFlow/Haifa runtime differential：NOT_RUN","2026-09-25 main@699cefd 合并态 Playwright FAIL：Interaction cold/warm 各 2/2 failed，Approve/Reject 按钮 disabled（卡片排在本轮 human 消息之前，被判为 Answered）；active reconnect 两次均 1 failed，运行中 GET run 返回 pending 而非 running。均稳定复现、0 retry；W05 分支单独通过，属 W18 持久化合入后的回归，待定位修复","修复 codex/w05-merged-start-order b720d42（已快进合入 main）：creator stream 在 SDK Run 离开 PENDING/QUEUED 后才写 metadata（对齐 DeerFlow try_start→metadata）；history 头 checkpoint、state、messages/page 叠加缓存 Run 的在途 human 消息与 Interaction request/response。新增服务端测试：修复前失败，修复后通过。修复后 Playwright：Interaction 2/2 + 2/2 PASS（85s/82s，0 retry）；active reconnect 5 次中 3 次 PASS，2 次在 spec:149 FAIL（重连后 human 与 assistant 各渲染两次）。根因指向 W18 持久消息身份不一致：流式 assistant id 为 assistant-<runId>，durable turn 使用 SDK messageId，human 亦不一致；尚未修复","2026-09-26 codex/w05-message-identity-steer@b49770f：新增 active reconnect 与 Steer 定向测试分别 1/1、5/5 PASS；主控整仓 clean verify 服务端 88 项中 1 FAIL、2 skipped，失败用例定向复跑 1/1 PASS，须查明间歇性；冻结协议默认 multitask_strategy=reject 被误作 Steer，catch(Throwable) 错误边界及长 Run 分页消息 ID 漂移尚未修复；该 SHA 冷/热 Playwright、真实模型、重启恢复 NOT_RUN；主控结论：不合并","2026-09-26 W05 复审修复最终 SHA 3ab6d93：非法/溢出 Steer cursor 提交前 409、最后 human ID 幂等、SDK unknown 保留活跃准入；定向 38/38、更新 SDK 后全仓原样复跑 server 97/0 fail/2 skip、合同 13、证据 41 PASS；修后 Interaction 2/2×2 与 ActiveReconnect 1/1×2 PASS，槽位释放。首次 Windows TEMP AccessDenied 为 FAIL，原样复跑未现；真实模型、生产 Tool、非 approval/多 Interaction NOT_RUN","主控合入 cc971c7：主线 clean verify server 111/0 fail/2 skip；固定 18018/33018 health/auth/models 与同源 API smoke PASS；W18 合入态 Haifa 差分 4/4×2 PASS（92/84 秒、0 retry、槽位清理），旧 3/4×3 FAIL 保留","2026-09-26 首次 clean-consumer verify：111 项中 pendingInteractionSurvivesServerRestartAndResumesTheSameRun 返回 409，FAIL；同 worktree 定向 4/4 PASS，二次空缓存全 6 模块 BUILD SUCCESS（server 111/0 fail/2 skip）；根因未定位，首次 FAIL 保留"], "exit": "精确 SSE/交互协议、gap+权威 view、断线角色与稳定 key；不依赖 Redis。" },
     { "id": "W06", "title": "历史、编辑重跑与分支后端", "wave": "C", "lane": "A · Run/历史", "state": "pending", "startedAt": null, "completedAt": null, "prerequisites": ["W04", "W05"], "summary": "后续 Wave C。", "evidence": [], "exit": "公开派生实验；身份/隐藏交互/时间线明确，未知副作用不重放。" },
     { "id": "W07", "title": "Goal、Todo、Context 与终止", "wave": "B", "lane": "A · Run/Context", "state": "pending", "startedAt": null, "completedAt": null, "prerequisites": ["W05"], "summary": "等待事件与交互基础。", "evidence": [], "exit": "有界继续、资源引用/预算/终止，映射上游消息与任务结构。" },

@@ -12,7 +12,7 @@
 - [x] W02 基础聊天已于 2026-09-26 13:44 +08:00 通过人工体验验收并关单：真实 DeepSeek 对话、SSE、取消、页面刷新恢复通过；重启历史归 W18，Interaction 归 W05。
 - [ ] W03 补齐同一 Conversation 换模型、title/polish/suggestions 与冻结 UI 差分。038-03 仍处于待实施授权，不能把方案当成已交付功能。
 - [ ] W05 核心协议稳定后推进 W07 的薄 Goal/Todo/Context/终止语义，再展开 W08 的产品层 Child 投影与 W13 的 Memory 捕获/召回。W10 的 SDK 动态凭据前置已解除，但产品配置、Tool allowlist 与交互仍待 W03/W05。
-- [ ] W04 主路径在更新 SDK 后由独立 `codex/w04-main-regression@c7d6c6e` 工作树以冻结 UI 双轮 2/2×2 PASS（142 秒/106 秒，零重试，端口释放）；17 份原始日志从 `target/w04-frozen-ui-files-evidence` 复制至 `local-tmp/slot-1-w04-main-20260926/evidence` 并逐一哈希核对。主工作树同目录第二个 Next dev 因 33018 已运行而拒绝启动，原始失败日志另存主树 `local-tmp/slot-1-w04-main-20260926/evidence`，并非功能断言失败。archive/restore/delete、document conversion、PDF/二进制预览及 25 MiB 浏览器边界仍未完成。主控已在 `private-docs/prompts/39-deerflow-parity-delivery/W04-Developing/W04-ScopeDecision-Developing.md` 提出维持原 W04 退出条件、必要时另设 Demo 里程碑的方案；等待人工裁决，未裁定前不得将整包标为完成或缩小路线图验收范围。
+- [ ] W04 主路径在更新 SDK 后由独立 `codex/w04-main-regression@c7d6c6e` 工作树以冻结 UI 双轮 2/2×2 PASS（142 秒/106 秒，零重试，端口释放）；17 份原始日志从 `target/w04-frozen-ui-files-evidence` 复制至 `local-tmp/slot-1-w04-main-20260926/evidence` 并逐一哈希核对。主工作树同目录第二个 Next dev 因 33018 已运行而拒绝启动，原始失败日志另存主树 `local-tmp/slot-1-w04-main-20260926/evidence`，并非功能断言失败。archive/restore/delete、document conversion、PDF/二进制预览及 25 MiB 浏览器边界仍未完成。人工已同意 `private-docs/prompts/39-deerflow-parity-delivery/W04-Developing/W04-ScopeDecision-Finished.md` 的选项 1：维持原 W04 整包退出条件，已通过主路径只作切片证据；若需 Demo 里程碑须另行提出，不得据此将 W04 标为完成。
 
 ## HA `0.1.2-SNAPSHOT` SDK 缺口
 
