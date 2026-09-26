@@ -2,6 +2,7 @@
 param(
     [string]$DeerFlowRoot,
     [string]$ManifestPath,
+    [string]$ExpandedInventoryPath,
     [string]$ResourceManifestPath,
     [string]$OracleManifestPath,
     [string]$OracleFixturesPath
@@ -18,6 +19,9 @@ if ([string]::IsNullOrWhiteSpace($ManifestPath)) {
 }
 if ([string]::IsNullOrWhiteSpace($ResourceManifestPath)) {
     $ResourceManifestPath = Join-Path $RepositoryRoot 'contracts/upstream/deerflow/resource-seed.json'
+}
+if ([string]::IsNullOrWhiteSpace($ExpandedInventoryPath)) {
+    $ExpandedInventoryPath = Join-Path $RepositoryRoot 'contracts/upstream/deerflow/frontend-consumer-expanded.json'
 }
 if ([string]::IsNullOrWhiteSpace($OracleManifestPath)) {
     $OracleManifestPath = Join-Path $RepositoryRoot 'contracts/upstream/deerflow/core-protocol-oracle.json'
@@ -147,6 +151,7 @@ function Assert-Evidence {
 
 $resolvedDeerFlowRoot = Resolve-DeerFlowRoot -ExplicitRoot $DeerFlowRoot
 $manifest = Read-JsonFile -Path ([System.IO.Path]::GetFullPath($ManifestPath))
+$expandedInventory = Read-JsonFile -Path ([System.IO.Path]::GetFullPath($ExpandedInventoryPath))
 $resourceManifest = Read-JsonFile -Path ([System.IO.Path]::GetFullPath($ResourceManifestPath))
 $oracleManifest = Read-JsonFile -Path ([System.IO.Path]::GetFullPath($OracleManifestPath))
 $oracleFixtures = Read-JsonFile -Path ([System.IO.Path]::GetFullPath($OracleFixturesPath))
@@ -157,6 +162,13 @@ Assert-Equal $manifest.status 'SOURCE_VERIFIED' 'Static manifest status must be 
 Assert-Equal $manifest.runtime_status 'NOT_RUN' 'Static extraction must not claim runtime PASS'
 Assert-Equal $manifest.source.source_sha $ExpectedSourceSha 'Contract manifest source SHA drifted'
 Assert-Equal $manifest.core_protocol_oracle 'contracts/upstream/deerflow/core-protocol-oracle.json' 'Frontend manifest lost the core protocol Oracle link'
+Assert-Equal $manifest.expanded_inventory 'contracts/upstream/deerflow/frontend-consumer-expanded.json' 'Frontend manifest lost expanded consumer inventory link'
+Assert-Equal $expandedInventory.schema_version 'w00.frontend-consumer-expanded/v1' 'Unexpected expanded consumer inventory schema'
+Assert-Equal $expandedInventory.source_sha $ExpectedSourceSha 'Expanded consumer inventory source SHA drifted'
+Assert-Equal $expandedInventory.status 'SOURCE_VERIFIED' 'Expanded consumer inventory must remain source-verified'
+Assert-Equal $expandedInventory.runtime_status 'NOT_RUN' 'Expanded consumer inventory must not claim runtime PASS or FAIL'
+Assert-Equal $expandedInventory.completion_status 'PARTIAL' 'Known residuals forbid a full W00 completion claim'
+Assert-Equal $expandedInventory.consumer 'browser_fetch' 'Expanded operations must remain in the browser fetch partition'
 Assert-Equal $resourceManifest.source.source_sha $ExpectedSourceSha 'Resource manifest source SHA drifted'
 Assert-Equal $resourceManifest.runtime_status 'NOT_RUN' 'Resource seed must not claim runtime PASS'
 Assert-Equal $resourceManifest.repository_import.status 'IMPORTED' 'Frozen W18 frontend import must be recorded separately from runtime status'
@@ -181,6 +193,12 @@ $w18Manifest = Read-JsonFile -Path $w18ManifestPath
 Assert-Equal $w18Manifest.upstream.commit $ExpectedSourceSha 'W18 import manifest is not bound to the frozen DeerFlow SHA'
 Assert-Equal $w18Manifest.upstream.sourceTree $resourceManifest.repository_import.source_tree 'W18 import source tree drifted from the W00 seed'
 Assert-Equal $w18Manifest.import.localPath $resourceManifest.repository_import.frontend_local_path 'W18 frontend import path drifted from the W00 seed'
+$embeddedLicensePaths = @($resourceManifest.license_review.frontend_embedded_license_paths)
+foreach ($embeddedLicensePath in @($w18Manifest.upstream.embeddedLicenseFiles)) {
+    if ($embeddedLicensePaths -notcontains [string]$embeddedLicensePath) {
+        throw "Nested frontend license is missing from W00 review: $embeddedLicensePath"
+    }
+}
 
 $gitHead = (& git -C $resolvedDeerFlowRoot rev-parse HEAD 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) {
@@ -235,6 +253,249 @@ foreach ($surface in $surfaces) {
     foreach ($evidence in $evidenceItems) {
         Assert-Evidence -Evidence $evidence -SourceRoot $resolvedDeerFlowRoot -SurfaceId ([string]$surface.id)
     }
+}
+
+$expandedFamilies = @($expandedInventory.families)
+$expandedFamilyIds = @($expandedFamilies | ForEach-Object { [string]$_.id })
+if (@($expandedFamilyIds | Group-Object | Where-Object Count -gt 1).Count -gt 0) {
+    throw 'Expanded consumer inventory has duplicate family IDs.'
+}
+foreach ($requiredId in @($expandedInventory.required_family_ids)) {
+    if ($expandedFamilyIds -notcontains [string]$requiredId) {
+        throw "Required expanded consumer family is missing: $requiredId"
+    }
+}
+$expandedOperationIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$wireKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+foreach ($surface in $surfaces) {
+    foreach ($method in @($surface.methods)) {
+        $key = "$([string]$surface.consumer)|$([string]$method)|$([string]$surface.public_path)"
+        if (-not $wireKeys.Add($key)) {
+            throw "Duplicate original consumer method/path key: $key"
+        }
+    }
+}
+$gatewayAppSource = Get-Content -LiteralPath (Join-Path $resolvedDeerFlowRoot 'backend/app/gateway/app.py') -Raw
+foreach ($family in $expandedFamilies) {
+    $familyId = [string]$family.id
+    $sourcePath = [string]$family.source_path
+    if (-not $sourcePath.StartsWith('frontend/src/', [System.StringComparison]::Ordinal) -or
+        -not $sourcePath.EndsWith('.ts', [System.StringComparison]::Ordinal)) {
+        throw "Expanded consumer family '$familyId' has an invalid frontend source path."
+    }
+    $absoluteSource = Join-Path $resolvedDeerFlowRoot $sourcePath
+    if (-not (Test-Path -LiteralPath $absoluteSource -PathType Leaf)) {
+        throw "Expanded consumer family '$familyId' source is missing: $sourcePath"
+    }
+    $source = Get-Content -LiteralPath $absoluteSource -Raw
+    $gatewayRegistration = [string]$family.gateway_registration
+    if ([string]::IsNullOrWhiteSpace($gatewayRegistration) -or
+        -not $gatewayAppSource.Contains($gatewayRegistration, [System.StringComparison]::Ordinal)) {
+        throw "Expanded consumer family '$familyId' lost gateway registration evidence."
+    }
+    if ($gatewayRegistration -notmatch '^app\.include_router\(([a-z_]+)\.router\)$' -or
+        -not (Test-Path -LiteralPath (Join-Path $resolvedDeerFlowRoot "backend/app/gateway/routers/$($Matches[1]).py") -PathType Leaf)) {
+        throw "Expanded consumer family '$familyId' has no matching frozen gateway router file."
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$family.registration_condition) -or
+        [string]::IsNullOrWhiteSpace([string]$family.auth)) {
+        throw "Expanded consumer family '$familyId' lacks registration/auth semantics."
+    }
+    $operations = @($family.operations)
+    if ($operations.Count -eq 0) {
+        throw "Expanded consumer family '$familyId' has no operations."
+    }
+    foreach ($operation in $operations) {
+        $operationId = [string]$operation.id
+        if (-not $expandedOperationIds.Add($operationId)) {
+            throw "Expanded consumer inventory has duplicate operation '$operationId'."
+        }
+        Assert-OneOf $operation.method @('GET', 'POST', 'PUT', 'PATCH', 'DELETE') "Expanded operation '$operationId' has an invalid method"
+        if (-not ([string]$operation.path).StartsWith('/api/', [System.StringComparison]::Ordinal)) {
+            throw "Expanded operation '$operationId' lacks a public API path."
+        }
+        $wireKey = "$([string]$expandedInventory.consumer)|$([string]$operation.method)|$([string]$operation.path)"
+        if (-not $wireKeys.Add($wireKey)) {
+            throw "Duplicate consumer method/path key across W00 partitions: $wireKey"
+        }
+        $functionAnchor = "function $([string]$operation.function)("
+        $functionStart = $source.IndexOf($functionAnchor, [System.StringComparison]::Ordinal)
+        if ($functionStart -lt 0) {
+            throw "Expanded operation '$operationId' lost frontend function evidence '$functionAnchor'."
+        }
+        $nextExport = $source.IndexOf("`nexport ", $functionStart + $functionAnchor.Length, [System.StringComparison]::Ordinal)
+        $functionEnd = if ($nextExport -ge 0) { $nextExport } else { $source.Length }
+        $functionSource = $source.Substring($functionStart, $functionEnd - $functionStart)
+        $routeAnchor = [string]$operation.route_anchor
+        if ([string]::IsNullOrWhiteSpace($routeAnchor) -or
+            -not $functionSource.Contains($routeAnchor, [System.StringComparison]::Ordinal)) {
+            throw "Expanded operation '$operationId' lost frontend route evidence '$routeAnchor'."
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$operation.response)) {
+            throw "Expanded operation '$operationId' lacks a response shape."
+        }
+    }
+}
+foreach ($requiredId in @($expandedInventory.required_operation_ids)) {
+    if (-not $expandedOperationIds.Contains([string]$requiredId)) {
+        throw "Required expanded consumer operation is missing: $requiredId"
+    }
+}
+$accountedModules = [System.Collections.Generic.List[string]]::new()
+$expandedNonApiModules = [System.Collections.Generic.List[string]]::new()
+foreach ($family in $expandedFamilies) {
+    $familySourcePath = [string]$family.source_path
+    if ($familySourcePath.EndsWith('/api.ts', [System.StringComparison]::Ordinal)) {
+        $accountedModules.Add($familySourcePath)
+    }
+    else {
+        $expandedNonApiModules.Add($familySourcePath)
+    }
+}
+foreach ($modulePath in @($expandedInventory.source_module_accounting.seeded_modules)) {
+    $accountedModules.Add([string]$modulePath)
+}
+foreach ($sharedModule in @($expandedInventory.source_module_accounting.shared_modules)) {
+    Assert-Equal $sharedModule.status 'SOURCE_VERIFIED' "Shared module '$($sharedModule.source_path)' has an invalid status"
+    $sharedPath = [string]$sharedModule.source_path
+    $sharedSourcePath = Join-Path $resolvedDeerFlowRoot $sharedPath
+    if (-not (Test-Path -LiteralPath $sharedSourcePath -PathType Leaf)) {
+        throw "Shared frontend API source module is missing: $sharedPath"
+    }
+    $sharedSource = Get-Content -LiteralPath $sharedSourcePath -Raw
+    foreach ($anchor in @($sharedModule.source_anchors)) {
+        if (-not $sharedSource.Contains([string]$anchor, [System.StringComparison]::Ordinal)) {
+            throw "Shared frontend API source module '$sharedPath' lost callsite '$anchor'."
+        }
+    }
+    foreach ($operationId in @($sharedModule.operation_ids)) {
+        if (-not $expandedOperationIds.Contains([string]$operationId) -and $ids -notcontains [string]$operationId) {
+            throw "Shared frontend API source module '$sharedPath' points to unknown operation '$operationId'."
+        }
+    }
+    $accountedModules.Add($sharedPath)
+}
+foreach ($residual in @($expandedInventory.source_module_accounting.residual_modules)) {
+    Assert-Equal $residual.status 'NOT_INVENTORIED' "Residual module '$($residual.source_path)' cannot claim completion"
+    if ([string]::IsNullOrWhiteSpace([string]$residual.reason)) {
+        throw "Residual module '$($residual.source_path)' has no reason."
+    }
+    $accountedModules.Add([string]$residual.source_path)
+}
+$duplicateAccountedModules = @($accountedModules | Group-Object | Where-Object Count -gt 1)
+if ($duplicateAccountedModules.Count -gt 0) {
+    throw "Frontend API source module was accounted more than once: $($duplicateAccountedModules[0].Name)"
+}
+$frozenApiModules = @(Get-ChildItem -LiteralPath (Join-Path $resolvedDeerFlowRoot 'frontend/src/core') -Recurse -Filter 'api.ts' -File |
+    ForEach-Object { [System.IO.Path]::GetRelativePath($resolvedDeerFlowRoot, $_.FullName).Replace('\', '/') })
+foreach ($modulePath in $frozenApiModules) {
+    if ($accountedModules -notcontains $modulePath) {
+        throw "Frozen frontend API source module is unaccounted: $modulePath"
+    }
+}
+foreach ($modulePath in $accountedModules) {
+    if ($frozenApiModules -notcontains $modulePath) {
+        throw "Accounted frontend API source module is absent from frozen checkout: $modulePath"
+    }
+}
+foreach ($residual in @($expandedInventory.non_api_module_residuals)) {
+    Assert-Equal $residual.status 'NOT_INVENTORIED' "Non-API residual '$($residual.source_path)' cannot claim completion"
+    if ([string]::IsNullOrWhiteSpace([string]$residual.reason) -or
+        -not (Test-Path -LiteralPath (Join-Path $resolvedDeerFlowRoot ([string]$residual.source_path)) -PathType Leaf)) {
+        throw "Non-API residual '$($residual.source_path)' lacks a reason or frozen source file."
+    }
+    if ($expandedNonApiModules -contains [string]$residual.source_path) {
+        throw "Non-API source is both inventoried and residual: $($residual.source_path)"
+    }
+}
+$accountedNonApiPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+foreach ($accounted in @($expandedInventory.non_api_accounted_modules)) {
+    Assert-Equal $accounted.status 'SOURCE_VERIFIED' "Non-API source '$($accounted.source_path)' has an invalid status"
+    $accountedPath = [string]$accounted.source_path
+    if (-not $accountedNonApiPaths.Add($accountedPath) -or
+        @($expandedInventory.non_api_module_residuals | Where-Object source_path -eq $accountedPath).Count -gt 0) {
+        throw "Non-API source '$accountedPath' has duplicate or residual classification."
+    }
+    $accountedSourcePath = Join-Path $resolvedDeerFlowRoot $accountedPath
+    if (-not $accountedPath.StartsWith('frontend/src/', [System.StringComparison]::Ordinal) -or
+        -not (Test-Path -LiteralPath $accountedSourcePath -PathType Leaf)) {
+        throw "Accounted non-API source is absent from frozen checkout: $accountedPath"
+    }
+    $accountedSource = Get-Content -LiteralPath $accountedSourcePath -Raw
+    if (@($accounted.source_anchors).Count -eq 0 -or @($accounted.surface_ids).Count -eq 0) {
+        throw "Accounted non-API source '$accountedPath' lacks source anchors or surface IDs."
+    }
+    foreach ($anchor in @($accounted.source_anchors)) {
+        if (-not $accountedSource.Contains([string]$anchor, [System.StringComparison]::Ordinal)) {
+            throw "Accounted non-API source '$accountedPath' lost source anchor '$anchor'."
+        }
+    }
+    foreach ($surfaceId in @($accounted.surface_ids)) {
+        if ($ids -notcontains [string]$surfaceId) {
+            throw "Accounted non-API source '$accountedPath' points to unknown surface '$surfaceId'."
+        }
+    }
+}
+foreach ($requiredPath in @($expandedInventory.required_non_api_accounted_paths)) {
+    if (-not $accountedNonApiPaths.Contains([string]$requiredPath)) {
+        throw "Required accounted non-API source is missing: $requiredPath"
+    }
+}
+if (@($expandedInventory.required_non_api_accounted_paths | Group-Object | Where-Object Count -gt 1).Count -gt 0) {
+    throw 'Required accounted non-API source path was listed more than once.'
+}
+foreach ($excluded in @($expandedInventory.excluded_external_calls)) {
+    Assert-Equal $excluded.status 'EXCLUDED_EXTERNAL' "Excluded call '$($excluded.source_path)' has an invalid classification"
+    if ([string]::IsNullOrWhiteSpace([string]$excluded.reason) -or
+        ([string]$excluded.source_anchor).StartsWith('/api/', [System.StringComparison]::Ordinal)) {
+        throw "Excluded call '$($excluded.source_path)' lacks external-only evidence."
+    }
+    $excludedPath = Join-Path $resolvedDeerFlowRoot ([string]$excluded.source_path)
+    if (-not (Test-Path -LiteralPath $excludedPath -PathType Leaf) -or
+        -not (Get-Content -LiteralPath $excludedPath -Raw).Contains([string]$excluded.source_anchor, [System.StringComparison]::Ordinal)) {
+        throw "Excluded external call '$($excluded.source_path)' lost source evidence."
+    }
+    if ($expandedNonApiModules -contains [string]$excluded.source_path -or
+        @($expandedInventory.non_api_module_residuals | Where-Object source_path -eq $excluded.source_path).Count -gt 0) {
+        throw "External call '$($excluded.source_path)' has conflicting inventory classification."
+    }
+}
+$nextRoutes = [System.Collections.Generic.List[string]]::new()
+foreach ($category in @('gateway_bff', 'external_only', 'mock_only_not_parity')) {
+    foreach ($route in @($expandedInventory.next_route_accounting.$category)) {
+        $nextRoutes.Add([string]$route)
+    }
+}
+if (@($nextRoutes | Group-Object | Where-Object Count -gt 1).Count -gt 0) {
+    throw 'Next Route Handler was classified more than once.'
+}
+$frozenNextRoutes = @(Get-ChildItem -LiteralPath (Join-Path $resolvedDeerFlowRoot 'frontend/src/app') -Recurse -Filter 'route.ts' -File |
+    ForEach-Object { [System.IO.Path]::GetRelativePath($resolvedDeerFlowRoot, $_.FullName).Replace('\', '/') })
+foreach ($route in $frozenNextRoutes) {
+    if ($nextRoutes -notcontains $route) {
+        throw "Frozen Next Route Handler is unaccounted: $route"
+    }
+}
+foreach ($route in $nextRoutes) {
+    if ($frozenNextRoutes -notcontains $route) {
+        throw "Classified Next Route Handler is missing from frozen checkout: $route"
+    }
+}
+foreach ($route in @($expandedInventory.next_route_accounting.mock_only_not_parity)) {
+    if (-not ([string]$route).StartsWith('frontend/src/app/mock/', [System.StringComparison]::Ordinal)) {
+        throw "Non-mock Next Route Handler was mislabeled mock-only: $route"
+    }
+}
+$browserWsCallsites = @(Get-ChildItem -LiteralPath (Join-Path $resolvedDeerFlowRoot 'frontend/src') -Recurse -File |
+    Where-Object { $_.Extension -in @('.ts', '.tsx') } |
+    Where-Object { (Get-Content -LiteralPath $_.FullName -Raw).Contains('new WebSocket(', [System.StringComparison]::Ordinal) } |
+    ForEach-Object { [System.IO.Path]::GetRelativePath($resolvedDeerFlowRoot, $_.FullName).Replace('\', '/') })
+if ($browserWsCallsites.Count -ne 1 -or $browserWsCallsites[0] -ne 'frontend/src/components/workspace/browser-view/use-browser-stream.ts') {
+    throw "Frozen browser WebSocket callsites drifted: $($browserWsCallsites -join ', ')"
+}
+if (@($expandedInventory.source_module_accounting.residual_modules).Count -eq 0 -and
+    @($expandedInventory.non_api_module_residuals).Count -eq 0) {
+    throw 'Expanded inventory claims PARTIAL but lists no residual source modules.'
 }
 
 $oracleContracts = @($oracleManifest.contracts)
@@ -356,12 +617,26 @@ foreach ($resource in @($resourceManifest.resources)) {
         Assert-Equal $importedHash $actualHash "Resource '$($resource.id)' imported content differs from frozen source"
     }
 }
+$resourceIds = @($resourceManifest.resources | ForEach-Object { [string]$_.id })
+foreach ($requiredId in @($resourceManifest.required_license_resource_ids)) {
+    if ($resourceIds -notcontains [string]$requiredId) {
+        throw "Required nested license resource is missing: $requiredId"
+    }
+    $reviewedResource = @($resourceManifest.resources | Where-Object id -eq $requiredId)[0]
+    if ([string]::IsNullOrWhiteSpace([string]$reviewedResource.license_assessment)) {
+        throw "Required nested license resource lacks an assessment: $requiredId"
+    }
+}
 
 $surfaceSummary = $surfaces | Group-Object consumer | Sort-Object Name | ForEach-Object {
     "$($_.Name)=$($_.Count)"
 }
 Write-Host "Verified DeerFlow W00 contract seed at $ExpectedSourceSha"
 Write-Host "Surfaces: $($surfaces.Count) ($($surfaceSummary -join ', '))"
+Write-Host "Expanded browser inventory: families=$($expandedFamilies.Count); operations=$($expandedOperationIds.Count); runtime=NOT_RUN"
+Write-Host "Frozen core API modules accounted=$($frozenApiModules.Count); explicit residuals=$(@($expandedInventory.source_module_accounting.residual_modules).Count + @($expandedInventory.non_api_module_residuals).Count); completion=PARTIAL"
+Write-Host "Next Route Handlers accounted=$($frozenNextRoutes.Count) (gateway BFF=$(@($expandedInventory.next_route_accounting.gateway_bff).Count), external=$(@($expandedInventory.next_route_accounting.external_only).Count), mock-only=$(@($expandedInventory.next_route_accounting.mock_only_not_parity).Count))"
+Write-Host "Browser WebSocket callsites accounted=$($browserWsCallsites.Count)"
 $oracleKindSummary = $oracleContracts | Group-Object kind | Sort-Object Name | ForEach-Object {
     "$($_.Name)=$($_.Count)"
 }

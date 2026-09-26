@@ -4,11 +4,12 @@
   "status": "SOURCE_VERIFIED",
   "runtime_status": "NOT_RUN",
   "core_protocol_oracle": "contracts/upstream/deerflow/core-protocol-oracle.json",
+  "expanded_inventory": "contracts/upstream/deerflow/frontend-consumer-expanded.json",
   "source": {
     "repository": "https://github.com/bytedance/deer-flow.git",
     "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
     "license_path": "LICENSE",
-    "license_conclusion": "Root MIT license is source-verified; nested dependency and asset licensing remains a W01 import review item."
+    "license_conclusion": "Root MIT and bundled nested license texts are source-verified in resource-seed.json; brand/favicons, dependencies and non-imported Skill packages remain unresolved."
   },
   "status_policy": {
     "SOURCE_VERIFIED": "The named source and registration/configuration evidence exists at source_sha.",
@@ -41,6 +42,14 @@
   "required_surface_ids": [
     "auth.setup-status.browser",
     "auth.me.browser",
+    "auth.providers.browser",
+    "auth.login-local.browser",
+    "auth.register.browser",
+    "auth.oauth.browser-navigation",
+    "auth.initialize.browser",
+    "auth.change-password.browser",
+    "auth.logout.browser",
+    "auth.setup-status.next-ssr",
     "auth.me.next-ssr",
     "catalog.features.browser",
     "catalog.models.browser",
@@ -53,6 +62,11 @@
     "thread.history.sdk-rest",
     "thread.messages-page.browser",
     "thread.runs.sdk-rest",
+    "thread.get.sdk-rest",
+    "thread.update.sdk-rest",
+    "thread.delete.sdk-rest",
+    "thread.update-state.sdk-rest",
+    "run.get.sdk-rest",
     "projects.config.browser",
     "projects.list.browser",
     "projects.create.browser",
@@ -61,11 +75,18 @@
     "run.workspace-changes.browser",
     "file.upload.browser",
     "file.artifact.browser",
+    "file.artifact-archive.browser",
+    "thread.goal.browser",
+    "thread.suggestions.browser",
+    "thread.regenerate-prepare.browser",
+    "thread.edit-regenerate-prepare.browser",
     "browser.navigate.browser",
     "browser.live.browser-ws",
     "memory.root.next-bff",
     "memory.path.next-bff",
     "routing.langgraph.next-rewrite",
+    "routing.agents.next-rewrite",
+    "routing.skills.next-rewrite",
     "routing.gateway.next-rewrite"
   ],
   "surfaces": [
@@ -101,6 +122,135 @@
         {"source_path": "frontend/src/core/auth/AuthProvider.tsx", "must_contain": ["fetch(\"/api/v1/auth/me\"", "credentials: \"include\""]},
         {"source_path": "frontend/tests/e2e-real-backend/auth-disabled-contract.spec.ts", "must_contain": ["gateway /auth/me returns the frontend synthetic user without a cookie", "AUTH_DISABLED_PERMISSIONS"]},
         {"source_path": "backend/app/gateway/routers/auth.py", "must_contain": ["@router.get(\"/me\", response_model=UserResponse)"]}
+      ]
+    },
+    {
+      "id": "auth.providers.browser",
+      "category": "auth",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["GET"],
+      "public_path": "/api/v1/auth/providers",
+      "gateway_path": "/api/v1/auth/providers",
+      "registration_condition": "Login page checks configured SSO providers for the page lifetime; errors hide buttons rather than block local sign-in.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path":"frontend/src/app/(auth)/login/page.tsx","must_contain":["fetch(\"/api/v1/auth/providers\")","setSsoProviders(data.providers ?? [])"]},
+        {"source_path":"backend/app/gateway/routers/auth.py","must_contain":["@router.get(\"/providers\")"]}
+      ]
+    },
+    {
+      "id": "auth.login-local.browser",
+      "category": "auth",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["POST"],
+      "public_path": "/api/v1/auth/login/local",
+      "gateway_path": "/api/v1/auth/login/local",
+      "registration_condition": "Local login branch posts URL-encoded username/password/remember_me with credentials included; not exercised in auth-disabled profile.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path":"frontend/src/app/(auth)/login/page.tsx","must_contain":["/api/v1/auth/login/local","application/x-www-form-urlencoded","credentials: \"include\""]},
+        {"source_path":"backend/app/gateway/routers/auth.py","must_contain":["@router.post(\"/login/local\""]}
+      ]
+    },
+    {
+      "id": "auth.register.browser",
+      "category": "auth",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["POST"],
+      "public_path": "/api/v1/auth/register",
+      "gateway_path": "/api/v1/auth/register",
+      "registration_condition": "Registration branch is shown only when regularSignupAllowed; JSON email/password/remember_me, credentials included; not exercised in auth-disabled profile.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path":"frontend/src/app/(auth)/login/page.tsx","must_contain":["!regularSignupAllowed","/api/v1/auth/register","JSON.stringify({ email, password, remember_me: rememberMe })"]},
+        {"source_path":"backend/app/gateway/routers/auth.py","must_contain":["@router.post(\"/register\""]}
+      ]
+    },
+    {
+      "id": "auth.oauth.browser-navigation",
+      "category": "auth",
+      "consumer": "browser_navigation",
+      "transport": "REST",
+      "methods": ["GET"],
+      "public_path": "/api/v1/auth/oauth/{provider}?next={path}&remember_me={bool}",
+      "gateway_path": "/api/v1/auth/oauth/{provider}",
+      "registration_condition": "Only configured SSO provider buttons navigate the browser; this is not a fetcher request and is not exercised in auth-disabled profile.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path":"frontend/src/app/(auth)/login/page.tsx","must_contain":["window.location.href = `/api/v1/auth/oauth/${provider.id}","remember_me=${String(rememberMe)}"]},
+        {"source_path":"backend/app/gateway/routers/auth.py","must_contain":["@router.get(\"/oauth/{provider}\")"]}
+      ]
+    },
+    {
+      "id": "auth.initialize.browser",
+      "category": "auth",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["POST"],
+      "public_path": "/api/v1/auth/initialize",
+      "gateway_path": "/api/v1/auth/initialize",
+      "registration_condition": "First admin setup branch; JSON email/password/remember_me with credentials included; already-initialized error redirects to login.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path":"frontend/src/app/(auth)/setup/page.tsx","must_contain":["fetch(\"/api/v1/auth/initialize\"","isSystemAlreadyInitializedError(data)"]},
+        {"source_path":"backend/app/gateway/routers/auth.py","must_contain":["@router.post(\"/initialize\""]}
+      ]
+    },
+    {
+      "id": "auth.change-password.browser",
+      "category": "auth",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["POST"],
+      "public_path": "/api/v1/auth/change-password",
+      "gateway_path": "/api/v1/auth/change-password",
+      "registration_condition": "Setup recovery and account settings both post current/new password with CSRF headers; password values are never recorded in this manifest.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path":"frontend/src/app/(auth)/setup/page.tsx","must_contain":["fetch(\"/api/v1/auth/change-password\"","...getCsrfHeaders()"]},
+        {"source_path":"frontend/src/components/workspace/settings/account-settings-page.tsx","must_contain":["/api/v1/auth/change-password"]},
+        {"source_path":"backend/app/gateway/routers/auth.py","must_contain":["@router.post(\"/change-password\""]}
+      ]
+    },
+    {
+      "id": "auth.logout.browser",
+      "category": "auth",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["POST"],
+      "public_path": "/api/v1/auth/logout",
+      "gateway_path": "/api/v1/auth/logout",
+      "registration_condition": "AuthProvider logout with cookie; failure forces hard navigation to tear down in-flight subscriptions.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path":"frontend/src/core/auth/AuthProvider.tsx","must_contain":["fetch(\"/api/v1/auth/logout\"","method: \"POST\""]},
+        {"source_path":"backend/app/gateway/routers/auth.py","must_contain":["@router.post(\"/logout\""]}
+      ]
+    },
+    {
+      "id": "auth.setup-status.next-ssr",
+      "category": "auth",
+      "consumer": "next_ssr",
+      "transport": "REST",
+      "methods": ["GET"],
+      "public_path": "server-side guard (no browser URL): setup-status",
+      "gateway_path": "/api/v1/auth/setup-status",
+      "registration_condition": "When static/auth-disabled mode is off and no access_token cookie is present, Next SSR probes setup-status with a bounded timeout and no-store cache; failed probe falls through to unauthenticated.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/auth/server.ts", "must_contain": ["if (!sessionCookie)", "`${internalGatewayUrl}/api/v1/auth/setup-status`", "AUTH_REQUEST_TIMEOUT_MS", "cache: \"no-store\""]},
+        {"source_path": "backend/app/gateway/routers/auth.py", "must_contain": ["@router.get(\"/setup-status\")"]}
       ]
     },
     {
@@ -270,6 +420,64 @@
       ]
     },
     {
+      "id": "thread.get.sdk-rest",
+      "category": "rest", "consumer": "langgraph_sdk", "transport": "REST", "methods": ["GET"],
+      "public_path": "/api/langgraph/threads/{thread_id}", "gateway_path": "/api/threads/{thread_id}",
+      "registration_condition": "Thread lookup in the chat hook; static-demo client overrides this method without a network request.",
+      "status": "SOURCE_VERIFIED", "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path":"frontend/src/core/threads/hooks.ts","must_contain":["apiClient.threads.get(threadId)"]},
+        {"source_path":"frontend/src/core/api/api-client.ts","must_contain":["client.threads.get = (async (threadId) =>"]},
+        {"source_path":"backend/app/gateway/routers/threads.py","must_contain":["@router.get(\"/{thread_id}\", response_model=ThreadResponse)"]}
+      ]
+    },
+    {
+      "id": "thread.update.sdk-rest",
+      "category": "rest", "consumer": "langgraph_sdk", "transport": "REST", "methods": ["PATCH"],
+      "public_path": "/api/langgraph/threads/{thread_id}", "gateway_path": "/api/threads/{thread_id}",
+      "registration_condition": "Thread metadata update after run creation; SDK 1.6.0 sends PATCH and static-demo client overrides update.",
+      "status": "SOURCE_VERIFIED", "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path":"frontend/src/core/threads/hooks.ts","must_contain":[".threads.update(meta.thread_id, {"]},
+        {"source_path":"frontend/src/core/api/api-client.ts","must_contain":["client.threads.update = (async (threadId) =>"]},
+        {"source_path":"backend/app/gateway/routers/threads.py","must_contain":["@router.patch(\"/{thread_id}\", response_model=ThreadResponse)"]}
+      ]
+    },
+    {
+      "id": "thread.delete.sdk-rest",
+      "category": "rest", "consumer": "langgraph_sdk", "transport": "REST", "methods": ["DELETE"],
+      "public_path": "/api/langgraph/threads/{thread_id}", "gateway_path": "/api/threads/{thread_id}",
+      "registration_condition": "Owned-thread delete in chat hook; one path has a separate direct fetch but both map to the same gateway handler.",
+      "status": "SOURCE_VERIFIED", "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path":"frontend/src/core/threads/hooks.ts","must_contain":["apiClient.threads.delete(threadId)"]},
+        {"source_path":"backend/app/gateway/routers/threads.py","must_contain":["@router.delete(\"/{thread_id}\", response_model=ThreadDeleteResponse)"]}
+      ]
+    },
+    {
+      "id": "thread.update-state.sdk-rest",
+      "category": "rest", "consumer": "langgraph_sdk", "transport": "REST", "methods": ["POST"],
+      "public_path": "/api/langgraph/threads/{thread_id}/state", "gateway_path": "/api/threads/{thread_id}/state",
+      "registration_condition": "Chat-hook state mutation uses SDK 1.6.0 updateState; not exercised by the static-demo client override.",
+      "status": "SOURCE_VERIFIED", "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path":"frontend/src/core/threads/hooks.ts","must_contain":["apiClient.threads.updateState(threadId, {"]},
+        {"source_path":"backend/app/gateway/routers/threads.py","must_contain":["@router.post(\"/{thread_id}/state\", response_model=ThreadStateResponse)"]}
+      ]
+    },
+    {
+      "id": "run.get.sdk-rest",
+      "category": "rest", "consumer": "langgraph_sdk", "transport": "REST", "methods": ["GET"],
+      "public_path": "/api/langgraph/threads/{thread_id}/runs/{run_id}", "gateway_path": "/api/threads/{thread_id}/runs/{run_id}",
+      "registration_condition": "Reconnect preflight and chat-hook run inspection; failure in reconnect preflight falls back to join, not a runtime success claim.",
+      "status": "SOURCE_VERIFIED", "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path":"frontend/src/core/api/api-client.ts","must_contain":["client.runs.get(threadId, runId, { signal })"]},
+        {"source_path":"frontend/src/core/threads/hooks.ts","must_contain":["apiClient.runs.get(threadId, runId)"]},
+        {"source_path":"backend/app/gateway/routers/thread_runs.py","must_contain":["@router.get(\"/{thread_id}/runs/{run_id}\", response_model=RunResponse)"]}
+      ]
+    },
+    {
       "id": "thread.messages-page.browser",
       "category": "rest",
       "consumer": "browser_fetch",
@@ -432,6 +640,87 @@
       ]
     },
     {
+      "id": "file.artifact-archive.browser",
+      "category": "file",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["GET", "POST"],
+      "public_path": "/api/threads/{thread_id}/runs/{run_id}/artifacts/archive",
+      "gateway_path": "/api/threads/{thread_id}/runs/{run_id}/artifacts/archive",
+      "registration_condition": "Owned thread/run; GET returns a bounded archive manifest, POST returns ZIP with Content-Disposition. The frontend rejects non-OK responses and derives a fallback filename if the header is absent.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/artifacts/api.ts", "must_contain": ["downloadArtifactArchive", "getArtifactArchiveManifest", "urlOfArtifactArchive", "method: \"POST\""]},
+        {"source_path": "frontend/src/core/artifacts/utils.ts", "must_contain": ["/runs/${encodeURIComponent(runId)}/artifacts/archive"]},
+        {"source_path": "backend/app/gateway/routers/thread_runs.py", "must_contain": ["@router.post(\"/{thread_id}/runs/{run_id}/artifacts/archive\")", "\"/{thread_id}/runs/{run_id}/artifacts/archive\""]}
+      ]
+    },
+    {
+      "id": "thread.goal.browser",
+      "category": "rest",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["GET", "PUT", "DELETE"],
+      "public_path": "/api/threads/{thread_id}/goal",
+      "gateway_path": "/api/threads/{thread_id}/goal",
+      "registration_condition": "The input box status/set/clear commands call the owned thread goal route; set sends {objective}, clear does not fabricate a new Run.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/components/workspace/input-box.tsx", "must_contain": ["handleGoalCommand", ")}/goal`", "method: \"GET\"", "method: \"DELETE\"", "method: \"PUT\""]},
+        {"source_path": "backend/app/gateway/routers/threads.py", "must_contain": ["@router.get(\"/{thread_id}/goal\"", "@router.put(\"/{thread_id}/goal\"", "@router.delete(\"/{thread_id}/goal\""]}
+      ]
+    },
+    {
+      "id": "thread.suggestions.browser",
+      "category": "rest",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["POST"],
+      "public_path": "/api/threads/{thread_id}/suggestions",
+      "gateway_path": "/api/threads/{thread_id}/suggestions",
+      "registration_condition": "Follow-up suggestions are requested only when globally enabled and recent non-empty messages exist; failures produce an empty list without changing the main answer.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/components/workspace/input-box.tsx", "must_contain": ["/suggestions`", "method: \"POST\"", "maxFollowupSuggestions"]},
+        {"source_path": "backend/app/gateway/routers/suggestions.py", "must_contain": ["\"/threads/{thread_id}/suggestions\"", "SuggestionsResponse(suggestions=[])"]}
+      ]
+    },
+    {
+      "id": "thread.regenerate-prepare.browser",
+      "category": "rest",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["POST"],
+      "public_path": "/api/threads/{thread_id}/runs/regenerate/prepare",
+      "gateway_path": "/api/threads/{thread_id}/runs/regenerate/prepare",
+      "registration_condition": "Regenerate action prepares a replay from an existing message_id before a separate Run submission; preparation is not itself a Run.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/threads/hooks.ts", "must_contain": ["/runs/regenerate/prepare`", "body: JSON.stringify({ message_id: messageId })"]},
+        {"source_path": "backend/app/gateway/routers/thread_runs.py", "must_contain": ["@router.post(\"/{thread_id}/runs/regenerate/prepare\""]}
+      ]
+    },
+    {
+      "id": "thread.edit-regenerate-prepare.browser",
+      "category": "rest",
+      "consumer": "browser_fetch",
+      "transport": "REST",
+      "methods": ["POST"],
+      "public_path": "/api/threads/{thread_id}/runs/edit-regenerate/prepare",
+      "gateway_path": "/api/threads/{thread_id}/runs/edit-regenerate/prepare",
+      "registration_condition": "Edit-and-regenerate prepares replacement_text for an existing human_message_id; unknown external effects are not claimed reversible.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/threads/hooks.ts", "must_contain": ["/runs/edit-regenerate/prepare`", "human_message_id: humanMessageId", "replacement_text: replacementText"]},
+        {"source_path": "backend/app/gateway/routers/thread_runs.py", "must_contain": ["@router.post(\"/{thread_id}/runs/edit-regenerate/prepare\""]}
+      ]
+    },
+    {
       "id": "browser.navigate.browser",
       "category": "browser",
       "consumer": "browser_fetch",
@@ -513,6 +802,36 @@
       ]
     },
     {
+      "id": "routing.agents.next-rewrite",
+      "category": "proxy",
+      "consumer": "next_rewrite",
+      "transport": "PROXY",
+      "methods": ["ANY"],
+      "public_path": "/api/agents[/{path...}]",
+      "gateway_path": "/api/agents[/{path...}]",
+      "registration_condition": "Explicit agents rewrite is installed only when NEXT_PUBLIC_BACKEND_BASE_URL is unset and precedes the /api catch-all.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/next.config.js", "must_contain": ["source: \"/api/agents\"", "source: \"/api/agents/:path*\"", "if (!process.env.NEXT_PUBLIC_BACKEND_BASE_URL)"]}
+      ]
+    },
+    {
+      "id": "routing.skills.next-rewrite",
+      "category": "proxy",
+      "consumer": "next_rewrite",
+      "transport": "PROXY",
+      "methods": ["ANY"],
+      "public_path": "/api/skills[/{path...}]",
+      "gateway_path": "/api/skills[/{path...}]",
+      "registration_condition": "Explicit skills rewrite is installed only when NEXT_PUBLIC_BACKEND_BASE_URL is unset and precedes the /api catch-all.",
+      "status": "SOURCE_VERIFIED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/next.config.js", "must_contain": ["source: \"/api/skills\"", "source: \"/api/skills/:path*\"", "if (!process.env.NEXT_PUBLIC_BACKEND_BASE_URL)"]}
+      ]
+    },
+    {
       "id": "routing.gateway.next-rewrite",
       "category": "proxy",
       "consumer": "next_rewrite",
@@ -529,7 +848,7 @@
     }
   ],
   "known_not_covered": [
-    "The remaining frontend REST inventory (agents, project documents/trash, skills, MCP, schedules, channels, console, batches and remaining mutations) is not yet enumerated here.",
+    "A source-anchored extension now enumerates 13 more browser API families and their methods/paths, including agents, project documents/trash, skills, MCP, schedules, channels, batches, memory and managed subagents. The extension still lists direct component calls, console, sidecar, custom skill export, Lark, knowledge and remaining mutations as not yet expanded.",
     "Core auth/run request-response, FastAPI/auth error, SSE envelope/mapping/replay-gap, selected history/project/workspace contracts are linked from core_protocol_oracle; remaining routes and message payload schemas remain incremental W00/W02 work.",
     "No reference DeerFlow backend, Haifa backend, browser, SSE, WS, upload, Range, or differential execution has run in this seed.",
     "No frontend files, backend implementation, third-party assets, prompts or skills are imported by this change."

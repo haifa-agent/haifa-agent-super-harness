@@ -52,7 +52,6 @@ window.WORK_PACKAGES_DATA = {
         "id": "NEXT-10",
         "priority": "P1",
         "title": "W03 title/suggestions 与冻结 UI 消费",
-        "status": "pending",
         "workPackages": ["W03"],
         "status": "in_progress",
         "owner": "OpenCode deepseek/deepseek-flash · codex/w03-title-suggestions-opencode · 槽位3 48018/63018；主控复审",

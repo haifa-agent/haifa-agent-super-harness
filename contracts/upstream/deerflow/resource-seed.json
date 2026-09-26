@@ -18,7 +18,18 @@
   "license_review": {
     "root_license": "MIT",
     "root_license_path": "LICENSE",
-    "conclusion": "Root license is verified only. W18 has imported the frozen frontend; package, font, image, brand and nested third-party obligations still require review before release or distribution.",
+    "conclusion": "Root MIT and three embedded frontend license texts are source-verified. Plugin README identifies CC0, MIT and third-party brand origins; root MIT does not settle trademark/favicon, package dependency, or non-imported Skill obligations. This is a factual inventory, not legal clearance.",
+    "frontend_embedded_license_paths": [
+      "frontend/public/images/plugins/LOBE-ICONS-LICENSE.md",
+      "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+      "frontend/src/components/workspace/channels/buzz-provider-icon.LICENSE.txt"
+    ],
+    "unresolved_risk_classes": [
+      "Brand marks and externally sourced favicons have origin statements but no explicit reuse grant in the bundled plugin README.",
+      "Frontend package.json and pnpm-lock.yaml identify dependencies, not a consolidated installed-package license/NOTICE inventory.",
+      "Two Skill packages carry nested LICENSE.txt files but are not imported into this repository; their complete package/assets/scripts must be reviewed if imported.",
+      "No vendored .woff/.ttf/.otf file was found under frozen frontend at this source SHA; this does not establish license terms for runtime or dependency fonts."
+    ],
     "status": "SOURCE_VERIFIED"
   },
   "resources": [
@@ -84,12 +95,80 @@
       "intended_local_path": "parity/upstream-tests/test_auth_me_permissions.py",
       "import_status": "NOT_RUN",
       "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.plugin-assets-origin",
+      "kind": "asset-provenance",
+      "source_path": "frontend/public/images/plugins/README.md",
+      "sha256": "07f3fc02d64cc3f391239cd4710685b72be02372109b19bfe76037b949a8f99f",
+      "intended_local_path": "frontend/public/images/plugins/README.md",
+      "import_status": "IMPORTED",
+      "license_assessment": "Simple Icons CC0 and LobeHub icons MIT source references; brand/favicons lack an explicit bundled reuse grant and remain review-needed.",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.lobe-icons-license",
+      "kind": "nested-license",
+      "source_path": "frontend/public/images/plugins/LOBE-ICONS-LICENSE.md",
+      "sha256": "add9d7531d1b21646317a8958e38fc727506fa39d24bdecb44154d943c82753a",
+      "intended_local_path": "frontend/public/images/plugins/LOBE-ICONS-LICENSE.md",
+      "import_status": "IMPORTED",
+      "license_assessment": "Bundled MIT text, copyright LobeHub 2023; retain notice on redistribution.",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.simple-icons-license",
+      "kind": "nested-license",
+      "source_path": "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+      "sha256": "cf05aaae5b87aad2245e052fbc8f19155f6b4b448c3148265ab12413dd4091c9",
+      "intended_local_path": "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+      "import_status": "IMPORTED",
+      "license_assessment": "Bundled CC0 1.0 text; its own limitations say trademarks and third-party rights are not cleared.",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.buzz-provider-icon-license",
+      "kind": "nested-license",
+      "source_path": "frontend/src/components/workspace/channels/buzz-provider-icon.LICENSE.txt",
+      "sha256": "108cb15997e51b75a8d18b0c1e2c52bd3879d051ab02118973387df1e4aab584",
+      "intended_local_path": "frontend/src/components/workspace/channels/buzz-provider-icon.LICENSE.txt",
+      "import_status": "IMPORTED",
+      "license_assessment": "Bundled Apache-2.0 text with Block, Inc. 2026 copyright; verify attribution in release bundle.",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.frontend-design-skill-license",
+      "kind": "skill-nested-license",
+      "source_path": "skills/public/frontend-design/LICENSE.txt",
+      "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+      "intended_local_path": "skills/upstream/deerflow/frontend-design/LICENSE.txt",
+      "import_status": "NOT_RUN",
+      "license_assessment": "Nested Apache-2.0 text discovered; full Skill package was not imported or execution-reviewed.",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.skill-creator-skill-license",
+      "kind": "skill-nested-license",
+      "source_path": "skills/public/skill-creator/LICENSE.txt",
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+      "intended_local_path": "skills/upstream/deerflow/skill-creator/LICENSE.txt",
+      "import_status": "NOT_RUN",
+      "license_assessment": "Nested license text discovered; full Skill package was not imported or execution-reviewed.",
+      "status": "SOURCE_VERIFIED"
     }
+  ],
+  "required_license_resource_ids": [
+    "deerflow.plugin-assets-origin",
+    "deerflow.lobe-icons-license",
+    "deerflow.simple-icons-license",
+    "deerflow.buzz-provider-icon-license",
+    "deerflow.frontend-design-skill-license",
+    "deerflow.skill-creator-skill-license"
   ],
   "known_not_covered": [
     "W18 imported the complete frozen frontend and root license under its own provenance manifest; this W00 change does not duplicate those files.",
     "Dedicated parity fixture/oracle paths remain NOT_RUN where no separate copy exists, even when the original frontend source is present inside the W18 import.",
-    "Prompt, Skill package, Tool schema, Memory prompt and broader fixture inventories remain to be expanded.",
-    "Root MIT does not settle third-party package, font, image, brand or asset-specific licensing."
+    "Prompt, complete Skill package, Tool schema, Memory prompt and broader fixture inventories remain to be expanded; only two nested Skill license texts are identified here.",
+    "Root MIT does not settle third-party package, font, image, brand or asset-specific licensing; no legal clearance is asserted."
   ]
 }

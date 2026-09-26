@@ -10,6 +10,7 @@ $ErrorActionPreference = 'Stop'
 $RepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $Verifier = Join-Path $RepositoryRoot 'scripts/verify-deerflow-contracts.ps1'
 $Manifest = Join-Path $RepositoryRoot 'contracts/upstream/deerflow/frontend-consumer-manifest.json'
+$ExpandedInventory = Join-Path $RepositoryRoot 'contracts/upstream/deerflow/frontend-consumer-expanded.json'
 $ResourceManifest = Join-Path $RepositoryRoot 'contracts/upstream/deerflow/resource-seed.json'
 $OracleManifest = Join-Path $RepositoryRoot 'contracts/upstream/deerflow/core-protocol-oracle.json'
 $OracleFixtures = Join-Path $RepositoryRoot 'contracts/upstream/deerflow/fixtures/core-protocol-fixtures.json'
@@ -18,13 +19,16 @@ $TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("haifa-w00-contract-tes
 function Invoke-Verifier {
     param(
         [string]$ContractManifest,
+        [string]$ExpandedInventoryManifest = $ExpandedInventory,
+        [string]$ResourceSeedManifest = $ResourceManifest,
         [string]$CoreOracleManifest = $OracleManifest,
         [string]$CoreOracleFixtures = $OracleFixtures
     )
     $output = & pwsh -NoProfile -File $Verifier `
         -DeerFlowRoot $DeerFlowRoot `
         -ManifestPath $ContractManifest `
-        -ResourceManifestPath $ResourceManifest `
+        -ExpandedInventoryPath $ExpandedInventoryManifest `
+        -ResourceManifestPath $ResourceSeedManifest `
         -OracleManifestPath $CoreOracleManifest `
         -OracleFixturesPath $CoreOracleFixtures 2>&1 | Out-String
     return [pscustomobject]@{
@@ -155,6 +159,127 @@ try {
         throw "Missing error status inventory gate did not fail for the expected reason:`n$($missingErrorsResult.Output)"
     }
 
+    $missingFamilyPath = Join-Path $TempRoot 'missing-expanded-family.json'
+    $missingFamily = Get-Content -LiteralPath $ExpandedInventory -Raw | ConvertFrom-Json -Depth 100
+    $missingFamily.families = @($missingFamily.families | Where-Object id -ne 'agents')
+    $missingFamily | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $missingFamilyPath -Encoding utf8NoBOM
+    $missingFamilyResult = Invoke-Verifier -ContractManifest $Manifest -ExpandedInventoryManifest $missingFamilyPath
+    if ($missingFamilyResult.ExitCode -eq 0 -or $missingFamilyResult.Output -notmatch 'Required expanded consumer family is missing') {
+        throw "Missing expanded family gate did not fail for the expected reason:`n$($missingFamilyResult.Output)"
+    }
+
+    $missingOperationPath = Join-Path $TempRoot 'missing-expanded-operation.json'
+    $missingOperation = Get-Content -LiteralPath $ExpandedInventory -Raw | ConvertFrom-Json -Depth 100
+    $batchFamily = @($missingOperation.families | Where-Object id -eq 'batches')[0]
+    $batchFamily.operations = @($batchFamily.operations | Where-Object id -ne 'batches.retry-item')
+    $missingOperation | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $missingOperationPath -Encoding utf8NoBOM
+    $missingOperationResult = Invoke-Verifier -ContractManifest $Manifest -ExpandedInventoryManifest $missingOperationPath
+    if ($missingOperationResult.ExitCode -eq 0 -or $missingOperationResult.Output -notmatch 'Required expanded consumer operation is missing') {
+        throw "Missing expanded operation gate did not fail for the expected reason:`n$($missingOperationResult.Output)"
+    }
+
+    $driftedOperationPath = Join-Path $TempRoot 'drifted-expanded-operation.json'
+    $driftedOperation = Get-Content -LiteralPath $ExpandedInventory -Raw | ConvertFrom-Json -Depth 100
+    $driftedOperation.families[0].operations[0].route_anchor = 'NO_SUCH_FROZEN_FRONTEND_ROUTE'
+    $driftedOperation | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $driftedOperationPath -Encoding utf8NoBOM
+    $driftedOperationResult = Invoke-Verifier -ContractManifest $Manifest -ExpandedInventoryManifest $driftedOperationPath
+    if ($driftedOperationResult.ExitCode -eq 0 -or $driftedOperationResult.Output -notmatch 'lost frontend route evidence') {
+        throw "Expanded operation source drift gate did not fail for the expected reason:`n$($driftedOperationResult.Output)"
+    }
+
+    $duplicateWirePath = Join-Path $TempRoot 'duplicate-expanded-wire-key.json'
+    $duplicateWire = Get-Content -LiteralPath $ExpandedInventory -Raw | ConvertFrom-Json -Depth 100
+    $duplicate = Get-Content -LiteralPath $ExpandedInventory -Raw | ConvertFrom-Json -Depth 100
+    $duplicate.families[0].operations[0].id = 'agents.list.duplicate'
+    $duplicateWire.families[0].operations = @($duplicateWire.families[0].operations) + @($duplicate.families[0].operations[0])
+    $duplicateWire | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $duplicateWirePath -Encoding utf8NoBOM
+    $duplicateWireResult = Invoke-Verifier -ContractManifest $Manifest -ExpandedInventoryManifest $duplicateWirePath
+    if ($duplicateWireResult.ExitCode -eq 0 -or $duplicateWireResult.Output -notmatch 'Duplicate consumer method/path key') {
+        throw "Duplicate wire key gate did not fail for the expected reason:`n$($duplicateWireResult.Output)"
+    }
+
+    $unaccountedModulePath = Join-Path $TempRoot 'unaccounted-api-module.json'
+    $unaccountedModule = Get-Content -LiteralPath $ExpandedInventory -Raw | ConvertFrom-Json -Depth 100
+    $unaccountedModule.source_module_accounting.shared_modules = @($unaccountedModule.source_module_accounting.shared_modules | Where-Object source_path -ne 'frontend/src/core/sidecar/api.ts')
+    $unaccountedModule | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $unaccountedModulePath -Encoding utf8NoBOM
+    $unaccountedModuleResult = Invoke-Verifier -ContractManifest $Manifest -ExpandedInventoryManifest $unaccountedModulePath
+    if ($unaccountedModuleResult.ExitCode -eq 0 -or $unaccountedModuleResult.Output -notmatch 'Frozen frontend API source module is unaccounted') {
+        throw "Unaccounted frozen API module gate did not fail for the expected reason:`n$($unaccountedModuleResult.Output)"
+    }
+
+    $driftedNonApiPath = Join-Path $TempRoot 'drifted-non-api-source.json'
+    $driftedNonApi = Get-Content -LiteralPath $ExpandedInventory -Raw | ConvertFrom-Json -Depth 100
+    $driftedNonApi.non_api_accounted_modules[0].source_anchors[0] = 'NO_SUCH_LANGGRAPH_WRAPPER'
+    $driftedNonApi | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $driftedNonApiPath -Encoding utf8NoBOM
+    $driftedNonApiResult = Invoke-Verifier -ContractManifest $Manifest -ExpandedInventoryManifest $driftedNonApiPath
+    if ($driftedNonApiResult.ExitCode -eq 0 -or $driftedNonApiResult.Output -notmatch 'lost source anchor') {
+        throw "Non-API wrapper source drift gate did not fail for the expected reason:`n$($driftedNonApiResult.Output)"
+    }
+
+    $unknownNonApiSurfacePath = Join-Path $TempRoot 'unknown-non-api-surface.json'
+    $unknownNonApiSurface = Get-Content -LiteralPath $ExpandedInventory -Raw | ConvertFrom-Json -Depth 100
+    $unknownNonApiSurface.non_api_accounted_modules[0].surface_ids[0] = 'NO_SUCH_W00_SURFACE'
+    $unknownNonApiSurface | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $unknownNonApiSurfacePath -Encoding utf8NoBOM
+    $unknownNonApiSurfaceResult = Invoke-Verifier -ContractManifest $Manifest -ExpandedInventoryManifest $unknownNonApiSurfacePath
+    if ($unknownNonApiSurfaceResult.ExitCode -eq 0 -or $unknownNonApiSurfaceResult.Output -notmatch 'points to unknown surface') {
+        throw "Unknown non-API surface gate did not fail for the expected reason:`n$($unknownNonApiSurfaceResult.Output)"
+    }
+
+    $missingNonApiPath = Join-Path $TempRoot 'missing-accounted-non-api.json'
+    $missingNonApi = Get-Content -LiteralPath $ExpandedInventory -Raw | ConvertFrom-Json -Depth 100
+    $missingNonApi.non_api_accounted_modules = @($missingNonApi.non_api_accounted_modules | Where-Object source_path -ne 'frontend/src/core/api/api-client.ts')
+    $missingNonApi | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $missingNonApiPath -Encoding utf8NoBOM
+    $missingNonApiResult = Invoke-Verifier -ContractManifest $Manifest -ExpandedInventoryManifest $missingNonApiPath
+    if ($missingNonApiResult.ExitCode -eq 0 -or $missingNonApiResult.Output -notmatch 'Required accounted non-API source is missing') {
+        throw "Missing accounted non-API source gate did not fail for the expected reason:`n$($missingNonApiResult.Output)"
+    }
+
+    $falseCompletionPath = Join-Path $TempRoot 'false-expanded-completion.json'
+    $falseCompletion = Get-Content -LiteralPath $ExpandedInventory -Raw | ConvertFrom-Json -Depth 100
+    $falseCompletion.completion_status = 'COMPLETE'
+    $falseCompletion | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $falseCompletionPath -Encoding utf8NoBOM
+    $falseCompletionResult = Invoke-Verifier -ContractManifest $Manifest -ExpandedInventoryManifest $falseCompletionPath
+    if ($falseCompletionResult.ExitCode -eq 0 -or $falseCompletionResult.Output -notmatch 'Known residuals forbid a full W00 completion claim') {
+        throw "False W00 completion gate did not fail for the expected reason:`n$($falseCompletionResult.Output)"
+    }
+
+    $falseExternalPath = Join-Path $TempRoot 'false-external-call.json'
+    $falseExternal = Get-Content -LiteralPath $ExpandedInventory -Raw | ConvertFrom-Json -Depth 100
+    $falseExternal.excluded_external_calls[0].source_anchor = 'NO_SUCH_EXTERNAL_URL'
+    $falseExternal | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $falseExternalPath -Encoding utf8NoBOM
+    $falseExternalResult = Invoke-Verifier -ContractManifest $Manifest -ExpandedInventoryManifest $falseExternalPath
+    if ($falseExternalResult.ExitCode -eq 0 -or $falseExternalResult.Output -notmatch 'lost source evidence') {
+        throw "False external exclusion gate did not fail for the expected reason:`n$($falseExternalResult.Output)"
+    }
+
+    $missingNextRoutePath = Join-Path $TempRoot 'missing-next-route.json'
+    $missingNextRoute = Get-Content -LiteralPath $ExpandedInventory -Raw | ConvertFrom-Json -Depth 100
+    $missingNextRoute.next_route_accounting.mock_only_not_parity = @($missingNextRoute.next_route_accounting.mock_only_not_parity | Where-Object { $_ -ne 'frontend/src/app/mock/api/models/route.ts' })
+    $missingNextRoute | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $missingNextRoutePath -Encoding utf8NoBOM
+    $missingNextRouteResult = Invoke-Verifier -ContractManifest $Manifest -ExpandedInventoryManifest $missingNextRoutePath
+    if ($missingNextRouteResult.ExitCode -eq 0 -or $missingNextRouteResult.Output -notmatch 'Frozen Next Route Handler is unaccounted') {
+        throw "Missing Next Route Handler gate did not fail for the expected reason:`n$($missingNextRouteResult.Output)"
+    }
+
+    $missingLicensePath = Join-Path $TempRoot 'missing-nested-license.json'
+    $missingLicense = Get-Content -LiteralPath $ResourceManifest -Raw | ConvertFrom-Json -Depth 100
+    $missingLicense.resources = @($missingLicense.resources | Where-Object id -ne 'deerflow.buzz-provider-icon-license')
+    $missingLicense | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $missingLicensePath -Encoding utf8NoBOM
+    $missingLicenseResult = Invoke-Verifier -ContractManifest $Manifest -ResourceSeedManifest $missingLicensePath
+    if ($missingLicenseResult.ExitCode -eq 0 -or $missingLicenseResult.Output -notmatch 'Required nested license resource is missing') {
+        throw "Missing nested license gate did not fail for the expected reason:`n$($missingLicenseResult.Output)"
+    }
+
+    $driftedLicensePath = Join-Path $TempRoot 'drifted-nested-license.json'
+    $driftedLicense = Get-Content -LiteralPath $ResourceManifest -Raw | ConvertFrom-Json -Depth 100
+    $licenseResource = @($driftedLicense.resources | Where-Object id -eq 'deerflow.lobe-icons-license')[0]
+    $licenseResource.sha256 = '0000000000000000000000000000000000000000000000000000000000000000'
+    $driftedLicense | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $driftedLicensePath -Encoding utf8NoBOM
+    $driftedLicenseResult = Invoke-Verifier -ContractManifest $Manifest -ResourceSeedManifest $driftedLicensePath
+    if ($driftedLicenseResult.ExitCode -eq 0 -or $driftedLicenseResult.Output -notmatch 'hash drifted') {
+        throw "Nested license hash drift gate did not fail for the expected reason:`n$($driftedLicenseResult.Output)"
+    }
+
     Write-Host 'PASS valid manifest'
     Write-Host 'PASS frozen SHA mismatch is rejected'
     Write-Host 'PASS missing critical SSE surface is rejected'
@@ -168,6 +293,19 @@ try {
     Write-Host 'PASS project responses cannot leak undeclared ownership fields'
     Write-Host 'PASS workspace unavailable fixture cannot claim available=true'
     Write-Host 'PASS expanded contracts must retain explicit error statuses'
+    Write-Host 'PASS missing expanded consumer family is rejected'
+    Write-Host 'PASS missing required expanded operation is rejected'
+    Write-Host 'PASS drifted frontend operation source is rejected'
+    Write-Host 'PASS duplicate consumer method/path across W00 partitions is rejected'
+    Write-Host 'PASS unaccounted frozen API source module is rejected'
+    Write-Host 'PASS drifted non-API wrapper source anchor is rejected'
+    Write-Host 'PASS unknown non-API wrapper surface is rejected'
+    Write-Host 'PASS missing accounted non-API wrapper is rejected'
+    Write-Host 'PASS residual inventory cannot claim W00 completion'
+    Write-Host 'PASS unverified external-only exclusion is rejected'
+    Write-Host 'PASS unaccounted Next Route Handler is rejected'
+    Write-Host 'PASS missing nested license resource is rejected'
+    Write-Host 'PASS nested license hash drift is rejected'
 }
 finally {
     if (Test-Path -LiteralPath $TempRoot) {

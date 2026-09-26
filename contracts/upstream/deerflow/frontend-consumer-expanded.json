@@ -1,0 +1,342 @@
+{
+  "schema_version": "w00.frontend-consumer-expanded/v1",
+  "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+  "status": "SOURCE_VERIFIED",
+  "runtime_status": "NOT_RUN",
+  "scope": "Additional browser callsites plus bounded auth and LangGraph SDK wrapper entry inventory; not a claim that every frozen frontend branch or payload is covered",
+  "consumer": "browser_fetch",
+  "completion_status": "PARTIAL",
+  "source_module_accounting": {
+    "rule": "Every frozen frontend/src/core/**/api.ts is assigned exactly once to a source-verified family, the original 28-surface seed, or an explicit residual.",
+    "seeded_modules": [
+      "frontend/src/core/artifacts/api.ts",
+      "frontend/src/core/features/api.ts",
+      "frontend/src/core/models/api.ts",
+      "frontend/src/core/uploads/api.ts",
+      "frontend/src/core/workspace-changes/api.ts"
+    ],
+    "shared_modules": [
+      {"source_path":"frontend/src/core/sidecar/api.ts","operation_ids":["threads.create-direct","thread.search.sdk-rest"],"source_anchors":["fetchWithAuth(`${getBackendBaseURL()}/api/threads`","apiClient.threads.search({"],"status":"SOURCE_VERIFIED","note":"Sidecar creates a direct Gateway thread and searches the existing SDK thread route; these are callsites of already inventoried wire keys, not new endpoints."}
+    ],
+    "residual_modules": []
+  },
+  "non_api_accounted_modules": [
+    {"source_path":"frontend/src/core/api/api-client.ts","status":"SOURCE_VERIFIED","surface_ids":["thread.create.sdk-rest","thread.state.sdk-rest","run.create.sdk-sse","run.join.sdk-sse","run.cancel.sdk-rest","run.get.sdk-rest"],"source_anchors":["new LangGraphClient({","onRequest: injectCsrfHeader","client.runs.get(threadId, runId, { signal })","client.threads.getState(threadId, undefined, { signal })","client.runs.stream = async function*","client.runs.joinStream = async function*","client.runs.cancel = (async","originalJoinStream(threadId, resolvedRunId","forceChatRunStreamOptions(options)"],"note":"The wrapper only directly issues runs.get and threads.getState, and intercepts stream/joinStream/cancel; other SDK methods are invoked by hooks or StreamManager. Mappings of SDK 1.6.0 methods to HTTP verbs/paths were cross-checked against the locally installed client.js matching the frozen pnpm lock, but that installed file is not part of the frozen source SHA or portable verifier."},
+    {"source_path":"frontend/src/app/(auth)/login/page.tsx","status":"SOURCE_VERIFIED","surface_ids":["auth.providers.browser","auth.login-local.browser","auth.register.browser","auth.oauth.browser-navigation"],"source_anchors":["fetch(\"/api/v1/auth/providers\")","/api/v1/auth/login/local","/api/v1/auth/register","window.location.href = `/api/v1/auth/oauth/${provider.id}"],"note":"Static login entry coverage only; SSO handshake and error schema remain runtime NOT_RUN."},
+    {"source_path":"frontend/src/app/(auth)/setup/page.tsx","status":"SOURCE_VERIFIED","surface_ids":["auth.initialize.browser","auth.change-password.browser"],"source_anchors":["fetch(\"/api/v1/auth/initialize\"","fetch(\"/api/v1/auth/change-password\""],"note":"Static first-admin and recovery branch entry coverage only; live recovery and error schema remain NOT_RUN."}
+  ],
+  "required_non_api_accounted_paths": ["frontend/src/core/api/api-client.ts", "frontend/src/app/(auth)/login/page.tsx", "frontend/src/app/(auth)/setup/page.tsx"],
+  "non_api_module_residuals": [
+    {"source_path":"frontend/src/core/threads/hooks.ts","status":"NOT_INVENTORIED","reason":"Named SDK get/update/delete/state/run paths are source-anchored in the seed, but this large hook and StreamManager's transitive method/branch matrix have not received a complete branch-and-payload census. This is a remaining source coverage boundary, not evidence of a missing endpoint."}
+  ],
+  "excluded_external_calls": [
+    {"source_path":"frontend/src/app/github-stars/route.ts","status":"EXCLUDED_EXTERNAL","source_anchor":"https://api.github.com/repos/bytedance/deer-flow","reason":"Next route fetches GitHub directly with a server runtime token and returns 204 on absent credential/error; it is not a DeerFlow or Haifa Gateway consumer and is not counted as backend compatibility."}
+  ],
+  "next_route_accounting": {
+    "gateway_bff": [
+      "frontend/src/app/api/memory/route.ts",
+      "frontend/src/app/api/memory/[...path]/route.ts"
+    ],
+    "external_only": ["frontend/src/app/github-stars/route.ts"],
+    "mock_only_not_parity": [
+      "frontend/src/app/mock/api/skills/route.ts",
+      "frontend/src/app/mock/api/mcp/config/route.ts",
+      "frontend/src/app/mock/api/threads/search/route.ts",
+      "frontend/src/app/mock/api/threads/[thread_id]/history/route.ts",
+      "frontend/src/app/mock/api/threads/[thread_id]/artifacts/[[...artifact_path]]/route.ts",
+      "frontend/src/app/mock/api/models/route.ts",
+      "frontend/src/app/mock/api/integrations/lark/status/route.ts",
+      "frontend/src/app/mock/api/integrations/lark/install/route.ts",
+      "frontend/src/app/mock/api/integrations/lark/config/start/route.ts",
+      "frontend/src/app/mock/api/integrations/lark/config/complete/route.ts",
+      "frontend/src/app/mock/api/integrations/lark/config/credentials/route.ts",
+      "frontend/src/app/mock/api/integrations/lark/auth/complete/route.ts",
+      "frontend/src/app/mock/api/integrations/lark/auth/start/route.ts"
+    ]
+  },
+  "required_family_ids": [
+    "agents", "projects-documents", "trash", "skills", "mcp", "schedules", "channels", "batches", "mcp-tasks", "input-polish", "suggestions", "memory", "subagents", "lark-integration", "threads-browser", "subtask-steps", "feedback", "knowledge-catalog", "skill-export", "user-preferences"
+  ],
+  "required_operation_ids": [
+    "agents.delete", "projects.documents.promote", "trash.documents.restore", "skills.upload", "mcp.server.state", "schedules.trigger", "channels.wechat.poll", "batches.retry-item", "mcp-tasks.cancel", "input-polish.post", "suggestions.config", "memory.fact.update", "subagents.delete", "lark.auth.complete", "threads.compact", "subtask-steps.events", "feedback.delete", "knowledge.documents", "skill-export.download", "user-preferences.patch"
+  ],
+  "families": [
+    {
+      "id": "agents",
+      "source_path": "frontend/src/core/agents/api.ts",
+      "gateway_registration": "app.include_router(agents.router)",
+      "registration_condition": "Router is mounted; agents API UI is controlled by /api/features agents_api_enabled and its last definitive browser cache.",
+      "auth": "Shared browser fetcher sends credentials and CSRF on mutations; gateway authorizes reads/writes.",
+      "operations": [
+        {"id":"agents.list","method":"GET","path":"/api/agents","function":"listAgents","route_anchor":"/api/agents","response":"Agent[]"},
+        {"id":"agents.get","method":"GET","path":"/api/agents/{name}","function":"getAgent","route_anchor":"/api/agents/${name}","response":"Agent"},
+        {"id":"agents.create","method":"POST","path":"/api/agents","function":"createAgent","route_anchor":"method: \"POST\"","request":"CreateAgentRequest","response":"Agent"},
+        {"id":"agents.update","method":"PUT","path":"/api/agents/{name}","function":"updateAgent","route_anchor":"method: \"PUT\"","request":"UpdateAgentRequest","response":"Agent"},
+        {"id":"agents.delete","method":"DELETE","path":"/api/agents/{name}","function":"deleteAgent","route_anchor":"method: \"DELETE\"","response":"empty"},
+        {"id":"agents.check-name","method":"GET","path":"/api/agents/check?name={name}","function":"checkAgentName","route_anchor":"/api/agents/check?name=","response":"name availability"}
+      ]
+    },
+    {
+      "id": "projects-documents",
+      "source_path": "frontend/src/core/projects/api.ts",
+      "gateway_registration": "app.include_router(project_documents.router)",
+      "registration_condition": "Project documents UI calls these routes for an existing owned project; read/write permission differs by method. The project resource base was already seeded separately.",
+      "auth": "Shared browser fetcher with cookie/CSRF; project ownership and document permission are server-side.",
+      "operations": [
+        {"id":"projects.archive","method":"POST","path":"/api/projects/{id}/archive","function":"archiveProject","route_anchor":"method: \"POST\"","response":"Project"},
+        {"id":"projects.restore","method":"POST","path":"/api/projects/{id}/restore","function":"restoreProject","route_anchor":"method: \"POST\"","response":"Project"},
+        {"id":"projects.delete","method":"DELETE","path":"/api/projects/{id}","function":"deleteProject","route_anchor":"method: \"DELETE\"","response":"empty"},
+        {"id":"projects.documents.list","method":"GET","path":"/api/projects/{id}/documents?limit={n}&offset={n}","function":"listProjectDocuments","route_anchor":"/documents","response":"document page envelope"},
+        {"id":"projects.documents.upload","method":"POST","path":"/api/projects/{id}/documents","function":"uploadProjectDocument","route_anchor":"formData.append(\"file\", file)","request":"multipart file field named file","response":"ProjectDocumentUploadResponse"},
+        {"id":"projects.documents.promote","method":"POST","path":"/api/projects/{id}/documents/from-thread","function":"promoteThreadFile","route_anchor":"/documents/from-thread","request":"thread_id,kind,name,optional shelf_name","response":"ProjectDocumentUploadResponse"},
+        {"id":"projects.documents.attach","method":"POST","path":"/api/projects/{id}/documents/{document_id}/attach-to-thread/{thread_id}","function":"attachProjectDocument","route_anchor":"/attach-to-thread/","response":"AttachProjectDocumentResult"},
+        {"id":"projects.documents.delete","method":"DELETE","path":"/api/projects/{id}/documents/{document_id}","function":"deleteProjectDocument","route_anchor":"method: \"DELETE\"","response":"empty"},
+        {"id":"projects.documents.preview","method":"GET","path":"/api/projects/{id}/documents/{document_id}/content","function":"fetchProjectDocumentPreview","route_anchor":"headers: { Range:","response":"bounded 206/416 preview or 409 content_missing"},
+        {"id":"projects.thread-files","method":"GET","path":"/api/projects/{id}/thread-files","function":"listProjectThreadFiles","route_anchor":"/thread-files","response":"thread file page envelope"}
+      ]
+    },
+    {
+      "id": "trash",
+      "source_path": "frontend/src/core/trash/api.ts",
+      "gateway_registration": "app.include_router(trash.router)",
+      "registration_condition": "Trash document view; 404 restore may open project picker, while 409 content_missing must keep row in trash.",
+      "auth": "Shared browser fetcher; owner/project access enforced by gateway.",
+      "operations": [
+        {"id":"trash.documents.list","method":"GET","path":"/api/trash/documents?limit={n}&offset={n}","function":"listTrashDocuments","route_anchor":"/documents${query}","response":"{documents,total,limit,offset}"},
+        {"id":"trash.documents.restore","method":"POST","path":"/api/trash/documents/{id}/restore","function":"restoreTrashDocument","route_anchor":"/restore","request":"optional project_id","response":"RestoreDocumentResult; 404/409 distinct"},
+        {"id":"trash.documents.purge","method":"POST","path":"/api/trash/documents/{id}/purge","function":"purgeTrashDocument","route_anchor":"/purge","response":"204 empty"},
+        {"id":"trash.purge-all","method":"POST","path":"/api/trash/purge","function":"emptyTrash","route_anchor":"trashUrl(\"/purge\")","response":"EmptyTrashResult"}
+      ]
+    },
+    {
+      "id": "skills",
+      "source_path": "frontend/src/core/skills/api.ts",
+      "gateway_registration": "app.include_router(skills.router)",
+      "registration_condition": "Skills settings and installation UI; exposure does not imply script/runtime dependencies are available.",
+      "auth": "Shared browser fetcher; gateway controls skill admin and package access.",
+      "operations": [
+        {"id":"skills.list","method":"GET","path":"/api/skills","function":"loadSkills","route_anchor":"/api/skills","response":"skill catalog"},
+        {"id":"skills.enable","method":"PUT","path":"/api/skills/{name}","function":"enableSkill","route_anchor":"method: \"PUT\"","request":"enabled","response":"skill"},
+        {"id":"skills.install","method":"POST","path":"/api/skills/install","function":"installSkill","route_anchor":"/api/skills/install","request":"{thread_id,path}","response":"InstallSkillResponse; non-403 HTTP errors may return success=false"},
+        {"id":"skills.upload","method":"POST","path":"/api/skills/install/upload","function":"uploadSkillArchive","route_anchor":"formData.append(\"archive\", archive)","request":"multipart archive field named archive","response":"InstallSkillResponse; 403/413/security findings throw"}
+      ]
+    },
+    {
+      "id": "mcp",
+      "source_path": "frontend/src/core/mcp/api.ts",
+      "gateway_registration": "app.include_router(mcp.router)",
+      "registration_condition": "MCP settings UI; server list and admin mutation paths are distinct, 403 is surfaced as admin-required.",
+      "auth": "Shared browser fetcher; gateway admin permission, credentials never copied to public variables.",
+      "operations": [
+        {"id":"mcp.config.get","method":"GET","path":"/api/mcp/config","function":"loadMCPConfig","route_anchor":"/api/mcp/config","response":"MCPConfig"},
+        {"id":"mcp.config.put","method":"PUT","path":"/api/mcp/config","function":"updateMCPConfig","route_anchor":"method: \"PUT\"","request":"MCPConfig","response":"MCPConfig"},
+        {"id":"mcp.servers.create","method":"POST","path":"/api/mcp/config/servers","function":"createMCPServers","route_anchor":"/api/mcp/config/servers","request":"mcp_servers map","response":"MCPConfig"},
+        {"id":"mcp.server.update","method":"PUT","path":"/api/mcp/config/server","function":"updateMCPServer","route_anchor":"/api/mcp/config/server","request":"server_name,server","response":"MCPConfig"},
+        {"id":"mcp.server.delete","method":"DELETE","path":"/api/mcp/config/servers/{name}","function":"deleteMCPServer","route_anchor":"/api/mcp/config/servers/${encodeURIComponent(serverName)}","response":"MCPConfig"},
+        {"id":"mcp.server.state","method":"PATCH","path":"/api/mcp/config","function":"updateMCPServerState","route_anchor":"method: \"PATCH\"","request":"server_name,enabled","response":"MCPConfig"}
+      ]
+    },
+    {
+      "id": "schedules",
+      "source_path": "frontend/src/core/scheduled-tasks/api.ts",
+      "gateway_registration": "app.include_router(scheduled_tasks.router)",
+      "registration_condition": "Scheduled tasks page and thread-bound schedule view; no live trigger claim follows from UI source.",
+      "auth": "Shared browser fetcher; gateway schedule read/write authorization.",
+      "operations": [
+        {"id":"schedules.list","method":"GET","path":"/api/scheduled-tasks","function":"fetchScheduledTasks","route_anchor":"scheduledTasksUrl(\"\")","response":"ScheduledTask[]"},
+        {"id":"schedules.thread-list","method":"GET","path":"/api/threads/{id}/scheduled-tasks","function":"fetchThreadScheduledTasks","route_anchor":"/scheduled-tasks","response":"ScheduledTask[]"},
+        {"id":"schedules.runs","method":"GET","path":"/api/scheduled-tasks/{id}/runs?limit={n}&offset={n}","function":"fetchScheduledTaskRuns","route_anchor":"/runs","response":"ScheduledTaskRun[]"},
+        {"id":"schedules.create","method":"POST","path":"/api/scheduled-tasks","function":"createScheduledTask","route_anchor":"method: \"POST\"","request":"ScheduledTaskPayload","response":"ScheduledTask"},
+        {"id":"schedules.update","method":"PATCH","path":"/api/scheduled-tasks/{id}","function":"updateScheduledTask","route_anchor":"method: \"PATCH\"","request":"partial ScheduledTaskPayload","response":"ScheduledTask"},
+        {"id":"schedules.pause","method":"POST","path":"/api/scheduled-tasks/{id}/pause","function":"pauseScheduledTask","route_anchor":"/pause","response":"ScheduledTask"},
+        {"id":"schedules.resume","method":"POST","path":"/api/scheduled-tasks/{id}/resume","function":"resumeScheduledTask","route_anchor":"/resume","response":"ScheduledTask"},
+        {"id":"schedules.trigger","method":"POST","path":"/api/scheduled-tasks/{id}/trigger","function":"triggerScheduledTask","route_anchor":"/trigger","response":"{id,triggered}"},
+        {"id":"schedules.delete","method":"DELETE","path":"/api/scheduled-tasks/{id}","function":"deleteScheduledTask","route_anchor":"method: \"DELETE\"","response":"{id,deleted}"}
+      ]
+    },
+    {
+      "id": "channels",
+      "source_path": "frontend/src/core/channels/api.ts",
+      "gateway_registration": "app.include_router(channels.router)",
+      "registration_condition": "Channels settings UI; provider availability and per-provider configured state gate actions.",
+      "auth": "Shared browser fetcher; runtime configuration and connection mutation require gateway permissions.",
+      "operations": [
+        {"id":"channels.providers","method":"GET","path":"/api/channels/providers","function":"listChannelProviders","route_anchor":"/providers","response":"ChannelProvidersResponse"},
+        {"id":"channels.connections","method":"GET","path":"/api/channels/connections","function":"listChannelConnections","route_anchor":"/connections","response":"ChannelConnectionsResponse.connections"},
+        {"id":"channels.connect","method":"POST","path":"/api/channels/{provider}/connect","function":"connectChannelProvider","route_anchor":"/connect","response":"ChannelConnectResponse"},
+        {"id":"channels.configure","method":"POST","path":"/api/channels/{provider}/runtime-config","function":"configureChannelProvider","route_anchor":"/runtime-config","request":"{values}","response":"ChannelProvider"},
+        {"id":"channels.connection.delete","method":"DELETE","path":"/api/channels/connections/{id}","function":"disconnectChannelConnection","route_anchor":"/connections/${encodeURIComponent(connectionId)}","response":"empty"},
+        {"id":"channels.provider.delete","method":"DELETE","path":"/api/channels/{provider}/runtime-config","function":"disconnectChannelProvider","route_anchor":"method: \"DELETE\"","response":"ChannelProvider"},
+        {"id":"channels.wechat.start","method":"POST","path":"/api/channels/wechat/qr-login","function":"startWechatQRLogin","route_anchor":"/wechat/qr-login","response":"WechatQRLoginSession"},
+        {"id":"channels.wechat.poll","method":"POST","path":"/api/channels/wechat/qr-login/{id}/poll","function":"pollWechatQRLogin","route_anchor":"/poll","request":"optional verify_code","response":"WechatQRLoginSession"},
+        {"id":"channels.wechat.cancel","method":"DELETE","path":"/api/channels/wechat/qr-login/{id}","function":"cancelWechatQRLogin","route_anchor":"method: \"DELETE\"","response":"empty; 404 accepted by client"}
+      ]
+    },
+    {
+      "id": "batches",
+      "source_path": "frontend/src/core/subagent-batches/api.ts",
+      "gateway_registration": "app.include_router(subagent_batches.router)",
+      "registration_condition": "Thread batch panel is gated by /api/features subagent_batches capability; the results link is a direct download URL.",
+      "auth": "Shared browser fetcher for JSON; download URL is same-origin and owner-checked.",
+      "operations": [
+        {"id":"batches.list","method":"GET","path":"/api/threads/{id}/subagent-batches?limit=20","function":"fetchSubagentBatches","route_anchor":"?limit=20","response":"SubagentBatch[]"},
+        {"id":"batches.items","method":"GET","path":"/api/threads/{id}/subagent-batches/{batch_id}/items?offset={n}&limit={n}&status={status}","function":"fetchSubagentBatchItems","route_anchor":"/items?${params}","response":"SubagentBatchItem[]"},
+        {"id":"batches.control","method":"POST","path":"/api/threads/{id}/subagent-batches/{batch_id}/{pause|resume|cancel}","function":"controlSubagentBatch","route_anchor":"/${action}","response":"SubagentBatch"},
+        {"id":"batches.retry-item","method":"POST","path":"/api/threads/{id}/subagent-batches/{batch_id}/items/{item_id}/retry","function":"retrySubagentBatchItem","route_anchor":"/retry","response":"SubagentBatchItem"},
+        {"id":"batches.results","method":"GET","path":"/api/threads/{id}/subagent-batches/{batch_id}/results.jsonl","function":"subagentBatchResultsUrl","route_anchor":"/results.jsonl","response":"JSONL download"}
+      ]
+    },
+    {
+      "id": "mcp-tasks",
+      "source_path": "frontend/src/core/background-tasks/api.ts",
+      "gateway_registration": "app.include_router(mcp_tasks.router)",
+      "registration_condition": "Thread background tasks panel is gated by mcp_tasks feature; polling and cancel are distinct operations.",
+      "auth": "Shared browser fetcher and owned-thread gateway permission.",
+      "operations": [
+        {"id":"mcp-tasks.list","method":"GET","path":"/api/threads/{id}/mcp-tasks?limit=20","function":"fetchBackgroundTasks","route_anchor":"?limit=20","response":"BackgroundTask[]"},
+        {"id":"mcp-tasks.get","method":"GET","path":"/api/threads/{id}/mcp-tasks/{task_id}","function":"fetchBackgroundTask","route_anchor":"/${encodeURIComponent(taskId)}","response":"BackgroundTaskDetail"},
+        {"id":"mcp-tasks.cancel","method":"POST","path":"/api/threads/{id}/mcp-tasks/{task_id}/cancel","function":"cancelBackgroundTask","route_anchor":"/cancel","response":"BackgroundTaskDetail"}
+      ]
+    },
+    {
+      "id": "input-polish",
+      "source_path": "frontend/src/core/input-polish/api.ts",
+      "gateway_registration": "app.include_router(input_polish.router)",
+      "registration_condition": "Input-box one-shot polishing action; it does not create the main thread run.",
+      "auth": "Shared browser fetcher; current user principal selected by gateway.",
+      "operations": [
+        {"id":"input-polish.post","method":"POST","path":"/api/input-polish","function":"polishInputDraft","route_anchor":"/api/input-polish","request":"draft text","response":"polished text"}
+      ]
+    },
+    {
+      "id": "suggestions",
+      "source_path": "frontend/src/core/suggestions/api.ts",
+      "gateway_registration": "app.include_router(suggestions.router)",
+      "registration_condition": "Config determines suggestion UI exposure; per-thread generation callsite is in input-box.tsx and remains separately listed as a residual direct component callsite.",
+      "auth": "Shared browser fetcher; owned thread required for generation.",
+      "operations": [
+        {"id":"suggestions.config","method":"GET","path":"/api/suggestions/config","function":"loadSuggestionsConfig","route_anchor":"/api/suggestions/config","response":"SuggestionsConfigResponse"}
+      ]
+    },
+    {
+      "id": "memory",
+      "source_path": "frontend/src/core/memory/api.ts",
+      "gateway_registration": "app.include_router(memory.router)",
+      "registration_condition": "Memory UI; same-origin /api/memory paths are intercepted by Next route handlers and forwarded server-side.",
+      "auth": "Browser fetcher plus Next BFF forwarding; server principal and memory scope must be enforced by gateway.",
+      "operations": [
+        {"id":"memory.get","method":"GET","path":"/api/memory","function":"loadMemory","route_anchor":"/api/memory","response":"UserMemory"},
+        {"id":"memory.clear","method":"DELETE","path":"/api/memory","function":"clearMemory","route_anchor":"method: \"DELETE\"","response":"UserMemory"},
+        {"id":"memory.fact.delete","method":"DELETE","path":"/api/memory/facts/{id}","function":"deleteMemoryFact","route_anchor":"/api/memory/facts/","response":"UserMemory"},
+        {"id":"memory.export","method":"GET","path":"/api/memory/export","function":"exportMemory","route_anchor":"/api/memory/export","response":"UserMemory"},
+        {"id":"memory.import","method":"POST","path":"/api/memory/import","function":"importMemory","route_anchor":"/api/memory/import","request":"UserMemory","response":"UserMemory"},
+        {"id":"memory.fact.create","method":"POST","path":"/api/memory/facts","function":"createMemoryFact","route_anchor":"/api/memory/facts","request":"fact","response":"UserMemory"},
+        {"id":"memory.fact.update","method":"PATCH","path":"/api/memory/facts/{id}","function":"updateMemoryFact","route_anchor":"method: \"PATCH\"","request":"fact patch","response":"UserMemory"}
+      ]
+    },
+    {
+      "id": "lark-integration",
+      "source_path": "frontend/src/core/integrations/lark/api.ts",
+      "gateway_registration": "app.include_router(integrations.router)",
+      "registration_condition": "Lark integration settings page; install/config/auth are explicit admin workflows and require provider configuration; 403 is surfaced as admin-required.",
+      "auth": "Shared browser fetcher, gateway admin permission; credentials are submitted to server, not public build variables.",
+      "operations": [
+        {"id":"lark.status","method":"GET","path":"/api/integrations/lark/status","function":"loadLarkIntegrationStatus","route_anchor":"/api/integrations/lark/status","response":"LarkIntegrationStatus"},
+        {"id":"lark.install","method":"POST","path":"/api/integrations/lark/install","function":"installLarkIntegration","route_anchor":"/api/integrations/lark/install","response":"LarkInstallResponse"},
+        {"id":"lark.auth.start","method":"POST","path":"/api/integrations/lark/auth/start","function":"startLarkAuthorization","route_anchor":"/api/integrations/lark/auth/start","request":"LarkAuthStartRequest","response":"LarkAuthStartResponse"},
+        {"id":"lark.config.start","method":"POST","path":"/api/integrations/lark/config/start","function":"startLarkConfiguration","route_anchor":"/api/integrations/lark/config/start","request":"LarkConfigStartRequest","response":"LarkConfigStartResponse"},
+        {"id":"lark.config.complete","method":"POST","path":"/api/integrations/lark/config/complete","function":"completeLarkConfiguration","route_anchor":"/api/integrations/lark/config/complete","request":"LarkConfigCompleteRequest","response":"LarkConfigCompleteResponse"},
+        {"id":"lark.config.credentials","method":"POST","path":"/api/integrations/lark/config/credentials","function":"setLarkAppCredentials","route_anchor":"/api/integrations/lark/config/credentials","request":"LarkConfigCredentialsRequest","response":"LarkConfigCompleteResponse"},
+        {"id":"lark.auth.complete","method":"POST","path":"/api/integrations/lark/auth/complete","function":"completeLarkAuthorization","route_anchor":"/api/integrations/lark/auth/complete","request":"LarkAuthCompleteRequest","response":"LarkAuthCompleteResponse"}
+      ]
+    },
+    {
+      "id": "threads-browser",
+      "source_path": "frontend/src/core/threads/api.ts",
+      "gateway_registration": "app.include_router(threads.router)",
+      "registration_condition": "Browser thread actions, in addition to the original SDK seed. Branch/compact/metadata/move use server-owned thread and require appropriate write permission.",
+      "auth": "Shared browser fetcher, CSRF on mutation; gateway thread owner and permission checks.",
+      "operations": [
+        {"id":"threads.token-usage","method":"GET","path":"/api/threads/{id}/token-usage","function":"fetchThreadTokenUsage","route_anchor":"/token-usage","response":"ThreadTokenUsageResponse or client-null on 403/404"},
+        {"id":"threads.branch","method":"POST","path":"/api/threads/{id}/branches","function":"branchThreadFromTurn","route_anchor":"/branches","request":"message_id,message_ids,optional title","response":"ThreadBranchResponse"},
+        {"id":"threads.metadata","method":"PATCH","path":"/api/threads/{id}","function":"patchThreadMetadata","route_anchor":"method: \"PATCH\"","request":"{metadata}","response":"ThreadMetadataPatchResponse"},
+        {"id":"threads.create-direct","method":"POST","path":"/api/threads","function":"createThread","route_anchor":"/api/threads","request":"thread_id,optional project_id","response":"AgentThread"},
+        {"id":"threads.move","method":"POST","path":"/api/threads/{id}/move","function":"moveThreadToProject","route_anchor":"/move","request":"{project_id|null}","response":"ThreadMetadataPatchResponse"},
+        {"id":"threads.compact","method":"POST","path":"/api/threads/{id}/compact","function":"compactThreadContext","route_anchor":"/compact","request":"force=true,optional agent_name/model_name","response":"ThreadCompactResponse"},
+        {"id":"threads.search-archive","method":"POST","path":"/api/threads/search","function":"searchThreadsByArchive","route_anchor":"/api/threads/search","request":"archived,metadata,status,limit,offset","response":"AgentThread[]"}
+      ]
+    },
+    {
+      "id": "feedback",
+      "source_path": "frontend/src/core/api/feedback.ts",
+      "gateway_registration": "app.include_router(feedback.router)",
+      "registration_condition": "Message feedback controls operate on an owned thread/run; DELETE treats HTTP 404 as already absent.",
+      "auth": "Shared browser fetcher with mutation CSRF; run owner/feedback permission checked by gateway.",
+      "operations": [
+        {"id":"feedback.upsert","method":"PUT","path":"/api/threads/{thread_id}/runs/{run_id}/feedback","function":"upsertFeedback","route_anchor":"method: \"PUT\"","request":"{rating,comment|null}","response":"FeedbackData"},
+        {"id":"feedback.delete","method":"DELETE","path":"/api/threads/{thread_id}/runs/{run_id}/feedback","function":"deleteFeedback","route_anchor":"method: \"DELETE\"","response":"empty; client accepts 404"}
+      ]
+    },
+    {
+      "id": "knowledge-catalog",
+      "source_path": "frontend/src/core/knowledge/scope-api.ts",
+      "gateway_registration": "app.include_router(knowledge.router)",
+      "registration_condition": "Agent knowledge scope picker; data depends on configured retrieval provider, and selection is separate from actual retrieval during a Run.",
+      "auth": "Shared browser fetcher, gateway catalog/read permission.",
+      "operations": [
+        {"id":"knowledge.datasets","method":"GET","path":"/api/knowledge/retrieval-catalog/datasets?agent_name={name}&page={n}&page_size={n}&search={term}","function":"listRetrievalCatalogDatasets","route_anchor":"/datasets?${query}","response":"RetrievalCatalogPage"},
+        {"id":"knowledge.documents","method":"GET","path":"/api/knowledge/retrieval-catalog/datasets/{dataset_id}/documents?agent_name={name}&page={n}&page_size={n}&search={term}","function":"listRetrievalCatalogDocuments","route_anchor":"/documents?${query}","response":"RetrievalCatalogPage"}
+      ]
+    },
+    {
+      "id": "skill-export",
+      "source_path": "frontend/src/core/skills/export.ts",
+      "gateway_registration": "app.include_router(skills.router)",
+      "registration_condition": "Custom Skill export UI first loads manifest, then requests ZIP with expected_revision; mismatched MIME is rejected client-side.",
+      "auth": "Shared browser fetcher, gateway custom Skill export permission.",
+      "operations": [
+        {"id":"skill-export.manifest","method":"GET","path":"/api/skills/custom/{name}/export-manifest","function":"loadSkillExportManifest","route_anchor":"/export-manifest","response":"SkillExportManifest"},
+        {"id":"skill-export.download","method":"GET","path":"/api/skills/custom/{name}/export?expected_revision={revision}","function":"downloadSkillExport","route_anchor":"/export?expected_revision=","response":"application/zip Blob or SkillExportRequestError"}
+      ]
+    },
+    {
+      "id": "user-preferences",
+      "source_path": "frontend/src/core/settings/user-preferences.ts",
+      "gateway_registration": "app.include_router(user_preferences.router)",
+      "registration_condition": "Authenticated workspace starts tab-local preference sync; GET/PATCH share one request helper with X-Expected-User-Id, 403/409 stop sync rather than retry under a new identity.",
+      "auth": "Shared browser fetcher, X-Expected-User-Id and cookie principal checked by gateway.",
+      "operations": [
+        {"id":"user-preferences.get","method":"GET","path":"/api/v1/auth/preferences","function":"startUserPreferences","route_anchor":"/api/v1/auth/preferences","response":"Preferences"},
+        {"id":"user-preferences.patch","method":"PATCH","path":"/api/v1/auth/preferences","function":"startUserPreferences","route_anchor":"X-Expected-User-Id","request":"partial Preferences","response":"status; applied via sync"}
+      ]
+    },
+    {
+      "id": "subtask-steps",
+      "source_path": "frontend/src/core/tasks/api.ts",
+      "gateway_registration": "app.include_router(thread_runs.router)",
+      "registration_condition": "Historical subtask card expands after live SSE is gone; bounded cursor pagination requests only subagent.step events for task_id, never all run events indefinitely.",
+      "auth": "Shared browser fetcher, owned-thread run-read permission.",
+      "operations": [
+        {"id":"subtask-steps.events","method":"GET","path":"/api/threads/{thread_id}/runs/{run_id}/events?event_types=subagent.step&task_id={task_id}&limit={n}&after_seq={seq}","function":"fetchSubtaskSteps","route_anchor":"event_types: \"subagent.step\"","response":"FetchedEvent[] transformed to SubtaskStep[]; max 100 pages"}
+      ]
+    },
+    {
+      "id": "subagents",
+      "source_path": "frontend/src/core/subagents/api.ts",
+      "gateway_registration": "app.include_router(subagents.router)",
+      "registration_condition": "Managed subagent settings UI; this is distinct from per-thread batch controls and runtime child execution.",
+      "auth": "Shared browser fetcher; gateway manages configuration permission.",
+      "operations": [
+        {"id":"subagents.list","method":"GET","path":"/api/subagents","function":"listSubagents","route_anchor":"/api/subagents","response":"Subagent[]"},
+        {"id":"subagents.create","method":"POST","path":"/api/subagents","function":"createManagedSubagent","route_anchor":"method: \"POST\"","request":"subagent config","response":"Subagent"},
+        {"id":"subagents.update","method":"PUT","path":"/api/subagents/{name}","function":"updateManagedSubagent","route_anchor":"method: \"PUT\"","request":"subagent config","response":"Subagent"},
+        {"id":"subagents.delete","method":"DELETE","path":"/api/subagents/{name}","function":"deleteManagedSubagent","route_anchor":"method: \"DELETE\"","response":"empty"}
+      ]
+    }
+  ],
+  "not_yet_expanded": [
+    "source_module_accounting closes the frozen core/**/api.ts file census; non_api_module_residuals names the known remaining source coverage boundary for this pass, not a claim that the full frontend tree was exhaustively scanned. completion_status stays PARTIAL while any NOT_INVENTORIED item remains. The three formerly residual non-API entry files are source-anchored, not runtime-tested.",
+    "Within enumerated families, path/method/response summaries are source anchors, not complete JSON schemas, backend behavior assertions or full UI branch coverage.",
+    "This inventory is a source-anchored static Oracle only; no reference/Haifa backend, browser, SSE, WS, file or differential execution is implied."
+  ]
+}
