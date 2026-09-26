@@ -43,6 +43,15 @@ class DeerFlowThreadRunApiTest {
     private final SecretKey continuationKey = new SecretKeySpec(new byte[32], "AES");
 
     @Test
+    void unknownRunStateCannotClearAdmissionOrEvictHotCache() {
+        assertThat(DeerFlowThreadRunApi.isKnownTerminal(Optional::<io.haifa.agent.runtime.api.AgentRunSnapshot>empty))
+                .isFalse();
+        assertThat(DeerFlowThreadRunApi.isKnownTerminal(() -> {
+            throw new IllegalStateException("transient durable lookup failure");
+        })).isFalse();
+    }
+
+    @Test
     void workspaceCompletionObservationHasAFiniteWallClockBound() {
         assertThat(DeerFlowThreadRunApi.WORKSPACE_COMPLETION_OBSERVER_MAX_WAIT)
                 .isEqualTo(Duration.ofHours(24));

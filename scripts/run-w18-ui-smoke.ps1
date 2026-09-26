@@ -204,7 +204,7 @@ try {
         # Maven JVM so the process tree remains attributable to this runner.
         [Environment]::SetEnvironmentVariable('W05_INTERACTION_ACCEPTANCE', '1', 'Process')
         $gatewayProcess = Start-Process -FilePath (Get-Command mvn.cmd).Source `
-            -ArgumentList @('-o', '-ntp', '-pl', 'super-harness-server', '-Dtest=InteractionAcceptanceServerTest', '-DforkCount=0', 'test') `
+            -ArgumentList @('-o', '-ntp', '-pl', 'super-harness-server', '-am', '-Dtest=InteractionAcceptanceServerTest', '-Dsurefire.failIfNoSpecifiedTests=false', '-DforkCount=0', 'test') `
             -WorkingDirectory $root `
             -RedirectStandardOutput $serverOut `
             -RedirectStandardError $serverErr `

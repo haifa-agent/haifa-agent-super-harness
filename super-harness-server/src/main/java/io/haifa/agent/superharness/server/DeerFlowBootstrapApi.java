@@ -132,10 +132,21 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
             List<? extends JavaTool<?, ?>> tools)
             throws IOException {
+        return createForInteractionTests(
+                configuration, dataDirectory, generateContinuationKey(), runModelResolver, tools);
+    }
+
+    static DeerFlowBootstrapApi createForInteractionTests(
+            LocalServerConfiguration configuration,
+            Path dataDirectory,
+            SecretKey continuationKey,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            List<? extends JavaTool<?, ?>> tools)
+            throws IOException {
         HttpServer server = HttpServer.create(configuration.socketAddress(), 0);
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         server.setExecutor(executor);
-        return new DeerFlowBootstrapApi(server, executor, dataDirectory, generateContinuationKey(), runModelResolver, tools);
+        return new DeerFlowBootstrapApi(server, executor, dataDirectory, continuationKey, runModelResolver, tools);
     }
 
     static DeerFlowBootstrapApi createForTests(

@@ -22,6 +22,8 @@ import io.haifa.agent.runtime.api.RunEventPage;
 import io.haifa.agent.sdk.api.AgentMetadata;
 import io.haifa.agent.sdk.api.HaifaAgent;
 import io.haifa.agent.sdk.api.HaifaAgents;
+import io.haifa.agent.sdk.api.RunInputCommand;
+import io.haifa.agent.sdk.api.RunInputResult;
 import io.haifa.agent.sdk.api.SdkCallerProvider;
 import io.haifa.agent.sdk.contribution.ModelContribution;
 import io.haifa.agent.sdk.contribution.PolicyPlatformContribution;
@@ -72,7 +74,10 @@ final class HaifaRunBridge implements AutoCloseable {
                 Map.of(ModelAdapterCoordinate.from(binding.snapshot()), binding.model()),
                 binding.snapshot(),
                 Map.of(binding.name(), binding.snapshot()));
-        this.agent = HaifaAgents.builder(profile(binding.snapshot()))
+        Set<String> allowedTools = tools.stream()
+                .map(tool -> tool.spec().name().value())
+                .collect(java.util.stream.Collectors.toSet());
+        this.agent = HaifaAgents.builder(profile(binding.snapshot(), allowedTools))
                 .metadata(new AgentMetadata("Super Harness local compatibility agent"))
                 .callerProvider(SdkCallerProvider.defaultPublicUser())
                 .model(models)
@@ -154,6 +159,10 @@ final class HaifaRunBridge implements AutoCloseable {
         return agent.runs().respond(submission);
     }
 
+    RunInputResult submitInput(RunInputCommand command) {
+        return agent.runs().submitInput(command);
+    }
+
     boolean cancel(AgentRunId runId) {
         AgentRunStatus before = snapshot(runId).status();
         if (before.isTerminal()) {
@@ -172,7 +181,7 @@ final class HaifaRunBridge implements AutoCloseable {
 
     record StartedRun(AgentRunId runId, SessionState session) {}
 
-    private static ProductProfile profile(ResolvedModelSnapshot snapshot) {
+    private static ProductProfile profile(ResolvedModelSnapshot snapshot, Set<String> allowedTools) {
         return ProductProfile.create(
                 new ProductId("haifa-super-harness"),
                 new ProductVersion("1.0.0"),
@@ -182,7 +191,7 @@ final class HaifaRunBridge implements AutoCloseable {
                 new ProductRunProfileRef(snapshot.modelId().value(), "1.0.0"),
                 new AgentRunBudget(65_536, 8_192, 65_536, 16, 16, 0, "USD", 100),
                 new AgentRunLimits(16, 0, 1, 120_000, 60_000, 16, 16, 0),
-                Set.of(),
+                allowedTools,
                 Set.of());
     }
 

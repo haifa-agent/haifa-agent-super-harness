@@ -292,7 +292,19 @@ class DeerFlowWorkspaceChangesApiTest {
             }
             Thread.sleep(25);
         }
-        throw new AssertionError("workspace completion observer did not persist run " + runId);
+        HttpResponse<String> run = get("/api/threads/thread-background-completion/runs/" + runId);
+        String status = run.statusCode() == 200
+                ? json.readTree(run.body()).path("status").asText()
+                : "HTTP " + run.statusCode();
+        long baselines;
+        try (var paths = Files.walk(changesRoot)) {
+            baselines = paths.filter(path -> path.getFileName().toString().equals("baseline.properties"))
+                    .count();
+        }
+        throw new AssertionError("workspace completion observer did not persist run " + runId
+                + "; run_status=" + status + "; observer_count="
+                + api.threadRunApi().workspaceCompletionObserverCount()
+                + "; baseline_files=" + baselines);
     }
 
     private Path onlyCompletedBaseline() throws Exception {

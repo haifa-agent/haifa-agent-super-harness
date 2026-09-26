@@ -47,7 +47,7 @@ final class LocalProbeModelTestSupport {
                 URI.create("https://model.invalid"),
                 new CredentialRef("env://SUPER_HARNESS_LOCAL_PROBE"),
                 false,
-                Set.of(ModelCapability.TEXT_CHAT),
+                Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING),
                 8_192,
                 1_024,
                 Map.of(),

@@ -124,7 +124,11 @@ final class DeerFlowConfigurationApi implements HttpHandler {
             throw new IllegalArgumentException(
                     "Mode '" + mode + "' requires an available reasoning-capable model");
         }
-        if (context.has("reasoning_effort") && !context.get("reasoning_effort").isNull()) {
+        // The frozen composer sends "minimal" when Flash is selected, including for
+        // models that do not expose reasoning effort. It is the no-reasoning value,
+        // not a request to enable a reasoning-capable mode.
+        if (context.has("reasoning_effort") && !context.get("reasoning_effort").isNull()
+                && !"minimal".equals(context.get("reasoning_effort").asText())) {
             throw new IllegalArgumentException("reasoning_effort is not supported in flash mode");
         }
         rejectUnavailableBooleanCapability(context, "thinking_enabled", "thinking");

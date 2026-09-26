@@ -1,32 +1,30 @@
-
 # Haifa Super Harness
 
-Independent Java 21 product foundation for the frozen DeerFlow parity program. The repository consumes Haifa Agent only through the published `io.haifa:haifa-agent-bom:0.1.2-SNAPSHOT` and public JARs in Maven repositories; it has no source-path dependency on the Haifa Agent checkout.
+本仓库是冻结 DeerFlow 对齐项目的独立 Java 21 产品工程。项目只通过 Maven 仓库中已发布的 `io.haifa:haifa-agent-bom:0.1.2-SNAPSHOT` 及公开 JAR 消费 Haifa Agent，不依赖 Haifa Agent 源码目录。
 
-## W01 foundation
+## W01 基础工程
 
-- `super-harness-app` proves a real public SDK `Run -> typed Java Tool -> Artifact` chain. The deterministic Tool renders content, then the application publishes it through the public Artifact service with real Run/Session provenance and verifies the stored payload hash.
-- `super-harness-harness` is a minimal fail-closed evidence verifier. A required case fails when it is missing, explicitly failed, duplicated, or marked PASS without evidence.
-- Maven Enforcer rejects Haifa product/demo/test JARs transitively and rejects direct implementation-module dependencies. An ArchUnit test rejects production imports from SDK internal and implementation packages.
+- `super-harness-app` 验证真实的公开 SDK `Run → Java 类型化 Tool → Artifact` 链路：确定性 Tool 生成内容，应用再通过公开 Artifact 服务发布，保留真实 Run/Session 来源并校验存储内容的哈希。
+- `super-harness-harness` 是最小化、失败即关闭的证据校验器。必需用例缺失、显式失败、重复，或标为 PASS 却没有证据时，校验均失败。
+- Maven Enforcer 拒绝直接或传递依赖 Haifa 产品、演示、测试 JAR，并拒绝直接依赖实现模块；ArchUnit 测试禁止生产代码导入 SDK 内部包和实现包。
 
-## Verify
+## 构建与验证
 
-From a shell with Java 21 and Maven 3.9.15, or through the committed Maven Wrapper, which resolves that same Maven 3.9.15 from a SHA-256-pinned distribution:
+使用 Java 21 和 Maven 3.9.15，或使用仓库提交的 Maven Wrapper。Wrapper 的 Maven 3.9.15 分发包固定了 SHA-256 校验值。
 
 ```powershell
-.\mvnw.cmd -o -ntp verify   # Windows; ./mvnw on Linux/macOS
+.\mvnw.cmd -o -ntp verify   # Windows；Linux/macOS 使用 ./mvnw
 mvn -o -ntp verify
 ./build-support/verify-clean-consumer.ps1
 ```
 
-Both `verify` commands prove the same fully offline rebuild from the configured local Maven repository. The wrapper needs one online run per machine to populate `%USERPROFILE%\.m2\wrapper\dists`, after which it resolves the distribution from that cache offline. `verify-clean-consumer.ps1` starts with an empty temporary consumer cache and resolves through the configured Maven repository exposed as a read-only file mirror; this proves the build does not use `D:\workspace\haifa-agent` or any Reactor/source-path dependency.
+前两条 `verify` 命令使用配置好的本地 Maven 仓库，验证同一套完全离线的构建。每台机器首次使用 Wrapper 时需要联网下载一次 Maven 分发包，写入 `%USERPROFILE%\.m2\wrapper\dists`；此后可从缓存离线运行。`verify-clean-consumer.ps1` 从空的临时依赖缓存开始，通过配置好的 Maven 仓库只读文件镜像解析依赖，以证明构建没有使用 `D:\workspace\haifa-agent` 或任何 Reactor/源码路径依赖。
 
-The smoke test emits a `W01_SDK_EVIDENCE` line containing the real Run ID, Tool alias, Artifact ID, Artifact SHA-256, and byte count. Test reports remain under each module's `target/surefire-reports` directory.
+冒烟测试会输出 `W01_SDK_EVIDENCE`，其中包含真实 Run ID、Tool 别名、Artifact ID、Artifact SHA-256 和字节数。测试报告位于各模块的 `target/surefire-reports`。
 
-## W18 frozen frontend local profile
+## W18 冻结前端本地配置
 
-Verify the frozen frontend, the recorded minimal BFF patch, the Haifa-only
-loopback profile, and the pinned Node/pnpm launcher without starting services:
+以下命令只校验冻结前端、已记录的最小 BFF 补丁、仅连接 Haifa 的 loopback 配置，以及固定的 Node/pnpm 启动工具链，不启动服务：
 
 ```powershell
 pwsh -NoProfile -File scripts/start-haifa-frontend.ps1 `
@@ -35,7 +33,27 @@ pwsh -NoProfile -File scripts/start-haifa-frontend.ps1 `
 pwsh -NoProfile -File tests/frontend/verify-haifa-frontend-profile.ps1
 ```
 
-See `docs/development/w18-haifa-local-profile.md` for the guarded topology and
-the non-dry launch workflow. The current W02 backend does not yet provide
-Thread/Run/SSE, so these configuration checks are not chat or differential
-parity evidence.
+受保护的本地拓扑和正式启动流程见 `docs/development/w18-haifa-local-profile.md`。仅通过上述配置检查，不代表聊天功能或双后端差分验收通过。
+
+## 启动主工作树供人工验收
+
+主工作树固定使用本地回环端口：Gateway `18018`、冻结前端 `33018`。重启时应保持数据目录不变；默认使用被 Git 忽略的 `local-tmp/main-service-data`，其中包含持久化 SQLite Runtime 和日志。重启时不要删除该目录或 Windows 凭据管理器中的 continuation key。
+
+准备好本地 Haifa Agent `0.1.2-SNAPSHOT` 公开 JAR/BOM 和冻结前端依赖后，如果端口已占用，应先核对进程身份，只停止确认属于主工作树的进程，再构建并启动：
+
+```powershell
+mvn -o -ntp clean verify
+pwsh -NoProfile -File scripts/start-main-super-harness.ps1
+```
+
+启动脚本会校验冻结 DeerFlow 源码和前端工具链的精确版本；在隐藏窗口中启动 Haifa Gateway 和现有的受保护前端启动器；在有界超时内等待 `/health`、`/api/v1/auth/me` 与前端就绪；最后输出访问地址、精确 PID、数据目录和日志路径。人工验收入口为 `http://127.0.0.1:33018/`。遇到端口占用时，脚本会拒绝启动，不会自行结束未知进程。若尚未运行完整验证，可传入 `-Build`，由脚本执行离线 Maven Reactor `package` 门禁。脚本退出后，服务仍会继续运行。
+
+只需重建或重启 Gateway、而受保护的前端仍在运行时，先核对监听 `18018` 的 Java 进程并只停止该 PID，再运行相关 Maven 测试和 `mvn -o -ntp -pl super-harness-server -am package`，随后执行：
+
+```powershell
+pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -GatewayOnly
+```
+
+此模式只检查并启动 Gateway，沿用原数据目录，不会启动第二个前端。确认 Gateway 健康后刷新浏览器。
+
+代码合入后重启前，先用 `Get-NetTCPConnection -State Listen -LocalPort 18018,33018` 查明监听 PID，再用 `Get-CimInstance Win32_Process` 核对精确命令行；只停止确认属于主工作树的进程，然后重跑上述命令。禁止按进程名批量停止所有工作树中的 Java 或 Node。页面能打开仅证明服务就绪；真实模型、Tool 和双后端对齐仍需分别提供 Run/Playwright 证据。

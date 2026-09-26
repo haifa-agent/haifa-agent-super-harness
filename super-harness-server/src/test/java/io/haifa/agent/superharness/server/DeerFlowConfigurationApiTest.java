@@ -392,6 +392,13 @@ class DeerFlowConfigurationApiTest {
                 .contains("do not support thinking")
                 .doesNotContain("api_key");
 
+        HttpResponse<String> unsupportedEffort = request(
+                "POST",
+                "/api/threads/w03-context/runs/stream",
+                "{" + input + ",\"context\":{\"mode\":\"flash\",\"reasoning_effort\":\"low\"}}");
+        assertThat(unsupportedEffort.statusCode()).isEqualTo(422);
+        assertThat(unsupportedEffort.body()).contains("reasoning_effort is not supported in flash mode");
+
         HttpResponse<String> unavailableModel = request(
                 "POST",
                 "/api/threads/w03-context/runs/stream",
@@ -461,7 +468,7 @@ class DeerFlowConfigurationApiTest {
                             .statusCode())
                     .isEqualTo(200);
             String runBody = """
-                    {"assistant_id":"lead_agent","input":{"messages":[{"type":"human","content":"use the configured provider"}]},"stream_mode":["messages-tuple","updates","custom"],"context":{"model_name":"demo-model","mode":"flash","thinking_enabled":false},"on_disconnect":"continue","multitask_strategy":"reject"}
+                    {"assistant_id":"lead_agent","input":{"messages":[{"type":"human","content":"use the configured provider"}]},"stream_mode":["messages-tuple","updates","custom"],"context":{"model_name":"demo-model","mode":"flash","reasoning_effort":"minimal","thinking_enabled":false,"is_plan_mode":false,"subagent_enabled":false},"on_disconnect":"continue","multitask_strategy":"reject"}
                     """;
             HttpResponse<String> run =
                     request("POST", "/api/threads/managed-run/runs/stream", runBody);

@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +28,9 @@ class DeerFlowInteractionHttpApiTest {
             .connectTimeout(Duration.ofSeconds(5))
             .build();
     private final AtomicInteger toolInvocations = new AtomicInteger();
+    private final SecretKey continuationKey = new SecretKeySpec(new byte[32], "AES");
+    private final HaifaPublicInteractionSpikeTest.ApprovalProbeModel model =
+            new HaifaPublicInteractionSpikeTest.ApprovalProbeModel();
     @TempDir
     Path dataDirectory;
     private DeerFlowBootstrapApi api;
@@ -33,7 +38,6 @@ class DeerFlowInteractionHttpApiTest {
 
     @BeforeEach
     void startServer() throws Exception {
-        var model = new HaifaPublicInteractionSpikeTest.ApprovalProbeModel();
         var binding = new HaifaRunBridge.ModelBinding(
                 "interaction-probe",
                 "1.0.0",
@@ -42,6 +46,7 @@ class DeerFlowInteractionHttpApiTest {
         api = DeerFlowBootstrapApi.createForInteractionTests(
                 new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
                 dataDirectory,
+                continuationKey,
                 ignored -> binding,
                 List.of(new HaifaPublicInteractionSpikeTest.MutatingProbeTool(toolInvocations)));
         api.start();
@@ -185,6 +190,58 @@ class DeerFlowInteractionHttpApiTest {
         assertThat(rejected.body()).contains("event: end");
         assertThat(toolInvocations).hasValue(0);
         assertThat(getJson(location).path("status").asText()).isEqualTo("success");
+    }
+
+    @Test
+    void pendingInteractionSurvivesServerRestartAndResumesTheSameRun() throws Exception {
+        createThread("restart-interaction-thread");
+        HttpResponse<String> requested = postJson(
+                "/api/threads/restart-interaction-thread/runs/stream", ordinaryRunBody("request approval"));
+        assertThat(requested.statusCode()).isEqualTo(200);
+        String location = requested.headers().firstValue("content-location").orElseThrow();
+        String requestId = firstEventData(requested.body(), "messages")
+                .get(0).path("artifact").path("human_input").path("request_id").asText();
+        assertThat(toolInvocations).hasValue(0);
+
+        api.close();
+        startServer();
+        JsonNode reloadedMessages = getJson("/api/threads/restart-interaction-thread/state")
+                .path("values").path("messages");
+        assertThat(reloadedMessages).hasSize(2);
+        assertThat(reloadedMessages.get(1).path("artifact").path("human_input")
+                .path("request_id").asText()).isEqualTo(requestId);
+        JsonNode reloadedPage = getJson("/api/threads/restart-interaction-thread/messages/page?limit=20")
+                .path("data");
+        assertThat(reloadedPage).hasSize(2);
+        assertThat(reloadedPage.get(1).path("content").path("artifact").path("human_input")
+                .path("request_id").asText()).isEqualTo(requestId);
+        assertThat(toolInvocations).hasValue(0);
+        HttpResponse<String> competingRun = postJson(
+                "/api/threads/restart-interaction-thread/runs/stream", ordinaryRunBody("competing request"));
+        assertThat(competingRun.statusCode()).as(competingRun.body()).isEqualTo(409);
+        HttpResponse<String> staleReply = postJson(
+                "/api/threads/restart-interaction-thread/runs/stream",
+                hiddenResponseBody("stale-request", "approve", "approve"));
+        assertThat(staleReply.statusCode()).as(staleReply.body()).isEqualTo(409);
+        assertThat(toolInvocations).hasValue(0);
+
+        HttpResponse<String> resumed = postJson(
+                "/api/threads/restart-interaction-thread/runs/stream",
+                hiddenResponseBody(requestId, "approve", "approve"));
+        assertThat(resumed.statusCode()).as(resumed.body()).isEqualTo(200);
+        assertThat(resumed.headers().firstValue("content-location")).contains(location);
+        assertThat(resumed.body()).contains("interaction resolved", "event: end");
+        assertThat(toolInvocations).hasValue(1);
+        assertThat(getJson(location).path("status").asText()).isEqualTo("success");
+        HttpResponse<String> duplicate = postJson(
+                "/api/threads/restart-interaction-thread/runs/stream",
+                hiddenResponseBody(requestId, "approve", "approve"));
+        assertThat(duplicate.statusCode()).isEqualTo(409);
+        assertThat(toolInvocations).hasValue(1);
+        System.out.println("W05_RESTART_INTERACTION_EVIDENCE run="
+                + location.substring(location.lastIndexOf('/') + 1)
+                + " request=" + requestId + " tool_calls=" + toolInvocations.get()
+                + " competing_run=409 stale_reply=409 duplicate=409");
     }
 
     private String ordinaryRunBody(String prompt) {
