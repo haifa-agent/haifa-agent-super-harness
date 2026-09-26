@@ -1,6 +1,6 @@
 window.WORK_PACKAGES_DATA = {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-26T21:24:00+08:00",
+  "updatedAt": "2026-09-26T21:37:00+08:00",
   "source": "private-docs/roadmap/35-super-harness-deerflow-parity.md",
   "baseline": {
     "phase": "Wave A",
@@ -12,7 +12,7 @@ window.WORK_PACKAGES_DATA = {
     "evidenceGatePassed": 1
   },
   "recentWorkPlan": {
-    "updatedAt": "2026-09-26T21:24:00+08:00",
+    "updatedAt": "2026-09-26T21:37:00+08:00",
     "focus": "主控已完成 W05/W18/W03 三切片合入、HA 0.1.2-SNAPSHOT 空缓存消费复验及 W04 合入态冻结 UI 双轮回归；主服务仍供人工验收。当前 P0 是定位 W05 Interaction 重启用例的间歇 409，随后推进 W05 生产 Tool/多类型交互；W03、W04、W18 仍有各自整包尾项，不能提前关单。",
     "items": [
       {
@@ -54,8 +54,8 @@ window.WORK_PACKAGES_DATA = {
         "title": "W03 title/suggestions 与冻结 UI 消费",
         "status": "pending",
         "workPackages": ["W03"],
-        "owner": "主控 /root 设计，待分配",
-        "nextAction": "为 title/suggestions 与冻结 UI 调用链写新提示词；已完成的 Input Polish 后端先做主端口受控成功路径或可用槽位 UI 验证，勿为试点切换系统端口。",
+        "owner": "主控 /root 设计；下一可独立切片优先评估 OpenCode",
+        "nextAction": "为 title/suggestions 与冻结 UI 调用链写新提示词；优先评估把有界后端切片交给 OpenCode，以实现后续约一半新开发任务由 OpenCode 承担的目标。已完成的 Input Polish 后端另补主端口受控成功路径或可用槽位 UI 验证，勿为试点切换系统端口。",
         "doneWhen": "title/suggestions 和 polish 的冻结 UI 消费、异常语义及模型/凭据边界通过真实受控 Provider 与浏览器验证；W03 整包另审。",
         "dependency": "OpenCode 使用 deepseek/deepseek-flash 提交 acf8061，经主控复审、分支 clean verify、controlled-provider 2/2×2 后合入 main@85b2a5b；同源空输入 400 PASS。槽位 2 的 53018 被 NAT 排除，UI smoke NOT_RUN。"
       },
@@ -66,9 +66,9 @@ window.WORK_PACKAGES_DATA = {
         "status": "pending",
         "workPackages": ["W00"],
         "owner": "主控复验",
-        "nextAction": "按路线图“首批 Oracle、增量展开不等全量”审计 28 个消费面、资源许可、参考配置与已合入 Oracle；明确后续 runtime differential 不属于该种子包。",
-        "doneWhen": "提交、冻结 SHA、自动门禁和源证据均对齐后，再决定能否从进行中转待验收；不能用静态验证冒充运行互通。",
-        "dependency": "本轮 13 项契约负例门禁 PASS；仍需逐项核实 W00 原退出条件。"
+        "nextAction": "补齐浏览器/SSR/BFF 的剩余 REST/WS/文件/auth 实际消费面、条件注册和参考配置，并完成嵌套依赖、字体、图片、品牌资产许可审计；保持静态 Oracle 与运行互通分层。",
+        "doneWhen": "路线图 W00 所要求的调用清单、来源/许可、参考配置与首批有效 Oracle 均有源码绑定和门禁证据后，主控才复核是否待验收；运行差分属于 W18，不能混同。",
+        "dependency": "2026-09-26 主控复核：28 个 surfaces、7 个资源及 13 项正/负门禁 PASS；manifest.known_not_covered 明示 agents/project/trash/skills/MCP/schedules/channels/console/batches 和多种 mutation 未盘全，resource-seed 仅验证根 MIT，嵌套依赖/字体/图片/品牌许可未审，因此 W00 仍 in_progress。"
       },
       {
         "id": "NEXT-04",
@@ -120,10 +120,10 @@ window.WORK_PACKAGES_DATA = {
         "title": "裁定 W04 完整 parity 尾项边界",
         "status": "blocked",
         "workPackages": ["W04"],
-        "owner": "主控提出方案，待人工裁决",
-        "nextAction": "区分已通过的上传/Artifact/Project/diff 主路径和 archive、转换、删除、预览、25 MiB 等未验尾项。",
-        "doneWhen": "如需拆分 demo-critical 与 full-parity-tail，先更新路线图和验收口径；未裁定前 W04 保持进行中。",
-        "dependency": "2026-09-26 合入态同代码独立工作树 W04 UI 2/2×2 PASS（零重试，槽位释放）；archive/转换/删除/预览/25 MiB 仍未做，人工范围裁决前不得把原整包标为完成。"
+        "owner": "主控已提出方案，待人工裁决",
+        "nextAction": "阅读 private-docs/prompts/39-deerflow-parity-delivery/W04-Developing/W04-ScopeDecision-Developing.md 并请人工裁定：保持原整包退出条件，或另立不改变 W04 状态的本地演示里程碑；未经裁决不改路线图/PRD。",
+        "doneWhen": "如需调整本期/长期验收口径，先由人工明确选择，再同步路线图、PRD、Dashboard；未裁定前 W04 保持进行中。",
+        "dependency": "主控提案已提交待审：合入态 W04 UI 2/2×2 PASS；archive/转换/删除/预览/25 MiB 仍未做。建议保持原 W04 口径，Demo 可另设里程碑但不关整包。"
       }
     ]
   },
@@ -225,10 +225,11 @@ window.WORK_PACKAGES_DATA = {
     { "at": "2026-09-26T18:19:00+08:00", "title": "W05 新分支主控评审：暂不合并", "detail": "codex/w05-message-identity-steer@b49770f：active reconnect 及 Steer 定向测试 1/1、5/5 PASS；主控整仓 clean verify 服务端 88 项中 1 FAIL、2 skipped，失败用例单独复跑 1/1 PASS。代码发现冻结默认 reject 被误作 Steer、SSE catch(Throwable) 及分页消息 ID 漂移风险；该 SHA 冷/热 Playwright、真实模型与重启恢复 NOT_RUN。W05 保持 in_progress，待修复和复验。" },
     { "at": "2026-09-26T19:14:04+08:00", "title": "W05 review 修复切片提交，待主控集成", "detail": "子智能体在 codex/w05-message-identity-steer 提交 77eef34：默认 reject 与显式 Haifa Steer Header 分离、SSE 错误脱敏、长 Run 消息 ID 稳定、UI runner -am；最终 verify 92/0/2，Interaction 冷/热各 2/2、ActiveReconnect 隔离根冷/热各 1/1，契约与 W24 41 断言 PASS。既有 workspace 间歇失败根因未定位，真实模型及冻结 UI Steer NOT_RUN；分支未合入主线，W05 整包仍 in_progress。" },
     { "at": "2026-09-26T21:09:00+08:00", "title": "主控复核 W05/W18/W03 合入与差分结果", "detail": "W05 3ab6d93、W18 runner 0ee36ed、OpenCode W03 Input Polish acf8061 分别合入 main@cc971c7/f47b425/85b2a5b；主线 clean verify server 111/0 fail/2 skip，18018/33018 主服务健康。W18 参考 4/4×3、Haifa 合入态 4/4×2 PASS，旧 3/4×3 FAIL 保留。首次 clean-consumer 因 W05 重启 Interaction 返回 409 FAIL，定向复跑 4/4 PASS，根因待查；三个整包均保持 in_progress。" },
-    { "at": "2026-09-26T21:24:00+08:00", "title": "SDK 空缓存消费与 W04 主线 UI 回归复验", "detail": "HA c0e2c1c6 的 0.1.2-SNAPSHOT 公开 JAR/BOM 在本仓二次空缓存 verify 全 6 模块 PASS、server 111/0/2、双 Child 1/1；首次 W05 Interaction 409 FAIL 保留为间歇问题。W04 主树因同目录 Next dev 单实例保护未运行断言，已在独立 codex/w04-main-regression@c7d6c6e 以同代码完成 2/2×2 PASS，零重试、端口释放；17 份原始日志复制到外置 local-tmp 并逐一哈希核对。" }
+    { "at": "2026-09-26T21:24:00+08:00", "title": "SDK 空缓存消费与 W04 主线 UI 回归复验", "detail": "HA c0e2c1c6 的 0.1.2-SNAPSHOT 公开 JAR/BOM 在本仓二次空缓存 verify 全 6 模块 PASS、server 111/0/2、双 Child 1/1；首次 W05 Interaction 409 FAIL 保留为间歇问题。W04 主树因同目录 Next dev 单实例保护未运行断言，已在独立 codex/w04-main-regression@c7d6c6e 以同代码完成 2/2×2 PASS，零重试、端口释放；17 份原始日志复制到外置 local-tmp 并逐一哈希核对。" },
+    { "at": "2026-09-26T21:30:00+08:00", "title": "W00 原范围退出复核：暂不转待验收", "detail": "主控原样复跑合同正/负门禁 13/13 PASS；28 个消费面与 7 个资源只是有效种子，manifest 明示剩余 agents/project/trash/skills/MCP/schedules/channels/console/batches 等路由未盘全，根 MIT 之外的依赖/字体/图片/品牌许可未审。W00 仍 in_progress，静态 Oracle 不冒充运行差分。" }
   ],
   "workPackages": [
-    { "id": "W00", "title": "固定快照、前端消费协议与资源种子", "wave": "A", "lane": "G · 协议/Verifier", "state": "in_progress", "startedAt": "2026-09-22T15:18:36+08:00", "completedAt": null, "prerequisites": [], "branch": "codex/w00-oracle-wave2", "owner": "/root", "summary": "冻结消费面/资源种子及两轮 core REST/Error/SSE Oracle 已集成；messages/history/runs、Project 与 workspace-changes 现已具备源码绑定 schema/fixture 和故意破坏负例，后续仍需覆盖完整 WS/文件/auth/SSR 与 runtime differential。", "evidence": ["protocol seed f901baf + 213a4be; expansion cd45adf / main b1352a4; wave2 18bd681 / main 60a5022", "28 surfaces + 18 core contracts + 19 source-derived fixtures PASS against frozen e545c28", "13 positive/negative verifier gates PASS；wrong SHA、missing source、runtime escalation 与 schema drift fail closed", "messages request→wire event、history/messages-page/runs-list、Project config/CRUD/threads、workspace-changes empty/query: SOURCE_VERIFIED + STATIC_CONTRACT_VERIFIED", "7 resources: SOURCE_VERIFIED; W18 imported assets split from dedicated parity fixtures", "implementation NOT_ASSESSED / runtime NOT_RUN are independently enforced", "reference DeerFlow runtime、WS、live reconnect 与 full differential: NOT_RUN"], "exit": "固定同 SHA 前后端；形成 REST/SSE/WS/文件/auth/SSR 调用清单、来源许可与首批 Oracle。" },
+    { "id": "W00", "title": "固定快照、前端消费协议与资源种子", "wave": "A", "lane": "G · 协议/Verifier", "state": "in_progress", "startedAt": "2026-09-22T15:18:36+08:00", "completedAt": null, "prerequisites": [], "branch": "codex/w00-oracle-wave2", "owner": "/root", "summary": "冻结消费面/资源种子及两轮 core REST/Error/SSE Oracle 已集成，28 个 surfaces、7 个资源和 13 项正/负门禁可复验；但源码清单明确未盘全 agents/project/trash/skills/MCP/schedules/channels/console/batches 等剩余消费面，根 MIT 之外的依赖/字体/图片/品牌许可也未审。按原路线图退出条件仍为进行中，运行差分归 W18。", "evidence": ["protocol seed f901baf + 213a4be; expansion cd45adf / main b1352a4; wave2 18bd681 / main 60a5022","28 surfaces + 18 core contracts + 19 source-derived fixtures PASS against frozen e545c28","13 positive/negative verifier gates PASS；wrong SHA、missing source、runtime escalation 与 schema drift fail closed","messages request→wire event、history/messages-page/runs-list、Project config/CRUD/threads、workspace-changes empty/query: SOURCE_VERIFIED + STATIC_CONTRACT_VERIFIED","7 resources: SOURCE_VERIFIED; W18 imported assets split from dedicated parity fixtures","implementation NOT_ASSESSED / runtime NOT_RUN are independently enforced","reference DeerFlow runtime、WS、live reconnect 与 full differential: NOT_RUN","2026-09-26 主控退出复核：tests/contracts/verify-deerflow-contracts.ps1 13/13 PASS；frontend-consumer-manifest.json 的 known_not_covered 明示剩余 REST/注册分支与消息 schema 未完成，resource-seed.json 的 license_review 只验证根 MIT，第三方/字体/图片/品牌义务未结；W00 不进入待验收，runtime differential 属 W18"], "exit": "固定同 SHA 前后端；形成 REST/SSE/WS/文件/auth/SSR 调用清单、来源许可与首批 Oracle。" },
     { "id": "W01", "title": "独立仓、JAR、上游 UI 与 Harness v0", "wave": "A", "lane": "底座/发布/Verifier", "state": "complete", "startedAt": "2026-09-22T15:11:34+08:00", "completedAt": "2026-09-22T16:39:59+08:00", "prerequisites": ["W00"], "branch": "codex/w01-foundation", "owner": "/root/w01_foundation", "summary": "独立 Java 21 Parent/BOM、公开 JAR 消费、真实 Run→Tool→Artifact smoke 与最小 fail-closed Harness 已完成。冻结前端导入由 W18 切片提供。", "evidence": ["branch 2784282 / main f0759b9", "mvn -o -ntp verify: 7 tests PASS", "empty consumer cache verify: PASS", "Run 01a0c863-56fb-7cee-b2c9-7cb5bb7368e8 / Tool artifact_render / Artifact w01-artifact-1 / SHA-256 8c2487ab..."], "exit": "独立 Parent/BOM；空缓存解析公开 JAR；最小 Harness 能识别故意失败与缺证据。" },
     { "id": "W02", "title": "本地身份、上游主协议与基础聊天", "wave": "A", "lane": "后端/联调", "state": "complete", "startedAt": "2026-09-22T17:47:00+08:00", "completedAt": "2026-09-26T13:44:00+08:00", "prerequisites": ["W01"], "branch": "codex/w02-content-blocks", "owner": "/root", "summary": "本地身份、模型目录、Thread/Run/SSE/cancel 与冻结前端真实文本对话已具备完整退出证据，人工体验验收通过，正式关单；重启历史归 W18、Interaction 归 W05，不作为 W02 阻断项。", "evidence": ["auth/me、setup-status、features、models 真实 socket 与同源前端接口 PASS；仅 loopback/开发免登录，伪造 owner/user_id/system_role 被拒", "真实 Haifa SDK Thread/Run/SSE/cancel；Content-Location、metadata/messages/end、取消 wait=false→interrupted 与 Thread busy→idle PASS", "冻结 UI text content block 与 string 输入兼容；畸形/未知/混合块 fail closed，未知图片块仍 422", "W18 受控 provider 冻结 UI Playwright 双跑 4/4 + 4/4 PASS，包含消息渲染/页面重载/cancel，0 retry；W05 active reconnect 双跑及提交后回归 PASS", "主线真实 DeepSeek Web Thread d78e1eec-3150-4a04-87ad-9c52aa64c5b8 / Run 01a0cc6d-592a-7685-95fa-b22b7d6bb848 success，UI 非空回复与刷新恢复 PASS；无 DeerFlow backend fallback", "合并态主线 d107d59 clean verify 93 tests、0 failure/error、1 opt-in live skip；同源 33018 auth/page 200，真实 DeepSeek Run 01a0d107-f640-7f1d-9008-8afebba0ff5c success、SSE metadata/messages/end", "人工体验验收通过：真实 DeepSeek 文本对话、SSE、cancel 与页面刷新恢复无明显 UX/协议问题；重启历史归 W18、Interaction 归 W05，退出条件全部满足，正式关单 PASS"], "exit": "auth/me、模型目录、Thread、Run、SSE、取消；同一 UI 真实运行且阻断 DeerFlow 回落。" },
     { "id": "W03", "title": "Agent、Model、模式与配置后端", "wave": "B", "lane": "E · 后端", "state": "in_progress", "startedAt": "2026-09-22T21:29:31+08:00", "completedAt": null, "prerequisites": ["W02"], "branch": "codex/w03-input-polish-opencode", "owner": "/root", "summary": "Managed Model、Agent、SOUL、配置模型 Run、OS credential_ref 与 DeepSeek 官方方言已集成；OpenCode Input Polish 后端 acf8061 经主控复审合入 main@85b2a5b，受控 Provider 与同源空输入负例通过。title/suggestions、同一 Conversation 换模型和冻结 UI 消费仍待验收，整包保持进行中。", "evidence": ["config 24c4127; Run binding b6b70f2 / main 1c0cb7c; DeepSeek 98bb4f1 / main def3c2b","main mvn -o -ntp clean verify: 62 passed, 1 opt-in L3 skipped; explicit L3 1/1 PASS","Windows Credential Manager target write/existence + public LocalModelCredentialResolver os://DEEPSEEK_API_KEY read PASS; secret scan PASS","real DeepSeek streaming tool-call probe PASS; main Run 01a0cb51-6f1f-7095-873b-1cc3ef26a65a PASS with model_calls=2/tool_calls=1","credential_ref accepts only os://NAME and wins over api_key；responses expose only has_credential/source；OS secret absent from JSON/ciphertext","exact https://api.deepseek.com → SDK deepseek-openai-chat + thinking=disabled；probe/Run share binding, snapshot, credential ref and dialect","explicit model > Agent model > first executable；thread name@revision drift 409；Run/SSE/cancel/reconnect 复用 W02/W05 bridge/projector","相对冻结 DeerFlow 仅增加可选 ref 标量与确定性选择，无 credential entity/table/cache/state machine；复杂度平衡或更低","main 18018 configured deepseek-main via OS ref；title/suggestions、同一 Conversation 换模型及完整冻结 UI 差分：NOT_RUN","OpenCode --model deepseek/deepseek-flash 提交 acf8061，主线 85b2a5b；Input Polish 定向 14/14、分支全仓 clean verify 96 server/0 fail/2 skip、controlled-provider 2/2×2 PASS；主线 clean verify 111 server/0 fail/2 skip，同源 /api/input-polish 空输入 400；付费模型未调用，槽位 2 UI 因 NAT 排除 NOT_RUN"], "exit": "复用上游页面，提供 SOUL/config/probe/模式/默认值及实际模型合约。" },
