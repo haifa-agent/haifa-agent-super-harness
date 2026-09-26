@@ -11,14 +11,15 @@ Independent Java 21 product foundation for the frozen DeerFlow parity program. T
 
 ## Verify
 
-From a shell with Java 21 and Maven 3.9.15:
+From a shell with Java 21 and Maven 3.9.15, or through the committed Maven Wrapper, which resolves that same Maven 3.9.15 from a SHA-256-pinned distribution:
 
 ```powershell
+.\mvnw.cmd -o -ntp verify   # Windows; ./mvnw on Linux/macOS
 mvn -o -ntp verify
 ./build-support/verify-clean-consumer.ps1
 ```
 
-The first command proves a fully offline rebuild from the configured local Maven repository. The second starts with an empty temporary consumer cache and resolves through the configured Maven repository exposed as a read-only file mirror; this proves the build does not use `D:\workspace\haifa-agent` or any Reactor/source-path dependency.
+Both `verify` commands prove the same fully offline rebuild from the configured local Maven repository. The wrapper needs one online run per machine to populate `%USERPROFILE%\.m2\wrapper\dists`, after which it resolves the distribution from that cache offline. `verify-clean-consumer.ps1` starts with an empty temporary consumer cache and resolves through the configured Maven repository exposed as a read-only file mirror; this proves the build does not use `D:\workspace\haifa-agent` or any Reactor/source-path dependency.
 
 The smoke test emits a `W01_SDK_EVIDENCE` line containing the real Run ID, Tool alias, Artifact ID, Artifact SHA-256, and byte count. Test reports remain under each module's `target/surefire-reports` directory.
 
