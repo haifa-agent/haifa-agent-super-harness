@@ -26,6 +26,7 @@ The HA coordinator merges 038-01 (Memory) and 038-02 (parent-child) sub-branches
 
 - [x] 038-01a memory governance removal — HA `12c24127` on `feat-012-sh-sdk-gaps` (squashed). 2026-09-25: HA `install -DskipTests` PASS; `javap` confirms removed `MemoryConflict`/`MemoryTombstone`/`MemoryAuditSink` and `resolveConflict`/`requestPurge`/`evaluateExpiry` are absent; Super Harness `mvn -o -ntp clean verify` BUILD SUCCESS, 119 tests, 0 failure/error, 2 intentional skips. Super Harness Java sources use none of the removed API.
 - [ ] 038-01b memory direct CRUD and AGENT scope — in progress.
-- [ ] 038-02a minimal parent-child delegation — in progress.
-- [ ] 038-02b SDK run input (steer) — in progress.
-- [ ] Integration branch → HA `dev` PR, human merge — NOT_RUN.
+- [x] 038-02a minimal parent-child delegation — HA `24a990f5` + `1114ef5c` (adds SQLite migration V14 `run(parent_run_id, created_at)` index). Public API: `ChildAgentSpec`, `ProductProfile.allowedChildAgents`, `HaifaAgentBuilder.childAgent`/`maxConcurrentChildRuns`, `AgentRuns.children`, `child.run.*` events. SH two-child smoke belongs to W08: `NOT_RUN`.
+- [x] 038-02b SDK run input (steer) — HA `97451fac` + `ff0fb0ee`. `AgentRuns.submitInput`; a Final produced while input is pending is deferred (`completion.deferred` / `PENDING_RUN_INPUT`), so SH must mark that first answer as superseded when projecting.
+- [ ] Integration branch → HA `dev`: draft PR [haifa-agent#250](https://github.com/haifa-agent/haifa-agent/pull/250), human review and merge; agents must not merge.
+- 2026-09-26 gate after 01a + 02b + 02a: HA `mvnw clean install -DskipTests` PASS, `javap` confirms the new SDK methods; Super Harness `mvn -o -ntp clean verify` BUILD SUCCESS, 119 tests, 0 failure/error, 2 intentional skips.
