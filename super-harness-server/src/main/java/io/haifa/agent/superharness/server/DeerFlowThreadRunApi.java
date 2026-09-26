@@ -15,6 +15,8 @@ import io.haifa.agent.runtime.api.InteractionResponseSubmission;
 import io.haifa.agent.runtime.api.InteractionState;
 import io.haifa.agent.runtime.api.InteractionView;
 import io.haifa.agent.runtime.api.RunEventPayloads;
+import io.haifa.agent.runtime.api.RuntimeContractException;
+import io.haifa.agent.store.sqlite.SqliteStoreException;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.project.changeset.FileChange;
 import io.haifa.agent.project.changeset.FileChangeType;
@@ -38,6 +40,7 @@ import io.haifa.agent.superharness.workspace.WorkspaceLineCounts;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.sql.SQLException;
 import java.time.Duration;
 import io.haifa.agent.sdk.api.RunInputCommand;
 import io.haifa.agent.sdk.api.RunInputResult;
@@ -69,6 +72,8 @@ import javax.crypto.SecretKey;
 
 /** Frozen DeerFlow thread/run compatibility routes backed by the public Haifa Agent SDK. */
 final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
+    private static final System.Logger INTERACTION_LOG =
+            System.getLogger(DeerFlowThreadRunApi.class.getName() + ".interaction");
     private static final Pattern THREAD = Pattern.compile("^/api/threads/([^/]+)$");
     private static final Pattern THREAD_STATE = Pattern.compile("^/api/threads/([^/]+)/state$");
     private static final Pattern THREAD_HISTORY =
@@ -683,7 +688,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                             return;
                         }
                     } catch (RuntimeException rejected) {
-                        sendJson(exchange, 409, Map.of("detail", "Interaction response was rejected"));
+                        sendInteractionFailure(exchange, run, "duplicate", rejected);
                         return;
                     }
                     sendJson(exchange, 409, Map.of("detail", "Interaction response already accepted"));
@@ -700,6 +705,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     try {
                         submission = DeerFlowInteractionHttpProjection.submission(
                                 pending.orElseThrow(), response, Instant.now());
+                    } catch (IllegalArgumentException invalid) {
+                        sendJson(exchange, 409, Map.of("detail", "Thread has no matching Interaction"));
+                        return;
+                    }
+                    try {
                         var receipt = run.bridge.respond(submission);
                         if (receipt.status() == InteractionResponseReceiptStatus.DUPLICATE) {
                             sendJson(
@@ -709,7 +719,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                             return;
                         }
                     } catch (RuntimeException rejected) {
-                        sendJson(exchange, 409, Map.of("detail", "Interaction response was rejected"));
+                        sendInteractionFailure(exchange, run, "first-response", rejected);
                         return;
                     }
                     Map<String, Object> responseMessage =
@@ -733,6 +743,74 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     true);
         } finally {
             completeWorkspaceChangesIfTerminal(run);
+        }
+    }
+
+    private void sendInteractionFailure(
+            HttpExchange exchange, RunRecord run, String phase, RuntimeException failure)
+            throws IOException {
+        int status = interactionFailureStatus(failure);
+        INTERACTION_LOG.log(
+                System.Logger.Level.WARNING,
+                "Interaction response failed at " + phase + ": " + interactionFailureReason(failure)
+                        + " causes=" + interactionFailureCauses(failure)
+                        + " durable=" + interactionDurableState(run));
+        String detail = switch (status) {
+            case 403 -> "Interaction response is forbidden";
+            case 409 -> "Interaction response was rejected";
+            case 422 -> "Interaction response is invalid";
+            default -> "Interaction response is unavailable";
+        };
+        sendJson(exchange, status, Map.of("detail", detail));
+    }
+
+    static int interactionFailureStatus(RuntimeException failure) {
+        if (!(failure instanceof RuntimeContractException contract)) return 500;
+        return switch (contract.code()) {
+            case APPROVAL_AUTHORITY_DENIED, AUTHENTICATION_REQUIRED -> 403;
+            case INTERACTION_ACTION_NOT_ALLOWED, CONTRACT_VERSION_UNSUPPORTED, PAYLOAD_TOO_LARGE -> 422;
+            case RUN_STATE_CONFLICT, RUN_VERSION_CONFLICT, IDEMPOTENCY_CONFLICT,
+                    INTERACTION_NOT_FOUND, INTERACTION_ALREADY_RESOLVED, INTERACTION_EXPIRED,
+                    INTERACTION_REVISION_CONFLICT, APPROVAL_TARGET_STALE -> 409;
+            default -> 500;
+        };
+    }
+
+    static String interactionFailureReason(RuntimeException failure) {
+        if (failure instanceof RuntimeContractException contract) return contract.code().name();
+        if (failure instanceof SqliteStoreException sqlite) {
+            return "SQLITE_" + sqlite.failure().name();
+        }
+        if (failure instanceof IllegalStateException
+                && "previous execution attempt did not pause before resume".equals(failure.getMessage())) {
+            return "PREVIOUS_ATTEMPT_NOT_PAUSED";
+        }
+        return failure.getClass().getSimpleName();
+    }
+
+    static String interactionFailureCauses(Throwable failure) {
+        List<String> causes = new ArrayList<>();
+        Throwable current = failure;
+        for (int depth = 0; current != null && depth < 6; depth++, current = current.getCause()) {
+            if (current instanceof SQLException sql) {
+                int code = sql.getErrorCode();
+                causes.add(current.getClass().getSimpleName()
+                        + "[primary=" + (code & 0xff) + ",extended=" + code + "]");
+            } else if (current instanceof SqliteStoreException sqlite) {
+                causes.add("SqliteStoreException[" + sqlite.failure().name() + "]");
+            } else {
+                causes.add(current.getClass().getSimpleName());
+            }
+        }
+        return String.join(">", causes);
+    }
+
+    private String interactionDurableState(RunRecord run) {
+        try {
+            return "run=" + run.bridge.snapshot(run.runId).status().name()
+                    + ",pending=" + run.bridge.pendingInteraction(run.runId).isPresent();
+        } catch (RuntimeException unavailable) {
+            return "unavailable:" + unavailable.getClass().getSimpleName();
         }
     }
 

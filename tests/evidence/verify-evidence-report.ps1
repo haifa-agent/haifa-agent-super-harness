@@ -31,6 +31,7 @@ function New-Fixture([string]$Name, [ValidateSet('PASS', 'FAIL', 'NOT_RUN')][str
         'dashboard.html',
         'work-package-dag.html',
         'contracts/upstream/deerflow/frontend-consumer-manifest.json',
+        'contracts/upstream/deerflow/frontend-consumer-expanded.json',
         'contracts/upstream/deerflow/resource-seed.json',
         'third-party/deerflow/manifest.json',
         'third-party/deerflow/LICENSES/deer-flow-MIT.txt',
@@ -39,6 +40,13 @@ function New-Fixture([string]$Name, [ValidateSet('PASS', 'FAIL', 'NOT_RUN')][str
         'frontend/pnpm-lock.yaml',
         'frontend/next.config.js'
     )) { Copy-FixtureFile $root $relative }
+    $resourceSeed = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'contracts/upstream/deerflow/resource-seed.json') -Raw |
+        ConvertFrom-Json -DateKind String
+    foreach ($resource in $resourceSeed.resources) {
+        if ($resource.import_status -eq 'IMPORTED') {
+            Copy-FixtureFile $root ([string]$resource.intended_local_path)
+        }
+    }
     if ($Surefire -ne 'NOT_RUN') {
         $report = Join-Path $root 'sample/target/surefire-reports/TEST-sample.xml'
         $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $report)
@@ -85,7 +93,7 @@ try {
 
     $valid = New-Fixture 'valid'
     $first = Invoke-Generator $valid 'target/evidence-one' -RequireSurefire
-    Assert-True ($first.ExitCode -eq 0) "valid evidence fixture must pass"
+    Assert-True ($first.ExitCode -eq 0) "valid evidence fixture must pass: $($first.Output)"
     $manifestOnePath = Join-Path $valid 'target/evidence-one/evidence-manifest.json'
     $manifestOne = Get-Content -LiteralPath $manifestOnePath -Raw | ConvertFrom-Json -DateKind String
     Assert-True ($manifestOne.governance.status -eq 'PASS') "governance status must be PASS"

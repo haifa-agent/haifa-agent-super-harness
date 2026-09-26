@@ -122,7 +122,13 @@ final class DeerFlowInteractionHttpProjection {
                 action,
                 List.of(),
                 stableId,
-                respondedAt);
+                sdkMillisecondTime(respondedAt));
+    }
+
+    // The SDK Runtime records receivedAt with millisecond precision and rejects a
+    // respondedAt that is later within the same millisecond.
+    static Instant sdkMillisecondTime(Instant instant) {
+        return Instant.ofEpochMilli(instant.toEpochMilli());
     }
 
     static Map<String, Object> responseMessage(

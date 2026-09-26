@@ -10,13 +10,31 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
+import io.haifa.agent.runtime.api.RuntimeApiErrorCode;
+import io.haifa.agent.runtime.api.RuntimeContractException;
+import io.haifa.agent.runtime.api.InteractionAction;
+import io.haifa.agent.runtime.api.InteractionConsequenceView;
+import io.haifa.agent.runtime.api.InteractionInputContract;
+import io.haifa.agent.runtime.api.InteractionKind;
+import io.haifa.agent.runtime.api.InteractionRequestId;
+import io.haifa.agent.runtime.api.InteractionRequesterView;
+import io.haifa.agent.runtime.api.InteractionState;
+import io.haifa.agent.runtime.api.InteractionTargetView;
+import io.haifa.agent.runtime.api.InteractionView;
+import io.haifa.agent.core.run.AgentRunId;
+import io.haifa.agent.core.session.AgentSessionId;
+import io.haifa.agent.store.sqlite.SqliteStoreException;
+import io.haifa.agent.store.sqlite.SqliteStoreFailure;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -242,6 +260,76 @@ class DeerFlowInteractionHttpApiTest {
                 + location.substring(location.lastIndexOf('/') + 1)
                 + " request=" + requestId + " tool_calls=" + toolInvocations.get()
                 + " competing_run=409 stale_reply=409 duplicate=409");
+    }
+
+    @Test
+    void interactionFailureClassificationKeepsUnexpectedSdkFailuresOutOfConflictResponsesAndLogs() {
+        RuntimeContractException stale = new RuntimeContractException(
+                RuntimeApiErrorCode.INTERACTION_REVISION_CONFLICT, "safe conflict");
+        assertThat(DeerFlowThreadRunApi.interactionFailureStatus(stale)).isEqualTo(409);
+        assertThat(DeerFlowThreadRunApi.interactionFailureReason(stale))
+                .isEqualTo("INTERACTION_REVISION_CONFLICT");
+
+        RuntimeContractException denied = new RuntimeContractException(
+                RuntimeApiErrorCode.APPROVAL_AUTHORITY_DENIED, "safe denial");
+        assertThat(DeerFlowThreadRunApi.interactionFailureStatus(denied)).isEqualTo(403);
+
+        IllegalStateException stillActive = new IllegalStateException(
+                "previous execution attempt did not pause before resume");
+        assertThat(DeerFlowThreadRunApi.interactionFailureStatus(stillActive)).isEqualTo(500);
+        assertThat(DeerFlowThreadRunApi.interactionFailureReason(stillActive))
+                .isEqualTo("PREVIOUS_ATTEMPT_NOT_PAUSED");
+
+        IllegalStateException unexpected = new IllegalStateException("provider response: sensitive content");
+        assertThat(DeerFlowThreadRunApi.interactionFailureStatus(unexpected)).isEqualTo(500);
+        assertThat(DeerFlowThreadRunApi.interactionFailureReason(unexpected))
+                .isEqualTo("IllegalStateException");
+
+        SqliteStoreException sqliteBusy = new SqliteStoreException(
+                SqliteStoreFailure.DATABASE_BUSY,
+                "private SQL and user content",
+                new SQLException("private SQL and user content", "SQLITE_BUSY", 5));
+        assertThat(DeerFlowThreadRunApi.interactionFailureStatus(sqliteBusy)).isEqualTo(500);
+        assertThat(DeerFlowThreadRunApi.interactionFailureReason(sqliteBusy))
+                .isEqualTo("SQLITE_DATABASE_BUSY");
+        assertThat(DeerFlowThreadRunApi.interactionFailureCauses(sqliteBusy))
+                .isEqualTo("SqliteStoreException[DATABASE_BUSY]>SQLException[primary=5,extended=5]");
+    }
+
+    @Test
+    void interactionResponseTimeUsesSdkMillisecondPrecision() {
+        var sameMillisecondLater = Instant.parse("2026-09-26T12:00:00.123999999Z");
+        var sdkReceivedAt = Instant.parse("2026-09-26T12:00:00.123Z");
+        var requestId = new InteractionRequestId("approval-request-1");
+        var pending = new InteractionView(
+                requestId,
+                new AgentRunId("run-1"),
+                new AgentSessionId("session-1"),
+                1,
+                InteractionKind.APPROVAL,
+                InteractionState.PENDING,
+                "Approve tool",
+                "Approve this tool?",
+                List.of(InteractionAction.APPROVE, InteractionAction.REJECT),
+                InteractionInputContract.NONE,
+                new InteractionTargetView("tool", "tool-1", Optional.empty(), Optional.empty(), "Tool"),
+                new InteractionRequesterView("human", "Operator"),
+                sdkReceivedAt,
+                Optional.empty(),
+                new InteractionConsequenceView("Approve", "Reject", "Expire"));
+        var wireReply = new DeerFlowInteractionHttpProjection.FrozenResponse(
+                DeerFlowInteractionHttpProjection.SOURCE,
+                requestId.value(),
+                "option",
+                "approve",
+                "approve");
+
+        assertThat(sdkReceivedAt).isBefore(sameMillisecondLater);
+        assertThat(DeerFlowInteractionHttpProjection.submission(pending, wireReply, sameMillisecondLater)
+                        .respondedAt())
+                .isEqualTo(sdkReceivedAt);
+        assertThat(DeerFlowInteractionHttpProjection.sdkMillisecondTime(sdkReceivedAt))
+                .isEqualTo(sdkReceivedAt);
     }
 
     private String ordinaryRunBody(String prompt) {
