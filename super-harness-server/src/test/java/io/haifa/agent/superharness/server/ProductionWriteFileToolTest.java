@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.haifa.agent.core.reference.PrincipalRef;
 import io.haifa.agent.core.reference.TenantRef;
 import io.haifa.agent.core.run.AgentRunId;
+import io.haifa.agent.core.session.AgentSessionId;
+import io.haifa.agent.core.tool.ToolCallId;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
 import io.haifa.agent.superharness.workspace.RestrictedWorkspaceService;
@@ -105,7 +107,8 @@ class ProductionWriteFileToolTest {
     }
 
     private static JavaToolContext context(String principal, boolean cancelled, boolean expired) {
-        return new JavaToolContext(new AgentRunId("run-1"), new TenantRef("public"),
+        return new JavaToolContext(new AgentRunId("run-1"), Optional.of(new AgentSessionId("session-1")),
+                new ToolCallId("tool-call-1"), new TenantRef("public"),
                 new PrincipalRef(principal, "user"),
                 expired ? Instant.now().minusSeconds(1) : Instant.now().plusSeconds(60),
                 Optional.empty(), () -> cancelled, Map.of());
