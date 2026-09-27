@@ -48,6 +48,7 @@ import java.util.concurrent.atomic.AtomicLong;
 final class HaifaRunBridge implements AutoCloseable {
     private final HaifaAgent agent;
     private final ModelBinding binding;
+    private final boolean hasTools;
     private final AtomicLong turnPageReads = new AtomicLong();
 
     HaifaRunBridge(ModelBinding binding) {
@@ -56,6 +57,7 @@ final class HaifaRunBridge implements AutoCloseable {
 
     HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools) {
         this.binding = binding;
+        this.hasTools = !tools.isEmpty();
         this.agent = HaifaAgentStarter.builder()
                 .name("Super Harness local compatibility agent")
                 .instructions("Return a concise answer to the local user's request.")
@@ -70,6 +72,7 @@ final class HaifaRunBridge implements AutoCloseable {
             List<? extends JavaTool<?, ?>> tools,
             DurableHaifaFoundation foundation) {
         this.binding = binding;
+        this.hasTools = !tools.isEmpty();
         ModelContribution models = new ModelContribution(
                 Map.of(ModelAdapterCoordinate.from(binding.snapshot()), binding.model()),
                 binding.snapshot(),
@@ -91,6 +94,10 @@ final class HaifaRunBridge implements AutoCloseable {
 
     String bindingIdentity() {
         return binding.name() + "@" + binding.revision();
+    }
+
+    boolean hasTools() {
+        return hasTools;
     }
 
     StartedRun start(String threadId, String message, Optional<SessionState> existing) {

@@ -244,6 +244,96 @@ function Test-WorkPackages {
         $null = Get-IsoTime $audit.lastProgressAt "$($package.id).lastProgressAt"
     }
 
+    $demo = $Data.customerDemo
+    Assert-Condition ($null -ne $demo -and [string]$demo.id -eq 'DEMO-V0') `
+        'customer demo ledger DEMO-V0 is required'
+    Assert-Condition ([string]$demo.roadmap -eq 'private-docs/roadmap/36-super-harness-customer-demo-v0.md') `
+        'customer demo roadmap must be the frozen v0 delivery plan'
+    $null = Get-IsoTime $demo.updatedAt 'customerDemo.updatedAt'
+    Assert-Condition ([string]$demo.decision -in @('NO_GO', 'GO')) 'customer demo decision must be NO_GO or GO'
+    $stages = @($demo.stages)
+    Assert-Condition ($stages.Count -eq 5) 'customer demo must contain exactly M0 through M4'
+    for ($index = 0; $index -lt $stages.Count; $index++) {
+        $stage = $stages[$index]
+        $id = "M$index"
+        Assert-Condition ([string]$stage.id -eq $id) "customer demo stages must be ordered M0 through M4"
+        Assert-Condition ($AllowedStates -contains [string]$stage.workStatus) "$id has an invalid workStatus"
+        Assert-Condition ([string]$stage.result -in @('PASS', 'FAIL', 'NOT_RUN', 'BLOCKED_EXTERNAL', 'UPSTREAM_UNSUPPORTED')) `
+            "$id has an invalid gate result"
+        foreach ($field in @('title', 'owner', 'exit', 'evidence', 'blocker', 'nextAction')) {
+            Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$stage.$field)) `
+                "$id is missing customer demo field $field"
+        }
+        $mapped = @($stage.workPackages | ForEach-Object { [string]$_ })
+        Assert-Condition ($mapped.Count -gt 0 -and @($mapped | Sort-Object -Unique).Count -eq $mapped.Count) `
+            "$id needs unique mapped work packages"
+        foreach ($packageId in $mapped) {
+            Assert-Condition $byId.ContainsKey($packageId) "$id maps to missing work package $packageId"
+        }
+        $dependencies = @($stage.dependsOn)
+        if ($index -eq 0) {
+            Assert-Condition ($dependencies.Count -eq 0) 'M0 must not have a demo-stage dependency'
+        }
+        else {
+            Assert-Condition ($dependencies.Count -eq 1 -and [string]$dependencies[0] -eq "M$($index - 1)") `
+                "$id must depend only on its immediately preceding demo stage"
+        }
+        if ([string]$stage.result -eq 'PASS') {
+            Assert-Condition ([string]$stage.workStatus -eq 'complete') "$id PASS requires complete workStatus"
+            if ($index -gt 0) {
+                Assert-Condition ([string]$stages[$index - 1].result -eq 'PASS') `
+                    "$id cannot PASS before M$($index - 1) PASS"
+            }
+            foreach ($field in @('proof', 'mainCommit', 'acceptedAt')) {
+                Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$stage.$field)) `
+                    "$id PASS requires independent gate evidence: $field"
+            }
+            Assert-Condition ([string]$stage.mainCommit -match '^[0-9a-f]{7,40}$') "$id mainCommit must be a Git SHA"
+            $null = Get-IsoTime $stage.acceptedAt "$id.acceptedAt"
+            if ($id -eq 'M4') {
+                Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$demo.humanAcceptance)) `
+                    'M4 PASS requires explicit human acceptance'
+            }
+        }
+        if ([string]$stage.workStatus -eq 'complete') {
+            Assert-Condition ([string]$stage.result -eq 'PASS') "$id complete workStatus requires PASS gate result"
+        }
+    }
+    $stageIds = @($stages | ForEach-Object { [string]$_.id })
+    foreach ($taskGroup in $taskGroups) {
+        foreach ($task in @($Data.deliveryTasks.$taskGroup)) {
+            if ($task.PSObject.Properties.Name -contains 'demoStages') {
+                $mappedStages = @($task.demoStages | ForEach-Object { [string]$_ })
+                Assert-Condition ($mappedStages.Count -gt 0 -and @($mappedStages | Sort-Object -Unique).Count -eq $mappedStages.Count) `
+                    "$taskGroup/$($task.id) needs unique demo-stage mappings"
+                foreach ($mappedStage in $mappedStages) {
+                    Assert-Condition ($stageIds -contains $mappedStage) `
+                        "$taskGroup/$($task.id) maps to missing demo stage $mappedStage"
+                }
+            }
+        }
+    }
+    foreach ($item in @($Data.recentWorkPlan.items)) {
+        if ($item.PSObject.Properties.Name -contains 'demoStage') {
+            Assert-Condition ($stageIds -contains [string]$item.demoStage) `
+                "recent work $($item.id) maps to missing demo stage $($item.demoStage)"
+        }
+    }
+    if ([string]$demo.decision -eq 'GO') {
+        Assert-Condition (@($stages | Where-Object result -ne 'PASS').Count -eq 0) `
+            'customer demo GO requires all M0-M4 gates PASS'
+        Assert-Condition ([string]$demo.mainSha -match '^[0-9a-f]{7,40}$') `
+            'customer demo GO requires a mainline Git SHA'
+        Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$demo.humanAcceptance)) `
+            'customer demo GO requires explicit human acceptance'
+        Assert-Condition ([string]$stages[4].mainCommit -eq [string]$demo.mainSha) `
+            'customer demo GO must match M4 mainline SHA'
+        foreach ($stage in $stages) {
+            Assert-Condition ([string]$stage.mainCommit -eq [string]$demo.mainSha) `
+                "customer demo GO requires $($stage.id) to be revalidated on the final mainline SHA"
+        }
+    }
+
     foreach ($milestone in @($Data.milestones)) {
         $null = Get-IsoTime $milestone.at "milestone.at"
     }
@@ -258,6 +348,11 @@ function Test-WorkPackages {
             ready_for_acceptance = @($packages | Where-Object state -eq 'ready_for_acceptance').Count
             blocked = @($packages | Where-Object state -eq 'blocked').Count
             complete = @($packages | Where-Object state -eq 'complete').Count
+        }
+        customerDemo = [ordered]@{
+            decision = [string]$demo.decision
+            passedStages = @($stages | Where-Object result -eq 'PASS').Count
+            totalStages = $stages.Count
         }
     }
 }

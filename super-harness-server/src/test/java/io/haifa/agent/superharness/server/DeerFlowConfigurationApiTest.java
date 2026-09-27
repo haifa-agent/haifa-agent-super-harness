@@ -417,7 +417,8 @@ class DeerFlowConfigurationApiTest {
             JsonNode request = json.readTree(exchange.getRequestBody());
             providerRequests.add(request);
             authorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
-            boolean probe = request.path("tools").isArray() && !request.path("tools").isEmpty();
+            boolean probe = request.path("tools").isArray()
+                    && request.path("tools").findValuesAsText("name").contains("connection_check");
             String payload = probe
                     ? """
                     data: {"id":"probe-1","model":"controlled-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"connection_check","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}
@@ -492,7 +493,8 @@ class DeerFlowConfigurationApiTest {
             assertThat(providerRequests).hasSize(2);
             assertThat(providerRequests.get(0).path("tools")).isNotEmpty();
             assertThat(providerRequests.get(0).path("stream").asBoolean()).isTrue();
-            assertThat(providerRequests.get(1).path("tools")).isEmpty();
+            assertThat(providerRequests.get(1).path("tools").findValuesAsText("name"))
+                    .contains("write_file");
             assertThat(providerRequests.get(1).path("stream").asBoolean()).isTrue();
             assertThat(authorizations).containsOnly("Bearer controlled-secret");
             System.out.println("W03_MANAGED_RUN_EVIDENCE run="

@@ -2,6 +2,18 @@
 
 本仓库是冻结 DeerFlow 对齐项目的独立 Java 21 产品工程。项目只通过 Maven 仓库中已发布的 `io.haifa:haifa-agent-bom:0.1.2-SNAPSHOT` 及公开 JAR 消费 Haifa Agent，不依赖 Haifa Agent 源码目录。
 
+## 客户演示与项目看板
+
+双击根目录 `dashboard.html` 可离线查看项目看板，默认进入“客户演示交付”Tab，按 M0–M4 显示当前演示阶段的执行状态、独立门禁结果、负责人、阻断和下一步；点击阶段上的 W 编号可跳到“工作包总览”。“最近工作安排”显示当前派工，“工作包总览”保留 W00–W24 的完整长期范围。三个视图只读根目录 `work-packages.js`，刷新页面获取最新记录；看板显示不等于运行验收。
+
+已按冻结 lockfile 准备好 `frontend/node_modules` 和本地 Playwright 浏览器时，可在仓库根目录运行看板的本地 `file://` 切换回归：
+
+```powershell
+frontend/node_modules/.bin/playwright.cmd test -c tests/dashboard/playwright.config.cjs
+```
+
+本轮演示目标与 Go/No-Go 见[客户演示 v0 路线图](private-docs/roadmap/36-super-harness-customer-demo-v0.md)：真实模型、生产 Tool、Approval、Artifact、Reload/Reconnect、Steer 在冻结 DeerFlow UI 上连续两轮。演示阶段通过不会自动关闭工作包，也不代表 PRD D01–D05 完整 Customer Demo Gate 或 Full Parity。当前整链尚未验收，不能把已通过的文本聊天或受控 Provider 测试当成客户演示完成。
+
 ## W01 基础工程
 
 - `super-harness-app` 验证真实的公开 SDK `Run → Java 类型化 Tool → Artifact` 链路：确定性 Tool 生成内容，应用再通过公开 Artifact 服务发布，保留真实 Run/Session 来源并校验存储内容的哈希。

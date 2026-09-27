@@ -106,6 +106,22 @@ public final class RestrictedWorkspaceService {
         return snapshot(normalized, copy, 0, false);
     }
 
+    /** Publish a complete new working file without ever replacing an existing path. */
+    public WorkspaceFileSnapshot createWorkingFile(String ownerId, WorkspaceId workspaceId, String logicalPath,
+                                                   byte[] content) {
+        WorkspaceBinding binding = registry.requireOwner(ownerId, workspaceId);
+        byte[] copy = requireContent(content, limits.maxWorkingFileBytes());
+        String normalized = LogicalWorkspacePath.normalize(logicalPath);
+        if (!normalized.startsWith("workspace/") && !normalized.startsWith("outputs/")) {
+            throw new WorkspaceException(WorkspaceError.INVALID_PATH,
+                    "new working files must be below workspace/ or outputs/");
+        }
+        Path root = registry.userDataRoot(binding.workspaceId());
+        Path target = LogicalWorkspacePath.resolve(root, normalized);
+        atomicCreateWorkingFile(root, target, copy);
+        return snapshot(normalized, copy, 0, false);
+    }
+
     public WorkspaceFileSnapshot read(String ownerId, WorkspaceId workspaceId, String logicalPath,
                                       long offset, int maxBytes) {
         WorkspaceBinding binding = registry.requireOwner(ownerId, workspaceId);
@@ -291,6 +307,32 @@ public final class RestrictedWorkspaceService {
                     "upload target already exists", exception);
         } catch (IOException exception) {
             throw WorkspaceRegistry.ioFailure("failed to store upload", exception);
+        }
+    }
+
+    private static void atomicCreateWorkingFile(Path root, Path target, byte[] content) {
+        ensureNoLinks(root, target);
+        Path part = null;
+        try {
+            Files.createDirectories(target.getParent());
+            ensureNoLinks(root, target);
+            part = Files.createTempFile(target.getParent(), ".write-", ".part");
+            Files.write(part, content);
+            // Hard-link publication is atomic and fails if target exists; ATOMIC_MOVE may replace it.
+            Files.createLink(target, part);
+        } catch (java.nio.file.FileAlreadyExistsException exception) {
+            throw new WorkspaceException(WorkspaceError.HASH_CONFLICT,
+                    "working file already exists", exception);
+        } catch (IOException exception) {
+            throw WorkspaceRegistry.ioFailure("failed to create working file", exception);
+        } finally {
+            if (part != null) {
+                try {
+                    Files.deleteIfExists(part);
+                } catch (IOException ignored) {
+                    // This temporary name is not an execution or artifact authority.
+                }
+            }
         }
     }
 

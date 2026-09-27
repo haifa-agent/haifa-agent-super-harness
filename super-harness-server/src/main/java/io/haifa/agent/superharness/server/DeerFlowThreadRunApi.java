@@ -115,7 +115,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private final Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver;
     private final Predicate<String> projectExists;
     private final PersistentProjectWorkspaceService workspaceChanges;
-    private final List<? extends JavaTool<?, ?>> runTools;
+    private final Function<String, List<? extends JavaTool<?, ?>>> runToolsForThread;
     private final PersistentThreadCatalog threadCatalog;
     private final DurableHaifaFoundation foundation;
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
@@ -132,13 +132,13 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             PersistentProjectWorkspaceService workspaceChanges,
             Path dataDirectory,
             SecretKey continuationKey,
-            List<? extends JavaTool<?, ?>> runTools)
+            Function<String, List<? extends JavaTool<?, ?>>> runToolsForThread)
             throws IOException {
         this.json = json;
         this.runModelResolver = runModelResolver;
         this.projectExists = projectExists;
         this.workspaceChanges = workspaceChanges;
-        this.runTools = List.copyOf(runTools);
+        this.runToolsForThread = runToolsForThread;
         this.threadCatalog = new PersistentThreadCatalog(json, dataDirectory);
         this.foundation = new DurableHaifaFoundation(dataDirectory, continuationKey);
         for (PersistentThreadCatalog.Entry entry : threadCatalog.list()) {
@@ -636,7 +636,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
             if (steerRun == null) {
             if (thread.bridge == null) {
-                HaifaRunBridge bridge = new HaifaRunBridge(binding, runTools, foundation);
+                HaifaRunBridge bridge = new HaifaRunBridge(binding, runToolsForThread.apply(threadId), foundation);
                 if (thread.modelBindingIdentity != null
                         && !thread.modelBindingIdentity.equals(bridge.bindingIdentity())) {
                     bridge.close();
@@ -931,7 +931,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             // The same published Tool registrations must be available when the SDK resumes
             // an approved Interaction after a process restart. The SDK still owns the
             // pending request and its side-effect admission; this bridge only restores it.
-            HaifaRunBridge bridge = new HaifaRunBridge(binding, runTools, foundation);
+            HaifaRunBridge bridge = new HaifaRunBridge(
+                    binding, runToolsForThread.apply(thread.threadId), foundation);
             boolean claimBinding = thread.modelBindingIdentity == null
                     || thread.modelBindingIdentity.equals(bridge.bindingIdentity());
             // Conversation and run reads are backed by the shared SQLite authority and do not
@@ -1365,7 +1366,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 || event.source().payload() instanceof RunEventPayloads.DeliveryLifecycle) {
             if ((event.source().payload() instanceof RunEventPayloads.ToolLifecycle
                             || event.source().payload() instanceof RunEventPayloads.ResourceAvailable)
-                    && (!runTools.isEmpty()
+                    && (run.bridge.hasTools()
                             || run.interactionRequestId != null
                             || run.bridge.pendingInteraction(run.runId).isPresent())) {
                 // Approval runs publish tool/checkpoint lifecycle records around the richer

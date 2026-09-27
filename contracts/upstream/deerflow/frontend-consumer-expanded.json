@@ -6,6 +6,7 @@
   "scope": "Additional browser callsites plus bounded auth and LangGraph SDK wrapper entry inventory; not a claim that every frozen frontend branch or payload is covered",
   "consumer": "browser_fetch",
   "completion_status": "PARTIAL",
+  "hooks_consumption_matrix": "contracts/upstream/deerflow/thread-hook-consumption-matrix.json",
   "source_module_accounting": {
     "rule": "Every frozen frontend/src/core/**/api.ts is assigned exactly once to a source-verified family, the original 28-surface seed, or an explicit residual.",
     "seeded_modules": [
@@ -27,7 +28,7 @@
   ],
   "required_non_api_accounted_paths": ["frontend/src/core/api/api-client.ts", "frontend/src/app/(auth)/login/page.tsx", "frontend/src/app/(auth)/setup/page.tsx"],
   "non_api_module_residuals": [
-    {"source_path":"frontend/src/core/threads/hooks.ts","status":"NOT_INVENTORIED","reason":"Named SDK get/update/delete/state/run paths are source-anchored in the seed, but this large hook and StreamManager's transitive method/branch matrix have not received a complete branch-and-payload census. This is a remaining source coverage boundary, not evidence of a missing endpoint."}
+    {"source_path":"frontend/src/core/threads/hooks.ts","status":"NOT_INVENTORIED","reason":"The hook-level callsite, branch, payload and error census is now recorded in contracts/upstream/deerflow/thread-hook-consumption-matrix.json (source-verified against hooks.ts). What remains NOT_INVENTORIED is the pinned @langchain/langgraph-sdk StreamManager's transitive method/branch and SSE serialization behavior, which lives in the locked npm package outside the frozen DeerFlow source SHA and has no local node_modules evidence in this worktree. This is a remaining source coverage boundary, not evidence of a missing endpoint."}
   ],
   "excluded_external_calls": [
     {"source_path":"frontend/src/app/github-stars/route.ts","status":"EXCLUDED_EXTERNAL","source_anchor":"https://api.github.com/repos/bytedance/deer-flow","reason":"Next route fetches GitHub directly with a server runtime token and returns 204 on absent credential/error; it is not a DeerFlow or Haifa Gateway consumer and is not counted as backend compatibility."}

@@ -26,6 +26,10 @@
 
 # 主控 Agent 规则
 
+- 本轮客户演示 v0 按 `private-docs/roadmap/36-super-harness-customer-demo-v0.md` 调度，唯一整链目标是“真实模型 + 真实生产 Tool + Approval + Artifact + Reload/Reconnect + Steer，在冻结 DeerFlow UI 上连续跑两遍无异常”。主控须把每个新任务映射到该路线图的阶段、真实缺口和退出门槛，并同步 `docs/todo.md` 与 `work-packages.js.recentWorkPlan`；L1/L2 受控 Provider、测试 Tool、静态合同、分开的单项 PASS 不能替代同一主线 SHA 的两轮 L3 整链证据。两轮不得隐匿失败或重试；真实 Artifact 必须有可信 ID/provenance 与可核验下载字节。该 v0 纵向演示不等于 PRD D01–D05 的完整 Customer Demo Gate 或 Full Parity，W04 已知 P0 等范围外风险仍须披露，不为追演示绿灯放宽门禁。
+- 当前执行采用“双轨交付”：`customerDemo.stages` 的 M0–M4 是客户演示阶段门禁，W00–W24 是不变的长期能力工作包台账。开发仍按工作包 task 提示词、独立 worktree、定向测试和主控验收交付；演示任务卡另外标注 `demoStages` 和该阶段原子断言。工作包切片/整包完成不自动使演示阶段 PASS，演示 v0 GO 也不自动关闭工作包或 PRD D01–D05。W00 等长期横切工作只消费演示实际触及的来源，不因整包未完成而阻断正向演示；W04 暂停 P0 单列风险，若演示脚本实际触及其故障路径则如实 FAIL。
+- 演示执行顺序为 M0 脚本/Oracle/doctor → M1 生产 Tool 与审批主线集成 → M2 真 Artifact 与冻结 UI 消费 → M3 L2 同脚本两轮及双后端逐 case 差分 → M4 主端口真实模型 L3 连续两轮、W24 原始证据、人工体验。阶段 `workStatus` 只表示执行状态，`result` 独立使用 PASS/FAIL/NOT_RUN 等 case 口径；已有分项证据不得提升阶段门禁。主控在每次派工、复审、合入、失败或门禁变更时同次核对 `customerDemo`、`recentWorkPlan`、`deliveryTasks`、`docs/todo.md` 与实际 worktree；失败史保留。只有五阶段均 PASS、同一主线 SHA、人工验收记录齐全，才可把演示决策改为 GO。
+- 主控每次开工、派单或向人工汇报前运行 `pwsh -NoProfile -File scripts/audit-work-package-delivery.ps1`，检查演示阶段、工作包、worktree、checkpoint、端口和实际子智能体列表；脚本无法读取智能体状态，须另行人工核对。阶段或工作包状态变更后运行 `pwsh -NoProfile -File tests/evidence/verify-evidence-report.ps1`，证据门禁失败时不得播报 PASS 或更新 GO。Dashboard 的 `file://` 三 Tab 变更须运行 `frontend/node_modules/.bin/playwright.cmd test -c tests/dashboard/playwright.config.cjs` 两遍并记录是否重试、失败首因和退出情况；缺离线浏览器时标 `NOT_RUN`，不能拿静态 HTML 检查代替交互验证。
 - 后续将工作包任务派给 OpenCode 子智能体时，主控统一在启动命令中显式指定 `--model deepseek/deepseek-flash`；不得依赖 OpenCode 默认模型。已启动的试点任务不为切换模型而中断，模型变更从下一次派单生效；任务 checkpoint 与交付证据须记录实际使用的模型。
 - OpenCode 的 W03 Input Polish 试点已证明可交付受界后端切片，但首次运行因外部目录权限拒绝无产出。后续不设 OpenCode 派单比例；优先把范围清楚、无需频繁与主控交互、可凭最终提交和独立门禁验收的任务交给 OpenCode，需要持续协商失败语义、架构或跨仓边界的任务优先交给可交互子智能体。主控在最近工作安排记录实际分配与理由，不因工具选择放宽设计提示词、代码评审、自动门禁、真实证据、密钥和外部目录边界。OpenCode 进程也计入同时最多四个子智能体的上限，必须占用独立 worktree、端口槽位和数据目录，并遵守相同的 15 分钟 checkpoint/失联恢复规则；无法安全取得上下文或执行门禁时由主控收回或改派，不算已完成派单。
 - 后续每个 Super Harness 工作包交给子智能体开发前，主控必须先编写可执行的设计文档提示词，放在 `private-docs/prompts/39-deerflow-parity-delivery/` 下对应工作包目录，并以该文档作为派单依据；不得只靠聊天消息口头分派。提示词至少写明冻结 DeerFlow 对照、roadmap/产品/PRD 范围、现状与依赖、明确的实现边界和领域复杂度约束、接口/数据/失败语义、验收条件、定向及全仓门禁、真实运行证据与 `NOT_RUN` 边界。一个工作包需拆分时，每个可独立开发和验收的任务使用单独 Markdown 文件；派单消息引用具体文件，并补充本次 branch/worktree、端口槽位、数据目录与 checkpoint 要求。
@@ -36,6 +40,7 @@
 - 多智能体执行采用“15 分钟无声上限”：每个运行中的子智能体至少每 15 分钟向主控回报一次 checkpoint，至少包含当前工作包、已完成证据、正在执行的命令或步骤、首个失败或阻塞、worktree 变更及下一交付点；长时间命令须在启动前说明目的，并在结束后立即回报。若距上次有效回报或可观察进展达到 15 分钟，主控必须发送一次非中断式点名消息，不得因智能体状态仍显示 `running` 而无限等待。
 - 点名后 5 分钟仍无应答，或主控通过 worktree、测试进程、端口与日志审计确认任务停滞、跑偏、越界或反复等待无结果时，按“失联/失控 lane”恢复：先保留未提交变更、日志、数据目录和进程证据，只中止受影响智能体的当前回合，再用原 worktree 恢复同一任务或明确交接给替代智能体，并收紧范围、端口与下一 checkpoint；禁止打断正常推进的其他智能体。主控须将该 lane 的实际工作包映射、恢复动作、可验证进展和仍为 `NOT_RUN` 的项目及时更新到 `work-packages.js`，避免用旧智能体名称误报任务进度。
 - `work-packages.js` 中的 `WORK_PACKAGES_DATA` 是 `dashboard.html` 的唯一进度数据源；页面只负责展示，禁止在 HTML 中复制维护工作包状态。
+- `work-packages.js.customerDemo` 是 Dashboard 默认“客户演示交付”Tab 的唯一演示阶段数据源；`recentWorkPlan` 只列正在准备推进的派工，“工作包总览”保留 W00–W24 完整范围。三者分别表示演示门禁、近期调度、能力生命周期，禁止互相推导状态或在 HTML 中写阶段/工作包特例。客户演示路线图是退出标准，Dashboard 只是控制台，不是验收证据本身。
 - 项目管理信息由主控在 `work-packages.js` 维护，`dashboard.html` 只实现通用筛选、排序和渲染；新增字段、状态口径或展示规则时必须同步校验数据源与页面，禁止在页面脚本中按工作包 ID 写特例。
 - `work-packages.js.recentWorkPlan` 是 Dashboard“最近工作安排”Tab 的唯一数据源，由主控维护；每项至少记录优先级、关联工作包、当前状态、负责人、下一步、完成判据与前置条件。主控在任务派发、阻断解除、验收结论或优先级变化后及时更新安排及 `updatedAt`；它只表示调度计划，不替代 `workPackages[].state` 和可验证证据，已完成事项应移出最近安排或明确标记，不得长期展示过期负责人/端口。
 - 工作包取得实质进展时，在同一提交更新其状态、简要说明和关键证据；无可验证代码或测试证据不得标记为完成，阻塞或后置只需简要注明原因。

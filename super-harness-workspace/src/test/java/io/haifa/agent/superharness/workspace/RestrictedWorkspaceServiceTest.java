@@ -7,14 +7,18 @@ import io.haifa.agent.project.filesystem.WorkspaceFileService;
 import io.haifa.agent.project.path.ProjectPath;
 import io.haifa.agent.project.path.WorkspacePath;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -180,6 +184,80 @@ class RestrictedWorkspaceServiceTest {
                 .isEqualTo(WorkspaceError.HASH_CONFLICT);
         assertThat(workspace.read("owner-a", binding.workspaceId(), "workspace/state.txt", 0, 16).bytes())
                 .isEqualTo(bytes("v1"));
+    }
+
+    @Test
+    void createsCompleteNewFileAtomicallyWithoutReplacingAnExistingTarget() throws Exception {
+        RestrictedWorkspaceService workspace = service();
+        WorkspaceBinding binding = workspace.bind("owner-a", "thread-create");
+        byte[] expected = bytes("初稿\n");
+        WorkspaceFileSnapshot created = workspace.createWorkingFile(
+                "owner-a", binding.workspaceId(), "/mnt/user-data/outputs/report.md", expected);
+
+        assertThat(created.bytes()).isEqualTo(expected);
+        assertThat(created.totalByteCount()).isEqualTo(expected.length);
+        assertThat(created.sha256()).isEqualTo(sha256(expected));
+        assertThat(workspace.readVerifiedBytes("owner-a", binding.workspaceId(), created.logicalPath()))
+                .isEqualTo(expected);
+        assertThatThrownBy(() -> workspace.createWorkingFile(
+                "owner-a", binding.workspaceId(), created.logicalPath(), bytes("replacement")))
+                .isInstanceOf(WorkspaceException.class)
+                .extracting(exception -> ((WorkspaceException) exception).error())
+                .isEqualTo(WorkspaceError.HASH_CONFLICT);
+        assertThat(workspace.readVerifiedBytes("owner-a", binding.workspaceId(), created.logicalPath()))
+                .isEqualTo(expected);
+        Path directory = storageRoot.resolve("workspaces").resolve(binding.workspaceId().value())
+                .resolve("user-data/outputs");
+        try (var names = Files.list(directory)) {
+            assertThat(names.map(path -> path.getFileName().toString()).toList()).containsExactly("report.md");
+        }
+    }
+
+    @Test
+    void concurrentCreatesHaveOneWinnerAndNeverReplaceIt() throws Exception {
+        RestrictedWorkspaceService workspace = service();
+        WorkspaceBinding binding = workspace.bind("owner-a", "thread-race");
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var first = CompletableFuture.supplyAsync(() -> createOutcome(
+                    workspace, binding, "first"), executor);
+            var second = CompletableFuture.supplyAsync(() -> createOutcome(
+                    workspace, binding, "second"), executor);
+            assertThat(first.get() + second.get()).isEqualTo(1);
+        }
+        byte[] persisted = workspace.readVerifiedBytes("owner-a", binding.workspaceId(), "workspace/race.txt");
+        assertThat(new String(persisted, StandardCharsets.UTF_8)).isIn("first", "second");
+    }
+
+    @Test
+    void newFileCreationRejectsSymbolicLinkParents() throws Exception {
+        RestrictedWorkspaceService workspace = service();
+        WorkspaceBinding binding = workspace.bind("owner-a", "thread-link");
+        Path userData = storageRoot.resolve("workspaces").resolve(binding.workspaceId().value())
+                .resolve("user-data");
+        Path outside = storageRoot.resolve("outside");
+        Files.createDirectories(outside);
+        Files.createDirectories(userData.resolve("workspace"));
+        try {
+            Files.createSymbolicLink(userData.resolve("workspace/linked"), outside);
+        } catch (UnsupportedOperationException | java.nio.file.FileSystemException failure) {
+            Assumptions.abort("symbolic links unavailable on this host: " + failure.getClass().getSimpleName());
+        }
+        assertThatThrownBy(() -> workspace.createWorkingFile(
+                "owner-a", binding.workspaceId(), "workspace/linked/escape.txt", bytes("escape")))
+                .isInstanceOf(WorkspaceException.class)
+                .extracting(exception -> ((WorkspaceException) exception).error())
+                .isEqualTo(WorkspaceError.PATH_ESCAPE);
+        assertThat(Files.exists(outside.resolve("escape.txt"))).isFalse();
+    }
+
+    private static int createOutcome(RestrictedWorkspaceService workspace, WorkspaceBinding binding, String value) {
+        try {
+            workspace.createWorkingFile("owner-a", binding.workspaceId(), "workspace/race.txt", bytes(value));
+            return 1;
+        } catch (WorkspaceException failure) {
+            assertThat(failure.error()).isEqualTo(WorkspaceError.HASH_CONFLICT);
+            return 0;
+        }
     }
 
     @Test

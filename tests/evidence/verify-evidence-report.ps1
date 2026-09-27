@@ -204,6 +204,35 @@ try {
     Write-WorkData $unreviewedTask $data
     Assert-Fails $unreviewedTask 'is ready without delivery evidence: commit'
 
+    $missingDemoStage = New-Fixture 'missing-demo-stage'
+    $data = Read-WorkData $missingDemoStage
+    $data.customerDemo.stages = @($data.customerDemo.stages | Where-Object id -ne 'M3')
+    Write-WorkData $missingDemoStage $data
+    Assert-Fails $missingDemoStage 'customer demo must contain exactly M0 through M4'
+
+    $invalidDemoMapping = New-Fixture 'invalid-demo-mapping'
+    $data = Read-WorkData $invalidDemoMapping
+    $data.customerDemo.stages[1].workPackages = @('W99')
+    Write-WorkData $invalidDemoMapping $data
+    Assert-Fails $invalidDemoMapping 'M1 maps to missing work package W99'
+
+    $skippedDemoGate = New-Fixture 'skipped-demo-gate'
+    $data = Read-WorkData $skippedDemoGate
+    $data.customerDemo.stages[1].workStatus = 'complete'
+    $data.customerDemo.stages[1].result = 'PASS'
+    $data.customerDemo.stages[1] | Add-Member -NotePropertyMembers @{
+        proof = 'independent test evidence'; mainCommit = '1234567'
+        acceptedAt = '2026-09-27T14:00:00+08:00'
+    }
+    Write-WorkData $skippedDemoGate $data
+    Assert-Fails $skippedDemoGate 'M1 cannot PASS before M0 PASS'
+
+    $selfCertifiedDemo = New-Fixture 'self-certified-demo-go'
+    $data = Read-WorkData $selfCertifiedDemo
+    $data.customerDemo.decision = 'GO'
+    Write-WorkData $selfCertifiedDemo $data
+    Assert-Fails $selfCertifiedDemo 'customer demo GO requires all M0-M4 gates PASS'
+
     $missingAudit = New-Fixture 'missing-execution-audit'
     $data = Read-WorkData $missingAudit
     $data.executionAudit.packages.W24.owner = ''

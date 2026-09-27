@@ -1,0 +1,673 @@
+{
+  "schema_version": "w00.thread-hook-consumption/v1",
+  "source_path": "frontend/src/core/threads/hooks.ts",
+  "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+  "status": "SOURCE_VERIFIED",
+  "runtime_status": "NOT_RUN",
+  "scope": "Static branch-and-payload census of the frozen thread hook module (create/join/cancel, refresh recovery, history/message/state/runs queries, SSE event and error branches). It records frozen-hook triggers and their expected SDK/REST wire consumption. It is not an implementation or runtime parity claim, and it does not describe the pinned SDK's internal StreamManager.",
+  "sdk_boundary": {
+    "package": "@langchain/langgraph-sdk",
+    "locked_version": "1.6.0",
+    "lockfile": "frontend/pnpm-lock.yaml",
+    "lockfile_integrity": "sha512-J/B1SkCG0U+eXEXH/X89dDHxP8I0eULjLtXYvZ39uk2TxEKjLsrW4LY5J7Qwrf0GCDA+IM/agjKSLXALnctWTw==",
+    "local_install_available": false,
+    "classification": "local_dependency_inference_unavailable",
+    "note": "StreamManager and the SDK method-to-HTTP mapping live in the pinned npm package, which is outside the frozen DeerFlow source SHA. No frontend/node_modules is present in this worktree, so the transitive SDK internals remain NOT_INVENTORIED; only frozen hook-level triggers are source-verified. The HTTP verbs/paths bound to each sdk_call below are cross-checked against the frozen Gateway routers in contracts/upstream/deerflow/frontend-consumer-manifest.json, not against an installed client.js."
+  },
+  "required_entry_ids": [
+    "hooks.useThreadStream.client.config",
+    "hooks.useThreadStream.onCreated.agent-metadata",
+    "hooks.useThreadStream.onUpdateEvent.thread-state",
+    "hooks.useThreadStream.onCustomEvent.task-events",
+    "hooks.useThreadStream.onError.retry-and-invalidate",
+    "hooks.useThreadStream.onFinish.invalidate",
+    "hooks.useThreadStream.active-run-rejoin",
+    "hooks.useThreadStream.stop.cancel",
+    "hooks.buildRunContext.mode-gating",
+    "hooks.sendMessage.uploads",
+    "hooks.sendMessage.submit",
+    "hooks.submitPreparedReplay.submit",
+    "hooks.regenerateMessage.prepare",
+    "hooks.editAndRegenerateMessage.prepare",
+    "hooks.useThreadHistory.messages-page",
+    "hooks.useThreads.search",
+    "hooks.useInfiniteThreads.search",
+    "hooks.useThreadRuns.list",
+    "hooks.useThreadMetadata.get",
+    "hooks.useThreadTokenUsage.browser",
+    "hooks.useBranchThread.branch",
+    "hooks.usePinThread.patch-metadata",
+    "hooks.useMoveThreadToProject.move",
+    "hooks.useRunDetail.get",
+    "hooks.useDeleteThread.delete",
+    "hooks.deleteLocalThreadData.delete",
+    "hooks.findSidecarThreadIdsForParent.search",
+    "hooks.useRenameThread.update-state"
+  ],
+  "entries": [
+    {
+      "id": "hooks.useThreadStream.client.config",
+      "hook": "useThreadStream",
+      "trigger": "useStream(...) mount",
+      "condition": "Always runs; isMock selects the static/mock client. assistantId defaults to lead_agent or a custom agent name; reconnectOnMount, fetchStateHistory and throttle are fixed options.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "new LangGraphClient + useStream",
+      "transport": "rest",
+      "wire_fields": ["client.apiUrl (/api/langgraph default)", "assistantId", "threadId", "reconnectOnMount=true", "fetchStateHistory.limit=1", "throttle=true"],
+      "surface_ids": ["thread.state.sdk-rest", "thread.history.sdk-rest"],
+      "operation_ids": [],
+      "auth": "SDK onRequest injects X-CSRF-Token from csrf_token cookie for state-changing calls; cookie credentials included.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "const thread = useStream<AgentThreadState>({",
+        "client: getAPIClient(isMock),",
+        "assistantId,",
+        "threadId: onStreamThreadId,",
+        "reconnectOnMount: true,",
+        "fetchStateHistory: { limit: 1 },",
+        "throttle: true,"
+      ]
+    },
+    {
+      "id": "hooks.useThreadStream.onCreated.agent-metadata",
+      "hook": "useThreadStream",
+      "trigger": "onCreated(meta)",
+      "condition": "context.agent_name is set and !isMock",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "threads.update",
+      "transport": "rest",
+      "wire_fields": ["path thread_id", "body.metadata.agent_name"],
+      "surface_ids": ["thread.update.sdk-rest"],
+      "operation_ids": [],
+      "auth": "SDK onRequest CSRF for PATCH; response errors are swallowed by .catch(() => ({}))",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "if (context.agent_name && !isMock) {",
+        ".threads.update(meta.thread_id, {",
+        "metadata: { agent_name: context.agent_name },"
+      ]
+    },
+    {
+      "id": "hooks.useThreadStream.onUpdateEvent.thread-state",
+      "hook": "useThreadStream",
+      "trigger": "onUpdateEvent(data, { mutate })",
+      "condition": "A LangGraph updates frame carries a rendered state key (title/artifacts/todos/goal) or a summarization middleware update.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "useStream onUpdateEvent",
+      "transport": "sse",
+      "wire_fields": ["updates[].title", "updates[].artifacts", "updates[].todos", "updates[].goal", "SummarizationMiddleware.before_model.messages", "DeerFlowSummarizationMiddleware.before_model.messages"],
+      "surface_ids": ["run.create.sdk-sse", "run.join.sdk-sse"],
+      "operation_ids": [],
+      "auth": "Stream credentials belong to the parent run stream.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "onUpdateEvent(data, { mutate }) {",
+        "hasRenderedThreadStateUpdate(data)",
+        "getSummarizationMiddlewareMessages(data)"
+      ]
+    },
+    {
+      "id": "hooks.useThreadStream.onCustomEvent.task-events",
+      "hook": "useThreadStream",
+      "trigger": "onCustomEvent(event)",
+      "condition": "A custom stream frame; handled types are stream_replay_gap, task_started/task_running and llm_retry.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "useStream onCustomEvent",
+      "transport": "sse",
+      "wire_fields": ["custom.type=stream_replay_gap", "custom.type=task_started", "custom.type=task_running", "task_running.message_index", "custom.type=llm_retry", "llm_retry.message"],
+      "surface_ids": ["run.create.sdk-sse", "run.join.sdk-sse"],
+      "operation_ids": [],
+      "auth": "Stream credentials belong to the parent run stream.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "onCustomEvent(event: unknown) {",
+        "eventType === \"stream_replay_gap\"",
+        "eventType === \"task_running\"",
+        "eventType === \"llm_retry\""
+      ]
+    },
+    {
+      "id": "hooks.useThreadStream.onError.retry-and-invalidate",
+      "hook": "useThreadStream",
+      "trigger": "onError(error)",
+      "condition": "The SDK stream raises (network, HTTP, or SSE error).",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "useStream onError",
+      "transport": "sse",
+      "wire_fields": ["error.status", "error.response.status", "error.message", "error.error.message"],
+      "surface_ids": ["run.create.sdk-sse", "thread.messages-page.browser"],
+      "operation_ids": [],
+      "auth": "Reconnect retry reuses the same authenticated join path.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "onError(error) {",
+        "scheduleActiveRunRejoinRetry();",
+        "getStreamErrorMessage(error)"
+      ]
+    },
+    {
+      "id": "hooks.useThreadStream.onFinish.invalidate",
+      "hook": "useThreadStream",
+      "trigger": "onFinish(state, run)",
+      "condition": "The run stream reaches its terminal frame.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "useStream onFinish",
+      "transport": "sse",
+      "wire_fields": ["run.run_id", "state.values"],
+      "surface_ids": ["run.create.sdk-sse", "run.join.sdk-sse"],
+      "operation_ids": [],
+      "auth": "Reads completed run identity from the terminal frame only.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "onFinish(state, run) {",
+        "completedRunIdsRef.current.add(run.run_id);",
+        "listeners.current.onFinish?.(state.values);"
+      ]
+    },
+    {
+      "id": "hooks.useThreadStream.active-run-rejoin",
+      "hook": "useThreadStream",
+      "trigger": "reconnect effect after runs.list resolves",
+      "condition": "An active run (status pending|running) is not completed, is not already owned by the tab-local reconnect pointer, is under the bounded retry budget, and the thread is not loading.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "thread.joinStream",
+      "transport": "sse",
+      "wire_fields": ["runs.list[].status", "runs.list[].run_id", "sessionStorage key lg:stream:<threadId>"],
+      "surface_ids": ["run.join.sdk-sse", "thread.runs.sdk-rest", "run.get.sdk-rest"],
+      "operation_ids": [],
+      "auth": "Read/owner permission enforced by the Gateway join route; apply_on_disconnect=false for observer joins.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "void joinStream(resolvedRunId);",
+        "ACTIVE_RUN_REJOIN_RETRY_DELAYS_MS = [1_000, 2_000] as const;",
+        "MAX_ACTIVE_RUN_REJOIN_ATTEMPTS =",
+        "readReconnectRun(resolvedThreadId) === resolvedRunId",
+        "ACTIVE_RUN_STATUSES = new Set([\"pending\", \"running\"]);"
+      ]
+    },
+    {
+      "id": "hooks.useThreadStream.stop.cancel",
+      "hook": "useThreadStream",
+      "trigger": "stopThread()",
+      "condition": "Caller invokes the returned stop action.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "thread.stop -> runs.cancel",
+      "transport": "rest",
+      "wire_fields": ["path thread_id", "path run_id", "action=interrupt"],
+      "surface_ids": ["run.cancel.sdk-rest"],
+      "operation_ids": [],
+      "auth": "SDK onRequest CSRF for POST cancel; terminal-state 409 is swallowed by api-client.ts.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "() => thread.stop(),",
+        "stopThreadAndInvalidateCaches("
+      ]
+    },
+    {
+      "id": "hooks.buildRunContext.mode-gating",
+      "hook": "buildRunContext",
+      "trigger": "run context built for every submit",
+      "condition": "settings.mode is one of flash|thinking|pro|ultra; conversation_references is attached only when the caller passed it.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "thread.submit payload context",
+      "transport": "sse",
+      "wire_fields": ["context.thinking_enabled", "context.is_plan_mode", "context.subagent_enabled", "context.reasoning_effort", "context.thread_id", "context.conversation_references"],
+      "surface_ids": ["run.create.sdk-sse"],
+      "operation_ids": [],
+      "auth": "conversation_references come only from the send options, never from local settings.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "thinking_enabled: settings.mode !== \"flash\",",
+        "is_plan_mode: settings.mode === \"pro\" || settings.mode === \"ultra\",",
+        "subagent_enabled: settings.mode === \"ultra\",",
+        "reasoning_effort:"
+      ]
+    },
+    {
+      "id": "hooks.sendMessage.uploads",
+      "hook": "sendMessage",
+      "trigger": "message.files non-empty",
+      "condition": "A ready threadId; every part must convert to a File or the send aborts before submit.",
+      "consumer": "browser_fetch",
+      "sdk_call": null,
+      "method": "POST",
+      "path": "/api/threads/{thread_id}/uploads",
+      "transport": "rest",
+      "wire_fields": ["multipart file field", "response.files[].filename", "response.files[].size", "response.files[].virtual_path"],
+      "surface_ids": ["file.upload.browser"],
+      "operation_ids": [],
+      "auth": "uploadFiles uses the shared authenticated fetcher (cookie + CSRF).",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "const uploadResponse = await uploadFiles(threadId, files);",
+        "uploadedFileInfo = uploadResponse.files;"
+      ]
+    },
+    {
+      "id": "hooks.sendMessage.submit",
+      "hook": "sendMessage",
+      "trigger": "thread.submit(messages, options)",
+      "condition": "Passes the in-flight guard; hide_from_ui controls whether a visible human message is submitted; humanMessageId is a client-generated local-human-<uuid>.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "thread.submit",
+      "transport": "sse",
+      "wire_fields": ["messages[].type=human", "messages[].additional_kwargs.files", "options.threadId", "options.streamResumable", "options.config.recursion_limit", "options.context", "options.streamMode (forced messages-tuple+updates+custom by api-client)"],
+      "surface_ids": ["run.create.sdk-sse"],
+      "operation_ids": [],
+      "auth": "SDK onRequest CSRF for the run stream POST; cookie credentials included.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "await thread.submit(",
+        "streamResumable: true,",
+        "recursion_limit: 1000,",
+        "conversationReferences: options?.conversationReferences,",
+        "hideFromUI = options?.additionalKwargs?.hide_from_ui === true;"
+      ]
+    },
+    {
+      "id": "hooks.submitPreparedReplay.submit",
+      "hook": "submitPreparedReplay",
+      "trigger": "thread.submit(prepared.input, options)",
+      "condition": "A regenerate/edit prepare response succeeded and no send is in flight.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "thread.submit",
+      "transport": "sse",
+      "wire_fields": ["prepared.input", "checkpoint.checkpoint_ns", "checkpoint.checkpoint_id", "checkpoint.checkpoint_map", "metadata", "options.threadId", "options.streamResumable", "options.config.recursion_limit"],
+      "surface_ids": ["run.create.sdk-sse"],
+      "operation_ids": [],
+      "auth": "Replay never carries conversation references; CSRF via SDK onRequest.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "await thread.submit(prepared.input, {",
+        "checkpoint: prepared.checkpoint,",
+        "metadata: prepared.metadata,"
+      ]
+    },
+    {
+      "id": "hooks.regenerateMessage.prepare",
+      "hook": "regenerateMessage",
+      "trigger": "POST prepare before replay submit",
+      "condition": "messageId is non-empty.",
+      "consumer": "browser_fetch",
+      "sdk_call": null,
+      "method": "POST",
+      "path": "/api/threads/{thread_id}/runs/regenerate/prepare",
+      "transport": "rest",
+      "wire_fields": ["request.message_id", "response.input", "response.checkpoint", "response.metadata", "response.target_run_id"],
+      "surface_ids": ["thread.regenerate-prepare.browser"],
+      "operation_ids": [],
+      "auth": "Shared authenticated fetcher (credentials include + CSRF).",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "/runs/regenerate/prepare",
+        "body: JSON.stringify({ message_id: messageId }),",
+        "return (await response.json()) as RegeneratePrepareResponse;"
+      ]
+    },
+    {
+      "id": "hooks.editAndRegenerateMessage.prepare",
+      "hook": "editAndRegenerateMessage",
+      "trigger": "POST prepare before replay submit",
+      "condition": "humanMessageId is non-empty.",
+      "consumer": "browser_fetch",
+      "sdk_call": null,
+      "method": "POST",
+      "path": "/api/threads/{thread_id}/runs/edit-regenerate/prepare",
+      "transport": "rest",
+      "wire_fields": ["request.human_message_id", "request.replacement_text", "response.input.messages", "response.replacement_human_message_id", "response.source_message_ids"],
+      "surface_ids": ["thread.edit-regenerate-prepare.browser"],
+      "operation_ids": [],
+      "auth": "Shared authenticated fetcher (credentials include + CSRF).",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "/runs/edit-regenerate/prepare",
+        "human_message_id: humanMessageId,",
+        "replacement_text: replacementText,"
+      ]
+    },
+    {
+      "id": "hooks.useThreadHistory.messages-page",
+      "hook": "useThreadHistory",
+      "trigger": "useInfiniteQuery page fetch",
+      "condition": "enabled && Boolean(threadId); disabled under isMock; paginates backward with before_seq.",
+      "consumer": "browser_fetch",
+      "sdk_call": null,
+      "method": "GET",
+      "path": "/api/threads/{thread_id}/messages/page?before_seq={seq}",
+      "transport": "rest",
+      "wire_fields": ["before_seq", "data[].seq", "data[].run_id", "data[].content", "has_more", "next_before_seq"],
+      "surface_ids": ["thread.messages-page.browser"],
+      "operation_ids": [],
+      "auth": "Shared authenticated fetcher (credentials include + CSRF on mutations).",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "/messages/page",
+        "url.searchParams.set(\"before_seq\", String(beforeSeq));",
+        "parseThreadMessagesPageResponse(await response.json())",
+        "credentials: \"include\","
+      ]
+    },
+    {
+      "id": "hooks.useThreads.search",
+      "hook": "useThreads",
+      "trigger": "useQuery search",
+      "condition": "Always enabled with DEFAULT_THREAD_SEARCH_PARAMS.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "threads.search",
+      "transport": "rest",
+      "wire_fields": ["sortBy", "sortOrder", "metadata", "limit", "offset", "select"],
+      "surface_ids": ["thread.search.sdk-rest"],
+      "operation_ids": [],
+      "auth": "SDK onRequest injects X-CSRF-Token for the POST search when the csrf_token cookie is present; cookie credentials included.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "buildThreadsSearchQueryOptions(apiClient, params)"
+      ]
+    },
+    {
+      "id": "hooks.useInfiniteThreads.search",
+      "hook": "useInfiniteThreads",
+      "trigger": "useInfiniteQuery page fetch",
+      "condition": "params.archived===undefined selects SDK threads.search; a boolean archived value selects the REST searchThreadsByArchive extension; page size 50.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "threads.search",
+      "transport": "rest",
+      "wire_fields": ["limit", "offset", "metadata", "sortBy", "sortOrder", "select", "archived (REST extension only)"],
+      "surface_ids": ["thread.search.sdk-rest"],
+      "operation_ids": ["threads.search-archive"],
+      "auth": "REST archive search uses the shared authenticated fetcher; SDK path uses onRequest.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "await apiClient.threads.search<AgentThreadState>({",
+        "await searchThreadsByArchive({",
+        "archived: params.archived,",
+        "INFINITE_THREADS_PAGE_SIZE = 50"
+      ]
+    },
+    {
+      "id": "hooks.useThreadRuns.list",
+      "hook": "useThreadRuns",
+      "trigger": "useQuery runs list",
+      "condition": "enabled && Boolean(threadId); disabled under isMock; retry=false.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "runs.list",
+      "transport": "rest",
+      "wire_fields": ["run.status", "run.run_id"],
+      "surface_ids": ["thread.runs.sdk-rest"],
+      "operation_ids": [],
+      "auth": "SDK onRequest; read/owner permission enforced by the Gateway.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "const response = await apiClient.runs.list(threadId);"
+      ]
+    },
+    {
+      "id": "hooks.useThreadMetadata.get",
+      "hook": "useThreadMetadata",
+      "trigger": "useQuery thread get",
+      "condition": "enabled && Boolean(threadId); HTTP 403/404 resolves to null instead of throwing.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "threads.get",
+      "transport": "rest",
+      "wire_fields": ["thread_id", "thread record"],
+      "surface_ids": ["thread.get.sdk-rest"],
+      "operation_ids": [],
+      "auth": "SDK onRequest; missing/inaccessible thread is not disclosed.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "const response = await apiClient.threads.get(threadId);",
+        "isThreadMissingError(error)"
+      ]
+    },
+    {
+      "id": "hooks.useThreadTokenUsage.browser",
+      "hook": "useThreadTokenUsage",
+      "trigger": "useQuery token usage",
+      "condition": "enabled && Boolean(threadId); 403/404 resolves to null.",
+      "consumer": "browser_fetch",
+      "sdk_call": null,
+      "method": "GET",
+      "path": "/api/threads/{thread_id}/token-usage",
+      "transport": "rest",
+      "wire_fields": ["thread_id", "context_usage", "token totals"],
+      "surface_ids": [],
+      "operation_ids": ["threads.token-usage"],
+      "auth": "Shared authenticated fetcher; 403/404 degrade to null.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "return fetchThreadTokenUsage(threadId);"
+      ]
+    },
+    {
+      "id": "hooks.useBranchThread.branch",
+      "hook": "useBranchThread",
+      "trigger": "mutation branchThreadFromTurn",
+      "condition": "Caller supplies threadId + messageId; messageIds defaults to [messageId]; title optional.",
+      "consumer": "browser_fetch",
+      "sdk_call": null,
+      "method": "POST",
+      "path": "/api/threads/{thread_id}/branches",
+      "transport": "rest",
+      "wire_fields": ["message_id", "message_ids", "title (optional)", "response.thread_id", "response.parent_checkpoint_id", "response.workspace_clone_mode"],
+      "surface_ids": [],
+      "operation_ids": ["threads.branch"],
+      "auth": "Shared authenticated fetcher; server-owned thread and write permission.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "branchThreadFromTurn(threadId, { messageId, messageIds, title })"
+      ]
+    },
+    {
+      "id": "hooks.usePinThread.patch-metadata",
+      "hook": "usePinThread",
+      "trigger": "mutation patchThreadMetadata",
+      "condition": "Caller toggles pinned metadata.",
+      "consumer": "browser_fetch",
+      "sdk_call": null,
+      "method": "PATCH",
+      "path": "/api/threads/{thread_id}",
+      "transport": "rest",
+      "wire_fields": ["body.metadata.<pinned key>"],
+      "surface_ids": [],
+      "operation_ids": ["threads.metadata"],
+      "auth": "Shared authenticated fetcher; owner/write permission.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "patchThreadMetadata(threadId, {",
+        "[THREAD_PINNED_METADATA_KEY]: pinned,"
+      ]
+    },
+    {
+      "id": "hooks.useMoveThreadToProject.move",
+      "hook": "useMoveThreadToProject",
+      "trigger": "mutation moveThreadToProject",
+      "condition": "Caller selects a project or null to clear.",
+      "consumer": "browser_fetch",
+      "sdk_call": null,
+      "method": "POST",
+      "path": "/api/threads/{thread_id}/move",
+      "transport": "rest",
+      "wire_fields": ["body.project_id"],
+      "surface_ids": [],
+      "operation_ids": ["threads.move"],
+      "auth": "Shared authenticated fetcher; owner/write permission.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "moveThreadToProject(threadId, projectId)"
+      ]
+    },
+    {
+      "id": "hooks.useRunDetail.get",
+      "hook": "useRunDetail",
+      "trigger": "useQuery run get",
+      "condition": "Always enabled for the supplied threadId/runId.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "runs.get",
+      "transport": "rest",
+      "wire_fields": ["thread_id", "run_id", "run record"],
+      "surface_ids": ["run.get.sdk-rest"],
+      "operation_ids": [],
+      "auth": "SDK onRequest; run read permission enforced by the Gateway.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "const response = await apiClient.runs.get(threadId, runId);"
+      ]
+    },
+    {
+      "id": "hooks.useDeleteThread.delete",
+      "hook": "useDeleteThread",
+      "trigger": "mutation delete sidecar children then thread",
+      "condition": "Sidecar children are searched and deleted first; a remote SDK 404 is treated as already-deleted.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "threads.delete",
+      "transport": "rest",
+      "wire_fields": ["path thread_id"],
+      "surface_ids": ["thread.delete.sdk-rest"],
+      "operation_ids": [],
+      "auth": "SDK onRequest CSRF for DELETE; 404 accepted, other errors rethrown.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "await apiClient.threads.delete(threadId);",
+        "if (getHttpStatus(error) !== 404) throw error;"
+      ]
+    },
+    {
+      "id": "hooks.deleteLocalThreadData.delete",
+      "hook": "deleteLocalThreadData",
+      "trigger": "direct REST delete after SDK delete",
+      "condition": "Always runs after the SDK delete; HTTP 404 is success.",
+      "consumer": "browser_fetch",
+      "sdk_call": null,
+      "method": "DELETE",
+      "path": "/api/threads/{thread_id}",
+      "transport": "rest",
+      "wire_fields": ["path thread_id", "response.detail on failure"],
+      "surface_ids": ["thread.delete.sdk-rest"],
+      "operation_ids": [],
+      "auth": "The module-scoped fetch is the shared authenticated fetcher (credentials include + CSRF); same gateway handler as the SDK delete.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "/api/threads/${encodeURIComponent(threadId)}",
+        "method: \"DELETE\",",
+        "response.status !== 404"
+      ]
+    },
+    {
+      "id": "hooks.findSidecarThreadIdsForParent.search",
+      "hook": "findSidecarThreadIdsForParent",
+      "trigger": "paged threads.search",
+      "condition": "Pagination loop with limit 100 until a short page.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "threads.search",
+      "transport": "rest",
+      "wire_fields": ["metadata.sidecar", "metadata.parent_thread_id", "limit=100", "offset", "sortBy", "sortOrder", "select"],
+      "surface_ids": ["thread.search.sdk-rest"],
+      "operation_ids": [],
+      "auth": "SDK onRequest; read permission enforced by the Gateway.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        "await apiClient.threads.search({",
+        "[SIDECAR_METADATA_KEY]: true,",
+        "parent_thread_id: parentThreadId,"
+      ]
+    },
+    {
+      "id": "hooks.useRenameThread.update-state",
+      "hook": "useRenameThread",
+      "trigger": "mutation updateState",
+      "condition": "Caller submits a non-empty title.",
+      "consumer": "langgraph_sdk",
+      "sdk_call": "threads.updateState",
+      "transport": "rest",
+      "wire_fields": ["values.title"],
+      "surface_ids": ["thread.update-state.sdk-rest"],
+      "operation_ids": [],
+      "auth": "SDK onRequest CSRF for the state POST; owner/write permission.",
+      "evidence_kind": "frozen_hook_source",
+      "runtime_status": "NOT_RUN",
+      "source_anchors": [
+        ".threads.updateState(threadId, {",
+        "values: { title },"
+      ]
+    }
+  ],
+  "error_semantics": {
+    "browser_fetch": "readResponseErrorMessage reads response.detail when present, else statusText. useThreadHistory throws 'Failed to load thread history.'; deleteLocalThreadData treats 404 as success; useThreadMetadata and useThreadTokenUsage treat 403/404 as absent/inaccessible rather than a hard error.",
+    "langgraph_sdk": "getHttpStatus reads error.status or error.response.status; useThreadMetadata treats 403/404 as missing; api-client.ts skips joins to terminal runs and converts gap frames into stream_replay_gap.",
+    "source_anchors": [
+      "function readResponseErrorMessage(",
+      "return status === 403 || status === 404;"
+    ]
+  },
+  "excluded_branches": [
+    {
+      "id": "excluded.steer",
+      "reason": "hooks.ts issues no steer call. Active-input steering is composed outside this module, so it is explicitly out of this module's callsite census."
+    },
+    {
+      "id": "excluded.queue",
+      "reason": "hooks.ts issues no queue or enqueue call. Queued input is composed outside this module, so it is explicitly out of this module's callsite census."
+    },
+    {
+      "id": "excluded.interrupt-rollback-explicit",
+      "reason": "hooks.ts exposes only thread.stop for cancellation; it never passes an explicit interrupt/rollback action, so no distinct cancel action branch exists here."
+    },
+    {
+      "id": "excluded.goal-compact",
+      "reason": "GET/PUT/DELETE /api/threads/{id}/goal and POST /api/threads/{id}/compact are issued by the composer/input-box callsite, not by hooks.ts."
+    },
+    {
+      "id": "excluded.workspace-changes",
+      "reason": "Run-scoped changed-file summaries/diff are fetched by core/workspace-changes/api.ts, not by hooks.ts."
+    },
+    {
+      "id": "excluded.static-demo-and-mock",
+      "reason": "isMock and the static-demo client override search/get/getState/getHistory/update without a network request; those branches perform no backend call and are excluded from the wire census."
+    },
+    {
+      "id": "excluded.pure-ordering-helpers",
+      "reason": "restore*/merge*/coalesce/reconcile helpers are client-side message ordering and rendering logic with no backend call."
+    }
+  ],
+  "not_inventoried": [
+    {
+      "id": "gap.sdk.stream-manager-internals",
+      "reason": "The pinned @langchain/langgraph-sdk StreamManager branch/payload behavior lives in the locked npm package, outside the frozen DeerFlow source SHA, and no frontend/node_modules is present in this worktree. Its transitive internals remain NOT_INVENTORIED."
+    },
+    {
+      "id": "gap.sdk.method-http-mapping",
+      "reason": "The exact HTTP verb/path each SDK method emits is inferred from the frozen Gateway routers in the manifest, not from an installed client.js; only the hook-level trigger and expected wire shape are source-verified."
+    },
+    {
+      "id": "gap.sse-frame-serialization",
+      "reason": "Exact SSE event names and payload serialization produced by the SDK for stream/joinStream are not source-verified here because the SDK implementation is unavailable."
+    }
+  ]
+}

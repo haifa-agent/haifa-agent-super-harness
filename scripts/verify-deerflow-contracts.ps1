@@ -5,7 +5,8 @@ param(
     [string]$ExpandedInventoryPath,
     [string]$ResourceManifestPath,
     [string]$OracleManifestPath,
-    [string]$OracleFixturesPath
+    [string]$OracleFixturesPath,
+    [string]$ThreadHookMatrixPath
 )
 
 Set-StrictMode -Version Latest
@@ -28,6 +29,9 @@ if ([string]::IsNullOrWhiteSpace($OracleManifestPath)) {
 }
 if ([string]::IsNullOrWhiteSpace($OracleFixturesPath)) {
     $OracleFixturesPath = Join-Path $RepositoryRoot 'contracts/upstream/deerflow/fixtures/core-protocol-fixtures.json'
+}
+if ([string]::IsNullOrWhiteSpace($ThreadHookMatrixPath)) {
+    $ThreadHookMatrixPath = Join-Path $RepositoryRoot 'contracts/upstream/deerflow/thread-hook-consumption-matrix.json'
 }
 
 function Resolve-DeerFlowRoot {
@@ -145,6 +149,242 @@ function Assert-Evidence {
         $needle = [string]$needleValue
         if (-not $content.Contains($needle, [System.StringComparison]::Ordinal)) {
             throw "Surface '$SurfaceId' lost required source evidence '$needle' in '$sourcePath'."
+        }
+    }
+}
+
+function Get-OptionalProperty {
+    param(
+        [object]$Object,
+        [string]$Name
+    )
+    if ($null -eq $Object) {
+        return $null
+    }
+    if ($Object.PSObject.Properties.Name -contains $Name) {
+        return $Object.$Name
+    }
+    return $null
+}
+
+function Assert-ThreadHookMatrix {
+    param(
+        [object]$Matrix,
+        [string]$SourceRoot,
+        [object]$ManifestSurfaces,
+        [System.Collections.Generic.HashSet[string]]$ExpandedOperationIds
+    )
+
+    if ($null -eq $Matrix) {
+        throw 'Expanded inventory lost the thread hook consumption matrix link.'
+    }
+    Assert-Equal $Matrix.schema_version 'w00.thread-hook-consumption/v1' 'Unexpected thread hook consumption matrix schema'
+    Assert-Equal $Matrix.source_sha $ExpectedSourceSha 'Thread hook consumption matrix source SHA drifted'
+    Assert-Equal $Matrix.status 'SOURCE_VERIFIED' 'Thread hook consumption matrix must remain source-verified'
+    Assert-Equal $Matrix.runtime_status 'NOT_RUN' 'Thread hook consumption matrix must not claim runtime PASS or FAIL'
+
+    $matrixSourcePath = [string]$Matrix.source_path
+    if ($matrixSourcePath -ne 'frontend/src/core/threads/hooks.ts') {
+        throw "Thread hook consumption matrix points at an unexpected source: $matrixSourcePath"
+    }
+    $absoluteSource = Join-Path $SourceRoot $matrixSourcePath
+    if (-not (Test-Path -LiteralPath $absoluteSource -PathType Leaf)) {
+        throw "Thread hook consumption matrix source is missing at frozen checkout: $matrixSourcePath"
+    }
+    $source = Get-Content -LiteralPath $absoluteSource -Raw
+
+    $sdkBoundary = Get-OptionalProperty -Object $Matrix -Name 'sdk_boundary'
+    if ($null -eq $sdkBoundary) {
+        throw 'Thread hook consumption matrix has no SDK boundary record.'
+    }
+    foreach ($field in @('package', 'locked_version', 'lockfile', 'lockfile_integrity', 'classification', 'note')) {
+        if ([string]::IsNullOrWhiteSpace([string](Get-OptionalProperty -Object $sdkBoundary -Name $field))) {
+            throw "Thread hook consumption SDK boundary lacks '$field'."
+        }
+    }
+    $localInstallAvailable = [bool](Get-OptionalProperty -Object $sdkBoundary -Name 'local_install_available')
+    if ($localInstallAvailable) {
+        $packageFiles = @(Get-OptionalProperty -Object $sdkBoundary -Name 'package_files')
+        if ($packageFiles.Count -eq 0) {
+            throw 'Thread hook consumption SDK boundary claims a local install without package file hashes.'
+        }
+    }
+
+    if (-not ($Matrix.PSObject.Properties.Name -contains 'entries')) {
+        throw 'Thread hook consumption matrix has no entries.'
+    }
+    $entries = @($Matrix.entries)
+    if ($entries.Count -eq 0) {
+        throw 'Thread hook consumption matrix contains no entries.'
+    }
+
+    # The required frozen-hook census is verifier-owned. A matrix edit must not be able to
+    # remove both an entry and its own required_entry_ids marker to certify itself as complete.
+    $expectedHookEntryIds = @(
+        'hooks.useThreadStream.client.config',
+        'hooks.useThreadStream.onCreated.agent-metadata',
+        'hooks.useThreadStream.onUpdateEvent.thread-state',
+        'hooks.useThreadStream.onCustomEvent.task-events',
+        'hooks.useThreadStream.onError.retry-and-invalidate',
+        'hooks.useThreadStream.onFinish.invalidate',
+        'hooks.useThreadStream.active-run-rejoin',
+        'hooks.useThreadStream.stop.cancel',
+        'hooks.buildRunContext.mode-gating',
+        'hooks.sendMessage.uploads',
+        'hooks.sendMessage.submit',
+        'hooks.submitPreparedReplay.submit',
+        'hooks.regenerateMessage.prepare',
+        'hooks.editAndRegenerateMessage.prepare',
+        'hooks.useThreadHistory.messages-page',
+        'hooks.useThreads.search',
+        'hooks.useInfiniteThreads.search',
+        'hooks.useThreadRuns.list',
+        'hooks.useThreadMetadata.get',
+        'hooks.useThreadTokenUsage.browser',
+        'hooks.useBranchThread.branch',
+        'hooks.usePinThread.patch-metadata',
+        'hooks.useMoveThreadToProject.move',
+        'hooks.useRunDetail.get',
+        'hooks.useDeleteThread.delete',
+        'hooks.deleteLocalThreadData.delete',
+        'hooks.findSidecarThreadIdsForParent.search',
+        'hooks.useRenameThread.update-state'
+    )
+
+    $surfaceIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($surface in $ManifestSurfaces) {
+        $null = $surfaceIds.Add([string]$surface.id)
+    }
+
+    $entryIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $hookTriggers = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($entry in $entries) {
+        $entryId = [string](Get-OptionalProperty -Object $entry -Name 'id')
+        if ([string]::IsNullOrWhiteSpace($entryId)) {
+            throw 'Thread hook consumption entry has no id.'
+        }
+        if (-not $entryIds.Add($entryId)) {
+            throw "Duplicate thread hook consumption entry: $entryId"
+        }
+        foreach ($field in @('hook', 'trigger', 'condition', 'consumer', 'auth', 'evidence_kind')) {
+            if ([string]::IsNullOrWhiteSpace([string](Get-OptionalProperty -Object $entry -Name $field))) {
+                throw "Thread hook consumption entry '$entryId' lacks '$field'."
+            }
+        }
+        Assert-OneOf ([string]$entry.consumer) @('langgraph_sdk', 'browser_fetch') "Thread hook consumption entry '$entryId' has an invalid consumer"
+        $hookTrigger = "$([string]$entry.hook)|$([string]$entry.trigger)"
+        if (-not $hookTriggers.Add($hookTrigger)) {
+            throw "Conflicting thread hook consumption mapping for hook/trigger: $hookTrigger"
+        }
+        $sdkCall = [string](Get-OptionalProperty -Object $entry -Name 'sdk_call')
+        $httpMethod = [string](Get-OptionalProperty -Object $entry -Name 'method')
+        $httpPath = [string](Get-OptionalProperty -Object $entry -Name 'path')
+        $hasSdkCall = -not [string]::IsNullOrWhiteSpace($sdkCall)
+        $hasHttpCall = (-not [string]::IsNullOrWhiteSpace($httpMethod)) -and (-not [string]::IsNullOrWhiteSpace($httpPath))
+        if ($hasSdkCall -and $hasHttpCall) {
+            throw "Conflicting thread hook consumption mapping for '$entryId': both sdk_call and HTTP method/path are set."
+        }
+        if ([string]$entry.consumer -eq 'langgraph_sdk' -and -not $hasSdkCall) {
+            throw "Thread hook consumption entry '$entryId' claims an SDK consumer without sdk_call."
+        }
+        if ([string]$entry.consumer -eq 'browser_fetch' -and -not $hasHttpCall) {
+            throw "Thread hook consumption entry '$entryId' claims a browser consumer without method/path."
+        }
+        $entryRuntime = Get-OptionalProperty -Object $entry -Name 'runtime_status'
+        if ($null -ne $entryRuntime) {
+            Assert-Equal ([string]$entryRuntime) 'NOT_RUN' "Thread hook consumption entry '$entryId' must not claim runtime PASS or FAIL"
+        }
+        if (-not $localInstallAvailable -and [string]$entry.evidence_kind -ne 'frozen_hook_source') {
+            throw "Thread hook consumption entry '$entryId' claims non-frozen evidence without an installed SDK package."
+        }
+
+        $anchors = @(Get-OptionalProperty -Object $entry -Name 'source_anchors')
+        if ($anchors.Count -eq 0) {
+            throw "Thread hook consumption entry '$entryId' has no source anchors."
+        }
+        foreach ($anchorValue in $anchors) {
+            $anchor = [string]$anchorValue
+            if (-not $source.Contains($anchor, [System.StringComparison]::Ordinal)) {
+                throw "Thread hook consumption entry '$entryId' lost source anchor '$anchor' in '$matrixSourcePath'."
+            }
+        }
+
+        $wireFields = @(Get-OptionalProperty -Object $entry -Name 'wire_fields')
+        if ($wireFields.Count -eq 0) {
+            throw "Thread hook consumption entry '$entryId' has no wire fields."
+        }
+
+        $bound = 0
+        foreach ($surfaceIdValue in @(Get-OptionalProperty -Object $entry -Name 'surface_ids')) {
+            $surfaceId = [string]$surfaceIdValue
+            if (-not $surfaceIds.Contains($surfaceId)) {
+                throw "Thread hook consumption entry '$entryId' points to unknown surface '$surfaceId'."
+            }
+            $bound += 1
+        }
+        foreach ($operationIdValue in @(Get-OptionalProperty -Object $entry -Name 'operation_ids')) {
+            $operationId = [string]$operationIdValue
+            if (-not $ExpandedOperationIds.Contains($operationId)) {
+                throw "Thread hook consumption entry '$entryId' points to unknown operation '$operationId'."
+            }
+            $bound += 1
+        }
+        if ($bound -eq 0) {
+            throw "Thread hook consumption entry '$entryId' binds no surface or operation."
+        }
+    }
+
+    foreach ($requiredEntryIdValue in @(Get-OptionalProperty -Object $Matrix -Name 'required_entry_ids')) {
+        $requiredEntryId = [string]$requiredEntryIdValue
+        if (-not $entryIds.Contains($requiredEntryId)) {
+            throw "Required thread hook consumption entry is missing: $requiredEntryId"
+        }
+    }
+    $declaredRequiredIds = @((Get-OptionalProperty -Object $Matrix -Name 'required_entry_ids') | ForEach-Object { [string]$_ })
+    if ($declaredRequiredIds.Count -ne $expectedHookEntryIds.Count -or
+            @(Compare-Object ($expectedHookEntryIds | Sort-Object) ($declaredRequiredIds | Sort-Object)).Count -gt 0) {
+        throw 'Thread hook consumption required_entry_ids drifted from the independent verifier baseline.'
+    }
+    foreach ($expectedEntryId in $expectedHookEntryIds) {
+        if (-not $entryIds.Contains($expectedEntryId)) {
+            throw "Independent frozen hook baseline entry is missing: $expectedEntryId"
+        }
+    }
+
+    $errorSemantics = Get-OptionalProperty -Object $Matrix -Name 'error_semantics'
+    if ($null -eq $errorSemantics) {
+        throw 'Thread hook consumption matrix has no error semantics record.'
+    }
+    foreach ($field in @('browser_fetch', 'langgraph_sdk')) {
+        if ([string]::IsNullOrWhiteSpace([string](Get-OptionalProperty -Object $errorSemantics -Name $field))) {
+            throw "Thread hook consumption error semantics lacks '$field'."
+        }
+    }
+    foreach ($anchorValue in @(Get-OptionalProperty -Object $errorSemantics -Name 'source_anchors')) {
+        $anchor = [string]$anchorValue
+        if ([string]::IsNullOrWhiteSpace($anchor) -or -not $source.Contains($anchor, [System.StringComparison]::Ordinal)) {
+            throw "Thread hook consumption error semantics lost source anchor '$anchor'."
+        }
+    }
+
+    $excludedBranches = @(Get-OptionalProperty -Object $Matrix -Name 'excluded_branches')
+    if ($excludedBranches.Count -eq 0) {
+        throw 'Thread hook consumption matrix lists no excluded branches.'
+    }
+    foreach ($branch in $excludedBranches) {
+        if ([string]::IsNullOrWhiteSpace([string](Get-OptionalProperty -Object $branch -Name 'id')) -or
+            [string]::IsNullOrWhiteSpace([string](Get-OptionalProperty -Object $branch -Name 'reason'))) {
+            throw 'Thread hook consumption excluded branch lacks an id or reason.'
+        }
+    }
+    $gaps = @(Get-OptionalProperty -Object $Matrix -Name 'not_inventoried')
+    if ($gaps.Count -eq 0) {
+        throw 'Thread hook consumption matrix lists no not-inventoried gaps.'
+    }
+    foreach ($gap in $gaps) {
+        if ([string]::IsNullOrWhiteSpace([string](Get-OptionalProperty -Object $gap -Name 'id')) -or
+            [string]::IsNullOrWhiteSpace([string](Get-OptionalProperty -Object $gap -Name 'reason'))) {
+            throw 'Thread hook consumption not-inventoried gap lacks an id or reason.'
         }
     }
 }
@@ -497,6 +737,13 @@ if (@($expandedInventory.source_module_accounting.residual_modules).Count -eq 0 
     @($expandedInventory.non_api_module_residuals).Count -eq 0) {
     throw 'Expanded inventory claims PARTIAL but lists no residual source modules.'
 }
+
+$expandedHookMatrixLink = [string](Get-OptionalProperty -Object $expandedInventory -Name 'hooks_consumption_matrix')
+if ($expandedHookMatrixLink -ne 'contracts/upstream/deerflow/thread-hook-consumption-matrix.json') {
+    throw 'Expanded inventory lost the thread hook consumption matrix link.'
+}
+$threadHookMatrix = Read-JsonFile -Path ([System.IO.Path]::GetFullPath($ThreadHookMatrixPath))
+Assert-ThreadHookMatrix -Matrix $threadHookMatrix -SourceRoot $resolvedDeerFlowRoot -ManifestSurfaces $surfaces -ExpandedOperationIds $expandedOperationIds
 
 $oracleContracts = @($oracleManifest.contracts)
 if ($oracleContracts.Count -eq 0) {

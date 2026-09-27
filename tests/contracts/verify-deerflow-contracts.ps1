@@ -14,6 +14,7 @@ $ExpandedInventory = Join-Path $RepositoryRoot 'contracts/upstream/deerflow/fron
 $ResourceManifest = Join-Path $RepositoryRoot 'contracts/upstream/deerflow/resource-seed.json'
 $OracleManifest = Join-Path $RepositoryRoot 'contracts/upstream/deerflow/core-protocol-oracle.json'
 $OracleFixtures = Join-Path $RepositoryRoot 'contracts/upstream/deerflow/fixtures/core-protocol-fixtures.json'
+$ThreadHookMatrix = Join-Path $RepositoryRoot 'contracts/upstream/deerflow/thread-hook-consumption-matrix.json'
 $TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("haifa-w00-contract-tests-" + [guid]::NewGuid().ToString('N'))
 
 function Invoke-Verifier {
@@ -22,7 +23,8 @@ function Invoke-Verifier {
         [string]$ExpandedInventoryManifest = $ExpandedInventory,
         [string]$ResourceSeedManifest = $ResourceManifest,
         [string]$CoreOracleManifest = $OracleManifest,
-        [string]$CoreOracleFixtures = $OracleFixtures
+        [string]$CoreOracleFixtures = $OracleFixtures,
+        [string]$ThreadHookMatrixManifest = $ThreadHookMatrix
     )
     $output = & pwsh -NoProfile -File $Verifier `
         -DeerFlowRoot $DeerFlowRoot `
@@ -30,7 +32,8 @@ function Invoke-Verifier {
         -ExpandedInventoryPath $ExpandedInventoryManifest `
         -ResourceManifestPath $ResourceSeedManifest `
         -OracleManifestPath $CoreOracleManifest `
-        -OracleFixturesPath $CoreOracleFixtures 2>&1 | Out-String
+        -OracleFixturesPath $CoreOracleFixtures `
+        -ThreadHookMatrixPath $ThreadHookMatrixManifest 2>&1 | Out-String
     return [pscustomobject]@{
         ExitCode = $LASTEXITCODE
         Output = $output
@@ -280,6 +283,79 @@ try {
         throw "Nested license hash drift gate did not fail for the expected reason:`n$($driftedLicenseResult.Output)"
     }
 
+    $missingHookEntryPath = Join-Path $TempRoot 'missing-hook-consumption-entry.json'
+    $missingHookEntry = Get-Content -LiteralPath $ThreadHookMatrix -Raw | ConvertFrom-Json -Depth 100
+    $missingHookEntry.entries = @($missingHookEntry.entries | Where-Object id -ne 'hooks.useThreadStream.stop.cancel')
+    $missingHookEntry | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $missingHookEntryPath -Encoding utf8NoBOM
+    $missingHookEntryResult = Invoke-Verifier -ContractManifest $Manifest -ThreadHookMatrixManifest $missingHookEntryPath
+    if ($missingHookEntryResult.ExitCode -eq 0 -or $missingHookEntryResult.Output -notmatch 'Required thread hook consumption entry is missing') {
+        throw "Missing hook consumption branch gate did not fail for the expected reason:`n$($missingHookEntryResult.Output)"
+    }
+
+    $selfCertifiedRemovalPath = Join-Path $TempRoot 'self-certified-hook-removal.json'
+    $selfCertifiedRemoval = Get-Content -LiteralPath $ThreadHookMatrix -Raw | ConvertFrom-Json -Depth 100
+    $selfCertifiedRemoval.entries = @($selfCertifiedRemoval.entries | Where-Object id -ne 'hooks.useThreadStream.stop.cancel')
+    $selfCertifiedRemoval.required_entry_ids = @($selfCertifiedRemoval.required_entry_ids | Where-Object { $_ -ne 'hooks.useThreadStream.stop.cancel' })
+    $selfCertifiedRemoval | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $selfCertifiedRemovalPath -Encoding utf8NoBOM
+    $selfCertifiedRemovalResult = Invoke-Verifier -ContractManifest $Manifest -ThreadHookMatrixManifest $selfCertifiedRemovalPath
+    if ($selfCertifiedRemovalResult.ExitCode -eq 0 -or $selfCertifiedRemovalResult.Output -notmatch 'independent verifier baseline') {
+        throw "Self-certified hook removal gate did not fail for the expected reason:`n$($selfCertifiedRemovalResult.Output)"
+    }
+
+    $driftedHookAnchorPath = Join-Path $TempRoot 'drifted-hook-anchor.json'
+    $driftedHookAnchor = Get-Content -LiteralPath $ThreadHookMatrix -Raw | ConvertFrom-Json -Depth 100
+    $driftedHookAnchor.entries[0].source_anchors[0] = 'NO_SUCH_HOOK_ANCHOR'
+    $driftedHookAnchor | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $driftedHookAnchorPath -Encoding utf8NoBOM
+    $driftedHookAnchorResult = Invoke-Verifier -ContractManifest $Manifest -ThreadHookMatrixManifest $driftedHookAnchorPath
+    if ($driftedHookAnchorResult.ExitCode -eq 0 -or $driftedHookAnchorResult.Output -notmatch 'lost source anchor') {
+        throw "Drifted hook consumption source anchor gate did not fail for the expected reason:`n$($driftedHookAnchorResult.Output)"
+    }
+
+    $runtimeHookClaimPath = Join-Path $TempRoot 'runtime-hook-claim.json'
+    $runtimeHookClaim = Get-Content -LiteralPath $ThreadHookMatrix -Raw | ConvertFrom-Json -Depth 100
+    $runtimeHookClaim.runtime_status = 'PASS'
+    $runtimeHookClaim | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $runtimeHookClaimPath -Encoding utf8NoBOM
+    $runtimeHookClaimResult = Invoke-Verifier -ContractManifest $Manifest -ThreadHookMatrixManifest $runtimeHookClaimPath
+    if ($runtimeHookClaimResult.ExitCode -eq 0 -or $runtimeHookClaimResult.Output -notmatch 'must not claim runtime PASS or FAIL') {
+        throw "Static hook matrix runtime PASS gate did not fail for the expected reason:`n$($runtimeHookClaimResult.Output)"
+    }
+
+    $duplicateHookEntryPath = Join-Path $TempRoot 'duplicate-hook-entry.json'
+    $duplicateHookEntry = Get-Content -LiteralPath $ThreadHookMatrix -Raw | ConvertFrom-Json -Depth 100
+    $duplicateHookEntry.entries = @($duplicateHookEntry.entries) + @($duplicateHookEntry.entries[0])
+    $duplicateHookEntry | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $duplicateHookEntryPath -Encoding utf8NoBOM
+    $duplicateHookEntryResult = Invoke-Verifier -ContractManifest $Manifest -ThreadHookMatrixManifest $duplicateHookEntryPath
+    if ($duplicateHookEntryResult.ExitCode -eq 0 -or $duplicateHookEntryResult.Output -notmatch 'Duplicate thread hook consumption entry') {
+        throw "Duplicate hook consumption entry gate did not fail for the expected reason:`n$($duplicateHookEntryResult.Output)"
+    }
+
+    $conflictHookEntryPath = Join-Path $TempRoot 'conflict-hook-entry.json'
+    $conflictHookEntry = Get-Content -LiteralPath $ThreadHookMatrix -Raw | ConvertFrom-Json -Depth 100
+    $conflictHookEntry.entries[1].trigger = $conflictHookEntry.entries[0].trigger
+    $conflictHookEntry | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $conflictHookEntryPath -Encoding utf8NoBOM
+    $conflictHookEntryResult = Invoke-Verifier -ContractManifest $Manifest -ThreadHookMatrixManifest $conflictHookEntryPath
+    if ($conflictHookEntryResult.ExitCode -eq 0 -or $conflictHookEntryResult.Output -notmatch 'Conflicting thread hook consumption mapping') {
+        throw "Conflicting hook consumption mapping gate did not fail for the expected reason:`n$($conflictHookEntryResult.Output)"
+    }
+
+    $unknownHookSurfacePath = Join-Path $TempRoot 'unknown-hook-surface.json'
+    $unknownHookSurface = Get-Content -LiteralPath $ThreadHookMatrix -Raw | ConvertFrom-Json -Depth 100
+    $unknownHookSurface.entries[0].surface_ids[0] = 'NO_SUCH_SURFACE'
+    $unknownHookSurface | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $unknownHookSurfacePath -Encoding utf8NoBOM
+    $unknownHookSurfaceResult = Invoke-Verifier -ContractManifest $Manifest -ThreadHookMatrixManifest $unknownHookSurfacePath
+    if ($unknownHookSurfaceResult.ExitCode -eq 0 -or $unknownHookSurfaceResult.Output -notmatch 'points to unknown surface') {
+        throw "Unknown hook consumption surface gate did not fail for the expected reason:`n$($unknownHookSurfaceResult.Output)"
+    }
+
+    $sdkInferenceHookEntryPath = Join-Path $TempRoot 'sdk-inference-hook-entry.json'
+    $sdkInferenceHookEntry = Get-Content -LiteralPath $ThreadHookMatrix -Raw | ConvertFrom-Json -Depth 100
+    $sdkInferenceHookEntry.entries[0].evidence_kind = 'local_sdk_inference'
+    $sdkInferenceHookEntry | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $sdkInferenceHookEntryPath -Encoding utf8NoBOM
+    $sdkInferenceHookEntryResult = Invoke-Verifier -ContractManifest $Manifest -ThreadHookMatrixManifest $sdkInferenceHookEntryPath
+    if ($sdkInferenceHookEntryResult.ExitCode -eq 0 -or $sdkInferenceHookEntryResult.Output -notmatch 'non-frozen evidence') {
+        throw "Unavailable SDK inference gate did not fail for the expected reason:`n$($sdkInferenceHookEntryResult.Output)"
+    }
+
     Write-Host 'PASS valid manifest'
     Write-Host 'PASS frozen SHA mismatch is rejected'
     Write-Host 'PASS missing critical SSE surface is rejected'
@@ -306,6 +382,14 @@ try {
     Write-Host 'PASS unaccounted Next Route Handler is rejected'
     Write-Host 'PASS missing nested license resource is rejected'
     Write-Host 'PASS nested license hash drift is rejected'
+    Write-Host 'PASS missing hook consumption branch is rejected'
+    Write-Host 'PASS entry and required-id co-removal is rejected by independent baseline'
+    Write-Host 'PASS drifted hook consumption source anchor is rejected'
+    Write-Host 'PASS static hook matrix cannot claim runtime PASS'
+    Write-Host 'PASS duplicate hook consumption entry is rejected'
+    Write-Host 'PASS conflicting hook consumption mapping is rejected'
+    Write-Host 'PASS unknown hook consumption surface is rejected'
+    Write-Host 'PASS unavailable SDK inference cannot be claimed'
 }
 finally {
     if (Test-Path -LiteralPath $TempRoot) {

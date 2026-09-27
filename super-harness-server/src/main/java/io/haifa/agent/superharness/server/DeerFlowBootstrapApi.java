@@ -8,6 +8,7 @@ import com.sun.net.httpserver.HttpServer;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.auth.localmodel.WindowsCredentialManagerClient;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
+import io.haifa.agent.superharness.workspace.RestrictedWorkspaceService;
 import io.haifa.agent.superharness.workspace.WorkspaceChangeLimits;
 import io.haifa.agent.superharness.workspace.WorkspaceLimits;
 import java.io.IOException;
@@ -73,6 +74,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.configurationApi = new DeerFlowConfigurationApi(objectMapper, dataDirectory);
         PersistentProjectWorkspaceService projects = new PersistentProjectWorkspaceService(
                 dataDirectory.resolve("workspace"), WorkspaceLimits.defaults(), WorkspaceChangeLimits.defaults());
+        RestrictedWorkspaceService toolWorkspace = new RestrictedWorkspaceService(
+                dataDirectory.resolve("workspace"), WorkspaceLimits.defaults());
         Function<JsonNode, HaifaRunBridge.ModelBinding> modelResolver =
                 testRunModelResolver == null
                         ? configurationApi::resolveRunModel
@@ -84,7 +87,9 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 projects,
                 dataDirectory,
                 continuationKey,
-                testRunTools);
+                threadId -> testRunModelResolver == null
+                        ? List.of(new ProductionWriteFileTool(threadId, projects, toolWorkspace))
+                        : testRunTools);
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
         this.projectApi = new DeerFlowProjectApi(objectMapper, projects, threadRunApi, workspaceApi);

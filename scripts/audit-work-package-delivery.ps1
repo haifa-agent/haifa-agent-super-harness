@@ -87,6 +87,30 @@ foreach ($port in $slotPorts) {
     finally { $probe.Stop() }
 }
 
+$demo = $data.customerDemo
+$demoStages = @($demo.stages)
+if ($demoStages.Count -ne 5) { $issues.Add('customer demo must contain M0-M4') }
+if ([string]$demo.decision -eq 'GO' -and @($demoStages | Where-Object result -ne 'PASS').Count -gt 0) {
+    $issues.Add('customer demo is GO while at least one stage is not PASS')
+}
+$demoAudit = [ordered]@{
+    id = [string]$demo.id
+    decision = [string]$demo.decision
+    updatedAt = [string]$demo.updatedAt
+    passedStages = @($demoStages | Where-Object result -eq 'PASS').Count
+    totalStages = $demoStages.Count
+    stages = @($demoStages | ForEach-Object {
+        [ordered]@{
+            id = [string]$_.id
+            workStatus = [string]$_.workStatus
+            result = [string]$_.result
+            owner = [string]$_.owner
+            blocker = [string]$_.blocker
+            nextAction = [string]$_.nextAction
+        }
+    })
+}
+
 [ordered]@{
     checkedAt = $now.ToString('o')
     packageCounts = [ordered]@{
@@ -97,6 +121,7 @@ foreach ($port in $slotPorts) {
         complete = @($data.workPackages | Where-Object state -eq 'complete').Count
     }
     crossCutting = $crossCutting
+    customerDemo = $demoAudit
     activeNonCrossCutting = $activeIds
     childSlotListeners = $listeners
     inProgressPackages = @($observed)
