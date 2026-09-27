@@ -76,6 +76,65 @@ function hasToolResult(body) {
   );
 }
 
+function toolResultCount(body) {
+  if (!Array.isArray(body.messages)) return 0;
+  return body.messages.filter((message) => message?.role === "tool").length;
+}
+
+// W18 differential: which upload paths reached the model context, independent
+// of how each backend frames them.
+function uploadPaths(body) {
+  const text = JSON.stringify(body.messages ?? []);
+  return [...new Set(text.match(/\/mnt\/user-data\/uploads\/[A-Za-z0-9._-]+/g) ?? [])];
+}
+
+function firstUserMatch(body, pattern) {
+  if (!Array.isArray(body.messages)) return null;
+  for (const message of body.messages) {
+    if (message?.role !== "user") continue;
+    const match = pattern.exec(textOfContent(message.content));
+    if (match) return match[0];
+  }
+  return null;
+}
+
+function toolCallFrame(id, callId, name, args) {
+  return {
+    id,
+    model: "w18-controlled-model",
+    choices: [
+      {
+        index: 0,
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: callId,
+              type: "function",
+              function: { name, arguments: JSON.stringify(args) },
+            },
+          ],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+  };
+}
+
+function finishWithToolCall(response, id, callId, name, args) {
+  frame(response, toolCallFrame(id, callId, name, args));
+  frame(response, { id, model: "w18-controlled-model", choices: [], usage: { prompt_tokens: 4, completion_tokens: 2 } });
+  frame(response, "[DONE]");
+  response.end();
+}
+
+function finishWithText(response, id, text) {
+  frame(response, completionChunk(id, text, "stop"));
+  frame(response, { id, model: "w18-controlled-model", choices: [], usage: { prompt_tokens: 6, completion_tokens: 4 } });
+  frame(response, "[DONE]");
+  response.end();
+}
+
 function frame(response, value) {
   response.write(`data: ${typeof value === "string" ? value : JSON.stringify(value)}\n\n`);
 }
@@ -129,6 +188,9 @@ const server = http.createServer((request, response) => {
         interaction,
         prompt,
         rawPrompt,
+        offeredTools,
+        toolResults: toolResultCount(body),
+        uploadPaths: uploadPaths(body),
         authorization: /^Bearer\s+\S+$/i.test(request.headers.authorization ?? ""),
       }),
     );
@@ -246,6 +308,44 @@ const server = http.createServer((request, response) => {
       });
       frame(response, "[DONE]");
       response.end();
+      return;
+    }
+
+    // W18 differential scripts only drive tools the backend actually offers; a
+    // backend without that production Tool falls through to the plain answer.
+    const fileToolPrompt = firstUserMatch(body, /w18-file-tool-\d+/);
+    if (fileToolPrompt && offeredTools.includes("write_file")) {
+      const id = `w18-file-tool-${Date.now()}`;
+      const target = `/mnt/user-data/outputs/${fileToolPrompt}.md`;
+      const results = toolResultCount(body);
+      if (results === 0) {
+        finishWithToolCall(response, id, "w18-write-call", "write_file", {
+          description: "W18 differential output",
+          path: target,
+          // Single line: the frozen LocalSandbox writes in text mode, so on
+          // Windows any "\n" becomes "\r\n" and the hash oracle would test the
+          // host newline convention instead of the Tool→Artifact path.
+          content: `W18 ${fileToolPrompt} produced by write_file 数据 ✓`,
+        });
+      } else if (results === 1 && offeredTools.includes("present_files")) {
+        finishWithToolCall(response, id, "w18-present-call", "present_files", { filepaths: [target] });
+      } else {
+        finishWithText(response, id, `File tool done: ${fileToolPrompt}`);
+      }
+      return;
+    }
+    const interactionPrompt = firstUserMatch(body, /w18-interaction-\d+/);
+    if (interactionPrompt && offeredTools.includes("ask_clarification")) {
+      const id = `w18-interaction-${Date.now()}`;
+      if (toolResultCount(body) === 0) {
+        finishWithToolCall(response, id, "w18-clarify-call", "ask_clarification", {
+          question: `Choose a path for ${interactionPrompt}`,
+          clarification_type: "approach_choice",
+          options: ["Alpha", "Beta"],
+        });
+      } else {
+        finishWithText(response, id, `Interaction resolved: ${interactionPrompt}`);
+      }
       return;
     }
 

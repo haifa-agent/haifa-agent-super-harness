@@ -182,6 +182,18 @@ try {
         }
         finally { Pop-Location }
     }
+    # SSR/BFF guard: every built rewrite must target only this slot's gateway,
+    # so neither combination can silently fall back to another backend.
+    $gatewayOrigin = "http://127.0.0.1:$GatewayPort"
+    $routes = Get-Content -Raw -LiteralPath (Join-Path $frontendRoot '.next/routes-manifest.json') | ConvertFrom-Json
+    $rewriteList = if ($routes.rewrites -is [array]) { @($routes.rewrites) } else {
+        @($routes.rewrites.beforeFiles) + @($routes.rewrites.afterFiles) + @($routes.rewrites.fallback)
+    }
+    $bffTargets = @($rewriteList | Where-Object { $_ -and $_.destination -match '^https?://' } |
+        ForEach-Object { ([Uri]$_.destination).GetLeftPart([UriPartial]::Authority) } | Sort-Object -Unique)
+    if ($bffTargets.Count -eq 0 -or @($bffTargets | Where-Object { $_ -cne $gatewayOrigin }).Count -gt 0) {
+        throw "Frozen frontend BFF rewrites target [$($bffTargets -join ', ')], expected only $gatewayOrigin; rebuild without -SkipBuild."
+    }
     $frontendProcess = Start-Process -FilePath $node `
         -ArgumentList @((Join-Path $frontendRoot 'node_modules/next/dist/bin/next'), 'start', '--hostname', '127.0.0.1', '--port', [string]$FrontendPort) `
         -WorkingDirectory $frontendRoot -PassThru -WindowStyle Hidden `
@@ -212,6 +224,7 @@ try {
         providerUrl = "http://127.0.0.1:$ProviderPort"
         providerPid = $providerProcess.Id
         dataRoot = $phaseRoot
+        bffRewriteTargets = $bffTargets
         frontendBuildId = (Get-Content -Raw -LiteralPath (Join-Path $frontendRoot '.next/BUILD_ID')).Trim()
         frozenManifestSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'third-party/deerflow/manifest.json')).Hash.ToLowerInvariant()
         frontendRoutesSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $frontendRoot '.next/routes-manifest.json')).Hash.ToLowerInvariant()
@@ -251,8 +264,51 @@ finally {
             $logHashes[$name] = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash.ToLowerInvariant()
         }
     }
+    # Proxy failures the Next server logged, by target origin (fallback evidence).
+    $proxyTargets = @()
+    foreach ($name in @('frontend.stdout.log', 'frontend.stderr.log')) {
+        $file = Join-Path $evidenceRoot $name
+        if (Test-Path -LiteralPath $file -PathType Leaf) {
+            $proxyTargets += @(Select-String -LiteralPath $file -Pattern 'Failed to proxy (https?://[^/\s]+)' -AllMatches |
+                ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value })
+        }
+    }
+    $cases = @()
+    $casesError = $null
+    $resultsFile = Join-Path $evidenceRoot 'results.json'
+    # Playwright JSON omits empty arrays (leaf suites have no "suites"), which
+    # StrictMode rejects as missing properties; read them defensively.
+    $prop = { param($o, $n) if ($o -and $o.PSObject.Properties[$n]) { @($o.$n) } else { @() } }
+    if (Test-Path -LiteralPath $resultsFile -PathType Leaf) {
+      try {
+        $walk = {
+            param($suite)
+            foreach ($spec in (& $prop $suite 'specs')) {
+                foreach ($t in (& $prop $spec 'tests')) {
+                    $last = @(& $prop $t 'results')[-1]
+                    $notRun = @((& $prop $t 'annotations') | Where-Object { $_.type -eq 'NOT_RUN' } | ForEach-Object { $_.description })
+                    [ordered]@{
+                        title = $spec.title
+                        status = $(if ($notRun.Count -gt 0 -and $last.status -eq 'skipped') { 'NOT_RUN' }
+                            elseif ($last.status -eq 'passed') { 'PASS' } else { "FAIL($($last.status))" })
+                        seconds = [math]::Round($last.duration / 1000, 1)
+                        retry = $last.retry
+                        notRunReason = $(if ($notRun.Count -gt 0) { $notRun[0] } else { $null })
+                    }
+                }
+            }
+            foreach ($child in (& $prop $suite 'suites')) { & $walk $child }
+        }
+        $report = Get-Content -Raw -LiteralPath $resultsFile | ConvertFrom-Json
+        $cases = @((& $prop $report 'suites') | ForEach-Object { & $walk $_ })
+      }
+      catch { $casesError = $_.Exception.Message }
+    }
     $summary = [ordered]@{
         backend = $Backend; testExitCode = $testExitCode
+        cases = $cases
+        casesError = $casesError
+        frontendProxyFailureTargets = @($proxyTargets | Sort-Object -Unique)
         elapsedSeconds = [int]((Get-Date) - $started).TotalSeconds
         testSeconds = $(if ($testStartedAt -and $testFinishedAt) { [math]::Round(($testFinishedAt - $testStartedAt).TotalSeconds, 1) } else { $null })
         readinessSeconds = [ordered]@{

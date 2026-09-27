@@ -1,6 +1,6 @@
 window.WORK_PACKAGES_DATA = {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-27T09:38:32+08:00",
+  "updatedAt": "2026-09-27T11:03:27+08:00",
   "source": "private-docs/roadmap/35-super-harness-deerflow-parity.md",
   "baseline": {
     "phase": "Wave A",
@@ -12,19 +12,19 @@ window.WORK_PACKAGES_DATA = {
     "evidenceGatePassed": 1
   },
   "recentWorkPlan": {
-    "updatedAt": "2026-09-27T09:38:32+08:00",
-    "focus": "W05 SQLite Interaction 诊断分支 9075023 已交付：受控同毫秒时间精度可复现 TRANSACTION_FAILED > IllegalArgumentException，DB_BUSY 与 revision 包装分别隔离；旧历史 409 无原始 cause，仍未归因，诊断分支未合入。W04 Archive/Restore/Delete 候选 75caf3d 经主控复审暂不合并：purge、restore、项目删除一致性与 30 天留存有阻断缺口。W04/W05 均保持 in_progress；主端口 18018/33018 不受影响。",
+    "updatedAt": "2026-09-27T11:03:27+08:00",
+    "focus": "W18 文件/Interaction 双后端差分诊断 runner 577a08c 已经主控复审合入 main@f3944a4；reference 9/9×2，Haifa 5 PASS/2 FAIL/2 NOT_RUN×2，红灯归 W04 上传、W05 生产 Tool，启用态 WS 归 W12。W04 Archive/Restore/Delete@63c910f 的生命周期 UI 双轮已通过，但项目删除部分失败与回滚一致性仍阻断合并，下载 hash/错误提示 UI 仍待验收；W05 历史 409 未归因。W04/W05/W18 均保持 in_progress；本次 W04 未合入，主服务未重启。",
     "items": [
       {
         "id": "NEXT-11",
         "priority": "P0",
-        "title": "W04 Archive/Restore/Delete 合并阻断修复",
+        "title": "W04 Archive/Restore/Delete 三次复审阻断",
         "status": "in_progress",
         "workPackages": ["W04"],
-        "owner": "主控 /root 复审；codex/w04-archive-restore-delete 原 worktree 待修复",
-        "nextAction": "先以冻结 DeerFlow 同一文档权威和失败语义重审持久布局；补 purge 失败保留 trash 行、restore 合并校验目标真实字节、项目删除/线程解绑失败一致性与 30 天留存的失败先行测试，再修复并复验。未达到门禁前不合入主线。",
-        "doneWhen": "阻断项均有受控失败注入与重启回读测试，定向/全仓/合同及真实 UI 或明确 NOT_RUN 证据通过，主控复审后再决定合入；W04 整包仍另审。",
-        "dependency": "候选 codex/w04-archive-restore-delete@75caf3d；主控原样复跑定向 7/7、合同 26/26、证据 41/41 PASS，但源码发现数据保全/失败一致性缺口；槽位2 53018 NAT 排除导致该切片 UI NOT_RUN。"
+        "owner": "主控 /root；W04 子智能体派遣已撤回",
+        "nextAction": "处理解绑成功后项目目录逐文件删除中途失败的不可恢复状态，校验源/现存 trash payload，并验证多线程解绑补偿失败；补受控注入、重启回读与重试。UI 补恢复后下载 hash、代表性错误提示，分类前次非零退出；未达门禁不合入。",
+        "doneWhen": "部分目录删除、缺失/损坏 payload 与 Nth 线程持久化/补偿失败均有 fail-closed 和重启证据；冻结 UI 成功链、下载 hash 与错误提示双轮/明确 NOT_RUN，定向/全仓门禁及主控复审通过，之后再决定切片合入。",
+        "dependency": "候选 codex/w04-archive-restore-delete@63c910f 工作树干净；主控定向 Workspace 23/23、Project API 5/5、Trash API 2/2 PASS，新旧 UI 两轮 4/4 PASS。代码仍在解绑后逐文件删项目，失败 catch 清掉 trash 暂存且无法回滚已删字节；payload 未校验，线程补偿失败只警告；UI 下载 hash/错误提示未测，较早 flow-104032 退出码 1 未分类。"
       },
       {
         "id": "NEXT-01",
@@ -32,10 +32,10 @@ window.WORK_PACKAGES_DATA = {
         "title": "W05 Interaction 尾项与间歇测试",
         "status": "in_progress",
         "workPackages": ["W05"],
-        "owner": "主控 /root 复审诊断分支；Codex /root/w05_restart_409 已交付并释放槽位1",
-        "nextAction": "复审纯测试分支 9075023 的异常链、真实 SQLite 与 UI 证据；另行设计 SDK 合同异常保留或 SH 小范围解包修复。历史 409 需原始 cause 或同路径复现，不能倒推；不据此关闭 W05。",
+        "owner": "主控 /root；诊断子智能体已交付，槽位1已释放",
+        "nextAction": "历史首次合法重启回复 409 独立追踪：同请求/Run/重启条件下保留脱敏原始 HTTP、内部错误码与 cause 链，再给稳定复现和修复。另评审 SDK 合同异常保留或 SH 小范围解包；不据此关闭 W05。",
         "doneWhen": "间歇用例的根因和修复有稳定回归证据；真实生产 Tool 与剩余 Interaction 语义获得 HTTP/SSE/Run/Tool 证据，整包退出条件另行复核。",
-        "dependency": "codex/w05-sqlite-fault-isolation@9075023：受控 SQLite 5/5、UI 2/2×2、六模块 clean verify 与 clean-consumer、合同 26/26、证据 41/41 PASS；DB_BUSY 和 revision 包装路径各自隔离，真实 HTTP 故障注入/过期卡/生产 Tool NOT_RUN。历史 409 原 cause 缺失；主线毫秒投影 main@ae74d35 已在，但这份诊断测试尚未合入。"
+        "dependency": "codex/w05-sqlite-fault-isolation@9075023 / main@05bede0：受控 SQLite 主线 5/5、分支 UI 2/2×2、六模块 clean verify 与 clean-consumer、合同 26/26、证据 41/41 PASS；DB_BUSY 和 revision 包装路径各自隔离，真实 HTTP 故障注入/过期卡/生产 Tool NOT_RUN。历史 409 原 cause 缺失，已单列 docs/todo.md。"
       },
       {
         "id": "NEXT-02",
@@ -51,13 +51,13 @@ window.WORK_PACKAGES_DATA = {
       {
         "id": "NEXT-09",
         "priority": "P1",
-        "title": "W18 双后端文件/Interaction 尾项",
-        "status": "pending",
+        "title": "W18 差分红灯归属与后续复验",
+        "status": "in_progress",
         "workPackages": ["W18"],
-        "owner": "待派 OpenCode deepseek/deepseek-flash；槽位3已释放，主控复审",
-        "nextAction": "W18-FileInteractionDifferential-Pending.md 已备；复核 W05 前置后用槽位3开展上传→生产文件 Tool→下载 hash、Interaction 与 WS/文件边界差分，不用脚本 fixture 冒充产品能力。",
-        "doneWhen": "剩余双后端场景取得冻结 UI、真实网络目标、Run/Tool/Artifact/hash 与同脚本重复证据；无法运行的项明确 NOT_RUN。",
-        "dependency": "runner 0ee36ed 已合入 main@f47b425；DeerFlow 参考 4/4×3，Haifa 合入 W05 后 4/4×2 PASS，分别 92/84 秒，端口释放。原 main@045e8e0 3/4×3 FAIL 保留为历史。"
+        "owner": "主控 /root；诊断切片已合入，后续产品修复分别归 W04/W05/W12",
+        "nextAction": "W04 修新会话首条上传 404 与已有 Thread 上传后模型上下文缺路径；W05 提供真实生产文件 Tool/Interaction；W12 启用态 WS。各自修复后主控按新提示词安排同 runner 双轮复验，不把 fixture 当生产能力。",
+        "doneWhen": "Haifa 两项上传 FAIL 有修复及同脚本双轮 PASS；生产 Tool/Interaction 从 NOT_RUN 转真实执行并有 Run/Tool/Artifact/hash 证据；启用态 WS 另按 W12 验收；W18 整包另审。",
+        "dependency": "577a08c / main@f3944a4 已交付诊断：reference 9/9×2，Haifa 5 PASS/2 FAIL/2 NOT_RUN×2；WS 禁用态 PASS、启用态 NOT_RUN。四文件哈希与最终证据一致，槽位释放，历史红灯保留。"
       },
       {
         "id": "NEXT-10",
@@ -144,7 +144,7 @@ window.WORK_PACKAGES_DATA = {
     { "workPackage": "W18", "branch": "codex/w18-haifa-config", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w18-haifa-config", "head": "d57f438" },
     { "workPackage": "W02", "branch": "codex/w02-local-api", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w02-local-api", "head": "b0b9ddc" },
     { "workPackage": "W04", "branch": "codex/w04-workspace-slice", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w04-workspace", "head": "cffbdbe" },
-    { "workPackage": "W04", "branch": "codex/w04-archive-restore-delete", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w04-archive-restore-delete", "head": "75caf3d; review blocked, not merged" },
+    { "workPackage": "W04", "branch": "codex/w04-archive-restore-delete", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w04-archive-restore-delete", "head": "63c910f; third review blocked, not merged" },
     { "workPackage": "W05", "branch": "codex/w05-events", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w05-events", "head": "5826e9e" },
     { "workPackage": "W02", "branch": "codex/w02-run-sse", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w02-run-sse", "head": "364f7a3" },
     { "workPackage": "W05", "branch": "codex/w05-sse-reconnect", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w05-sse-reconnect", "head": "63650e3" },
@@ -168,10 +168,10 @@ window.WORK_PACKAGES_DATA = {
     { "workPackage": "W04", "branch": "codex/w04-security-hardening", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w04-security-hardening", "head": "64e4358 + 7eff317; main d107d59" },
     { "workPackage": "W04", "branch": "codex/w04-frozen-ui-files", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w04-frozen-ui-files", "head": "27b4a84" },
     { "workPackage": "W05", "branch": "codex/w05-message-identity-steer", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w05-interaction", "head": "3ab6d93; main cc971c7" },
-    { "workPackage": "W18", "branch": "codex/w18-dual-backend-differential", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w18-dual-backend-differential", "head": "0ee36ed; main f47b425; worktree ff 85b2a5b" },
+    { "workPackage": "W18", "branch": "codex/w18-dual-backend-differential", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w18-dual-backend-differential", "head": "577a08c; main f3944a4; diagnostics merged" },
     { "workPackage": "W03", "branch": "codex/w03-input-polish-opencode", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w03-input-polish-opencode", "head": "acf8061; main 85b2a5b" },
     { "workPackage": "W03", "branch": "codex/w03-title-suggestions-opencode", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w03-title-suggestions-opencode", "head": "e113a7f; main aab7169" },
-    { "workPackage": "W05", "branch": "codex/w05-sqlite-fault-isolation", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w05-sqlite-fault-isolation", "head": "9075023; diagnostic test only, pending main review" },
+    { "workPackage": "W05", "branch": "codex/w05-sqlite-fault-isolation", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w05-sqlite-fault-isolation", "head": "9075023 / main 05bede0; diagnostic test only" },
     { "workPackage": "W04", "branch": "codex/w04-main-regression", "path": "D:/workspace/haifa-agent-super-harness-worktrees/w04-main-regression", "head": "main c7d6c6e; UI regression only" }
   ],
   "milestones": [
@@ -248,7 +248,11 @@ window.WORK_PACKAGES_DATA = {
     { "at": "2026-09-27T00:18:34+08:00", "title": "W03 title/suggestions 冻结 UI 切片合入", "detail": "OpenCode deepseek/deepseek-flash 分支 e113a7f 经主控复审合入 main@aab7169。首次 UI 1/2 FAIL 定位为标题落盘晚于冻结前端刷新约 90 ms，原始证据保留；修复后隔离根 2/2×3 PASS，最终代码六模块 clean verify、Thread/Run 42/42、Suggestions 13/13 与 Provider 2/2、合同负例 13/13 PASS。主 Gateway 原数据根重启，18018/33018 健康、聊天页和同源 suggestions config 200；W03 换模型与 Input Polish 专项 UI 仍 NOT_RUN，整包 in_progress。" },
     { "at": "2026-09-27T08:59:01+08:00", "title": "派发 W05 SQLite Interaction 受控故障隔离", "detail": "主控把时间精度设为第一可证伪方向，私有提示词 ccd332c 转 Developing；从 main@8ee9514 新建 codex/w05-sqlite-fault-isolation 独立 worktree，交 Codex /root/w05_restart_409 槽位1 28018/43018。旧 409 与后来 500 是否同因仍未证实；此刻仅派单，测试与根因结论均 NOT_RUN。" },
     { "at": "2026-09-27T09:35:53+08:00", "title": "W04 Archive/Restore/Delete 主控复审暂缓合并", "detail": "候选 codex/w04-archive-restore-delete@75caf3d 与 walkthrough 一致，主控定向 7/7、合同 26/26、证据 41/41 原样复跑通过；但 purge 先删元数据且吞文件清理失败、restore merge 未验证目标字节、项目删除与线程解绑跨文件边界缺少失败一致性、30 天 retention 未实现，均未达到本切片数据保全退出条件。槽位2 UI 因 NAT 端口排除 NOT_RUN，主线未合并、W04 仍 in_progress。" },
-    { "at": "2026-09-27T09:38:32+08:00", "title": "W05 SQLite Interaction 诊断子任务交付", "detail": "codex/w05-sqlite-fault-isolation@9075023 只新增诊断测试；受控 SQLite 5/5、六模块 clean verify/clean-consumer、冻结 UI 2/2×2、合同 26/26、证据 41/41 PASS，槽位1端口释放。时间精度复现 later 500 同类错误链，DB_BUSY/revision 包装各自隔离；旧历史 HTTP 409 缺 cause，仍未归因。过期卡和真实 HTTP 故障注入 NOT_RUN，诊断分支待主控复审，W05 不关单。" }
+    { "at": "2026-09-27T09:38:32+08:00", "title": "W05 SQLite Interaction 诊断子任务交付", "detail": "codex/w05-sqlite-fault-isolation@9075023 只新增诊断测试；受控 SQLite 5/5、六模块 clean verify/clean-consumer、冻结 UI 2/2×2、合同 26/26、证据 41/41 PASS，槽位1端口释放。时间精度复现 later 500 同类错误链，DB_BUSY/revision 包装各自隔离；旧历史 HTTP 409 缺 cause，仍未归因。过期卡和真实 HTTP 故障注入 NOT_RUN，诊断分支待主控复审，W05 不关单。" },
+    { "at": "2026-09-27T09:48:08+08:00", "title": "W05 诊断测试合入，W18/W04 独立开发继续", "detail": "codex/w05-sqlite-fault-isolation@9075023 经主控确认仅新增纯测试，合入 main@05bede0；主线受控 SQLite 5/5 PASS，主 18018 health、33018 聊天页各 200，生产服务无代码变更。旧 409 未归因已单列 todo，不阻断其他工作。W18 独立 Agent 槽位3差分、W04 原 worktree 四项修复正在进行，交付后由主控复审；两者当前代码和门禁结论不预判。" },
+    { "at": "2026-09-27T10:18:53+08:00", "title": "W04 二次主控复审未过合入门禁", "detail": "W04 子智能体派遣撤回，主控审阅 walkthrough 与干净候选 f6ecd58；purge、restore 字节校验和 30 天懒清理已有修复，定向 Workspace 23/23、Project API 5/5、Trash API 2/2 PASS。但项目删除先移文档入 trash、再解绑线程；解绑失败会留下项目却丢失活动文档，多线程解绑亦无原子回滚。走查的 UI 2/2×2 仅是既有文件/Workspace 脚本，本切片 archive/trash/restore/purge UI NOT_RUN。未合并，W04 保持 in_progress；W18 独立开发不受影响。" },
+    { "at": "2026-09-27T10:33:28+08:00", "title": "W18 文件与 Interaction 差分诊断合入", "detail": "主控接管复审，codex/w18-dual-backend-differential@577a08c 仅四个 runner/spec/config/受控 Provider 文件合入 main@f3944a4。最终代码 reference 9/9×2、Haifa 5 PASS/2 FAIL/2 NOT_RUN×2，零重试、槽位释放，四文件证据哈希一致；两项上传失败归 W04，生产文件 Tool/Interaction 未注册归 W05，启用态 WS 两侧 NOT_RUN 归 W12。主控 JS/冻结来源/合同/证据门禁通过；诊断切片 Finished，W18 整包继续 in_progress，红灯不抹除。" },
+    { "at": "2026-09-27T11:03:27+08:00", "title": "W04 第三次主控复审仍暂缓合入", "detail": "候选 63c910f 新增真实生命周期冻结 UI 4/4（两轮）PASS，主控定向 Workspace 23/23、Project API 5/5、Trash API 2/2 PASS；但解绑后项目目录逐文件删除失败时回滚 trash 不会恢复已删字节，源/既有 trash payload 未校验，多线程解绑补偿失败仅警告。UI 尚无下载 hash/错误提示，较早 flow-104032 非零退出未分类。W04 保持 in_progress、主线未合并。" }
   ],
   "workPackages": [
     { "id": "W00", "title": "固定快照、前端消费协议与资源种子", "wave": "A", "lane": "G · 协议/Verifier", "state": "in_progress", "startedAt": "2026-09-22T15:18:36+08:00", "completedAt": null, "prerequisites": [], "branch": "codex/w00-consumer-inventory", "owner": "/root", "summary": "冻结消费清单与资源来源种子持续扩展：48 surfaces、20 families/92 额外 browser operations、13 资源，26 项正负合同门禁通过；22/22 core api.ts、16/16 Next route 和唯一 browser WS 入口有源码归属。threads/hooks.ts 与 StreamManager 完整分支/载荷矩阵、第三方品牌/依赖许可仍未闭合，静态清单状态 PARTIAL，运行互通归 W18 且 NOT_RUN；W00 保持进行中。", "evidence": ["protocol seed f901baf + 213a4be; expansion cd45adf / main b1352a4; wave2 18bd681 / main 60a5022","28 surfaces + 18 core contracts + 19 source-derived fixtures PASS against frozen e545c28","13 positive/negative verifier gates PASS；wrong SHA、missing source、runtime escalation 与 schema drift fail closed","messages request→wire event、history/messages-page/runs-list、Project config/CRUD/threads、workspace-changes empty/query: SOURCE_VERIFIED + STATIC_CONTRACT_VERIFIED","7 resources: SOURCE_VERIFIED; W18 imported assets split from dedicated parity fixtures","implementation NOT_ASSESSED / runtime NOT_RUN are independently enforced","reference DeerFlow runtime、WS、live reconnect 与 full differential: NOT_RUN","2026-09-26 旧退出复核 13/13 PASS，但消费/许可未盘全，W00 未转待验收","2026-09-26 子任务 14dc4a7+2470676+8bfc849 / 主线 a1eb6d4：48 surfaces、20 families/92 operations、13 资源，26/26 合同门禁主线复跑 PASS；子任务 clean verify 6 模块 PASS、server 111/0/2，diff/secret scan PASS","剩余 threads/hooks.ts/StreamManager 分支与载荷、品牌/favicon 复用授权、依赖 NOTICE 和未导入 Skill 整包：PARTIAL/UNKNOWN；运行互通和 Playwright：NOT_RUN"], "exit": "固定同 SHA 前后端；形成 REST/SSE/WS/文件/auth/SSR 调用清单、来源许可与首批 Oracle。" },
@@ -269,7 +273,7 @@ window.WORK_PACKAGES_DATA = {
     { "id": "W15", "title": "Skill 与 Integration 后端", "wave": "B", "lane": "F · Prompt/Skill", "state": "pending", "startedAt": null, "completedAt": null, "prerequisites": ["W03", "W04", "W10"], "summary": "等待配置、文件和 MCP 基础。", "evidence": [], "exit": "整包导入、安装/开关/reload/导出/只读 review；来源、许可、版本与用户数据分离。" },
     { "id": "W16", "title": "23 Skill 与成果链", "wave": "B", "lane": "F · Prompt/Skill", "state": "pending", "startedAt": null, "completedAt": null, "prerequisites": ["W04", "W07", "W11", "W15"], "summary": "按垂直切片逐个验收。", "evidence": [], "exit": "每个 Skill 独立验收，先研究/数据/文件垂直切片，包含数值、来源、渲染和下载 Oracle。" },
     { "id": "W17", "title": "MCP 长期任务", "wave": "C", "lane": "E · MCP/Provider", "state": "pending", "startedAt": null, "completedAt": null, "prerequisites": ["W05", "W10"], "summary": "后续 Wave C。", "evidence": [], "exit": "submit/status/cancel/通知、未知结果、安全补偿和重启；禁止无界轮询。" },
-    { "id": "W18", "title": "上游前端导入、配置与真实联调", "wave": "A", "lane": "G · 前端/Verifier", "state": "in_progress", "startedAt": "2026-09-22T15:11:34+08:00", "completedAt": null, "prerequisites": ["W00","W01"], "branch": "codex/w18-dual-backend-differential", "owner": "/root", "summary": "冻结前端、Haifa-only 门禁、持久 history/messages/runs 与双后端差分 runner 已合入；同一冻结 UI 下参考 DeerFlow 4/4×3、合入 W05 后 Haifa 4/4×2，active reload/join 唯一性已恢复。上传→生产文件 Tool→下载 hash、Interaction、WS/文件等全范围差分仍待切片验收，整包保持进行中。", "evidence": ["import 3b7099f / main 59c78e9; smoke bc3e701 / main aa94b4c; projection a3c7f8c / main 6f5d1ca; live verifier 601a18b / main 738bcdd","source+recorded patch verification: 981 files / 21,172,960 bytes / SHA-256 inventory 1fc6b2e4...f8a3 PASS","controlled provider Playwright cold/warm 4/4 + 4/4 PASS, 0 retry；auth、event:messages、cancel wait=0→interrupted、page reload 全通过","main clean verify after W00/W04/W18 merge: 74 tests = 73 PASS + 1 explicit DeepSeek live SKIP","main real DeepSeek Web: Thread d78e1eec-3150-4a04-87ad-9c52aa64c5b8 / Run 01a0cc6d-592a-7685-95fa-b22b7d6bb848 success；UI non-empty + reload restored PASS","slot2 opt-in DeepSeek Web: Thread d1149976-71a5-4750-9049-56fd730eb6f5 / Run 01a0cc6c-4517-77bd-bdb5-b46e9e744cb5 success；SSE messages+end、no fallback、secret scan PASS","Playwright health: locale-neutral textarea locator + bounded terminal poll；live 1/1 12.059s、controlled regression 4/4 21.4s，0 retry/hang/timeout，PID/ports clean","W18 branch 5f6ef8b；upstream SDK 6a4575f → PR #239 已合并、#241 回退、#242 重新落地（78a0ee02，SDK 基线 22c9261c）；本地 Maven SQLite JAR 仍为 6a4575f 构建（SHA-256 6958A9ED…B70E），与基线公开 API 一致（仅 requireAes256Key private→package-private），javap 两个公开方法可见；本地 0.1.1-SNAPSHOT 为 09-22/09-24 混合安装，尚未从 22c9261c 统一重发布；主线合并态 clean verify 81 server tests、0 failure/error、2 intentional skip","W18 冻结 UI SQLite cold/warm 4/4 + 4/4 PASS，重启历史/消息/runs 200；主线合并态 Playwright、完整 DeerFlow runtime differential、files/WS: NOT_RUN","2026-09-25 main@699cefd 合并态：主网关/前端 18018/33018 同源真实 DeepSeek，Thread 1fd9556a-eef1-42a1-a1b7-c218c952f79d / Run 01a0d651-a083-7536-b7c3-ea34f12aac8e success（17*23=391）；网关精确重启后 runs/messages/page/history 200、UI reload 恢复 PASS；W18 UI smoke cold/warm 4/4 + 4/4 PASS（100s/66s，0 retry，端口清理）","b720d42 合入后主线 clean verify：119 tests（server 82）、0 failure/error、2 intentional skip；主网关精确重启，同源 history/runs/auth 200。新增同源真实 DeepSeek：Thread 3cd122c7-aa43-49db-af12-aee41348f1a3 / Run 01a0d6c4-5c46-705a-bfe1-67144fc8233e success（19*21=399），读到 metadata 时状态已非 pending，history 已含输入。修复分支上 W18 UI smoke 4/4 + 4/4 PASS。待办：durable message id 与流式 id 不一致（见 W05）","2026-09-26 差分 runner codex/w18-dual-backend-differential@0ee36ed：同一冻结 UI/reference 4/4×3 PASS；Haifa main@045e8e0 3/4×3，active reload/join 后回答重复 2 次（reference 1 次），真实 FAIL；Run success、join 200、SSE messages/end；全仓 verify、冻结来源、合同与证据门禁 PASS，槽位清理。待 W05 最终 SHA 合入复验","双后端 runner 0ee36ed / main f47b425：参考 DeerFlow 4/4×3；Haifa main@85b2a5b 在 W05 合入后 4/4×2 PASS，92/84 秒，0 retry，运行日志/哈希存 slot-3-differential/haifa/evidence-20260926-205009 与 evidence-20260926-205149；remainingListeners=[]，主端口未中断；旧 main@045e8e0 3/4×3 FAIL 保留","文件/生产 Tool/Interaction 的双后端 UI 差分、WS 全面消费：NOT_RUN；此前真实 DeepSeek Web 文本对话已完成，但本轮差分仅 controlled provider，未发起付费模型调用"], "exit": "保留 frontend+lockfile/SSR/BFF；最小配置 patch；同一 UI 两种后端真实验证。" },
+    { "id": "W18", "title": "上游前端导入、配置与真实联调", "wave": "A", "lane": "G · 前端/Verifier", "state": "in_progress", "startedAt": "2026-09-22T15:11:34+08:00", "completedAt": null, "prerequisites": ["W00","W01"], "branch": "codex/w18-dual-backend-differential", "owner": "/root", "summary": "冻结前端、Haifa-only 门禁、持久 history/messages/runs 与双后端差分 runner 已合入；同一冻结 UI 下参考 DeerFlow 4/4×3、合入 W05 后 Haifa 4/4×2，active reload/join 唯一性已恢复。文件/生产 Tool/Interaction/WS 禁用态诊断已合入；reference 9/9×2，Haifa 5 PASS/2 FAIL/2 NOT_RUN×2，产品缺口未闭合，整包继续进行中。", "evidence": ["import 3b7099f / main 59c78e9; smoke bc3e701 / main aa94b4c; projection a3c7f8c / main 6f5d1ca; live verifier 601a18b / main 738bcdd","source+recorded patch verification: 981 files / 21,172,960 bytes / SHA-256 inventory 1fc6b2e4...f8a3 PASS","controlled provider Playwright cold/warm 4/4 + 4/4 PASS, 0 retry；auth、event:messages、cancel wait=0→interrupted、page reload 全通过","main clean verify after W00/W04/W18 merge: 74 tests = 73 PASS + 1 explicit DeepSeek live SKIP","main real DeepSeek Web: Thread d78e1eec-3150-4a04-87ad-9c52aa64c5b8 / Run 01a0cc6d-592a-7685-95fa-b22b7d6bb848 success；UI non-empty + reload restored PASS","slot2 opt-in DeepSeek Web: Thread d1149976-71a5-4750-9049-56fd730eb6f5 / Run 01a0cc6c-4517-77bd-bdb5-b46e9e744cb5 success；SSE messages+end、no fallback、secret scan PASS","Playwright health: locale-neutral textarea locator + bounded terminal poll；live 1/1 12.059s、controlled regression 4/4 21.4s，0 retry/hang/timeout，PID/ports clean","W18 branch 5f6ef8b；upstream SDK 6a4575f → PR #239 已合并、#241 回退、#242 重新落地（78a0ee02，SDK 基线 22c9261c）；本地 Maven SQLite JAR 仍为 6a4575f 构建（SHA-256 6958A9ED…B70E），与基线公开 API 一致（仅 requireAes256Key private→package-private），javap 两个公开方法可见；本地 0.1.1-SNAPSHOT 为 09-22/09-24 混合安装，尚未从 22c9261c 统一重发布；主线合并态 clean verify 81 server tests、0 failure/error、2 intentional skip","W18 冻结 UI SQLite cold/warm 4/4 + 4/4 PASS，重启历史/消息/runs 200；主线合并态 Playwright、完整 DeerFlow runtime differential、files/WS: NOT_RUN","2026-09-25 main@699cefd 合并态：主网关/前端 18018/33018 同源真实 DeepSeek，Thread 1fd9556a-eef1-42a1-a1b7-c218c952f79d / Run 01a0d651-a083-7536-b7c3-ea34f12aac8e success（17*23=391）；网关精确重启后 runs/messages/page/history 200、UI reload 恢复 PASS；W18 UI smoke cold/warm 4/4 + 4/4 PASS（100s/66s，0 retry，端口清理）","b720d42 合入后主线 clean verify：119 tests（server 82）、0 failure/error、2 intentional skip；主网关精确重启，同源 history/runs/auth 200。新增同源真实 DeepSeek：Thread 3cd122c7-aa43-49db-af12-aee41348f1a3 / Run 01a0d6c4-5c46-705a-bfe1-67144fc8233e success（19*21=399），读到 metadata 时状态已非 pending，history 已含输入。修复分支上 W18 UI smoke 4/4 + 4/4 PASS。待办：durable message id 与流式 id 不一致（见 W05）","2026-09-26 差分 runner codex/w18-dual-backend-differential@0ee36ed：同一冻结 UI/reference 4/4×3 PASS；Haifa main@045e8e0 3/4×3，active reload/join 后回答重复 2 次（reference 1 次），真实 FAIL；Run success、join 200、SSE messages/end；全仓 verify、冻结来源、合同与证据门禁 PASS，槽位清理。待 W05 最终 SHA 合入复验","双后端 runner 0ee36ed / main f47b425：参考 DeerFlow 4/4×3；Haifa main@85b2a5b 在 W05 合入后 4/4×2 PASS，92/84 秒，0 retry，运行日志/哈希存 slot-3-differential/haifa/evidence-20260926-205009 与 evidence-20260926-205149；remainingListeners=[]，主端口未中断；旧 main@045e8e0 3/4×3 FAIL 保留","文件/生产 Tool/Interaction 的双后端 UI 差分、WS 全面消费：NOT_RUN；此前真实 DeepSeek Web 文本对话已完成，但本轮差分仅 controlled provider，未发起付费模型调用","2026-09-27 诊断 577a08c/main f3944a4：最终代码 reference 9/9×2，Haifa 5 PASS/2 FAIL/2 NOT_RUN×2；新会话上传 404、已有 Thread 上传未进模型上下文为真实 FAIL，生产 Tool/Interaction 无注册为 NOT_RUN；WS 禁用态 PASS、启用态两侧 NOT_RUN。四文件 SHA 与 topology 一致，零重试、端口释放；仅 L2 受控 Provider，无 L3 付费调用"], "exit": "保留 frontend+lockfile/SSR/BFF；最小配置 patch；同一 UI 两种后端真实验证。" },
     { "id": "W19", "title": "Scheduler", "wave": "C", "lane": "H · Scheduler", "state": "pending", "startedAt": null, "completedAt": null, "prerequisites": ["W05", "W07"], "summary": "后续 Wave C。", "evidence": [], "exit": "CRUD/触发/历史/timezone/misfire/幂等/重启，复用现有页面。" },
     { "id": "W20", "title": "五 IM、GitHub 与 Lark", "wave": "C", "lane": "H · Channels", "state": "pending", "startedAt": null, "completedAt": null, "prerequisites": ["W03", "W05", "W10", "W15"], "summary": "不作为本地 Web 启动前置。", "evidence": [], "exit": "逐渠道身份、附件、取消、去重和真实服务验证；不阻塞本地 Web。" },
     { "id": "W21", "title": "本地身份底线与诊断；完整账号后置", "wave": "C", "lane": "H · Admin/Security", "state": "pending", "startedAt": null, "completedAt": null, "prerequisites": ["W02", "W05", "W10"], "summary": "本地身份底线随 W02 推进，完整账号体系后置。", "evidence": [], "exit": "当前只做 auth/me、必要偏好、权限负例、Run/Tool/Usage；完整账号体系后置。" },

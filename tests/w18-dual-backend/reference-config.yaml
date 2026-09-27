@@ -13,8 +13,14 @@ sandbox:
 skills:
   path: $W18_REFERENCE_SKILLS_ROOT
   container_path: /mnt/skills
-tool_groups: []
-tools: []
+# Only the production file-writer the file Tool case needs; built-in
+# present_files/ask_clarification come from DeerFlow itself.
+tool_groups:
+  - name: file:write
+tools:
+  - name: write_file
+    group: file:write
+    use: deerflow.sandbox.tools:write_file_tool
 memory:
   enabled: false
   injection_enabled: false
