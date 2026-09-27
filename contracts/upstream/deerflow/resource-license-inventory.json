@@ -1,0 +1,2471 @@
+{
+  "schema_version": "w00.resource-license-inventory/v1",
+  "scope": "incremental_inventory",
+  "status": "SOURCE_VERIFIED",
+  "runtime_status": "NOT_RUN",
+  "legal_clearance": "NOT_ASSERTED",
+  "source": {
+    "repository": "https://github.com/bytedance/deer-flow.git",
+    "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+    "root_license": "MIT"
+  },
+  "status_policy": {
+    "review_status": {
+      "SOURCE_VERIFIED": "The named provenance and any bundled license text were checked, but reuse clearance is still not asserted.",
+      "REVIEW_NEEDED": "A human asset/license review is required before reuse; origin or bundled text alone is not a grant.",
+      "UNKNOWN": "Neither the provenance nor the license can be confirmed from repository evidence."
+    },
+    "import_status": {
+      "BUNDLED": "The asset file is present under the imported frontend/ tree.",
+      "REFERENCED": "The dependency is declared and locked but its installed package contents are not vendored here.",
+      "NOT_IMPORTED": "The upstream resource is identified but was never imported into this repository."
+    },
+    "legal_clearance": "NOT_ASSERTED: this file is a factual inventory; the root MIT license never settles brand, favicon, package or unreviewed Skill obligations."
+  },
+  "provenance_sources": {
+    "plugin_origin_readme": "frontend/public/images/plugins/README.md",
+    "package_manifest": "frontend/package.json",
+    "lockfile": "frontend/pnpm-lock.yaml"
+  },
+  "brand_assets": [
+    {
+      "id": "deerflow.brand.github",
+      "category": "brand_asset",
+      "display_name": "github",
+      "source_path": "frontend/public/images/plugins/github.svg",
+      "sha256": "476ba7aa67b86da7d6e7567b08a4bf0eb1a2fd28da5fc243f8ee39a2f1ea6773",
+      "import_status": "BUNDLED",
+      "license_expression": "CC0-1.0",
+      "license_basis": "BUNDLED_LICENSE_TEXT",
+      "license_basis_verified": true,
+      "review_status": "REVIEW_NEEDED",
+      "review_note": "Simple Icons 16.31.0 CC0 text is bundled; the service name/logo trademark is not granted and needs human review before redistribution.",
+      "evidence": {
+        "kind": "BUNDLED_LICENSE_TEXT",
+        "location": "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+        "origin_statement": "frontend/public/images/plugins/README.md",
+        "license_path": "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+        "license_sha256": "cf05aaae5b87aad2245e052fbc8f19155f6b4b448c3148265ab12413dd4091c9"
+      }
+    },
+    {
+      "id": "deerflow.brand.notion",
+      "category": "brand_asset",
+      "display_name": "notion",
+      "source_path": "frontend/public/images/plugins/notion.svg",
+      "sha256": "fdddc8f06178df169036d3f5fc336eb98b15cad375afa04d0a5cd7aa61b65739",
+      "import_status": "BUNDLED",
+      "license_expression": "CC0-1.0",
+      "license_basis": "BUNDLED_LICENSE_TEXT",
+      "license_basis_verified": true,
+      "review_status": "REVIEW_NEEDED",
+      "review_note": "Simple Icons 16.31.0 CC0 text is bundled; the service name/logo trademark is not granted and needs human review before redistribution.",
+      "evidence": {
+        "kind": "BUNDLED_LICENSE_TEXT",
+        "location": "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+        "origin_statement": "frontend/public/images/plugins/README.md",
+        "license_path": "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+        "license_sha256": "cf05aaae5b87aad2245e052fbc8f19155f6b4b448c3148265ab12413dd4091c9"
+      }
+    },
+    {
+      "id": "deerflow.brand.hubspot",
+      "category": "brand_asset",
+      "display_name": "hubspot",
+      "source_path": "frontend/public/images/plugins/hubspot.svg",
+      "sha256": "5e3d32c06f065e541829e34c2d2429b1fee686a49020b1974b3fec228916f55e",
+      "import_status": "BUNDLED",
+      "license_expression": "CC0-1.0",
+      "license_basis": "BUNDLED_LICENSE_TEXT",
+      "license_basis_verified": true,
+      "review_status": "REVIEW_NEEDED",
+      "review_note": "Simple Icons 16.31.0 CC0 text is bundled; the service name/logo trademark is not granted and needs human review before redistribution.",
+      "evidence": {
+        "kind": "BUNDLED_LICENSE_TEXT",
+        "location": "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+        "origin_statement": "frontend/public/images/plugins/README.md",
+        "license_path": "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+        "license_sha256": "cf05aaae5b87aad2245e052fbc8f19155f6b4b448c3148265ab12413dd4091c9"
+      }
+    },
+    {
+      "id": "deerflow.brand.jira",
+      "category": "brand_asset",
+      "display_name": "jira",
+      "source_path": "frontend/public/images/plugins/jira.svg",
+      "sha256": "f831a691d67e7a187a358ea91f98e5d51ef93345d905651258d0fbd1f4d5f363",
+      "import_status": "BUNDLED",
+      "license_expression": "CC0-1.0",
+      "license_basis": "BUNDLED_LICENSE_TEXT",
+      "license_basis_verified": true,
+      "review_status": "REVIEW_NEEDED",
+      "review_note": "Simple Icons 16.31.0 CC0 text is bundled; the service name/logo trademark is not granted and needs human review before redistribution.",
+      "evidence": {
+        "kind": "BUNDLED_LICENSE_TEXT",
+        "location": "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+        "origin_statement": "frontend/public/images/plugins/README.md",
+        "license_path": "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+        "license_sha256": "cf05aaae5b87aad2245e052fbc8f19155f6b4b448c3148265ab12413dd4091c9"
+      }
+    },
+    {
+      "id": "deerflow.brand.postgresql",
+      "category": "brand_asset",
+      "display_name": "postgresql",
+      "source_path": "frontend/public/images/plugins/postgresql.svg",
+      "sha256": "bc45b1c56d0b1501dea387dbec4fda450d2ebc35244a620791815509d8c41dba",
+      "import_status": "BUNDLED",
+      "license_expression": "CC0-1.0",
+      "license_basis": "BUNDLED_LICENSE_TEXT",
+      "license_basis_verified": true,
+      "review_status": "REVIEW_NEEDED",
+      "review_note": "Simple Icons 16.31.0 CC0 text is bundled; the service name/logo trademark is not granted and needs human review before redistribution.",
+      "evidence": {
+        "kind": "BUNDLED_LICENSE_TEXT",
+        "location": "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+        "origin_statement": "frontend/public/images/plugins/README.md",
+        "license_path": "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+        "license_sha256": "cf05aaae5b87aad2245e052fbc8f19155f6b4b448c3148265ab12413dd4091c9"
+      }
+    },
+    {
+      "id": "deerflow.brand.brave",
+      "category": "brand_asset",
+      "display_name": "brave",
+      "source_path": "frontend/public/images/plugins/brave.svg",
+      "sha256": "ab03dbd270ceb53def63a0587f41d74b286056fdbe523cfcb8e3bfe88763b02b",
+      "import_status": "BUNDLED",
+      "license_expression": "CC0-1.0",
+      "license_basis": "BUNDLED_LICENSE_TEXT",
+      "license_basis_verified": true,
+      "review_status": "REVIEW_NEEDED",
+      "review_note": "Simple Icons 16.31.0 CC0 text is bundled; the service name/logo trademark is not granted and needs human review before redistribution.",
+      "evidence": {
+        "kind": "BUNDLED_LICENSE_TEXT",
+        "location": "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+        "origin_statement": "frontend/public/images/plugins/README.md",
+        "license_path": "frontend/public/images/plugins/SIMPLE-ICONS-LICENSE.md",
+        "license_sha256": "cf05aaae5b87aad2245e052fbc8f19155f6b4b448c3148265ab12413dd4091c9"
+      }
+    },
+    {
+      "id": "deerflow.brand.exa",
+      "category": "brand_asset",
+      "display_name": "exa",
+      "source_path": "frontend/public/images/plugins/exa.svg",
+      "sha256": "8d8113b2d6796bc680cccba6578a1487e49407adf08bbe20fccd949b59a8371a",
+      "import_status": "BUNDLED",
+      "license_expression": "MIT",
+      "license_basis": "BUNDLED_LICENSE_TEXT",
+      "license_basis_verified": true,
+      "review_status": "REVIEW_NEEDED",
+      "review_note": "@lobehub/icons-static-svg 1.95.0 MIT text is bundled; the service brand mark is not granted and needs human review.",
+      "evidence": {
+        "kind": "BUNDLED_LICENSE_TEXT",
+        "location": "frontend/public/images/plugins/LOBE-ICONS-LICENSE.md",
+        "origin_statement": "frontend/public/images/plugins/README.md",
+        "license_path": "frontend/public/images/plugins/LOBE-ICONS-LICENSE.md",
+        "license_sha256": "add9d7531d1b21646317a8958e38fc727506fa39d24bdecb44154d943c82753a"
+      }
+    },
+    {
+      "id": "deerflow.brand.firecrawl",
+      "category": "brand_asset",
+      "display_name": "firecrawl",
+      "source_path": "frontend/public/images/plugins/firecrawl.svg",
+      "sha256": "98993b111d1cb75edd0b1ce3a1e8bd3f85dcf5548072ffb959ac97ffe69ade59",
+      "import_status": "BUNDLED",
+      "license_expression": "MIT",
+      "license_basis": "BUNDLED_LICENSE_TEXT",
+      "license_basis_verified": true,
+      "review_status": "REVIEW_NEEDED",
+      "review_note": "@lobehub/icons-static-svg 1.95.0 MIT text is bundled; the service brand mark is not granted and needs human review.",
+      "evidence": {
+        "kind": "BUNDLED_LICENSE_TEXT",
+        "location": "frontend/public/images/plugins/LOBE-ICONS-LICENSE.md",
+        "origin_statement": "frontend/public/images/plugins/README.md",
+        "license_path": "frontend/public/images/plugins/LOBE-ICONS-LICENSE.md",
+        "license_sha256": "add9d7531d1b21646317a8958e38fc727506fa39d24bdecb44154d943c82753a"
+      }
+    },
+    {
+      "id": "deerflow.brand.lark",
+      "category": "brand_asset",
+      "display_name": "lark",
+      "source_path": "frontend/public/images/plugins/lark.ico",
+      "sha256": "69da9be6053530750202e4f674d621274bd86a9fc23f44a16c5e6c7aa56dfd9e",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "ORIGIN_STATEMENT",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Feishu website favicon fetched from the public site; the README records the URL but no reuse grant. Origin: https://www.feishu.cn/favicon.ico",
+      "evidence": {
+        "kind": "ORIGIN_STATEMENT",
+        "location": "frontend/public/images/plugins/README.md",
+        "origin_statement": "frontend/public/images/plugins/README.md"
+      }
+    },
+    {
+      "id": "deerflow.brand.dingtalk",
+      "category": "brand_asset",
+      "display_name": "dingtalk",
+      "source_path": "frontend/public/images/plugins/dingtalk.ico",
+      "sha256": "86a24b5e0853f6d74f1ca5614e1c41c83fb0e7032c4e246fe9e0efc5baced36c",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "ORIGIN_STATEMENT",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Favicon linked by the DingTalk homepage; no explicit license text is bundled. Origin: https://www.dingtalk.com",
+      "evidence": {
+        "kind": "ORIGIN_STATEMENT",
+        "location": "frontend/public/images/plugins/README.md",
+        "origin_statement": "frontend/public/images/plugins/README.md"
+      }
+    },
+    {
+      "id": "deerflow.brand.wecom",
+      "category": "brand_asset",
+      "display_name": "wecom",
+      "source_path": "frontend/public/images/plugins/wecom.png",
+      "sha256": "5b95029b419b45aef63f876b9bb8d86705fbff36da4c51dfdd9f2d63a1de7f2a",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "ORIGIN_STATEMENT",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "48px favicon linked by WeCom; no explicit license text is bundled. Origin: https://work.weixin.qq.com",
+      "evidence": {
+        "kind": "ORIGIN_STATEMENT",
+        "location": "frontend/public/images/plugins/README.md",
+        "origin_statement": "frontend/public/images/plugins/README.md"
+      }
+    },
+    {
+      "id": "deerflow.brand.tencent-docs",
+      "category": "brand_asset",
+      "display_name": "tencent-docs",
+      "source_path": "frontend/public/images/plugins/tencent-docs.ico",
+      "sha256": "a41f0618d62d19d7907e4976a96985c6dd459984545db5924524b4e2f1e5ff44",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "ORIGIN_STATEMENT",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Favicon linked by Tencent Docs; no explicit license text is bundled. Origin: https://docs.qq.com",
+      "evidence": {
+        "kind": "ORIGIN_STATEMENT",
+        "location": "frontend/public/images/plugins/README.md",
+        "origin_statement": "frontend/public/images/plugins/README.md"
+      }
+    },
+    {
+      "id": "deerflow.brand.openviking",
+      "category": "brand_asset",
+      "display_name": "openviking",
+      "source_path": "frontend/public/images/plugins/openviking.png",
+      "sha256": "8da7815d68dd33eb358daa1bb5ca42f67cd1e0c0e11258ab690fb08cff635ab2",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "ORIGIN_STATEMENT",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Logo fetched from a GitHub source path; the README records the URL but no reuse grant or license text. Origin: https://github.com/volcengine/OpenViking/blob/main/docs/images/ov-logo-icon.png",
+      "evidence": {
+        "kind": "ORIGIN_STATEMENT",
+        "location": "frontend/public/images/plugins/README.md",
+        "origin_statement": "frontend/public/images/plugins/README.md"
+      }
+    },
+    {
+      "id": "deerflow.root-favicon",
+      "category": "root_favicon",
+      "display_name": "root-favicon",
+      "source_path": "frontend/public/favicon.ico",
+      "sha256": "b139c92d057530040959e4e9bb88b06ab0cd294d29ec668951fc3655a0f6a459",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled root site favicon; the frozen tree carries no origin statement or license text for this file, so both the license and any trademark remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/favicon.ico"
+      }
+    }
+  ],
+  "public_media": [
+    {
+      "id": "deerflow.media.demo-threads-21cfea46-34bd-4aa6-9e1f-3009452fbeb9-user-data-outputs-doraemon-moe-comic-jpg",
+      "category": "public_media",
+      "display_name": "demo/threads/21cfea46-34bd-4aa6-9e1f-3009452fbeb9/user-data/outputs/doraemon-moe-comic.jpg",
+      "source_path": "frontend/public/demo/threads/21cfea46-34bd-4aa6-9e1f-3009452fbeb9/user-data/outputs/doraemon-moe-comic.jpg",
+      "sha256": "ee7814bbca38fc04361ff0a19dfe401ece6bf3be9443053418ee0a9b83b9d6a7",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/21cfea46-34bd-4aa6-9e1f-3009452fbeb9/user-data/outputs/doraemon-moe-comic.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-4f3e55ee-f853-43db-bfb3-7d1a411f03cb-user-data-outputs-darcy-proposal-reference-jpg",
+      "category": "public_media",
+      "display_name": "demo/threads/4f3e55ee-f853-43db-bfb3-7d1a411f03cb/user-data/outputs/darcy-proposal-reference.jpg",
+      "source_path": "frontend/public/demo/threads/4f3e55ee-f853-43db-bfb3-7d1a411f03cb/user-data/outputs/darcy-proposal-reference.jpg",
+      "sha256": "c6c8f8932cfd66a2c3ae83fedcf5dcfc1a2b30c6de3eb9e5cd3dea3307756876",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/4f3e55ee-f853-43db-bfb3-7d1a411f03cb/user-data/outputs/darcy-proposal-reference.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-4f3e55ee-f853-43db-bfb3-7d1a411f03cb-user-data-outputs-darcy-proposal-video-mp4",
+      "category": "public_media",
+      "display_name": "demo/threads/4f3e55ee-f853-43db-bfb3-7d1a411f03cb/user-data/outputs/darcy-proposal-video.mp4",
+      "source_path": "frontend/public/demo/threads/4f3e55ee-f853-43db-bfb3-7d1a411f03cb/user-data/outputs/darcy-proposal-video.mp4",
+      "sha256": "90a3e6e61b345e3e6887de14ea7623d210a5000dc2f5545cabaeddb38c154644",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/4f3e55ee-f853-43db-bfb3-7d1a411f03cb/user-data/outputs/darcy-proposal-video.mp4"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-7f9dc56c-e49c-4671-a3d2-c492ff4dce0c-user-data-outputs-leica-nyc-candid-jpg",
+      "category": "public_media",
+      "display_name": "demo/threads/7f9dc56c-e49c-4671-a3d2-c492ff4dce0c/user-data/outputs/leica-nyc-candid.jpg",
+      "source_path": "frontend/public/demo/threads/7f9dc56c-e49c-4671-a3d2-c492ff4dce0c/user-data/outputs/leica-nyc-candid.jpg",
+      "sha256": "dc1ae0af1573305808d81db622e0525d87ca956e5e7ba49127b58cc7f722e3a7",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/7f9dc56c-e49c-4671-a3d2-c492ff4dce0c/user-data/outputs/leica-nyc-candid.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-7f9dc56c-e49c-4671-a3d2-c492ff4dce0c-user-data-outputs-leica-paris-decisive-moment-jpg",
+      "category": "public_media",
+      "display_name": "demo/threads/7f9dc56c-e49c-4671-a3d2-c492ff4dce0c/user-data/outputs/leica-paris-decisive-moment.jpg",
+      "source_path": "frontend/public/demo/threads/7f9dc56c-e49c-4671-a3d2-c492ff4dce0c/user-data/outputs/leica-paris-decisive-moment.jpg",
+      "sha256": "f17bdec15d641f378862a39efbc535c1620ccb6b423b5305f21228d0bd0067ad",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/7f9dc56c-e49c-4671-a3d2-c492ff4dce0c/user-data/outputs/leica-paris-decisive-moment.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-7f9dc56c-e49c-4671-a3d2-c492ff4dce0c-user-data-outputs-leica-tokyo-night-jpg",
+      "category": "public_media",
+      "display_name": "demo/threads/7f9dc56c-e49c-4671-a3d2-c492ff4dce0c/user-data/outputs/leica-tokyo-night.jpg",
+      "source_path": "frontend/public/demo/threads/7f9dc56c-e49c-4671-a3d2-c492ff4dce0c/user-data/outputs/leica-tokyo-night.jpg",
+      "sha256": "1b607fe4de83eca86255427d5a292e2a6c39c3a963c5a3d483b13516a3bf19b3",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/7f9dc56c-e49c-4671-a3d2-c492ff4dce0c/user-data/outputs/leica-tokyo-night.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-90040b36-7eba-4b97-ba89-02c3ad47a8b9-user-data-outputs-american-woman-newyork-jpg",
+      "category": "public_media",
+      "display_name": "demo/threads/90040b36-7eba-4b97-ba89-02c3ad47a8b9/user-data/outputs/american-woman-newyork.jpg",
+      "source_path": "frontend/public/demo/threads/90040b36-7eba-4b97-ba89-02c3ad47a8b9/user-data/outputs/american-woman-newyork.jpg",
+      "sha256": "b1c1992808f46187ffd8bb95a8bea640c61aa6485cff5f1b80946862cc1fa9b9",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/90040b36-7eba-4b97-ba89-02c3ad47a8b9/user-data/outputs/american-woman-newyork.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-90040b36-7eba-4b97-ba89-02c3ad47a8b9-user-data-outputs-american-woman-shanghai-jpg",
+      "category": "public_media",
+      "display_name": "demo/threads/90040b36-7eba-4b97-ba89-02c3ad47a8b9/user-data/outputs/american-woman-shanghai.jpg",
+      "source_path": "frontend/public/demo/threads/90040b36-7eba-4b97-ba89-02c3ad47a8b9/user-data/outputs/american-woman-shanghai.jpg",
+      "sha256": "a7699116b5715fd10a414b41f45e6c14a23fc357c7d1495d4e34482cfba083fb",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/90040b36-7eba-4b97-ba89-02c3ad47a8b9/user-data/outputs/american-woman-shanghai.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-ad76c455-5bf9-4335-8517-fc03834ab828-user-data-outputs-visualizations-class-gender-survival-png",
+      "category": "public_media",
+      "display_name": "demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/class_gender_survival.png",
+      "source_path": "frontend/public/demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/class_gender_survival.png",
+      "sha256": "fa10a2e688a59ba71906b7b1ec9f59002798ed9ad7f50eb9ea36ee3b6586a35b",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/class_gender_survival.png"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-ad76c455-5bf9-4335-8517-fc03834ab828-user-data-outputs-visualizations-correlation-heatmap-png",
+      "category": "public_media",
+      "display_name": "demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/correlation_heatmap.png",
+      "source_path": "frontend/public/demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/correlation_heatmap.png",
+      "sha256": "dfcfa73eb47d5378408c852036b429abb78c640ab47d3c81f48eb709327b07d1",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/correlation_heatmap.png"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-ad76c455-5bf9-4335-8517-fc03834ab828-user-data-outputs-visualizations-family-size-analysis-png",
+      "category": "public_media",
+      "display_name": "demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/family_size_analysis.png",
+      "source_path": "frontend/public/demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/family_size_analysis.png",
+      "sha256": "681707c06f432ef9430ba0b064822f93377e92db9fabc5851fc99a83c8a4dcc3",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/family_size_analysis.png"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-ad76c455-5bf9-4335-8517-fc03834ab828-user-data-outputs-visualizations-fare-analysis-png",
+      "category": "public_media",
+      "display_name": "demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/fare_analysis.png",
+      "source_path": "frontend/public/demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/fare_analysis.png",
+      "sha256": "159a388b6a7f9d9b0180c71343c205eac369dec44e2583757715ff82d87f98b5",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/fare_analysis.png"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-ad76c455-5bf9-4335-8517-fc03834ab828-user-data-outputs-visualizations-survival-by-age-png",
+      "category": "public_media",
+      "display_name": "demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/survival_by_age.png",
+      "source_path": "frontend/public/demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/survival_by_age.png",
+      "sha256": "ca59b7a97b4e00d985e1bc1bd7bf5cad5e4b4eb9527885cba78cdda48c0c4cdd",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/survival_by_age.png"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-ad76c455-5bf9-4335-8517-fc03834ab828-user-data-outputs-visualizations-survival-by-class-png",
+      "category": "public_media",
+      "display_name": "demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/survival_by_class.png",
+      "source_path": "frontend/public/demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/survival_by_class.png",
+      "sha256": "21ee67716f472ab15a5770f525a7fd70cdacd995459eb45f1b379ab815495f6a",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/survival_by_class.png"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-ad76c455-5bf9-4335-8517-fc03834ab828-user-data-outputs-visualizations-survival-overview-png",
+      "category": "public_media",
+      "display_name": "demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/survival_overview.png",
+      "source_path": "frontend/public/demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/survival_overview.png",
+      "sha256": "f7ab01538f562975b3ab471ba615b28c0d87e37023d7e8eb7f109bcaa3f5bcf9",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/ad76c455-5bf9-4335-8517-fc03834ab828/user-data/outputs/visualizations/survival_overview.png"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-b83fbb2a-4e36-4d82-9de0-7b2a02c2092a-user-data-outputs-caren-hero-jpg",
+      "category": "public_media",
+      "display_name": "demo/threads/b83fbb2a-4e36-4d82-9de0-7b2a02c2092a/user-data/outputs/caren-hero.jpg",
+      "source_path": "frontend/public/demo/threads/b83fbb2a-4e36-4d82-9de0-7b2a02c2092a/user-data/outputs/caren-hero.jpg",
+      "sha256": "254ac24144ccaed6f14b7e4132da21bf1ffd688b9c9cada8373ab24349e22854",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/b83fbb2a-4e36-4d82-9de0-7b2a02c2092a/user-data/outputs/caren-hero.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-b83fbb2a-4e36-4d82-9de0-7b2a02c2092a-user-data-outputs-caren-ingredients-jpg",
+      "category": "public_media",
+      "display_name": "demo/threads/b83fbb2a-4e36-4d82-9de0-7b2a02c2092a/user-data/outputs/caren-ingredients.jpg",
+      "source_path": "frontend/public/demo/threads/b83fbb2a-4e36-4d82-9de0-7b2a02c2092a/user-data/outputs/caren-ingredients.jpg",
+      "sha256": "434e368cc414764ad4e15fe105ef2afb7c9cff4ae075ff75a22381cd0498996e",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/b83fbb2a-4e36-4d82-9de0-7b2a02c2092a/user-data/outputs/caren-ingredients.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-b83fbb2a-4e36-4d82-9de0-7b2a02c2092a-user-data-outputs-caren-lifestyle-jpg",
+      "category": "public_media",
+      "display_name": "demo/threads/b83fbb2a-4e36-4d82-9de0-7b2a02c2092a/user-data/outputs/caren-lifestyle.jpg",
+      "source_path": "frontend/public/demo/threads/b83fbb2a-4e36-4d82-9de0-7b2a02c2092a/user-data/outputs/caren-lifestyle.jpg",
+      "sha256": "0e2325f210d17620dbd3fe733f0f220988740b79e8336086f219e38fe7efe9b4",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/b83fbb2a-4e36-4d82-9de0-7b2a02c2092a/user-data/outputs/caren-lifestyle.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.demo-threads-b83fbb2a-4e36-4d82-9de0-7b2a02c2092a-user-data-outputs-caren-products-jpg",
+      "category": "public_media",
+      "display_name": "demo/threads/b83fbb2a-4e36-4d82-9de0-7b2a02c2092a/user-data/outputs/caren-products.jpg",
+      "source_path": "frontend/public/demo/threads/b83fbb2a-4e36-4d82-9de0-7b2a02c2092a/user-data/outputs/caren-products.jpg",
+      "sha256": "be2b69c10ed92553f37634227e9ac39ed36d7b547b2ae2b6255bbd524e3bb4c1",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/demo/threads/b83fbb2a-4e36-4d82-9de0-7b2a02c2092a/user-data/outputs/caren-products.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.images-21cfea46-34bd-4aa6-9e1f-3009452fbeb9-jpg",
+      "category": "public_media",
+      "display_name": "images/21cfea46-34bd-4aa6-9e1f-3009452fbeb9.jpg",
+      "source_path": "frontend/public/images/21cfea46-34bd-4aa6-9e1f-3009452fbeb9.jpg",
+      "sha256": "a4f6f4a95e47c95f3d87a50abbf0ae04d26307a6d5ab69ce9707f470f9c8c6ef",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/images/21cfea46-34bd-4aa6-9e1f-3009452fbeb9.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.images-3823e443-4e2b-4679-b496-a9506eae462b-jpg",
+      "category": "public_media",
+      "display_name": "images/3823e443-4e2b-4679-b496-a9506eae462b.jpg",
+      "source_path": "frontend/public/images/3823e443-4e2b-4679-b496-a9506eae462b.jpg",
+      "sha256": "006db341abab8bade7583ce42b6cb31009c028a6f8cf51866e102dfb5f739ff3",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/images/3823e443-4e2b-4679-b496-a9506eae462b.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.images-4f3e55ee-f853-43db-bfb3-7d1a411f03cb-jpg",
+      "category": "public_media",
+      "display_name": "images/4f3e55ee-f853-43db-bfb3-7d1a411f03cb.jpg",
+      "source_path": "frontend/public/images/4f3e55ee-f853-43db-bfb3-7d1a411f03cb.jpg",
+      "sha256": "c6c8f8932cfd66a2c3ae83fedcf5dcfc1a2b30c6de3eb9e5cd3dea3307756876",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/images/4f3e55ee-f853-43db-bfb3-7d1a411f03cb.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.images-7cfa5f8f-a2f8-47ad-acbd-da7137baf990-jpg",
+      "category": "public_media",
+      "display_name": "images/7cfa5f8f-a2f8-47ad-acbd-da7137baf990.jpg",
+      "source_path": "frontend/public/images/7cfa5f8f-a2f8-47ad-acbd-da7137baf990.jpg",
+      "sha256": "e7aaf6141071145d36017cf30e27ba72d33c338b1286947151121699e1caf2a2",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/images/7cfa5f8f-a2f8-47ad-acbd-da7137baf990.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.images-ad76c455-5bf9-4335-8517-fc03834ab828-jpg",
+      "category": "public_media",
+      "display_name": "images/ad76c455-5bf9-4335-8517-fc03834ab828.jpg",
+      "source_path": "frontend/public/images/ad76c455-5bf9-4335-8517-fc03834ab828.jpg",
+      "sha256": "854b97f8b21fd5b850fe5b409b7efbb518e05be8f19db42f33da887076b1d0f0",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/images/ad76c455-5bf9-4335-8517-fc03834ab828.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.images-d3e5adaf-084c-4dd5-9d29-94f1d6bccd98-jpg",
+      "category": "public_media",
+      "display_name": "images/d3e5adaf-084c-4dd5-9d29-94f1d6bccd98.jpg",
+      "source_path": "frontend/public/images/d3e5adaf-084c-4dd5-9d29-94f1d6bccd98.jpg",
+      "sha256": "ae92cf73f34dba17216506df27db077fbdf95d6fdbd4b932ecc6f6becb2c52c9",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/images/d3e5adaf-084c-4dd5-9d29-94f1d6bccd98.jpg"
+      }
+    },
+    {
+      "id": "deerflow.media.images-deer-svg",
+      "category": "public_media",
+      "display_name": "images/deer.svg",
+      "source_path": "frontend/public/images/deer.svg",
+      "sha256": "14b74a454c547b34815cbb1e7aca58a63c0d49a03f414f46be0f21297aef920a",
+      "import_status": "BUNDLED",
+      "license_expression": "UNKNOWN",
+      "license_basis": "NONE",
+      "license_basis_verified": true,
+      "review_status": "UNKNOWN",
+      "review_note": "Bundled frontend/public media asset with no local origin statement or license text; the license and any third-party or trademark rights remain unverified.",
+      "evidence": {
+        "kind": "NONE",
+        "location": "frontend/public/images/deer.svg"
+      }
+    }
+  ],
+  "fonts": {
+    "scan_root": "frontend",
+    "vendored_font_count": 0,
+    "import_status": "NONE_VENDORED",
+    "license_expression": "UNKNOWN",
+    "license_basis": "NONE",
+    "license_basis_verified": true,
+    "review_status": "UNKNOWN",
+    "review_note": "No vendored .woff/.woff2/.ttf/.otf file was found under the imported frontend/ tree at this source SHA; runtime or dependency font terms are still not established and remain unverified.",
+    "evidence": {
+      "kind": "NONE",
+      "location": "frontend"
+    }
+  },
+  "frontend_dependencies": {
+    "derived_from": "frontend/package.json",
+    "lockfile": "frontend/pnpm-lock.yaml",
+    "notice": {
+      "status": "NOT_GENERATED",
+      "reason": "No installed package license texts or consolidated NOTICE are available offline; a release distributor must generate and review a dependency NOTICE before shipping."
+    },
+    "packages": [
+      {
+        "name": "@codemirror/lang-css",
+        "section": "dependencies",
+        "declared_range": "^6.3.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@codemirror/lang-html",
+        "section": "dependencies",
+        "declared_range": "^6.4.11",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@codemirror/lang-javascript",
+        "section": "dependencies",
+        "declared_range": "^6.2.4",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@codemirror/lang-json",
+        "section": "dependencies",
+        "declared_range": "^6.0.2",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@codemirror/lang-markdown",
+        "section": "dependencies",
+        "declared_range": "^6.5.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@codemirror/lang-python",
+        "section": "dependencies",
+        "declared_range": "^6.2.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@codemirror/language-data",
+        "section": "dependencies",
+        "declared_range": "^6.5.2",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@eslint/eslintrc",
+        "section": "devDependencies",
+        "declared_range": "^3.3.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@langchain/core",
+        "section": "dependencies",
+        "declared_range": "^1.1.15",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@langchain/langgraph-sdk",
+        "section": "dependencies",
+        "declared_range": "^1.5.3",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@playwright/test",
+        "section": "devDependencies",
+        "declared_range": "^1.59.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-avatar",
+        "section": "dependencies",
+        "declared_range": "^1.1.11",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-collapsible",
+        "section": "dependencies",
+        "declared_range": "^1.1.12",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-dialog",
+        "section": "dependencies",
+        "declared_range": "^1.1.15",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-dropdown-menu",
+        "section": "dependencies",
+        "declared_range": "^2.1.16",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-hover-card",
+        "section": "dependencies",
+        "declared_range": "^1.1.15",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-icons",
+        "section": "dependencies",
+        "declared_range": "^1.3.2",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-popover",
+        "section": "dependencies",
+        "declared_range": "^1.1.15",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-progress",
+        "section": "dependencies",
+        "declared_range": "^1.1.8",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-scroll-area",
+        "section": "dependencies",
+        "declared_range": "^1.2.10",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-select",
+        "section": "dependencies",
+        "declared_range": "^2.2.6",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-separator",
+        "section": "dependencies",
+        "declared_range": "^1.1.8",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-slot",
+        "section": "dependencies",
+        "declared_range": "^1.2.4",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-switch",
+        "section": "dependencies",
+        "declared_range": "^1.2.6",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-tabs",
+        "section": "dependencies",
+        "declared_range": "^1.1.13",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-toggle",
+        "section": "dependencies",
+        "declared_range": "^1.1.10",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-toggle-group",
+        "section": "dependencies",
+        "declared_range": "^1.1.11",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-tooltip",
+        "section": "dependencies",
+        "declared_range": "^1.2.8",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@radix-ui/react-use-controllable-state",
+        "section": "dependencies",
+        "declared_range": "^1.2.2",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@rsbuild/plugin-react",
+        "section": "devDependencies",
+        "declared_range": "^2.1.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@rstest/core",
+        "section": "devDependencies",
+        "declared_range": "^0.10.6",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@streamdown/code",
+        "section": "dependencies",
+        "declared_range": "1.1.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@streamdown/mermaid",
+        "section": "dependencies",
+        "declared_range": "1.0.2",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@t3-oss/env-nextjs",
+        "section": "dependencies",
+        "declared_range": "^0.12.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@tailwindcss/postcss",
+        "section": "devDependencies",
+        "declared_range": "^4.0.15",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@tanstack/react-query",
+        "section": "dependencies",
+        "declared_range": "^5.90.17",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@tanstack/react-virtual",
+        "section": "dependencies",
+        "declared_range": "^3.13.23",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@testing-library/dom",
+        "section": "devDependencies",
+        "declared_range": "^10.4.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@testing-library/react",
+        "section": "devDependencies",
+        "declared_range": "^16.3.2",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@types/gsap",
+        "section": "devDependencies",
+        "declared_range": "^3.0.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@types/hast",
+        "section": "dependencies",
+        "declared_range": "^3.0.4",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@types/node",
+        "section": "devDependencies",
+        "declared_range": "^20.14.10",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@types/papaparse",
+        "section": "devDependencies",
+        "declared_range": "5.5.2",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@types/react",
+        "section": "devDependencies",
+        "declared_range": "^19.0.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@types/react-dom",
+        "section": "devDependencies",
+        "declared_range": "^19.0.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@uiw/codemirror-theme-basic",
+        "section": "dependencies",
+        "declared_range": "^4.25.4",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@uiw/codemirror-theme-monokai",
+        "section": "dependencies",
+        "declared_range": "^4.25.4",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@uiw/react-codemirror",
+        "section": "dependencies",
+        "declared_range": "^4.25.4",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "@xyflow/react",
+        "section": "dependencies",
+        "declared_range": "^12.10.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "ai",
+        "section": "dependencies",
+        "declared_range": "^6.0.33",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "best-effort-json-parser",
+        "section": "dependencies",
+        "declared_range": "^1.2.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "canvas-confetti",
+        "section": "dependencies",
+        "declared_range": "^1.9.4",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "class-variance-authority",
+        "section": "dependencies",
+        "declared_range": "^0.7.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "clsx",
+        "section": "dependencies",
+        "declared_range": "^2.1.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "cmdk",
+        "section": "dependencies",
+        "declared_range": "^1.1.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "codemirror",
+        "section": "dependencies",
+        "declared_range": "^6.0.2",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "date-fns",
+        "section": "dependencies",
+        "declared_range": "^4.1.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "defu",
+        "section": "dependencies",
+        "declared_range": "6.1.5",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "dotenv",
+        "section": "dependencies",
+        "declared_range": "^17.2.3",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "embla-carousel-react",
+        "section": "dependencies",
+        "declared_range": "^8.6.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "eslint",
+        "section": "devDependencies",
+        "declared_range": "^9.23.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "eslint-config-next",
+        "section": "devDependencies",
+        "declared_range": "^15.2.3",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "github-slugger",
+        "section": "dependencies",
+        "declared_range": "^2.0.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "gsap",
+        "section": "dependencies",
+        "declared_range": "^3.13.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "h3",
+        "section": "dependencies",
+        "declared_range": "1.15.9",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "happy-dom",
+        "section": "devDependencies",
+        "declared_range": "^20.11.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "hast",
+        "section": "dependencies",
+        "declared_range": "^1.0.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "katex",
+        "section": "dependencies",
+        "declared_range": "^0.16.28",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "lucide-react",
+        "section": "dependencies",
+        "declared_range": "^0.562.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "motion",
+        "section": "dependencies",
+        "declared_range": "^12.26.2",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "nanoid",
+        "section": "dependencies",
+        "declared_range": "^5.1.16",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "next",
+        "section": "dependencies",
+        "declared_range": "^16.3.3",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "next-themes",
+        "section": "dependencies",
+        "declared_range": "^0.4.6",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "nextra",
+        "section": "dependencies",
+        "declared_range": "^4.6.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "nextra-theme-docs",
+        "section": "dependencies",
+        "declared_range": "^4.6.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "nuxt-og-image",
+        "section": "dependencies",
+        "declared_range": "^5.1.13",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "ogl",
+        "section": "dependencies",
+        "declared_range": "^1.0.11",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "papaparse",
+        "section": "dependencies",
+        "declared_range": "5.7.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "postcss",
+        "section": "devDependencies",
+        "declared_range": "^8.5.18",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "prettier",
+        "section": "devDependencies",
+        "declared_range": "^3.5.3",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "prettier-plugin-tailwindcss",
+        "section": "devDependencies",
+        "declared_range": "^0.6.11",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "qrcode.react",
+        "section": "dependencies",
+        "declared_range": "4.2.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "react",
+        "section": "dependencies",
+        "declared_range": "^19.0.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "react-dom",
+        "section": "dependencies",
+        "declared_range": "^19.0.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "react-resizable-panels",
+        "section": "dependencies",
+        "declared_range": "^4.4.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "rehype-katex",
+        "section": "dependencies",
+        "declared_range": "^7.0.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "rehype-raw",
+        "section": "dependencies",
+        "declared_range": "^7.0.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "rehype-sanitize",
+        "section": "dependencies",
+        "declared_range": "^6.0.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "rehype-slug",
+        "section": "dependencies",
+        "declared_range": "^6.0.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "remark-gfm",
+        "section": "dependencies",
+        "declared_range": "^4.0.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "remark-math",
+        "section": "dependencies",
+        "declared_range": "^6.0.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "shiki",
+        "section": "dependencies",
+        "declared_range": "3.23.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "sonner",
+        "section": "dependencies",
+        "declared_range": "^2.0.7",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "streamdown",
+        "section": "dependencies",
+        "declared_range": "2.5.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "tailwind-merge",
+        "section": "dependencies",
+        "declared_range": "^3.4.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "tailwindcss",
+        "section": "devDependencies",
+        "declared_range": "^4.0.15",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "tokenlens",
+        "section": "dependencies",
+        "declared_range": "^1.3.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "tw-animate-css",
+        "section": "devDependencies",
+        "declared_range": "^1.4.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "typescript",
+        "section": "devDependencies",
+        "declared_range": "^5.8.2",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "typescript-eslint",
+        "section": "devDependencies",
+        "declared_range": "^8.27.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "unist-util-visit",
+        "section": "dependencies",
+        "declared_range": "^5.0.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "use-stick-to-bottom",
+        "section": "dependencies",
+        "declared_range": "^1.1.1",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "uuid",
+        "section": "dependencies",
+        "declared_range": "^14.0.0",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      },
+      {
+        "name": "zod",
+        "section": "dependencies",
+        "declared_range": "^3.24.2",
+        "import_status": "REFERENCED",
+        "license_expression": "UNKNOWN",
+        "license_basis": "PACKAGE_MANIFEST_ONLY",
+        "license_basis_verified": true,
+        "review_status": "UNKNOWN",
+        "review_note": "Declared in frontend/package.json and pinned by pnpm-lock.yaml; no installed package license text or consolidated NOTICE is vendored in this repository, so the license terms remain unverified."
+      }
+    ]
+  },
+  "non_imported_skills": [
+    {
+      "id": "deerflow.skill.academic-paper-review",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/academic-paper-review/SKILL.md",
+      "sha256": "a0285baaeacc916bf45751c06db37745b195ddd4ec30e271ec1472f6cd48e8aa",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/academic-paper-review",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "a0285baaeacc916bf45751c06db37745b195ddd4ec30e271ec1472f6cd48e8aa",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "a0285baaeacc916bf45751c06db37745b195ddd4ec30e271ec1472f6cd48e8aa",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.bootstrap",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/bootstrap/SKILL.md",
+      "sha256": "d117997b877f80da7411d33b457878ad9ae0a649f43781a74c8b09707984356d",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/bootstrap",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "d117997b877f80da7411d33b457878ad9ae0a649f43781a74c8b09707984356d",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "d117997b877f80da7411d33b457878ad9ae0a649f43781a74c8b09707984356d",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.chart-visualization",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/chart-visualization/SKILL.md",
+      "sha256": "eb44160e5a51bc0951696c65c13623bb7f686c140b6fd44e6e588b43c9911840",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/chart-visualization",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "eb44160e5a51bc0951696c65c13623bb7f686c140b6fd44e6e588b43c9911840",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "eb44160e5a51bc0951696c65c13623bb7f686c140b6fd44e6e588b43c9911840",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.claude-to-deerflow",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/claude-to-deerflow/SKILL.md",
+      "sha256": "b05a6fa8c64ba4137b09a5f61278b6caa0384b2b4e4330ee9676e2485a53269e",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/claude-to-deerflow",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "b05a6fa8c64ba4137b09a5f61278b6caa0384b2b4e4330ee9676e2485a53269e",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "b05a6fa8c64ba4137b09a5f61278b6caa0384b2b4e4330ee9676e2485a53269e",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.code-documentation",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/code-documentation/SKILL.md",
+      "sha256": "75721d7bc1b294592dc31a1e1d92ff9c390115af4b08ed42e7e0a2b094060676",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/code-documentation",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "75721d7bc1b294592dc31a1e1d92ff9c390115af4b08ed42e7e0a2b094060676",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "75721d7bc1b294592dc31a1e1d92ff9c390115af4b08ed42e7e0a2b094060676",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.consulting-analysis",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/consulting-analysis/SKILL.md",
+      "sha256": "5bc99df7e5f8af5471eaa5d20b85fc46e99895cf3f2642fa9da94108d03ca13e",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/consulting-analysis",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "5bc99df7e5f8af5471eaa5d20b85fc46e99895cf3f2642fa9da94108d03ca13e",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "5bc99df7e5f8af5471eaa5d20b85fc46e99895cf3f2642fa9da94108d03ca13e",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.data-analysis",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/data-analysis/SKILL.md",
+      "sha256": "d9383f31df40250c7dd58b31f3518bc80c95f670eada6e8222c7925d80a0b3a1",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/data-analysis",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "d9383f31df40250c7dd58b31f3518bc80c95f670eada6e8222c7925d80a0b3a1",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "d9383f31df40250c7dd58b31f3518bc80c95f670eada6e8222c7925d80a0b3a1",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.deep-research",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/deep-research/SKILL.md",
+      "sha256": "04712f4daa7937cc1f8dabc1a086a9549e670eb3fa3f1a8d30abdc3ea8b31a79",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/deep-research",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "04712f4daa7937cc1f8dabc1a086a9549e670eb3fa3f1a8d30abdc3ea8b31a79",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "04712f4daa7937cc1f8dabc1a086a9549e670eb3fa3f1a8d30abdc3ea8b31a79",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.find-skills",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/find-skills/SKILL.md",
+      "sha256": "0fccfaeacc4c71bfc93aeabf06d2d5d17480d4a09cb024c643a90b14dc024aba",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/find-skills",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "0fccfaeacc4c71bfc93aeabf06d2d5d17480d4a09cb024c643a90b14dc024aba",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "0fccfaeacc4c71bfc93aeabf06d2d5d17480d4a09cb024c643a90b14dc024aba",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.frontend-design",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/frontend-design/SKILL.md",
+      "sha256": "f187caf13081bd3b5509f4c7424b7b507e3140020daaf3454b9181d1af4f61ca",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/frontend-design",
+      "license_expression": "Apache-2.0",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "REVIEW_NEEDED",
+      "review_note": "Nested Apache-2.0 text is anchored through a controller-provided frozen excerpt, but the full Skill package (assets, scripts, prompts) was not imported or reviewed, so complete obligations remain open.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "f187caf13081bd3b5509f4c7424b7b507e3140020daaf3454b9181d1af4f61ca",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "f187caf13081bd3b5509f4c7424b7b507e3140020daaf3454b9181d1af4f61ca",
+      "manifest_reviewed": false,
+      "nested_license_path": "skills/public/frontend-design/LICENSE.txt",
+      "nested_license_sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+    },
+    {
+      "id": "deerflow.skill.github-deep-research",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/github-deep-research/SKILL.md",
+      "sha256": "7add6956b424fbe5d4fcf85ea977b7b663ad2d810b3157a69953401db9c7acdb",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/github-deep-research",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "7add6956b424fbe5d4fcf85ea977b7b663ad2d810b3157a69953401db9c7acdb",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "7add6956b424fbe5d4fcf85ea977b7b663ad2d810b3157a69953401db9c7acdb",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.image-generation",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/image-generation/SKILL.md",
+      "sha256": "9e5f4d09a8440ef6cca6f3b0ec35777259b6eadd027bfa5db9baa4ee13812f4e",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/image-generation",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "9e5f4d09a8440ef6cca6f3b0ec35777259b6eadd027bfa5db9baa4ee13812f4e",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "9e5f4d09a8440ef6cca6f3b0ec35777259b6eadd027bfa5db9baa4ee13812f4e",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.music-generation",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/music-generation/SKILL.md",
+      "sha256": "b8b17571b82357dea768c5aa24437eada4a717a2d7c6fad082f6bb63cde6d884",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/music-generation",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "b8b17571b82357dea768c5aa24437eada4a717a2d7c6fad082f6bb63cde6d884",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "b8b17571b82357dea768c5aa24437eada4a717a2d7c6fad082f6bb63cde6d884",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.newsletter-generation",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/newsletter-generation/SKILL.md",
+      "sha256": "cc66adb99053a781d6b5ce65f5e698c62384b8793421d15067d880e7b32538dc",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/newsletter-generation",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "cc66adb99053a781d6b5ce65f5e698c62384b8793421d15067d880e7b32538dc",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "cc66adb99053a781d6b5ce65f5e698c62384b8793421d15067d880e7b32538dc",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.podcast-generation",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/podcast-generation/SKILL.md",
+      "sha256": "8b5e640f8f24741a126d0a824c10a96a8635c3a9997d327200ec3e29c922059b",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/podcast-generation",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "8b5e640f8f24741a126d0a824c10a96a8635c3a9997d327200ec3e29c922059b",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "8b5e640f8f24741a126d0a824c10a96a8635c3a9997d327200ec3e29c922059b",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.ppt-generation",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/ppt-generation/SKILL.md",
+      "sha256": "1c3e00433b754365390c9ffca4fcc12061f42993cc612b68bf77cd778affc090",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/ppt-generation",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "1c3e00433b754365390c9ffca4fcc12061f42993cc612b68bf77cd778affc090",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "1c3e00433b754365390c9ffca4fcc12061f42993cc612b68bf77cd778affc090",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.skill-creator",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/skill-creator/SKILL.md",
+      "sha256": "313a95a145d9926693f8c053b63047212dd1db217c061891865b6546c4e70d02",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/skill-creator",
+      "license_expression": "Apache-2.0",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "REVIEW_NEEDED",
+      "review_note": "Nested Apache-2.0 text is anchored through a controller-provided frozen excerpt, but the full Skill package (assets, scripts, prompts) was not imported or reviewed, so complete obligations remain open.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "313a95a145d9926693f8c053b63047212dd1db217c061891865b6546c4e70d02",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "313a95a145d9926693f8c053b63047212dd1db217c061891865b6546c4e70d02",
+      "manifest_reviewed": false,
+      "nested_license_path": "skills/public/skill-creator/LICENSE.txt",
+      "nested_license_sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"
+    },
+    {
+      "id": "deerflow.skill.skill-reviewer",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/skill-reviewer/SKILL.md",
+      "sha256": "68cff70a729660fed0fbf01b9ff4ec408bab83ea4e5997811508dc394e1c185d",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/skill-reviewer",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "68cff70a729660fed0fbf01b9ff4ec408bab83ea4e5997811508dc394e1c185d",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "68cff70a729660fed0fbf01b9ff4ec408bab83ea4e5997811508dc394e1c185d",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.surprise-me",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/surprise-me/SKILL.md",
+      "sha256": "e93e72ca445d112fa46c8b4d1b355cd97a51448ad20693f1279296523944d01a",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/surprise-me",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "e93e72ca445d112fa46c8b4d1b355cd97a51448ad20693f1279296523944d01a",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "e93e72ca445d112fa46c8b4d1b355cd97a51448ad20693f1279296523944d01a",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.systematic-literature-review",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/systematic-literature-review/SKILL.md",
+      "sha256": "9fe4891e86b29d0f0f192bddab4ff913b123ffd764a2af737a4d6bb334209b6a",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/systematic-literature-review",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "9fe4891e86b29d0f0f192bddab4ff913b123ffd764a2af737a4d6bb334209b6a",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "9fe4891e86b29d0f0f192bddab4ff913b123ffd764a2af737a4d6bb334209b6a",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.vercel-deploy-claimable",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/vercel-deploy-claimable/SKILL.md",
+      "sha256": "92e8165ce59f1da03f7850fc698ee7b4182cbd87e05e8857b555b649d7ee1965",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/vercel-deploy-claimable",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "92e8165ce59f1da03f7850fc698ee7b4182cbd87e05e8857b555b649d7ee1965",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "92e8165ce59f1da03f7850fc698ee7b4182cbd87e05e8857b555b649d7ee1965",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.video-generation",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/video-generation/SKILL.md",
+      "sha256": "cbd6a3ef76c4388312476768fd4a34f0a9bc27ffe594215784b770d4eac7c765",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/video-generation",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "cbd6a3ef76c4388312476768fd4a34f0a9bc27ffe594215784b770d4eac7c765",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "cbd6a3ef76c4388312476768fd4a34f0a9bc27ffe594215784b770d4eac7c765",
+      "manifest_reviewed": false
+    },
+    {
+      "id": "deerflow.skill.web-design-guidelines",
+      "category": "non_imported_skill",
+      "source_path": "skills/public/web-design-guidelines/SKILL.md",
+      "sha256": "f4647ca866a3accf763777f83e7682954f0187cd6bea7eea0399796652414e8f",
+      "import_status": "NOT_IMPORTED",
+      "intended_local_path": "skills/upstream/deerflow/web-design-guidelines",
+      "license_expression": "UNKNOWN",
+      "license_basis": "CONTROLLER_EXCERPT",
+      "license_basis_verified": false,
+      "review_status": "UNKNOWN",
+      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "evidence": {
+        "kind": "CONTROLLER_EXCERPT",
+        "location": "controller-provided frozen Skill SKILL.md digest",
+        "sha256": "f4647ca866a3accf763777f83e7682954f0187cd6bea7eea0399796652414e8f",
+        "sha256_verified_locally": false
+      },
+      "skill_md_sha256": "f4647ca866a3accf763777f83e7682954f0187cd6bea7eea0399796652414e8f",
+      "manifest_reviewed": false
+    }
+  ],
+  "required_ids": [
+    "deerflow.brand.github",
+    "deerflow.brand.notion",
+    "deerflow.brand.hubspot",
+    "deerflow.brand.jira",
+    "deerflow.brand.postgresql",
+    "deerflow.brand.brave",
+    "deerflow.brand.exa",
+    "deerflow.brand.firecrawl",
+    "deerflow.brand.lark",
+    "deerflow.brand.dingtalk",
+    "deerflow.brand.wecom",
+    "deerflow.brand.tencent-docs",
+    "deerflow.brand.openviking",
+    "deerflow.root-favicon",
+    "deerflow.media.demo-threads-21cfea46-34bd-4aa6-9e1f-3009452fbeb9-user-data-outputs-doraemon-moe-comic-jpg",
+    "deerflow.media.demo-threads-4f3e55ee-f853-43db-bfb3-7d1a411f03cb-user-data-outputs-darcy-proposal-reference-jpg",
+    "deerflow.media.demo-threads-4f3e55ee-f853-43db-bfb3-7d1a411f03cb-user-data-outputs-darcy-proposal-video-mp4",
+    "deerflow.media.demo-threads-7f9dc56c-e49c-4671-a3d2-c492ff4dce0c-user-data-outputs-leica-nyc-candid-jpg",
+    "deerflow.media.demo-threads-7f9dc56c-e49c-4671-a3d2-c492ff4dce0c-user-data-outputs-leica-paris-decisive-moment-jpg",
+    "deerflow.media.demo-threads-7f9dc56c-e49c-4671-a3d2-c492ff4dce0c-user-data-outputs-leica-tokyo-night-jpg",
+    "deerflow.media.demo-threads-90040b36-7eba-4b97-ba89-02c3ad47a8b9-user-data-outputs-american-woman-newyork-jpg",
+    "deerflow.media.demo-threads-90040b36-7eba-4b97-ba89-02c3ad47a8b9-user-data-outputs-american-woman-shanghai-jpg",
+    "deerflow.media.demo-threads-ad76c455-5bf9-4335-8517-fc03834ab828-user-data-outputs-visualizations-class-gender-survival-png",
+    "deerflow.media.demo-threads-ad76c455-5bf9-4335-8517-fc03834ab828-user-data-outputs-visualizations-correlation-heatmap-png",
+    "deerflow.media.demo-threads-ad76c455-5bf9-4335-8517-fc03834ab828-user-data-outputs-visualizations-family-size-analysis-png",
+    "deerflow.media.demo-threads-ad76c455-5bf9-4335-8517-fc03834ab828-user-data-outputs-visualizations-fare-analysis-png",
+    "deerflow.media.demo-threads-ad76c455-5bf9-4335-8517-fc03834ab828-user-data-outputs-visualizations-survival-by-age-png",
+    "deerflow.media.demo-threads-ad76c455-5bf9-4335-8517-fc03834ab828-user-data-outputs-visualizations-survival-by-class-png",
+    "deerflow.media.demo-threads-ad76c455-5bf9-4335-8517-fc03834ab828-user-data-outputs-visualizations-survival-overview-png",
+    "deerflow.media.demo-threads-b83fbb2a-4e36-4d82-9de0-7b2a02c2092a-user-data-outputs-caren-hero-jpg",
+    "deerflow.media.demo-threads-b83fbb2a-4e36-4d82-9de0-7b2a02c2092a-user-data-outputs-caren-ingredients-jpg",
+    "deerflow.media.demo-threads-b83fbb2a-4e36-4d82-9de0-7b2a02c2092a-user-data-outputs-caren-lifestyle-jpg",
+    "deerflow.media.demo-threads-b83fbb2a-4e36-4d82-9de0-7b2a02c2092a-user-data-outputs-caren-products-jpg",
+    "deerflow.media.images-21cfea46-34bd-4aa6-9e1f-3009452fbeb9-jpg",
+    "deerflow.media.images-3823e443-4e2b-4679-b496-a9506eae462b-jpg",
+    "deerflow.media.images-4f3e55ee-f853-43db-bfb3-7d1a411f03cb-jpg",
+    "deerflow.media.images-7cfa5f8f-a2f8-47ad-acbd-da7137baf990-jpg",
+    "deerflow.media.images-ad76c455-5bf9-4335-8517-fc03834ab828-jpg",
+    "deerflow.media.images-d3e5adaf-084c-4dd5-9d29-94f1d6bccd98-jpg",
+    "deerflow.media.images-deer-svg",
+    "deerflow.skill.academic-paper-review",
+    "deerflow.skill.bootstrap",
+    "deerflow.skill.chart-visualization",
+    "deerflow.skill.claude-to-deerflow",
+    "deerflow.skill.code-documentation",
+    "deerflow.skill.consulting-analysis",
+    "deerflow.skill.data-analysis",
+    "deerflow.skill.deep-research",
+    "deerflow.skill.find-skills",
+    "deerflow.skill.frontend-design",
+    "deerflow.skill.github-deep-research",
+    "deerflow.skill.image-generation",
+    "deerflow.skill.music-generation",
+    "deerflow.skill.newsletter-generation",
+    "deerflow.skill.podcast-generation",
+    "deerflow.skill.ppt-generation",
+    "deerflow.skill.skill-creator",
+    "deerflow.skill.skill-reviewer",
+    "deerflow.skill.surprise-me",
+    "deerflow.skill.systematic-literature-review",
+    "deerflow.skill.vercel-deploy-claimable",
+    "deerflow.skill.video-generation",
+    "deerflow.skill.web-design-guidelines"
+  ],
+  "known_not_covered": [
+    "This inventory does not import, install or download any dependency, license text, image or Skill; it is static provenance only.",
+    "Root MIT does not settle dependency, font, image, brand or favicon licensing; no legal clearance is asserted.",
+    "All 23 frozen public Skill packages are recorded as NOT_IMPORTED; only the two with a nested LICENSE.txt carry license text evidence, and no full package assets, scripts or prompts were reviewed or imported.",
+    "Every bundled frontend/public media file (service thumbnails, logo artwork, demo thread outputs and the demo video) is recorded with its SHA-256, but only the plugin logos carry local license evidence; the rest stay UNKNOWN."
+  ]
+}

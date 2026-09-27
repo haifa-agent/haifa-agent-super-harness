@@ -15,6 +15,7 @@
     "status": "IMPORTED",
     "runtime_status": "NOT_RUN"
   },
+  "license_inventory_path": "contracts/upstream/deerflow/resource-license-inventory.json",
   "license_review": {
     "root_license": "MIT",
     "root_license_path": "LICENSE",

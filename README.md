@@ -33,7 +33,7 @@ pwsh -NoProfile -File scripts/start-haifa-frontend.ps1 `
 pwsh -NoProfile -File tests/frontend/verify-haifa-frontend-profile.ps1
 ```
 
-受保护的本地拓扑和正式启动流程见 `docs/development/w18-haifa-local-profile.md`。仅通过上述配置检查，不代表聊天功能或双后端差分验收通过。
+受保护的主工作树拓扑与正式启动流程见下文“启动主工作树供人工验收”；历史 W18 配置设计与验收记录已归档至 `private-docs/prompts/39-deerflow-parity-delivery/W18-Developing/references/`。仅通过上述配置检查，不代表聊天功能或双后端差分验收通过。
 
 ## W03 后续建议配置
 
