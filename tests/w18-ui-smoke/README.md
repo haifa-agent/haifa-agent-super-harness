@@ -61,6 +61,26 @@ pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 `
 `target/w03-title-suggestions-evidence/playwright`. It is mutually exclusive with
 `-ActiveReconnect`, `-Interaction`, and `-LiveDeepSeek`, and it never starts the live provider.
 
+The W03 input-polish profile reuses the controlled loopback provider and the unmodified frozen
+frontend. The frozen composer calls the same-origin `POST /api/input-polish`; the gateway performs
+one bounded non-streaming provider call, and the rewrite/undo/cancel/error state is the frozen
+`input-box.tsx` implementation. It asserts the exact `{text, locale, thread_id}` wire body, that
+polishing creates no Thread/Run/Tool/Artifact (`404` on the candidate thread id and zero run-stream
+requests), that a follow-up send submits only the current edit-box text, that cancel/unmount drop a
+late response and ignore duplicate clicks, and that whitespace/over-limit/provider-failure/empty/
+think-block/code-fence answers fail closed without leaking provider details. It runs the same spec
+twice with independent data-roots:
+
+```powershell
+pwsh -NoProfile -File scripts/run-w03-input-polish-ui.ps1
+```
+
+`-InputPolish` selects `w03-input-polish.spec.cjs`, defaults the data root to
+`target/agent-slot-<n>-input-polish-data`, and writes evidence to
+`local-tmp/slot-<n>-w03-input-polish-ui/evidence` so a later `mvn clean` cannot destroy it. It is
+mutually exclusive with the other profiles and never starts the live provider. The wrapper
+snapshots each round's Playwright results/artifacts under `evidence/round-1` / `evidence/round-2`.
+
 The explicitly authorized DeepSeek L3 variant uses the same runner and slot,
 but a separate data/evidence directory and one independent Playwright case:
 

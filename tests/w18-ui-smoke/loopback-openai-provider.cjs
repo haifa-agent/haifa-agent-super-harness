@@ -69,6 +69,113 @@ function isSuggestionsRequest(body) {
 
 const SUGGESTIONS = ["What changed?", "Why now?", "What next?"];
 
+// ---- W03 Input Polish controlled fixture -------------------------------------
+// The frozen UI sends {text, locale?, thread_id?} to the same-origin gateway,
+// which performs one bounded non-streaming OpenAI-compatible call whose system
+// instruction is the "pre-send prompt optimizer". Answer deterministically based
+// on a marker embedded in the draft so the spec can drive both the happy path and
+// the error boundaries without ever mocking the page or the protocol.
+const POLISH_REWRITE =
+  "Polished camera brief: buy a camera; state the goal, scope, constraints, and expected output.";
+const POLISH_THINK_TEXT = "Polished camera brief from think.";
+const POLISH_FENCE_TEXT = "Polished camera brief from fence.";
+
+const polishCalls = [];
+const chatCalls = [];
+
+function isInputPolishRequest(body) {
+  if (!Array.isArray(body.messages)) return false;
+  return body.messages.some(
+    (message) =>
+      message?.role === "system" &&
+      textOfContent(message.content).includes("pre-send prompt optimizer"),
+  );
+}
+
+function polishContentFor(draft) {
+  if (draft.includes("__polish_unchanged__")) return draft;
+  if (draft.includes("__polish_empty__")) return "";
+  if (draft.includes("__polish_think__")) {
+    return `<think>PRIVATE_REASONING_DO_NOT_LEAK</think> ${POLISH_THINK_TEXT}`;
+  }
+  if (draft.includes("__polish_fence__")) {
+    return `\`\`\`\n${POLISH_FENCE_TEXT}\n\`\`\``;
+  }
+  return POLISH_REWRITE;
+}
+
+function handleInputPolish(request, response, body, prompt) {
+  const draftMatch = /<draft>\r?\n([\s\S]*?)\r?\n<\/draft>/.exec(prompt);
+  const localeMatch = /^Locale hint: (.*)$/m.exec(prompt);
+  const draft = draftMatch ? draftMatch[1] : "";
+  // Distinguish "field absent" from "field present but null": the flash/non-thinking
+  // path must not send reasoning_effort at all, so the spec asserts presence === false.
+  const reasoningEffortPresent = Object.prototype.hasOwnProperty.call(
+    body,
+    "reasoning_effort",
+  );
+  const record = {
+    draft,
+    locale: localeMatch ? localeMatch[1].trim() : null,
+    model: body.model ?? null,
+    stream: body.stream === true,
+    reasoningEffort: reasoningEffortPresent ? body.reasoning_effort : null,
+    reasoningEffortPresent,
+    offeredTools: toolNames(body),
+  };
+  polishCalls.push(record);
+  console.log(JSON.stringify({ type: "provider_input_polish", ...record }));
+
+  if (draft.includes("__polish_fail__")) {
+    // Non-2xx with a body the gateway must never surface to the browser.
+    sendJson(response, 500, { error: { message: "PROVIDER_INTERNAL_SECRET_BODY" } });
+    return;
+  }
+
+  const content = polishContentFor(draft);
+  const deliver = () => {
+    if (response.writableEnded || response.destroyed) return;
+    if (body.stream === true) {
+      response.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+      });
+      frame(response, completionChunk("w03-polish", content, "stop"));
+      frame(response, {
+        id: "w03-polish",
+        model: "w18-controlled-model",
+        choices: [],
+        usage: { prompt_tokens: 4, completion_tokens: 3 },
+      });
+      frame(response, "[DONE]");
+      response.end();
+      return;
+    }
+    sendJson(response, 200, {
+      id: `w03-polish-${Date.now()}`,
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model: "w18-controlled-model",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 },
+    });
+  };
+
+  if (draft.includes("__polish_slow__")) {
+    const timer = setTimeout(deliver, 4000);
+    response.on("close", () => clearTimeout(timer));
+    return;
+  }
+  deliver();
+}
+
 function hasToolResult(body) {
   return (
     Array.isArray(body.messages) &&
@@ -153,6 +260,10 @@ const server = http.createServer((request, response) => {
     sendJson(response, 200, { status: "ok" });
     return;
   }
+  if (request.method === "GET" && url.pathname === "/__state") {
+    sendJson(response, 200, { polishCalls, chatCalls });
+    return;
+  }
   if (request.method !== "POST" || url.pathname !== "/v1/chat/completions") {
     sendJson(response, 404, { error: "not_found" });
     return;
@@ -178,6 +289,13 @@ const server = http.createServer((request, response) => {
     const offeredTools = toolNames(body);
     const probe = offeredTools.includes("connection_check");
     const interaction = offeredTools.includes("mutating_probe");
+
+    if (isInputPolishRequest(body)) {
+      handleInputPolish(request, response, body, prompt);
+      return;
+    }
+
+    chatCalls.push({ prompt, stream: body.stream === true, offeredTools });
     console.log(
       JSON.stringify({
         type: "provider_request",

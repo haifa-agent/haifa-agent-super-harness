@@ -11,6 +11,7 @@ param(
     [switch]$ActiveReconnect,
     [switch]$Interaction,
     [switch]$TitleSuggestions,
+    [switch]$InputPolish,
     [switch]$LiveDeepSeek,
     [switch]$SkipBuild
 )
@@ -23,8 +24,8 @@ $expectedFrontendPort = 15618 + (10000 * $AgentSlot)
 if ($GatewayPort -ne $expectedGatewayPort -or $FrontendPort -ne $expectedFrontendPort -or $ProviderPort -ne 0) {
     throw "W18 slot $AgentSlot requires Gateway=$expectedGatewayPort and Frontend=$expectedFrontendPort; controlled Provider must use OS-assigned port 0."
 }
-if (@($ActiveReconnect, $Interaction, $TitleSuggestions, $LiveDeepSeek).Where({ $_ }).Count -gt 1) {
-    throw 'Active reconnect, Interaction, title/suggestions, and live DeepSeek profiles are mutually exclusive.'
+if (@($ActiveReconnect, $Interaction, $TitleSuggestions, $InputPolish, $LiveDeepSeek).Where({ $_ }).Count -gt 1) {
+    throw 'Active reconnect, Interaction, title/suggestions, input-polish, and live DeepSeek profiles are mutually exclusive.'
 }
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
@@ -35,6 +36,8 @@ if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
         "target/agent-slot-$AgentSlot-interaction-data"
     } elseif ($TitleSuggestions) {
         "target/agent-slot-$AgentSlot-title-suggestions-data"
+    } elseif ($InputPolish) {
+        "target/agent-slot-$AgentSlot-input-polish-data"
     } else {
         "target/agent-slot-$AgentSlot-data"
     })
@@ -65,6 +68,8 @@ $evidenceRoot = Join-Path $root $(if ($LiveDeepSeek) {
     'target/w05-interaction-evidence/playwright'
 } elseif ($TitleSuggestions) {
     'target/w03-title-suggestions-evidence/playwright'
+} elseif ($InputPolish) {
+    "local-tmp/slot-$AgentSlot-w03-input-polish-ui/evidence"
 } else {
     'target/w18-ui-smoke-evidence/playwright'
 })
@@ -108,11 +113,13 @@ $managedEnvironment = @{
         'w05-interaction.spec.cjs'
     } elseif ($TitleSuggestions) {
         'w03-title-suggestions.spec.cjs'
+    } elseif ($InputPolish) {
+        'w03-input-polish.spec.cjs'
     } else {
         'w18-ui-smoke.spec.cjs'
     })
-    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $TitleSuggestions) { '120000' } else { '60000' })
-    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $TitleSuggestions) { 'on' } else { 'retain-on-failure' })
+    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $TitleSuggestions -or $InputPolish) { '120000' } else { '60000' })
+    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $TitleSuggestions -or $InputPolish) { 'on' } else { 'retain-on-failure' })
     # Kept disabled through the ordinary build/test gate. The runner enables it
     # only immediately before launching the dedicated guarded test process.
     W05_INTERACTION_ACCEPTANCE = $null
