@@ -32,7 +32,7 @@ class ProductionWriteFileHttpTest {
     private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
     @Test
-    void productionRunPublishesWriteFileAndCreatesDownloadableBytesAfterApproval() throws Exception {
+    void productionApprovalGateRejectsMismatchedCrossThreadDuplicateAndRejectedWrites() throws Exception {
         byte[] expected = "真实文件内容\n".getBytes(StandardCharsets.UTF_8);
         String path = "/mnt/user-data/outputs/production.txt";
         List<JsonNode> providerRequests = java.util.Collections.synchronizedList(new ArrayList<>());
@@ -42,24 +42,32 @@ class ProductionWriteFileHttpTest {
             JsonNode request = json.readTree(exchange.getRequestBody());
             providerRequests.add(request);
             int call = calls.getAndIncrement();
+            boolean hasToolResult = false;
+            for (JsonNode message : request.path("messages")) {
+                if ("tool".equals(message.path("role").asText())) {
+                    hasToolResult = true;
+                    break;
+                }
+            }
             String chunk;
-            if (call == 0) {
+            String responseId = "provider-write-" + (call + 1);
+            if (!hasToolResult) {
                 String arguments = json.writeValueAsString(Map.of(
                         "path", path, "content", new String(expected, StandardCharsets.UTF_8)));
                 chunk = json.writeValueAsString(Map.of(
-                        "id", "provider-write-1", "model", "demo-provider-id",
+                        "id", responseId, "model", "demo-provider-id",
                         "choices", List.of(Map.of("index", 0, "finish_reason", "tool_calls",
                                 "delta", Map.of("tool_calls", List.of(Map.of(
-                                        "index", 0, "id", "call-production-write", "type", "function",
+                                        "index", 0, "id", "call-production-write-" + (call + 1), "type", "function",
                                         "function", Map.of("name", "write_file", "arguments", arguments))))))));
             } else {
                 chunk = json.writeValueAsString(Map.of(
-                        "id", "provider-write-2", "model", "demo-provider-id",
+                        "id", responseId, "model", "demo-provider-id",
                         "choices", List.of(Map.of("index", 0, "finish_reason", "stop",
                                 "delta", Map.of("content", "Created the file.")))));
             }
             byte[] response = ("data: " + chunk + "\n\n"
-                    + "data: {\"id\":\"provider-write-" + (call + 1) + "\",\"model\":\"demo-provider-id\",\"choices\":[],"
+                    + "data: {\"id\":\"" + responseId + "\",\"model\":\"demo-provider-id\",\"choices\":[],"
                     + "\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":3}}\n\n"
                     + "data: [DONE]\n\n").getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
@@ -108,15 +116,18 @@ class ProductionWriteFileHttpTest {
             assertThat(client.send(HttpRequest.newBuilder(artifact).GET().build(),
                     HttpResponse.BodyHandlers.ofByteArray()).statusCode()).isEqualTo(404);
 
-            String approval = """
-                    {"assistant_id":"lead_agent","input":{"messages":[{"id":"response","type":"human",
-                    "content":[{"type":"text","text":"approve"}],
-                    "additional_kwargs":{"hide_from_ui":true,"human_input_response":
-                    {"version":1,"kind":"human_input_response","source":"haifa_interaction",
-                    "request_id":"%s","response_kind":"option","option_id":"approve","value":"approve"}}}]},
-                    "stream_mode":["messages-tuple","updates","custom"],
-                    "on_disconnect":"continue","multitask_strategy":"reject"}
-                    """.formatted(requestId);
+            String wrongRequest = interactionResponse("another-request", "approve");
+            assertThat(request(base, "POST", "/api/threads/production-file/runs/stream", wrongRequest)
+                    .statusCode()).isEqualTo(409);
+            assertThat(request(base, "POST", "/api/threads", "{\"thread_id\":\"production-file-other\"}")
+                    .statusCode()).isEqualTo(200);
+            String crossThread = interactionResponse(requestId, "approve");
+            assertThat(request(base, "POST", "/api/threads/production-file-other/runs/stream", crossThread)
+                    .statusCode()).isEqualTo(409);
+            assertThat(client.send(HttpRequest.newBuilder(artifact).GET().build(),
+                    HttpResponse.BodyHandlers.ofByteArray()).statusCode()).isEqualTo(404);
+
+            String approval = interactionResponse(requestId, "approve");
             HttpResponse<String> resumed = request(base, "POST", "/api/threads/production-file/runs/stream", approval);
             assertThat(resumed.statusCode()).as(resumed.body()).isEqualTo(200);
             assertThat(resumed.body()).contains("Created the file.");
@@ -131,7 +142,7 @@ class ProductionWriteFileHttpTest {
                 if ("tool".equals(message.path("role").asText())) toolResult = message;
             }
             assertThat(toolResult).isNotNull();
-            assertThat(toolResult.path("tool_call_id").asText()).isEqualTo("call-production-write");
+            assertThat(toolResult.path("tool_call_id").asText()).isEqualTo("call-production-write-1");
             String toolSummary = toolResult.path("content").asText();
             assertThat(toolSummary).contains(path, sha);
 
@@ -145,12 +156,53 @@ class ProductionWriteFileHttpTest {
                     location + "/workspace-changes?include_files=true", null).body());
             assertThat(changes.path("available").asBoolean()).as(changes.toString()).isTrue();
             assertThat(changes.path("files").toString()).contains(path, sha);
+
+            HttpResponse<String> duplicate = request(
+                    base, "POST", "/api/threads/production-file/runs/stream", approval);
+            assertThat(duplicate.statusCode()).as(duplicate.body()).isEqualTo(409);
+            assertThat(providerRequests).hasSize(2);
+            assertThat(client.send(HttpRequest.newBuilder(artifact).GET().build(),
+                    HttpResponse.BodyHandlers.ofByteArray()).body()).isEqualTo(expected);
+
+            assertThat(request(base, "POST", "/api/threads", "{\"thread_id\":\"production-file-rejected\"}")
+                    .statusCode()).isEqualTo(200);
+            HttpResponse<String> rejectedPending = request(
+                    base, "POST", "/api/threads/production-file-rejected/runs/stream", runBody);
+            assertThat(rejectedPending.statusCode()).as(rejectedPending.body()).isEqualTo(200);
+            var rejectedRequestMatch = Pattern.compile("\\\"request_id\\\":\\\"([^\\\"]+)\\\"")
+                    .matcher(rejectedPending.body());
+            assertThat(rejectedRequestMatch.find()).as(rejectedPending.body()).isTrue();
+            URI rejectedArtifact = base.resolve("/api/threads/production-file-rejected/artifacts" + path);
+            assertThat(client.send(HttpRequest.newBuilder(rejectedArtifact).GET().build(),
+                    HttpResponse.BodyHandlers.ofByteArray()).statusCode()).isEqualTo(404);
+            HttpResponse<String> rejected = request(
+                    base,
+                    "POST",
+                    "/api/threads/production-file-rejected/runs/stream",
+                    interactionResponse(rejectedRequestMatch.group(1), "reject"));
+            assertThat(rejected.statusCode()).as(rejected.body()).isEqualTo(200);
+            assertThat(client.send(HttpRequest.newBuilder(rejectedArtifact).GET().build(),
+                    HttpResponse.BodyHandlers.ofByteArray()).statusCode()).isEqualTo(404);
+
             System.out.println("W05_PRODUCTION_FILE_EVIDENCE run=" + runId
-                    + " toolCall=call-production-write size=" + expected.length + " sha256=" + sha
+                    + " toolCall=call-production-write-1 size=" + expected.length + " sha256=" + sha
+                    + " wrong_request=409 cross_thread=409 duplicate=409 rejected_file=404"
                     + " toolSummary=" + toolSummary);
         } finally {
             provider.stop(0);
         }
+    }
+
+    private static String interactionResponse(String requestId, String option) {
+        return """
+                {"assistant_id":"lead_agent","input":{"messages":[{"id":"response","type":"human",
+                "content":[{"type":"text","text":"%s"}],
+                "additional_kwargs":{"hide_from_ui":true,"human_input_response":
+                {"version":1,"kind":"human_input_response","source":"haifa_interaction",
+                "request_id":"%s","response_kind":"option","option_id":"%s","value":"%s"}}}]},
+                "stream_mode":["messages-tuple","updates","custom"],
+                "on_disconnect":"continue","multitask_strategy":"reject"}
+                """.formatted(option, requestId, option, option);
     }
 
     private HttpResponse<String> request(URI base, String method, String path, String body) throws Exception {

@@ -6,11 +6,11 @@
 
 目标、双轨工作流及逐阶段 Go/No-Go 见[客户演示路线图](../private-docs/roadmap/36-super-harness-customer-demo-v0.md)：真实模型 + 生产 Tool + Approval + Artifact + Reload/Reconnect + Steer，在冻结 DeerFlow UI 连续两轮无异常。Dashboard 默认“客户演示交付”Tab 是 M0–M4 控制台，`work-packages.js.customerDemo` 是阶段状态数据源；“工作包总览”仍保留 W00–W24 完整范围。W00 静态矩阵与 W05 安全新建文件切片已复审合入，但五个阶段门禁均 `NOT_RUN`、演示决策 `NO_GO`；它不是 PRD D01–D05 全部完成。
 
-- [ ] P0｜M0：主控固定无敏感数据的同一 Thread/Run 演示脚本、Steer 可重复窗口、模型/预算/凭据引用与 doctor；输出每轮的输入 hash、网络目标、断言和 `NOT_RUN` 清单。W00 矩阵仅按脚本实际触及的来源消费，不等 W00 整包关闭。任务分工和派工顺序见[演示派工索引](../private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-1/README.md)。
-- [ ] P0｜M1：W05 受限生产文件 Tool `c6c2be9` 已复审合入 `main@cf04388`，首次全仓 Steer SSE gap `FAIL` 与 Windows 符号链接负例 `NOT_RUN` 保留。下一步完成同一生产 Tool/Approval 的拒绝、重复、越权、取消与主端口阶段 Oracle；受控 Provider 两轮不能代替真实模型整链。
+- [ ] P0｜M0：主控已固定 `contracts/customer-demo/customer-demo-v0-oracle.json`（两轮、8 case、同 Run Steer 窗口），只读 doctor 的静态正例/4 个负例及主端口前端、SDK、模型、OS 凭据、数据根核验 PASS，未调用付费模型；真实模型预算授权和真实 Steer 窗口仍为 `NOT_RUN`，不得把 doctor 当整链 PASS。W00 矩阵仅按脚本触及来源消费。任务分工见[演示派工索引](../private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-1/README.md)。
+- [ ] P0｜M1：W05 受限生产文件 Tool `c6c2be9` 已复审合入；主控在 `main@45a7ea6` 补齐受控 Provider 的批准前 404、错误 request/跨线程/重复 409、批准恰好一次、拒绝后无文件，以及取消/过期定向覆盖；定向 11/11、六模块 `clean verify`（Server 157/0/0/2 skip）和主端口 health/page/models smoke 均 PASS，未调用付费模型。M0 尚未通过，首次 Steer SSE gap `FAIL` 与 Windows 符号链接负例 `NOT_RUN` 继续保留，M1 不提升为 PASS；受控 Provider 不能代替真实模型整链。
 - [ ] P0｜M2：补真实 Artifact 发布与冻结 UI Tool/Approval/Artifact 卡片；子智能体提示词为 [W05-DemoArtifactUi-Pending](../private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-1/W05-Developing/W05-DemoArtifactUi-Pending.md)。主控先评审上游 SDK 完整 Tool transcript、普通 Tool 持久 Interaction 的最小公开接口，必要时走 HA `feat-*` PR 和人工复杂度裁决，不在 SH 另建权威。
 - [ ] P0｜M3：W18 在冻结 UI 把 pending→reload/reconnect→approve→Tool→Artifact→active Steer→terminal 做 L2 两轮及相关 reference/Haifa 逐 case 差分，提示词为 [W18-DemoL2Differential-Pending](../private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-1/W18-Developing/W18-DemoL2Differential-Pending.md)。保留旧 W04 上传 `FAIL`，不用 fixture 冒充生产能力。
-- [ ] P1｜W24 演示证据框架：M0 Oracle 固定后可将 [W24-DemoEvidenceBundle-Pending](../private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-1/W24-Developing/W24-DemoEvidenceBundle-Pending.md) 交给 OpenCode（`--model deepseek/deepseek-flash`），只构建 manifest 与 fail-closed 验证；不得运行付费模型或替主控宣告 GO。
+- [ ] P1｜W24 演示证据框架：OpenCode（`--model deepseek/deepseek-flash`）候选 `3fcc2f7` 已在独立 worktree 交付，六模块构建、61+41 assertions 与 Dashboard 2/2×2 均 PASS，但尚未合入。主控源码评审发现两个阻断并已退回同一 lane：阶段/轮次真实 `FAIL` 被总报告折叠为 `NOT_RUN`；Artifact 的下载 SHA/字节数及 provenance 只验证声明字符串，未绑定实际下载文件和原始证据。必须以独立修复提交补齐负例后再复审；不得运行付费模型或替主控宣告 GO，后续阶段无原始证据时继续保持 `NOT_RUN`。
 - [ ] P0｜M4：由主控在主线 `18018/33018` 使用真实模型按同配置/数据根连续两轮 L3 全链 `PASS`，零隐藏重试，W24 汇总原始 trace、Run/Tool/Interaction/Artifact、下载 hash、Usage 与失败史，再请人工体验验收；否则仍为 `FAIL`/`NOT_RUN`，不宣称演示版就绪。当前路线止于 M4，没有独立 M5。
 
 ## W04：已人工接受 Archive/Restore/Delete 切片；偶现风险挂账，不阻断其他工作包

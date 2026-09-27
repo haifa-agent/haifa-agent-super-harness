@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "haifa.customer-demo.oracle/v1",
+  "demoId": "DEMO-V0",
+  "frozenFrontend": {
+    "repository": "bytedance/deer-flow",
+    "commit": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+    "manifest": "third-party/deerflow/manifest.json",
+    "fallbackAllowed": false
+  },
+  "runtime": {
+    "gatewayPort": 18018,
+    "frontendPort": 33018,
+    "gatewayKind": "haifa",
+    "sdkVersion": "0.1.2-SNAPSHOT",
+    "dataRootPolicy": "preserve-between-rounds"
+  },
+  "model": {
+    "id": "main-deepseek",
+    "provider": "openai-compatible",
+    "endpointHost": "api.deepseek.com",
+    "credentialSource": "os",
+    "realModelRequired": true
+  },
+  "budget": {
+    "authorizationRequired": true,
+    "maxModelCallsPerRound": 3,
+    "paidRunAllowedByThisFile": false
+  },
+  "story": {
+    "rounds": 2,
+    "promptTemplate": "请使用生产 write_file 工具在 /mnt/user-data/outputs/customer-demo-round-{{round}}.txt 新建文件，内容必须精确为 haifa-customer-demo-round-{{round}}。工具执行需要审批；获得批准后继续当前 Run，并在结束前接受我通过界面发送的 Steer 指令。",
+    "steerInstruction": "请在同一 Run 中把最终回答补充为：DEMO-STEER-ACK-{{round}}，不要再次调用 write_file。",
+    "tool": "write_file",
+    "approval": "manual-frozen-ui",
+    "artifact": "sdk-owned-real-artifact",
+    "fileNameTemplate": "customer-demo-round-{{round}}.txt",
+    "fileContentTemplate": "haifa-customer-demo-round-{{round}}",
+    "steerWindow": {
+      "target": "same-run",
+      "opensAfter": "approved-tool-result",
+      "closesBefore": "terminal-state",
+      "testOnlyDelayAllowed": false,
+      "manualRetryAllowed": false
+    }
+  },
+  "oracle": [
+    { "id": "run-created", "required": true, "evidence": ["threadId", "runId", "modelId", "inputSha256"] },
+    { "id": "approval-pending", "required": true, "evidence": ["toolCallId", "interactionId", "fileAbsent", "artifactAbsent"] },
+    { "id": "reload-reconnect", "required": true, "evidence": ["sameRunId", "sameInteractionId", "singleCard"] },
+    { "id": "approval-exactly-once", "required": true, "evidence": ["responseId", "singleToolExecution", "negativeCases"] },
+    { "id": "artifact-download", "required": true, "evidence": ["artifactId", "provenance", "byteCount", "downloadSha256"] },
+    { "id": "active-steer", "required": true, "evidence": ["targetRunId", "steerRequest", "steerResponse", "ackText"] },
+    { "id": "terminal", "required": true, "evidence": ["terminalState", "sseEnd", "usage"] },
+    { "id": "cleanup", "required": true, "evidence": ["ports", "processes", "firstFailureHistory"] }
+  ],
+  "resultVocabulary": ["PASS", "FAIL", "NOT_RUN", "BLOCKED_EXTERNAL", "UPSTREAM_UNSUPPORTED"]
+}
