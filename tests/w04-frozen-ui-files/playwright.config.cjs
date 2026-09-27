@@ -5,14 +5,14 @@ const { defineConfig, devices } = require(path.resolve(
   "../../frontend/node_modules/@playwright/test",
 ));
 
-const frontendPort = process.env.E2E_FRONTEND_PORT ?? "43018";
+const frontendPort = process.env.E2E_FRONTEND_PORT ?? "25618";
 const evidenceRoot = process.env.W04_EVIDENCE_DIR
   ? path.resolve(process.env.W04_EVIDENCE_DIR)
   : path.resolve(__dirname, "../../target/w04-frozen-ui-files-evidence");
 
 module.exports = defineConfig({
   testDir: __dirname,
-  testMatch: "w04-files-project-workspace.spec.cjs",
+  testMatch: ["w04-files-project-workspace.spec.cjs", "w04-archive-restore-delete.spec.cjs"],
   fullyParallel: false,
   workers: 1,
   retries: 0,

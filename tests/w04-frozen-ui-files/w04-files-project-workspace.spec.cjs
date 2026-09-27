@@ -9,7 +9,7 @@ const { expect, test } = require(path.resolve(
 
 const APP =
   process.env.E2E_APP_URL ??
-  `http://127.0.0.1:${process.env.E2E_FRONTEND_PORT ?? "43018"}`;
+  `http://127.0.0.1:${process.env.E2E_FRONTEND_PORT ?? "25618"}`;
 const DATA_ROOT = process.env.W04_DATA_ROOT;
 const MODEL_NAME = "w04-controlled";
 

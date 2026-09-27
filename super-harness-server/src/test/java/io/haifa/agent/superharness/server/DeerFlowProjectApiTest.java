@@ -116,9 +116,17 @@ class DeerFlowProjectApiTest {
                 .path("id").asText();
         assertThat(request("PATCH", "/api/projects/" + id, "{\"name\":42}").statusCode())
                 .isEqualTo(422);
-        assertThat(body(get("/api/projects/" + id)).path("name").asText()).isEqualTo("Kept");
-        assertThat(request("POST", "/api/projects/" + id + "/archive", "{}").statusCode()).isEqualTo(404);
-        assertThat(request("DELETE", "/api/projects/" + id, null).statusCode()).isEqualTo(405);
+        HttpResponse<String> archived = request("POST", "/api/projects/" + id + "/archive", "{}");
+        assertThat(archived.statusCode()).isEqualTo(200);
+        assertThat(body(archived).path("status").asText()).isEqualTo("archived");
+
+        HttpResponse<String> restored = request("POST", "/api/projects/" + id + "/restore", "{}");
+        assertThat(restored.statusCode()).isEqualTo(200);
+        assertThat(body(restored).path("status").asText()).isEqualTo("active");
+
+        HttpResponse<String> deleted = request("DELETE", "/api/projects/" + id, null);
+        assertThat(deleted.statusCode()).isEqualTo(204);
+        assertThat(get("/api/projects/" + id).statusCode()).isEqualTo(404);
     }
 
     @Test
@@ -200,6 +208,74 @@ class DeerFlowProjectApiTest {
         HttpResponse<String> emptyUpload = multipart(projectId, "file", "empty.txt", new byte[0]);
         assertThat(emptyUpload.statusCode()).isEqualTo(422);
         assertThat(emptyUpload.body()).contains("must not be empty");
+    }
+
+    @Test
+    void projectArchiveRestoreDeleteAndDocumentTrashLifecycle() throws Exception {
+        HttpResponse<String> create = request("POST", "/api/projects", """
+                {"name":"LifeCycle","instructions":"Test project"}
+                """);
+        String projectId = body(create).path("id").asText();
+
+        // Upload doc1
+        byte[] bytes1 = "doc1 content\n".getBytes(StandardCharsets.UTF_8);
+        HttpResponse<String> uploaded1 = multipart(projectId, "file", "doc1.txt", bytes1);
+        String doc1Id = body(uploaded1).path("document").path("id").asText();
+
+        // Delete doc1 (soft delete)
+        HttpResponse<String> deleteDoc1 = request("DELETE", "/api/projects/" + projectId + "/documents/" + doc1Id, null);
+        assertThat(deleteDoc1.statusCode()).isEqualTo(204);
+        JsonNode docsAfterDelete = body(get("/api/projects/" + projectId + "/documents"));
+        assertThat(docsAfterDelete.path("total").asInt()).isEqualTo(0);
+
+        // Upload doc2
+        byte[] bytes2 = "doc2 content\n".getBytes(StandardCharsets.UTF_8);
+        HttpResponse<String> uploaded2 = multipart(projectId, "file", "doc2.txt", bytes2);
+        String doc2Id = body(uploaded2).path("document").path("id").asText();
+        assertThat(body(get("/api/projects/" + projectId + "/documents")).path("total").asInt()).isEqualTo(1);
+
+        // Archive project
+        HttpResponse<String> archiveResp = request("POST", "/api/projects/" + projectId + "/archive", "{}");
+        assertThat(archiveResp.statusCode()).isEqualTo(200);
+        assertThat(body(archiveResp).path("status").asText()).isEqualTo("archived");
+
+        // Archived project rejects document upload and trash (fail-closed 404)
+        HttpResponse<String> uploadArchived = multipart(projectId, "file", "doc3.txt", bytes("blocked\n"));
+        assertThat(uploadArchived.statusCode()).isEqualTo(404);
+        HttpResponse<String> trashArchived = request("DELETE", "/api/projects/" + projectId + "/documents/" + doc2Id, null);
+        assertThat(trashArchived.statusCode()).isEqualTo(404);
+
+        // Restore project
+        HttpResponse<String> restoreResp = request("POST", "/api/projects/" + projectId + "/restore", "{}");
+        assertThat(restoreResp.statusCode()).isEqualTo(200);
+        assertThat(body(restoreResp).path("status").asText()).isEqualTo("active");
+
+        // Bind thread to project
+        HttpResponse<String> threadResp = request("POST", "/api/threads", """
+                {"thread_id":"w04-test-thread","project_id":"%s","metadata":{"title":"W04 Thread"}}
+                """.formatted(projectId));
+        assertThat(threadResp.statusCode()).isEqualTo(200);
+        assertThat(body(get("/api/projects/" + projectId + "/threads?limit=10")).has(0)).isTrue();
+
+        // Delete project
+        HttpResponse<String> deleteProj = request("DELETE", "/api/projects/" + projectId, null);
+        assertThat(deleteProj.statusCode()).isEqualTo(204);
+        assertThat(get("/api/projects/" + projectId).statusCode()).isEqualTo(404);
+
+        // Verify thread has deerflow_project_id unlinked
+        JsonNode threadAfter = body(get("/api/threads/w04-test-thread"));
+        assertThat(threadAfter.path("metadata").has("deerflow_project_id")).isFalse();
+
+        // Verify doc1 and doc2 are both in trash
+        JsonNode trashList = body(get("/api/trash/documents"));
+        assertThat(trashList.path("total").asInt()).isEqualTo(2);
+        assertThat(trashList.path("documents"))
+                .extracting(node -> node.path("id").asText())
+                .containsExactlyInAnyOrder(doc1Id, doc2Id);
+    }
+
+    private static byte[] bytes(String text) {
+        return text.getBytes(StandardCharsets.UTF_8);
     }
 
     private HttpResponse<String> get(String path) throws Exception {

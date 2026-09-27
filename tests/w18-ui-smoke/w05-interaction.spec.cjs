@@ -8,7 +8,7 @@ const { expect, test } = require(path.resolve(
 
 const APP =
   process.env.E2E_APP_URL ??
-  `http://127.0.0.1:${process.env.E2E_FRONTEND_PORT ?? "53018"}`;
+  `http://127.0.0.1:${process.env.E2E_FRONTEND_PORT ?? "35618"}`;
 
 function runIdentity(response) {
   const location = response.headers()["content-location"];

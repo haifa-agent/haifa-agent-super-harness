@@ -15,6 +15,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -547,6 +549,328 @@ class PersistentProjectWorkspaceServiceTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> projects.createProject("owner-a", "ok", "", Map.of("other", "x")))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void projectArchiveRestoreDeleteLifecycleAndArchivedRejection() {
+        PersistentProjectWorkspaceService projects = projects();
+        ProjectProfile project = projects.createProject("owner-a", "Alpha", "Instructions", Map.of());
+        String projectId = project.id();
+
+        projects.uploadProjectDocument("owner-a", projectId, "notes.txt", bytes("live content\n"));
+        assertThat(projects.listProjectDocuments("owner-a", projectId)).hasSize(1);
+
+        // Archive project
+        ProjectProfile archived = projects.archiveProject("owner-a", projectId);
+        assertThat(archived.status()).isEqualTo("archived");
+        assertThat(projects.listProjects("owner-a", Optional.of("archived")))
+                .extracting(ProjectProfile::id).containsExactly(projectId);
+        assertThat(projects.listProjects("owner-a", Optional.of("active"))).isEmpty();
+
+        // Archived project still allows read access to shelf documents
+        assertThat(projects.listProjectDocuments("owner-a", projectId)).hasSize(1);
+
+        // Archived project rejects uploads, promote, and individual document trashing (fail-closed 404)
+        assertError(WorkspaceError.PROJECT_NOT_FOUND,
+                () -> projects.uploadProjectDocument("owner-a", projectId, "new.txt", bytes("blocked\n")));
+        String docId = projects.listProjectDocuments("owner-a", projectId).get(0).id();
+        assertError(WorkspaceError.PROJECT_NOT_FOUND,
+                () -> projects.trashProjectDocument("owner-a", projectId, docId));
+
+        // Restore project
+        ProjectProfile restored = projects.restoreProject("owner-a", projectId);
+        assertThat(restored.status()).isEqualTo("active");
+        assertThat(projects.listProjects("owner-a", Optional.of("active")))
+                .extracting(ProjectProfile::id).containsExactly(projectId);
+
+        // Now upload works again
+        projects.uploadProjectDocument("owner-a", projectId, "doc2.txt", bytes("doc 2\n"));
+        assertThat(projects.listProjectDocuments("owner-a", projectId)).hasSize(2);
+
+        // Deleting project trashes all its live documents and unlinks the project directory
+        projects.deleteProject("owner-a", projectId);
+        assertThat(projects.projectExists("owner-a", projectId)).isFalse();
+        assertError(WorkspaceError.PROJECT_NOT_FOUND, () -> projects.getProject("owner-a", projectId));
+
+        // Documents are preserved in trash with trashOrigin matching the deleted project
+        TrashDocumentList trashList = projects.listTrashDocuments("owner-a", 10, 0);
+        assertThat(trashList.total()).isEqualTo(2);
+        assertThat(trashList.documents())
+                .extracting(d -> d.trashOrigin().orElseThrow().projectId())
+                .containsOnly(projectId);
+        assertThat(trashList.documents())
+                .extracting(d -> d.trashOrigin().orElseThrow().projectName())
+                .containsOnly("Alpha");
+
+        // Verify restart persistence of trash after project deletion
+        PersistentProjectWorkspaceService restarted = projects();
+        TrashDocumentList restartedTrash = restarted.listTrashDocuments("owner-a", 10, 0);
+        assertThat(restartedTrash.total()).isEqualTo(2);
+    }
+
+    @Test
+    void documentTrashListRestoreMergeAndPurgeLifecycle() throws IOException {
+        PersistentProjectWorkspaceService projects = projects();
+        ProjectProfile p1 = projects.createProject("owner-a", "P1", "", Map.of());
+        ProjectProfile p2 = projects.createProject("owner-a", "P2", "", Map.of());
+
+        byte[] contentA = bytes("content A\n");
+        byte[] contentB = bytes("content B\n");
+        ProjectDocumentReceipt receiptA = projects.uploadProjectDocument("owner-a", p1.id(), "docA.txt", contentA);
+        ProjectDocumentReceipt receiptB = projects.uploadProjectDocument("owner-a", p1.id(), "docB.txt", contentB);
+        String docAId = receiptA.document().id();
+        String docBId = receiptB.document().id();
+
+        // Trash docA
+        projects.trashProjectDocument("owner-a", p1.id(), docAId);
+        assertThat(projects.listProjectDocuments("owner-a", p1.id()))
+                .extracting(ProjectDocument::id).containsExactly(docBId);
+
+        // List trash
+        TrashDocumentList trash = projects.listTrashDocuments("owner-a", 10, 0);
+        assertThat(trash.total()).isEqualTo(1);
+        assertThat(trash.documents().get(0).id()).isEqualTo(docAId);
+        assertThat(trash.documents().get(0).name()).isEqualTo("docA.txt");
+        assertThat(trash.documents().get(0).trashOrigin().orElseThrow().projectId()).isEqualTo(p1.id());
+
+        // Restore docA to origin project
+        RestoreDocumentResult restoredA = projects.restoreTrashDocument("owner-a", docAId, Optional.empty());
+        assertThat(restoredA.outcome()).isEqualTo("restored");
+        assertThat(restoredA.document().id()).isEqualTo(docAId);
+        assertThat(restoredA.document().projectId()).isEqualTo(p1.id());
+        assertThat(projects.listProjectDocuments("owner-a", p1.id())).hasSize(2);
+        assertThat(projects.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(0);
+
+        // Upload same content to P2
+        ProjectDocumentReceipt receiptC = projects.uploadProjectDocument("owner-a", p2.id(), "docC.txt", contentA);
+
+        // Trash docA again and restore to P2 -> should MERGE because content matches
+        projects.trashProjectDocument("owner-a", p1.id(), docAId);
+        RestoreDocumentResult mergedResult = projects.restoreTrashDocument("owner-a", docAId, Optional.of(p2.id()));
+        assertThat(mergedResult.outcome()).isEqualTo("merged");
+        assertThat(mergedResult.document().id()).isEqualTo(receiptC.document().id());
+        assertThat(projects.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(0);
+
+        // Trash docB, test content_missing on corrupted payload
+        projects.trashProjectDocument("owner-a", p1.id(), docBId);
+        Path trashPayload = storageRoot.resolve("trash").resolve("payloads").resolve(receiptB.document().sha256());
+        Files.writeString(trashPayload, "corrupted", StandardOpenOption.TRUNCATE_EXISTING);
+
+        assertError(WorkspaceError.CONTENT_INTEGRITY,
+                () -> projects.restoreTrashDocument("owner-a", docBId, Optional.of(p1.id())));
+        // Document remains in trash
+        assertThat(projects.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(1);
+
+        // Single purge
+        projects.purgeTrashDocument("owner-a", docBId);
+        assertThat(projects.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(0);
+
+        // Empty trash
+        projects.uploadProjectDocument("owner-a", p1.id(), "temp1.txt", bytes("1"));
+        projects.uploadProjectDocument("owner-a", p1.id(), "temp2.txt", bytes("2"));
+        String t1 = projects.listProjectDocuments("owner-a", p1.id()).get(0).id();
+        String t2 = projects.listProjectDocuments("owner-a", p1.id()).get(1).id();
+        projects.trashProjectDocument("owner-a", p1.id(), t1);
+        projects.trashProjectDocument("owner-a", p1.id(), t2);
+        assertThat(projects.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(2);
+
+        int purgedCount = projects.emptyTrash("owner-a");
+        assertThat(purgedCount).isEqualTo(2);
+        assertThat(projects.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(0);
+    }
+
+    @Test
+    void purgeTrashDocumentRetainsRowAndAllowsRetryWhenPayloadUnlinkFails() throws Exception {
+        PersistentProjectWorkspaceService projects = projects();
+        ProjectProfile p = projects.createProject("owner-a", "P-Purge", "", Map.of());
+        byte[] content = bytes("purge failure test\n");
+        ProjectDocumentReceipt receipt = projects.uploadProjectDocument("owner-a", p.id(), "doc.txt", content);
+        String docId = receipt.document().id();
+        String sha = receipt.document().sha256();
+
+        projects.trashProjectDocument("owner-a", p.id(), docId);
+        assertThat(projects.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(1);
+
+        Path payloadFile = storageRoot.resolve("trash").resolve("payloads").resolve(sha);
+        // Make payloadFile read-only to inject delete failure on Windows
+        payloadFile.toFile().setReadOnly();
+        try {
+            // Attempting to purge should fail because payload deletion fails
+            assertError(WorkspaceError.IO_FAILURE, () -> projects.purgeTrashDocument("owner-a", docId));
+
+            // Metadata row MUST still exist in trash!
+            TrashDocumentList list = projects.listTrashDocuments("owner-a", 10, 0);
+            assertThat(list.total()).isEqualTo(1);
+            assertThat(list.documents().get(0).id()).isEqualTo(docId);
+        } finally {
+            payloadFile.toFile().setWritable(true);
+        }
+
+        // Lock/read-only released: now purge should succeed and row is removed
+        projects.purgeTrashDocument("owner-a", docId);
+        assertThat(projects.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(0);
+        assertThat(Files.exists(payloadFile)).isFalse();
+    }
+
+    @Test
+    void purgeWithSharedPayloadOnlyDeletesPayloadWhenLastReferencePurged() throws Exception {
+        PersistentProjectWorkspaceService projects = projects();
+        ProjectProfile p1 = projects.createProject("owner-a", "P-Shared-1", "", Map.of());
+        ProjectProfile p2 = projects.createProject("owner-a", "P-Shared-2", "", Map.of());
+        byte[] content = bytes("shared content identical\n");
+        ProjectDocumentReceipt r1 = projects.uploadProjectDocument("owner-a", p1.id(), "doc1.txt", content);
+        ProjectDocumentReceipt r2 = projects.uploadProjectDocument("owner-a", p2.id(), "doc2.txt", content);
+        String id1 = r1.document().id();
+        String id2 = r2.document().id();
+        String sha = r1.document().sha256();
+
+        projects.trashProjectDocument("owner-a", p1.id(), id1);
+        projects.trashProjectDocument("owner-a", p2.id(), id2);
+        assertThat(projects.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(2);
+
+        Path payloadFile = storageRoot.resolve("trash").resolve("payloads").resolve(sha);
+        assertThat(Files.exists(payloadFile)).isTrue();
+
+        // Purge first document: payload is shared with id2, so payload MUST NOT be deleted
+        projects.purgeTrashDocument("owner-a", id1);
+        assertThat(projects.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(1);
+        assertThat(Files.exists(payloadFile)).isTrue();
+
+        // Purge second document: no more references, payload MUST now be deleted
+        projects.purgeTrashDocument("owner-a", id2);
+        assertThat(projects.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(0);
+        assertThat(Files.exists(payloadFile)).isFalse();
+    }
+
+    @Test
+    void restoreTrashDocumentVerifiesTargetPayloadBeforeMerging() throws Exception {
+        PersistentProjectWorkspaceService projects = projects();
+        ProjectProfile p1 = projects.createProject("owner-a", "P1-TargetCheck", "", Map.of());
+        ProjectProfile p2 = projects.createProject("owner-a", "P2-TargetCheck", "", Map.of());
+        byte[] content = bytes("merge check content\n");
+        ProjectDocumentReceipt r1 = projects.uploadProjectDocument("owner-a", p1.id(), "doc1.txt", content);
+        ProjectDocumentReceipt r2 = projects.uploadProjectDocument("owner-a", p2.id(), "doc2.txt", content);
+        String id1 = r1.document().id();
+        String sha = r1.document().sha256();
+
+        // Trash doc1
+        projects.trashProjectDocument("owner-a", p1.id(), id1);
+        assertThat(projects.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(1);
+
+        // Corrupt P2's payload file
+        Path p2Payload = storageRoot.resolve("projects")
+                .resolve("prj-" + Hashing.sha256(p2.id()).substring(0, 32))
+                .resolve("payloads").resolve(sha);
+        Files.writeString(p2Payload, "corrupted target bytes", StandardOpenOption.TRUNCATE_EXISTING);
+
+        // Restore doc1 into P2 -> merge candidate exists, but target payload is corrupted -> MUST fail with CONTENT_INTEGRITY (409)
+        assertError(WorkspaceError.CONTENT_INTEGRITY,
+                () -> projects.restoreTrashDocument("owner-a", id1, Optional.of(p2.id())));
+
+        // doc1 MUST still be preserved in trash!
+        assertThat(projects.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(1);
+        // Source trash payload MUST still be intact!
+        Path trashPayload = storageRoot.resolve("trash").resolve("payloads").resolve(sha);
+        assertThat(Files.readAllBytes(trashPayload)).isEqualTo(content);
+    }
+
+    @Test
+    void deleteProjectWithThreadUnbindFailurePreservesProject() throws IOException {
+        PersistentProjectWorkspaceService projects = projects();
+        ProjectProfile p = projects.createProject("owner-a", "P-UnbindFail", "", Map.of());
+        byte[] docBytes = bytes("test active document bytes\n");
+        ProjectDocumentReceipt receipt = projects.uploadProjectDocument("owner-a", p.id(), "test.txt", docBytes);
+        String docId = receipt.document().id();
+        Path projectDir = storageRoot.resolve("projects")
+                .resolve("prj-" + Hashing.sha256(p.id()).substring(0, 32));
+
+        // Unbind action throws IOException
+        assertError(WorkspaceError.IO_FAILURE,
+                () -> projects.deleteProject("owner-a", p.id(), () -> {
+                    throw new IOException("simulated thread unbind persistence error");
+                }));
+
+        // 1. Project directory and profile must STILL exist!
+        assertThat(projects.projectExists("owner-a", p.id())).isTrue();
+        assertThat(projects.getProject("owner-a", p.id()).name()).isEqualTo("P-UnbindFail");
+        assertThat(Files.exists(projectDir)).isTrue();
+
+        // 2. Active documents must STILL exist in project: listable and readable with exact bytes!
+        List<ProjectDocument> docs = projects.listProjectDocuments("owner-a", p.id());
+        assertThat(docs).extracting(ProjectDocument::id).containsExactly(docId);
+        ProjectDocumentContent content = projects.readProjectDocument("owner-a", p.id(), docId, 0, 32);
+        assertThat(content.bytes()).isEqualTo(docBytes);
+
+        // 3. No documents leaked to trash during failed deletion!
+        assertThat(projects.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(0);
+
+        // 4. Verify restart persistence: new service instance sees project and documents intact!
+        PersistentProjectWorkspaceService restarted = projects();
+        assertThat(restarted.projectExists("owner-a", p.id())).isTrue();
+        assertThat(restarted.getProject("owner-a", p.id()).name()).isEqualTo("P-UnbindFail");
+        assertThat(restarted.listProjectDocuments("owner-a", p.id()))
+                .extracting(ProjectDocument::id).containsExactly(docId);
+        assertThat(restarted.readProjectDocument("owner-a", p.id(), docId, 0, 32).bytes()).isEqualTo(docBytes);
+        assertThat(restarted.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(0);
+
+        // 5. Retry with succeeding unbind action: project deleted and documents moved to trash!
+        restarted.deleteProject("owner-a", p.id(), () -> {});
+        assertThat(restarted.projectExists("owner-a", p.id())).isFalse();
+        assertError(WorkspaceError.PROJECT_NOT_FOUND, () -> restarted.getProject("owner-a", p.id()));
+        assertThat(Files.exists(projectDir)).isFalse();
+
+        TrashDocumentList trash = restarted.listTrashDocuments("owner-a", 10, 0);
+        assertThat(trash.total()).isEqualTo(1);
+        assertThat(trash.documents().get(0).id()).isEqualTo(docId);
+        assertThat(trash.documents().get(0).name()).isEqualTo("test.txt");
+    }
+
+    @Test
+    void retentionSweepPurgesExpiredTrashDocumentsOnList() throws IOException {
+        PersistentProjectWorkspaceService projects = projects();
+        ProjectProfile pA = projects.createProject("owner-a", "PA", "", Map.of());
+        ProjectProfile pB = projects.createProject("owner-b", "PB", "", Map.of());
+
+        ProjectDocumentReceipt rA1 = projects.uploadProjectDocument("owner-a", pA.id(), "a1.txt", bytes("a1"));
+        ProjectDocumentReceipt rA2 = projects.uploadProjectDocument("owner-a", pA.id(), "a2.txt", bytes("a2"));
+        ProjectDocumentReceipt rB1 = projects.uploadProjectDocument("owner-b", pB.id(), "b1.txt", bytes("b1"));
+
+        projects.trashProjectDocument("owner-a", pA.id(), rA1.document().id());
+        projects.trashProjectDocument("owner-a", pA.id(), rA2.document().id());
+        projects.trashProjectDocument("owner-b", pB.id(), rB1.document().id());
+
+        // Artificially age a1 to 35 days ago (expired), a2 to 5 days ago (active)
+        Path a1Trash = storageRoot.resolve("trash").resolve("documents").resolve(rA1.document().id() + ".properties");
+        updateProperties(a1Trash, props -> props.setProperty("trashedAt", Instant.now().minus(35, ChronoUnit.DAYS).toString()));
+
+        Path b1Trash = storageRoot.resolve("trash").resolve("documents").resolve(rB1.document().id() + ".properties");
+        updateProperties(b1Trash, props -> props.setProperty("trashedAt", Instant.now().minus(40, ChronoUnit.DAYS).toString()));
+
+        // When owner-a lists trash, 30-day retention sweep runs:
+        // a1 (35 days old) is purged!
+        // a2 (5 days old) is retained!
+        TrashDocumentList listA = projects.listTrashDocuments("owner-a", 10, 0);
+        assertThat(listA.total()).isEqualTo(1);
+        assertThat(listA.documents().get(0).id()).isEqualTo(rA2.document().id());
+        assertThat(Files.exists(a1Trash)).isFalse();
+
+        // owner-b's trash document (b1) was NOT touched by owner-a's listing (owner isolation)
+        assertThat(Files.exists(b1Trash)).isTrue();
+        // When owner-b lists trash, b1 is swept
+        TrashDocumentList listB = projects.listTrashDocuments("owner-b", 10, 0);
+        assertThat(listB.total()).isEqualTo(0);
+        assertThat(Files.exists(b1Trash)).isFalse();
+    }
+
+    private static void updateProperties(Path path, Consumer<Properties> updater) throws IOException {
+        Properties properties = new Properties();
+        try (var in = Files.newInputStream(path)) {
+            properties.load(in);
+        }
+        updater.accept(properties);
+        try (var out = Files.newOutputStream(path)) {
+            properties.store(out, null);
+        }
     }
 
     @FunctionalInterface

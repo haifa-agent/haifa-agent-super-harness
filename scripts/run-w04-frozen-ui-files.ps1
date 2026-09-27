@@ -2,8 +2,8 @@
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$SourceRepository = 'D:\workspace\haifa-agent-super-harness\deer-flow',
-    [int]$GatewayPort = 28018,
-    [int]$FrontendPort = 43018,
+    [int]$GatewayPort = 20618,
+    [int]$FrontendPort = 25618,
     [int]$ProviderPort = 0,
     [string]$DataDirectory,
     [switch]$SkipBuild
@@ -12,8 +12,8 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-if ($GatewayPort -ne 28018 -or $FrontendPort -ne 43018 -or $ProviderPort -ne 0) {
-    throw 'W04 slot 1 is fixed to Gateway=28018 and Frontend=43018; controlled Provider must use OS-assigned port 0.'
+if ($GatewayPort -ne 20618 -or $FrontendPort -ne 25618 -or $ProviderPort -ne 0) {
+    throw 'W04 slot 1 is fixed to Gateway=20618 and Frontend=25618; controlled Provider must use OS-assigned port 0.'
 }
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
@@ -31,6 +31,10 @@ foreach ($port in @($GatewayPort, $FrontendPort)) {
     if ($listener) {
         throw "Refusing occupied W04 slot port $port (PID $($listener.OwningProcess -join ','))."
     }
+    $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $port)
+    try { $probe.Start() }
+    catch { throw "W04 slot port $port cannot bind on loopback (check Windows excluded port ranges): $($_.Exception.Message)" }
+    finally { $probe.Stop() }
 }
 
 $frontendRoot = Join-Path $root 'frontend'

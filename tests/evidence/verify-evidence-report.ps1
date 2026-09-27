@@ -166,6 +166,50 @@ try {
     Write-WorkData $cycle $data
     Assert-Fails $cycle 'prerequisite cycle detected'
 
+    $crossCuttingTask = New-Fixture 'cross-cutting-delivery-task'
+    $data = Read-WorkData $crossCuttingTask
+    $data.workPackages[3] | Add-Member -NotePropertyName tags -NotePropertyValue @('长期横切')
+    Write-WorkData $crossCuttingTask $data
+    Assert-Fails $crossCuttingTask 'W03 is cross-cutting and must not use a bounded delivery task group'
+
+    $tooManyTasks = New-Fixture 'too-many-delivery-tasks'
+    $data = Read-WorkData $tooManyTasks
+    $data.deliveryTasks.W04 = @($data.deliveryTasks.W04) + @($data.deliveryTasks.W04[0])
+    Write-WorkData $tooManyTasks $data
+    Assert-Fails $tooManyTasks 'must have 1 to 4 delivery tasks'
+
+    $missingTaskCard = New-Fixture 'missing-active-task-card'
+    $data = Read-WorkData $missingTaskCard
+    $data.deliveryTasks.W04[1].status = 'in_progress'
+    Write-WorkData $missingTaskCard $data
+    Assert-Fails $missingTaskCard 'in progress without a complete task card: prompt'
+
+    $oldSlotPorts = New-Fixture 'old-slot-ports'
+    $data = Read-WorkData $oldSlotPorts
+    $task = $data.deliveryTasks.W04[1]
+    $task.status = 'in_progress'
+    $task.prompt = 'private-docs/prompts/39-deerflow-parity-delivery/W04-Developing/W04-FaultIsolation-Pending.md'
+    $task | Add-Member -NotePropertyMembers @{
+        owner = '/root/test'; branch = 'feat-test'; worktree = 'D:/workspace/test'
+        slot = '2'; ports = '38018/53018'; dataRoot = 'D:/workspace/test/local-tmp'
+        exit = 'controlled failure test'; lastCheckpointAt = '2026-09-27T12:00:00+08:00'
+        nextCheckpoint = '2026-09-27T12:15:00+08:00'
+    }
+    Write-WorkData $oldSlotPorts $data
+    Assert-Fails $oldSlotPorts 'slot and child port group do not match'
+
+    $unreviewedTask = New-Fixture 'unreviewed-delivery-task'
+    $data = Read-WorkData $unreviewedTask
+    $data.deliveryTasks.W04[0].status = 'ready_for_acceptance'
+    Write-WorkData $unreviewedTask $data
+    Assert-Fails $unreviewedTask 'is ready without delivery evidence: commit'
+
+    $missingAudit = New-Fixture 'missing-execution-audit'
+    $data = Read-WorkData $missingAudit
+    $data.executionAudit.packages.W24.owner = ''
+    Write-WorkData $missingAudit $data
+    Assert-Fails $missingAudit 'W24 execution audit is missing owner'
+
     $missingEvidence = New-Fixture 'missing-evidence'
     $data = Read-WorkData $missingEvidence
     $complete = @($data.workPackages | Where-Object state -eq 'complete')[0]

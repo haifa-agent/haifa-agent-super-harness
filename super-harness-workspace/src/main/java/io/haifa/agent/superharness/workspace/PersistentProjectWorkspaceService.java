@@ -27,6 +27,7 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
@@ -57,6 +58,7 @@ public final class PersistentProjectWorkspaceService {
 
     private final Path projectsRoot;
     private final Path changesRoot;
+    private final Path trashRoot;
     private final WorkspaceRegistry registry;
     private final WorkspaceLimits workspaceLimits;
     private final WorkspaceChangeLimits changeLimits;
@@ -70,8 +72,11 @@ public final class PersistentProjectWorkspaceService {
         this.registry = new WorkspaceRegistry(root);
         this.projectsRoot = root.resolve("projects");
         this.changesRoot = root.resolve("workspace-changes");
+        this.trashRoot = root.resolve("trash");
         WorkspaceRegistry.createDirectories(projectsRoot);
         WorkspaceRegistry.createDirectories(changesRoot);
+        WorkspaceRegistry.createDirectories(trashRoot.resolve("documents"));
+        WorkspaceRegistry.createDirectories(trashRoot.resolve("payloads"));
         cleanupAbandonedStages();
     }
 
@@ -186,6 +191,114 @@ public final class PersistentProjectWorkspaceService {
                 existing.status(), existing.createdAt(), now);
     }
 
+    public synchronized ProjectProfile archiveProject(String ownerId, String projectId) {
+        Path project = requireProject(ownerId, projectId);
+        Path binding = project.resolve(BINDING_FILE);
+        Properties properties = loadProperties(binding, WorkspaceError.PROJECT_NOT_FOUND, "project does not exist");
+        properties.setProperty("status", "archived");
+        properties.setProperty("updatedAt", Instant.now().toString());
+        storeReplacing(properties, binding, "Super Harness project binding");
+        return loadProject(properties, projectId);
+    }
+
+    public synchronized ProjectProfile restoreProject(String ownerId, String projectId) {
+        Path project = requireProject(ownerId, projectId);
+        Path binding = project.resolve(BINDING_FILE);
+        Properties properties = loadProperties(binding, WorkspaceError.PROJECT_NOT_FOUND, "project does not exist");
+        properties.setProperty("status", "active");
+        properties.setProperty("updatedAt", Instant.now().toString());
+        storeReplacing(properties, binding, "Super Harness project binding");
+        return loadProject(properties, projectId);
+    }
+
+    @FunctionalInterface
+    public interface ProjectDeletionAction {
+        void execute() throws Exception;
+    }
+
+    public synchronized void deleteProject(String ownerId, String projectId) {
+        deleteProject(ownerId, projectId, () -> {});
+    }
+
+    public synchronized void deleteProject(String ownerId, String projectId, ProjectDeletionAction onUnbind) {
+        Path project = requireProject(ownerId, projectId);
+        ProjectProfile profile = getProject(ownerId, projectId);
+        Path documentsDir = project.resolve("documents");
+        List<ProjectDocument> docsToTrash = new ArrayList<>();
+        if (Files.exists(documentsDir)) {
+            try (Stream<Path> paths = Files.list(documentsDir)) {
+                List<Path> docFiles = paths.filter(path -> path.getFileName().toString().endsWith(".properties")).toList();
+                for (Path docFile : docFiles) {
+                    docsToTrash.add(loadDocument(docFile, projectId));
+                }
+            } catch (IOException exception) {
+                throw WorkspaceRegistry.ioFailure("failed to read project documents during project deletion", exception);
+            }
+        }
+
+        List<Path> createdTrashDocs = new ArrayList<>();
+        List<Path> createdTrashPayloads = new ArrayList<>();
+        try {
+            // 1. Stage documents into trash without mutating or deleting from projectRoot
+            for (ProjectDocument document : docsToTrash) {
+                Path payload = project.resolve("payloads").resolve(document.sha256());
+                Path trashPayload = trashRoot.resolve("payloads").resolve(document.sha256());
+                if (Files.exists(payload) && !Files.exists(trashPayload)) {
+                    Files.copy(payload, trashPayload, StandardCopyOption.REPLACE_EXISTING);
+                    createdTrashPayloads.add(trashPayload);
+                }
+
+                Properties properties = new Properties();
+                properties.setProperty("ownerId", ownerId);
+                properties.setProperty("id", document.id());
+                properties.setProperty("projectId", document.projectId());
+                properties.setProperty("name", document.name());
+                properties.setProperty("sizeBytes", Long.toString(document.sizeBytes()));
+                properties.setProperty("sha256", document.sha256());
+                properties.setProperty("sourceKind", document.sourceKind().wireValue());
+                document.sourceThreadId().ifPresent(val -> properties.setProperty("sourceThreadId", val));
+                document.sourceName().ifPresent(val -> properties.setProperty("sourceName", val));
+                properties.setProperty("createdAt", document.createdAt().toString());
+                properties.setProperty("updatedAt", document.updatedAt().toString());
+                properties.setProperty("trashedAt", Instant.now().toString());
+                properties.setProperty("trashOriginProjectId", document.projectId());
+                properties.setProperty("trashOriginProjectName", profile.name());
+
+                Path trashDoc = trashRoot.resolve("documents").resolve(document.id() + ".properties");
+                storeReplacing(properties, trashDoc, "Super Harness trashed document");
+                createdTrashDocs.add(trashDoc);
+            }
+
+            // 2. Execute unbind action before project directory deletion
+            if (onUnbind != null) {
+                onUnbind.execute();
+            }
+
+            // 3. Commit: unbind succeeded and all trash entries staged; delete project directory
+            deleteDirectoryRecursively(project);
+        } catch (Exception failure) {
+            // Roll back all staged trash entries so failure leaves trash pristine and project intact
+            for (Path trashDocPath : createdTrashDocs) {
+                try {
+                    Files.deleteIfExists(trashDocPath);
+                } catch (IOException rollbackErr) {
+                    LOGGER.log(Level.WARNING, "failed to rollback trash document " + trashDocPath, rollbackErr);
+                }
+            }
+            for (Path trashPayloadPath : createdTrashPayloads) {
+                try {
+                    Files.deleteIfExists(trashPayloadPath);
+                } catch (IOException rollbackErr) {
+                    LOGGER.log(Level.WARNING, "failed to rollback trash payload " + trashPayloadPath, rollbackErr);
+                }
+            }
+            if (failure instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw WorkspaceRegistry.ioFailure("failed to delete project", failure);
+        }
+    }
+
     /** Store one immutable upload snapshot. Equal content deduplicates and the first metadata wins. */
     public synchronized ProjectDocumentReceipt uploadProjectDocument(
             String ownerId, String projectId, String name, byte[] content) {
@@ -202,7 +315,7 @@ public final class PersistentProjectWorkspaceService {
             ProjectDocumentSourceKind sourceKind,
             String sourceName,
             Optional<String> shelfName) {
-        requireProject(ownerId, projectId);
+        requireActiveProject(ownerId, projectId);
         WorkspaceBinding binding = registry.requireOwner(ownerId, workspaceId);
         String thread = requireIdentity(threadId, "threadId");
         if (!binding.threadId().equals(thread)) {
@@ -270,6 +383,293 @@ public final class PersistentProjectWorkspaceService {
         } catch (IOException exception) {
             throw WorkspaceRegistry.ioFailure("failed to read project document", exception);
         }
+    }
+
+    public synchronized void trashProjectDocument(String ownerId, String projectId, String documentId) {
+        Path project = requireActiveProject(ownerId, projectId);
+        ProjectProfile profile = getProject(ownerId, projectId);
+        ProjectDocument document = requireDocument(project, documentId, projectId);
+        trashDocumentInternal(ownerId, project, document, profile.name());
+    }
+
+    public static final int DEFAULT_TRASH_RETENTION_DAYS = 30;
+
+    public synchronized void sweepExpiredTrash(String ownerId, int retentionDays, Instant now) {
+        String owner = requireIdentity(ownerId, "ownerId");
+        Path docsDir = trashRoot.resolve("documents");
+        if (!Files.exists(docsDir)) {
+            return;
+        }
+        Instant cutoff = now.minus(retentionDays, ChronoUnit.DAYS);
+        List<String> expiredIds = new ArrayList<>();
+        try (Stream<Path> paths = Files.list(docsDir)) {
+            List<Path> files = paths.filter(p -> p.getFileName().toString().endsWith(".properties")).toList();
+            for (Path file : files) {
+                try {
+                    Properties props = loadProperties(file, WorkspaceError.DOCUMENT_NOT_FOUND, "");
+                    if (owner.equals(props.getProperty("ownerId"))) {
+                        String trashedAtStr = props.getProperty("trashedAt");
+                        if (trashedAtStr != null) {
+                            Instant trashedAt = Instant.parse(trashedAtStr);
+                            if (!trashedAt.isAfter(cutoff)) {
+                                expiredIds.add(props.getProperty("id"));
+                            }
+                        }
+                    }
+                } catch (Exception parseException) {
+                    LOGGER.log(Level.WARNING, "Failed to parse trash document properties during sweep: " + file, parseException);
+                }
+            }
+        } catch (IOException exception) {
+            LOGGER.log(Level.WARNING, "Failed to list trash documents during retention sweep", exception);
+            return;
+        }
+
+        for (String id : expiredIds) {
+            try {
+                purgeTrashDocument(owner, id);
+            } catch (Exception purgeException) {
+                LOGGER.log(Level.WARNING, "Retention sweep purge failed for document " + id + "; retained for retry", purgeException);
+            }
+        }
+    }
+
+    public synchronized TrashDocumentList listTrashDocuments(String ownerId, int limit, int offset) {
+        return listTrashDocuments(ownerId, limit, offset, DEFAULT_TRASH_RETENTION_DAYS, Instant.now());
+    }
+
+    public synchronized TrashDocumentList listTrashDocuments(
+            String ownerId, int limit, int offset, int retentionDays, Instant now) {
+        String owner = requireIdentity(ownerId, "ownerId");
+        sweepExpiredTrash(owner, retentionDays, now);
+        Path docsDir = trashRoot.resolve("documents");
+        if (!Files.exists(docsDir)) {
+            return new TrashDocumentList(List.of(), 0, limit, offset);
+        }
+        List<TrashDocument> trashed = new ArrayList<>();
+        try (Stream<Path> paths = Files.list(docsDir)) {
+            List<Path> files = paths.filter(path -> path.getFileName().toString().endsWith(".properties")).toList();
+            for (Path file : files) {
+                try {
+                    Properties props = loadProperties(file, WorkspaceError.DOCUMENT_NOT_FOUND, "trashed document missing");
+                    if (owner.equals(props.getProperty("ownerId"))) {
+                        trashed.add(loadTrashDocument(props, file));
+                    }
+                } catch (Exception e) {
+                    LOGGER.log(Level.WARNING, "Skipping unreadable trash document " + file, e);
+                }
+            }
+        } catch (IOException exception) {
+            throw WorkspaceRegistry.ioFailure("failed to list trash documents", exception);
+        }
+        trashed.sort(Comparator.comparing(TrashDocument::trashedAt).reversed().thenComparing(TrashDocument::id));
+        int total = trashed.size();
+        int from = Math.min(offset, total);
+        int to = Math.min(total, from + limit);
+        List<TrashDocument> paged = trashed.subList(from, to);
+        return new TrashDocumentList(paged, total, limit, offset);
+    }
+
+    public synchronized RestoreDocumentResult restoreTrashDocument(
+            String ownerId, String documentId, Optional<String> requestedTargetProjectId) {
+        String owner = requireIdentity(ownerId, "ownerId");
+        Path trashDoc = trashRoot.resolve("documents").resolve(documentId + ".properties");
+        if (!Files.exists(trashDoc)) {
+            throw new WorkspaceException(WorkspaceError.DOCUMENT_NOT_FOUND, "trash document not found");
+        }
+        Properties props = loadProperties(trashDoc, WorkspaceError.DOCUMENT_NOT_FOUND, "trash document not found");
+        if (!owner.equals(props.getProperty("ownerId"))) {
+            throw new WorkspaceException(WorkspaceError.DOCUMENT_NOT_FOUND, "trash document not found");
+        }
+        TrashDocument trashed = loadTrashDocument(props, trashDoc);
+
+        String targetProjectId;
+        if (requestedTargetProjectId.isPresent() && !requestedTargetProjectId.get().isBlank()) {
+            targetProjectId = requestedTargetProjectId.get();
+        } else if (trashed.trashOrigin().isPresent()) {
+            targetProjectId = trashed.trashOrigin().get().projectId();
+        } else {
+            throw new WorkspaceException(WorkspaceError.PROJECT_NOT_FOUND, "no target project available");
+        }
+
+        Path targetProjectRoot = requireActiveProject(owner, targetProjectId);
+
+        Path trashPayload = trashRoot.resolve("payloads").resolve(trashed.sha256());
+        if (!Files.exists(trashPayload)) {
+            throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY, "content_missing");
+        }
+        try {
+            long size = Files.size(trashPayload);
+            if (size != trashed.sizeBytes()) {
+                throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY, "content_missing");
+            }
+            byte[] all = Files.readAllBytes(trashPayload);
+            if (!Hashing.sha256(all).equals(trashed.sha256())) {
+                throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY, "content_missing");
+            }
+        } catch (IOException exception) {
+            throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY, "content_missing", exception);
+        }
+
+        List<ProjectDocument> existingDocs = listProjectDocuments(owner, targetProjectId);
+        Optional<ProjectDocument> matchingCandidate = existingDocs.stream()
+                .filter(d -> d.sha256().equals(trashed.sha256()))
+                .findFirst();
+
+        if (matchingCandidate.isPresent()) {
+            // Verify target surviving document's payload exists and is intact!
+            Path candidatePayload = targetProjectRoot.resolve("payloads").resolve(matchingCandidate.get().sha256());
+            if (!Files.exists(candidatePayload)) {
+                throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY, "content_missing");
+            }
+            try {
+                if (Files.size(candidatePayload) != matchingCandidate.get().sizeBytes()
+                        || !Hashing.sha256(Files.readAllBytes(candidatePayload)).equals(matchingCandidate.get().sha256())) {
+                    throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY, "content_missing");
+                }
+            } catch (IOException exception) {
+                throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY, "content_missing", exception);
+            }
+
+            // Both source and target are verified. Remove trash document metadata.
+            boolean otherReferenced = hasOtherTrashReferences(trashed.id(), trashed.sha256());
+            if (!otherReferenced) {
+                try {
+                    Files.deleteIfExists(trashPayload);
+                } catch (IOException exception) {
+                    LOGGER.log(Level.WARNING, "failed to clean discarded trash payload after merge", exception);
+                }
+            }
+            try {
+                Files.deleteIfExists(trashDoc);
+            } catch (IOException exception) {
+                throw WorkspaceRegistry.ioFailure("failed to delete trashed document during merge", exception);
+            }
+            return new RestoreDocumentResult("merged", matchingCandidate.get());
+        }
+
+        Path targetPayload = targetProjectRoot.resolve("payloads").resolve(trashed.sha256());
+        try {
+            boolean copyNeeded = true;
+            if (Files.exists(targetPayload)) {
+                if (Files.size(targetPayload) == trashed.sizeBytes()
+                        && Hashing.sha256(Files.readAllBytes(targetPayload)).equals(trashed.sha256())) {
+                    copyNeeded = false;
+                }
+            }
+            if (copyNeeded) {
+                Files.copy(trashPayload, targetPayload, StandardCopyOption.REPLACE_EXISTING);
+            }
+            if (!Files.exists(targetPayload)
+                    || Files.size(targetPayload) != trashed.sizeBytes()
+                    || !Hashing.sha256(Files.readAllBytes(targetPayload)).equals(trashed.sha256())) {
+                throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY, "content_missing");
+            }
+        } catch (IOException exception) {
+            throw WorkspaceRegistry.ioFailure("failed to copy payload to restored project", exception);
+        }
+
+        Instant now = Instant.now();
+        ProjectDocument restoredDoc = new ProjectDocument(
+                trashed.id(),
+                targetProjectId,
+                trashed.name(),
+                trashed.sizeBytes(),
+                trashed.sha256(),
+                trashed.sourceThreadId(),
+                trashed.sourceKind(),
+                trashed.sourceName(),
+                trashed.createdAt(),
+                now);
+
+        Properties restoredProps = new Properties();
+        restoredProps.setProperty("id", restoredDoc.id());
+        restoredProps.setProperty("projectId", targetProjectId);
+        restoredProps.setProperty("name", restoredDoc.name());
+        restoredProps.setProperty("sizeBytes", Long.toString(restoredDoc.sizeBytes()));
+        restoredProps.setProperty("sha256", restoredDoc.sha256());
+        restoredProps.setProperty("sourceKind", restoredDoc.sourceKind().wireValue());
+        restoredDoc.sourceThreadId().ifPresent(val -> restoredProps.setProperty("sourceThreadId", val));
+        restoredDoc.sourceName().ifPresent(val -> restoredProps.setProperty("sourceName", val));
+        restoredProps.setProperty("createdAt", restoredDoc.createdAt().toString());
+        restoredProps.setProperty("updatedAt", now.toString());
+
+        Path targetDocPath = targetProjectRoot.resolve("documents").resolve(restoredDoc.id() + ".properties");
+        storeNew(restoredProps, targetDocPath, "Super Harness restored project document");
+
+        boolean otherReferenced = hasOtherTrashReferences(trashed.id(), trashed.sha256());
+        if (!otherReferenced) {
+            try {
+                Files.deleteIfExists(trashPayload);
+            } catch (IOException exception) {
+                LOGGER.log(Level.WARNING, "failed to delete trash payload after restore", exception);
+            }
+        }
+        try {
+            Files.deleteIfExists(trashDoc);
+        } catch (IOException exception) {
+            throw WorkspaceRegistry.ioFailure("failed to remove document from trash", exception);
+        }
+
+        return new RestoreDocumentResult("restored", restoredDoc);
+    }
+
+    public synchronized void purgeTrashDocument(String ownerId, String documentId) {
+        String owner = requireIdentity(ownerId, "ownerId");
+        Path trashDoc = trashRoot.resolve("documents").resolve(documentId + ".properties");
+        if (!Files.exists(trashDoc)) {
+            throw new WorkspaceException(WorkspaceError.DOCUMENT_NOT_FOUND, "trash document not found");
+        }
+        Properties props = loadProperties(trashDoc, WorkspaceError.DOCUMENT_NOT_FOUND, "trash document not found");
+        if (!owner.equals(props.getProperty("ownerId"))) {
+            throw new WorkspaceException(WorkspaceError.DOCUMENT_NOT_FOUND, "trash document not found");
+        }
+        String sha256 = props.getProperty("sha256");
+
+        // 1. Guarded payload removal: delete payload file first if unreferenced by other trash documents.
+        // If file deletion fails, throw ioFailure so trashDoc is NOT deleted, remaining retryable!
+        boolean otherReferenced = hasOtherTrashReferences(documentId, sha256);
+        if (!otherReferenced && sha256 != null && !sha256.isBlank()) {
+            Path payloadFile = trashRoot.resolve("payloads").resolve(sha256);
+            try {
+                Files.deleteIfExists(payloadFile);
+            } catch (IOException exception) {
+                throw WorkspaceRegistry.ioFailure("failed to delete trash payload " + sha256, exception);
+            }
+        }
+
+        // 2. Only after payload deletion succeeds (or was shared), delete metadata
+        try {
+            Files.deleteIfExists(trashDoc);
+        } catch (IOException exception) {
+            throw WorkspaceRegistry.ioFailure("failed to delete trash document metadata", exception);
+        }
+    }
+
+    public synchronized int emptyTrash(String ownerId) {
+        String owner = requireIdentity(ownerId, "ownerId");
+        Path docsDir = trashRoot.resolve("documents");
+        if (!Files.exists(docsDir)) {
+            return 0;
+        }
+        List<String> docIds = new ArrayList<>();
+        try (Stream<Path> paths = Files.list(docsDir)) {
+            List<Path> files = paths.filter(path -> path.getFileName().toString().endsWith(".properties")).toList();
+            for (Path file : files) {
+                Properties props = loadProperties(file, WorkspaceError.DOCUMENT_NOT_FOUND, "trash doc missing");
+                if (owner.equals(props.getProperty("ownerId"))) {
+                    docIds.add(props.getProperty("id"));
+                }
+            }
+        } catch (IOException exception) {
+            throw WorkspaceRegistry.ioFailure("failed to empty trash", exception);
+        }
+        int count = 0;
+        for (String docId : docIds) {
+            purgeTrashDocument(owner, docId);
+            count++;
+        }
+        return count;
     }
 
     /** Capture a bounded immutable baseline for a run. */
@@ -509,7 +909,7 @@ public final class PersistentProjectWorkspaceService {
             Optional<String> sourceThread,
             ProjectDocumentSourceKind sourceKind,
             Optional<String> sourceName) {
-        Path project = requireProject(ownerId, projectId);
+        Path project = requireActiveProject(ownerId, projectId);
         String displayName = validateFilename(name);
         byte[] bytes = Objects.requireNonNull(content, "content").clone();
         if (bytes.length == 0) {
@@ -751,6 +1151,129 @@ public final class PersistentProjectWorkspaceService {
             throw new WorkspaceException(WorkspaceError.OWNER_MISMATCH, "project belongs to a different owner");
         }
         return root;
+    }
+
+    private Path requireActiveProject(String ownerId, String projectId) {
+        Path root = requireProject(ownerId, projectId);
+        Properties binding = loadProperties(root.resolve(BINDING_FILE), WorkspaceError.PROJECT_NOT_FOUND,
+                "project does not exist");
+        if (!"active".equals(binding.getProperty("status"))) {
+            throw new WorkspaceException(WorkspaceError.PROJECT_NOT_FOUND, "project is archived");
+        }
+        return root;
+    }
+
+    private void trashDocumentInternal(String ownerId, Path projectRoot, ProjectDocument document, String projectName) {
+        Path payload = projectRoot.resolve("payloads").resolve(document.sha256());
+        Path trashPayload = trashRoot.resolve("payloads").resolve(document.sha256());
+        try {
+            if (Files.exists(payload) && !Files.exists(trashPayload)) {
+                Files.copy(payload, trashPayload, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException exception) {
+            throw WorkspaceRegistry.ioFailure("failed to copy document payload to trash", exception);
+        }
+        Properties properties = new Properties();
+        properties.setProperty("ownerId", ownerId);
+        properties.setProperty("id", document.id());
+        properties.setProperty("projectId", document.projectId());
+        properties.setProperty("name", document.name());
+        properties.setProperty("sizeBytes", Long.toString(document.sizeBytes()));
+        properties.setProperty("sha256", document.sha256());
+        properties.setProperty("sourceKind", document.sourceKind().wireValue());
+        document.sourceThreadId().ifPresent(val -> properties.setProperty("sourceThreadId", val));
+        document.sourceName().ifPresent(val -> properties.setProperty("sourceName", val));
+        properties.setProperty("createdAt", document.createdAt().toString());
+        properties.setProperty("updatedAt", document.updatedAt().toString());
+        properties.setProperty("trashedAt", Instant.now().toString());
+        properties.setProperty("trashOriginProjectId", document.projectId());
+        properties.setProperty("trashOriginProjectName", projectName);
+
+        Path trashDoc = trashRoot.resolve("documents").resolve(document.id() + ".properties");
+        storeReplacing(properties, trashDoc, "Super Harness trashed document");
+
+        Path originalDoc = projectRoot.resolve("documents").resolve(document.id() + ".properties");
+        try {
+            Files.deleteIfExists(originalDoc);
+        } catch (IOException exception) {
+            throw WorkspaceRegistry.ioFailure("failed to delete original document properties", exception);
+        }
+    }
+
+    private TrashDocument loadTrashDocument(Properties properties, Path path) {
+        try {
+            String id = properties.getProperty("id");
+            String name = validateFilename(properties.getProperty("name"));
+            long size = Long.parseLong(properties.getProperty("sizeBytes"));
+            String sha256 = properties.getProperty("sha256");
+            ProjectDocumentSourceKind kind = switch (properties.getProperty("sourceKind")) {
+                case "upload" -> ProjectDocumentSourceKind.UPLOAD;
+                case "output" -> ProjectDocumentSourceKind.OUTPUT;
+                default -> throw new IllegalArgumentException("document source kind is invalid");
+            };
+            Optional<String> sourceThreadId = Optional.ofNullable(properties.getProperty("sourceThreadId"));
+            Optional<String> sourceName = Optional.ofNullable(properties.getProperty("sourceName"));
+            Instant createdAt = Instant.parse(properties.getProperty("createdAt"));
+            Instant updatedAt = Instant.parse(properties.getProperty("updatedAt"));
+            Instant trashedAt = Instant.parse(properties.getProperty("trashedAt"));
+            String originProjId = properties.getProperty("trashOriginProjectId");
+            String originProjName = properties.getProperty("trashOriginProjectName");
+            Optional<TrashDocument.TrashOrigin> origin = (originProjId != null && originProjName != null)
+                    ? Optional.of(new TrashDocument.TrashOrigin(originProjId, originProjName))
+                    : Optional.empty();
+            return new TrashDocument(id, name, size, sha256, sourceThreadId, kind, sourceName, createdAt, updatedAt, trashedAt, origin);
+        } catch (RuntimeException exception) {
+            throw new WorkspaceException(WorkspaceError.CONTENT_INTEGRITY, "trashed document metadata is corrupt", exception);
+        }
+    }
+
+    private boolean hasOtherTrashReferences(String excludeDocId, String sha256) {
+        if (sha256 == null || sha256.isBlank()) {
+            return false;
+        }
+        Path docsDir = trashRoot.resolve("documents");
+        if (!Files.exists(docsDir)) {
+            return false;
+        }
+        String excludeFileName = excludeDocId + ".properties";
+        try (Stream<Path> paths = Files.list(docsDir)) {
+            return paths.filter(p -> p.getFileName().toString().endsWith(".properties"))
+                    .filter(p -> !p.getFileName().toString().equals(excludeFileName))
+                    .anyMatch(p -> {
+                        try {
+                            Properties pProps = loadProperties(p, WorkspaceError.DOCUMENT_NOT_FOUND, "");
+                            return sha256.equals(pProps.getProperty("sha256"));
+                        } catch (Exception ignored) {
+                            return false;
+                        }
+                    });
+        } catch (IOException exception) {
+            LOGGER.log(Level.WARNING, "failed to scan trash documents for payload references", exception);
+            return true;
+        }
+    }
+
+    private static void deleteDirectoryRecursively(Path root) {
+        if (!Files.exists(root)) {
+            return;
+        }
+        try {
+            Files.walkFileTree(root, new java.nio.file.SimpleFileVisitor<Path>() {
+                @Override
+                public java.nio.file.FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                    Files.deleteIfExists(file);
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public java.nio.file.FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+                    Files.deleteIfExists(dir);
+                    return java.nio.file.FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException exception) {
+            throw WorkspaceRegistry.ioFailure("failed to delete project directory", exception);
+        }
     }
 
     private ProjectProfile loadProject(Path binding, String expectedProjectId) {

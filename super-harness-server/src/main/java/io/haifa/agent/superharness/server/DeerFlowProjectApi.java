@@ -29,8 +29,11 @@ final class DeerFlowProjectApi implements HttpHandler {
     private static final String OWNER_ID = DeerFlowBootstrapApi.DEFAULT_USER_ID;
     private static final int MAX_JSON_BYTES = 32 * 1024;
     private static final Pattern PROJECT = Pattern.compile("^/api/projects/([^/]+)$");
+    private static final Pattern PROJECT_ARCHIVE = Pattern.compile("^/api/projects/([^/]+)/archive$");
+    private static final Pattern PROJECT_RESTORE = Pattern.compile("^/api/projects/([^/]+)/restore$");
     private static final Pattern THREADS = Pattern.compile("^/api/projects/([^/]+)/threads$");
     private static final Pattern DOCUMENTS = Pattern.compile("^/api/projects/([^/]+)/documents$");
+    private static final Pattern DOCUMENT = Pattern.compile("^/api/projects/([^/]+)/documents/([^/]+)$");
     private static final Pattern DOCUMENT_CONTENT =
             Pattern.compile("^/api/projects/([^/]+)/documents/([^/]+)/content$");
     private static final Pattern DOCUMENT_ATTACH = Pattern.compile(
@@ -80,7 +83,23 @@ final class DeerFlowProjectApi implements HttpHandler {
                 }
                 return;
             }
-            Matcher match = THREADS.matcher(path);
+            Matcher match = PROJECT_ARCHIVE.matcher(path);
+            if (match.matches()) {
+                if (!requireMethod(exchange, "POST")) {
+                    return;
+                }
+                sendJson(exchange, 200, response(projects.archiveProject(OWNER_ID, match.group(1))));
+                return;
+            }
+            match = PROJECT_RESTORE.matcher(path);
+            if (match.matches()) {
+                if (!requireMethod(exchange, "POST")) {
+                    return;
+                }
+                sendJson(exchange, 200, response(projects.restoreProject(OWNER_ID, match.group(1))));
+                return;
+            }
+            match = THREADS.matcher(path);
             if (match.matches()) {
                 if (!requireMethod(exchange, "GET")) {
                     return;
@@ -104,6 +123,15 @@ final class DeerFlowProjectApi implements HttpHandler {
                 attachDocument(exchange, match.group(1), match.group(2), match.group(3));
                 return;
             }
+            match = DOCUMENT.matcher(path);
+            if (match.matches()) {
+                if (!requireMethod(exchange, "DELETE")) {
+                    return;
+                }
+                projects.trashProjectDocument(OWNER_ID, match.group(1), match.group(2));
+                sendNoContent(exchange);
+                return;
+            }
             match = DOCUMENTS.matcher(path);
             if (match.matches()) {
                 if (exchange.getRequestMethod().equals("GET")) {
@@ -121,8 +149,10 @@ final class DeerFlowProjectApi implements HttpHandler {
                     sendJson(exchange, 200, response(projects.getProject(OWNER_ID, match.group(1))));
                 } else if (exchange.getRequestMethod().equals("PATCH")) {
                     patch(exchange, match.group(1));
+                } else if (exchange.getRequestMethod().equals("DELETE")) {
+                    deleteProject(exchange, match.group(1));
                 } else {
-                    methodNotAllowed(exchange, "GET, PATCH");
+                    methodNotAllowed(exchange, "GET, PATCH, DELETE");
                 }
                 return;
             }
@@ -137,17 +167,34 @@ final class DeerFlowProjectApi implements HttpHandler {
             sendJson(exchange, failure.status(), Map.of("detail", failure.getMessage()));
         } catch (WorkspaceException failure) {
             int status = switch (failure.error()) {
-                case PROJECT_NOT_FOUND, OWNER_MISMATCH, INVALID_IDENTITY -> 404;
+                case PROJECT_NOT_FOUND, OWNER_MISMATCH, INVALID_IDENTITY, DOCUMENT_NOT_FOUND -> 404;
                 case FILE_TOO_LARGE -> 413;
                 case READ_OUT_OF_BOUNDS -> 416;
                 case CONTENT_INTEGRITY, FILE_NOT_FOUND -> 409;
                 case INVALID_PATH -> 422;
                 default -> 500;
             };
-            sendJson(exchange, status, Map.of("detail", status == 404 ? "Project not found" : failure.getMessage()));
+            String detail = switch (failure.error()) {
+                case PROJECT_NOT_FOUND, OWNER_MISMATCH, INVALID_IDENTITY -> "Project not found";
+                case DOCUMENT_NOT_FOUND -> "Project document not found";
+                case CONTENT_INTEGRITY -> "content_missing";
+                default -> failure.getMessage();
+            };
+            sendJson(exchange, status, Map.of("detail", detail));
         } catch (IllegalArgumentException failure) {
             sendJson(exchange, 422, Map.of("detail", failure.getMessage()));
         }
+    }
+
+    private void deleteProject(HttpExchange exchange, String projectId) throws IOException {
+        projects.deleteProject(OWNER_ID, projectId, () -> threads.unbindProject(projectId));
+        sendNoContent(exchange);
+    }
+
+    private void sendNoContent(HttpExchange exchange) throws IOException {
+        exchange.getResponseHeaders().set("Cache-Control", "no-store");
+        exchange.sendResponseHeaders(204, -1);
+        exchange.close();
     }
 
     private void list(HttpExchange exchange) throws IOException {

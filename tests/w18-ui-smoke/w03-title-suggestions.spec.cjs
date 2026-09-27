@@ -12,7 +12,7 @@ const { expect, test } = require(path.resolve(
 // suggestions through the real POST /api/threads/{id}/suggestions call.
 const APP =
   process.env.E2E_APP_URL ??
-  `http://127.0.0.1:${process.env.E2E_FRONTEND_PORT ?? "63018"}`;
+  `http://127.0.0.1:${process.env.E2E_FRONTEND_PORT ?? "45618"}`;
 const EXPECTED_SUGGESTIONS = ["What changed?", "Why now?", "What next?"];
 
 function escapeRegExp(value) {

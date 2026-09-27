@@ -54,6 +54,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final DeerFlowConfigurationApi configurationApi;
     private final DeerFlowWorkspaceApi workspaceApi;
     private final DeerFlowProjectApi projectApi;
+    private final DeerFlowTrashApi trashApi;
     private final DeerFlowInputPolishApi inputPolishApi;
     private final DeerFlowSuggestionsApi suggestionsApi;
 
@@ -87,6 +88,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
         this.projectApi = new DeerFlowProjectApi(objectMapper, projects, threadRunApi, workspaceApi);
+        this.trashApi = new DeerFlowTrashApi(objectMapper, projects);
         this.inputPolishApi = new DeerFlowInputPolishApi(objectMapper, modelResolver);
         this.suggestionsApi = new DeerFlowSuggestionsApi(
                 objectMapper, modelResolver, threadRunApi::hasThread, suggestionsSettings);
@@ -394,6 +396,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         server.createContext(DeerFlowInputPolishApi.PATH, inputPolishApi);
         server.createContext("/api/suggestions", suggestionsApi);
         server.createContext("/api/projects", projectApi);
+        server.createContext("/api/trash", trashApi);
         server.createContext("/api/threads", exchange -> {
             if (!workspaceApi.tryHandle(exchange) && !suggestionsApi.tryHandle(exchange)) {
                 threadRunApi.handle(exchange);

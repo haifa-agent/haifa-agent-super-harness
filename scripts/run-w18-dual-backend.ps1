@@ -5,9 +5,9 @@ param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$SourceRepository = 'D:\workspace\haifa-agent-super-harness\deer-flow',
     [string]$DataDirectory,
-    [int]$GatewayPort = 48018,
-    [int]$FrontendPort = 63018,
-    [int]$ProviderPort = 58018,
+    [int]$GatewayPort = 40618,
+    [int]$FrontendPort = 45618,
+    [int]$ProviderPort = 46618,
     [switch]$SkipBuild
 )
 
@@ -50,8 +50,8 @@ function Stop-OwnedTree([System.Diagnostics.Process]$Process) {
 }
 
 if ([string]::IsNullOrWhiteSpace($Backend)) { throw '-Backend reference|haifa is required.' }
-if ($GatewayPort -ne 48018 -or $FrontendPort -ne 63018 -or $ProviderPort -ne 58018) {
-    throw 'W18 slot 3 requires Gateway=48018, Frontend=63018 and the main-controller-assigned test-only Provider=58018.'
+if ($GatewayPort -ne 40618 -or $FrontendPort -ne 45618 -or $ProviderPort -ne 46618) {
+    throw 'W18 slot 3 requires Gateway=40618, Frontend=45618 and the main-controller-assigned test-only Provider=46618.'
 }
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 $source = (Resolve-Path -LiteralPath $SourceRepository).Path
@@ -71,6 +71,10 @@ if (-not $dataRoot.StartsWith($root.TrimEnd('\', '/') + [IO.Path]::DirectorySepa
 foreach ($port in @($GatewayPort, $FrontendPort, $ProviderPort)) {
     $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
     if ($listener) { throw "Slot-3 port $port already has listener PID $($listener.OwningProcess -join ',')." }
+    $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $port)
+    try { $probe.Start() }
+    catch { throw "Slot-3 port $port cannot bind on loopback (check Windows excluded port ranges): $($_.Exception.Message)" }
+    finally { $probe.Stop() }
 }
 $frontendRoot = Join-Path $root 'frontend'
 if (-not (Test-Path -LiteralPath (Join-Path $frontendRoot 'node_modules/.bin/next.cmd'))) {

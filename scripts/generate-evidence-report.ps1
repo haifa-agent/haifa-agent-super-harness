@@ -156,6 +156,94 @@ function Test-WorkPackages {
     }
     foreach ($id in $actualIds) { Visit-Package $id @() }
 
+    $crossCutting = @($packages | Where-Object {
+        $_.PSObject.Properties.Name -contains 'tags' -and @($_.tags) -contains '长期横切'
+    } | ForEach-Object { [string]$_.id })
+    $taskGroups = @($Data.deliveryTasks.PSObject.Properties.Name)
+    $activeTaskPackages = @()
+    $activeTaskPorts = @()
+    $activeTaskRoots = @()
+    foreach ($id in $taskGroups) {
+        Assert-Condition $byId.ContainsKey($id) "delivery tasks reference missing work package $id"
+        Assert-Condition ($crossCutting -notcontains $id) "$id is cross-cutting and must not use a bounded delivery task group"
+        $tasks = @($Data.deliveryTasks.$id)
+        Assert-Condition ($tasks.Count -ge 1 -and $tasks.Count -le 4) "$id must have 1 to 4 delivery tasks; more requires human scope decision"
+        for ($index = 0; $index -lt $tasks.Count; $index++) {
+            $task = $tasks[$index]
+            Assert-Condition ([string]$task.id -eq "task-$($index + 1)") "$id delivery task ids must be sequential task-1 through task-4"
+            Assert-Condition ($AllowedStates -contains [string]$task.status) "$id/$($task.id) has an invalid state"
+            Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$task.title)) "$id/$($task.id) is missing a title"
+            if ([string]$task.status -eq 'in_progress') {
+                $activeTaskPackages += $id
+                foreach ($field in @('prompt', 'owner', 'branch', 'worktree', 'slot', 'ports', 'dataRoot', 'exit', 'lastCheckpointAt', 'nextCheckpoint')) {
+                    Assert-Condition ($task.PSObject.Properties.Name -contains $field -and
+                        -not [string]::IsNullOrWhiteSpace([string]$task.$field)) `
+                        "$id/$($task.id) is in progress without a complete task card: $field"
+                }
+                $lastCheckpoint = Get-IsoTime $task.lastCheckpointAt "$id/$($task.id).lastCheckpointAt"
+                $nextCheckpoint = Get-IsoTime $task.nextCheckpoint "$id/$($task.id).nextCheckpoint"
+                Assert-Condition ($nextCheckpoint -gt $lastCheckpoint -and
+                    $nextCheckpoint -le $lastCheckpoint.AddMinutes(15)) `
+                    "$id/$($task.id) next checkpoint must be within 15 minutes"
+                $slotPorts = @{ '1' = '20618/25618'; '2' = '30618/35618'; '3' = '40618/45618' }
+                Assert-Condition ($slotPorts.ContainsKey([string]$task.slot) -and
+                    [string]$task.ports -eq $slotPorts[[string]$task.slot]) `
+                    "$id/$($task.id) slot and child port group do not match"
+                $activeTaskPorts += [string]$task.ports
+                $activeTaskRoots += [string]$task.dataRoot
+            }
+            if ([string]$task.status -in @('ready_for_acceptance', 'complete')) {
+                foreach ($field in @('commit', 'targetedTests', 'runtimeEvidence', 'exit')) {
+                    Assert-Condition ($task.PSObject.Properties.Name -contains $field -and
+                        -not [string]::IsNullOrWhiteSpace([string]$task.$field)) `
+                        "$id/$($task.id) is ready without delivery evidence: $field"
+                }
+                Assert-Condition ($task.PSObject.Properties.Name -contains 'notRun') `
+                    "$id/$($task.id) must explicitly list NOT_RUN cases"
+                Assert-Condition ($task.PSObject.Properties.Name -contains 'worktreeClean' -and $task.worktreeClean -eq $true) `
+                    "$id/$($task.id) delivery worktree is not recorded clean"
+            }
+            if ([string]$task.status -eq 'complete') {
+                foreach ($field in @('mainCommit', 'reviewEvidence', 'mainSmoke', 'acceptedAt')) {
+                    Assert-Condition ($task.PSObject.Properties.Name -contains $field -and
+                        -not [string]::IsNullOrWhiteSpace([string]$task.$field)) `
+                        "$id/$($task.id) cannot complete before mainline review and acceptance: $field"
+                }
+                $null = Get-IsoTime $task.acceptedAt "$id/$($task.id).acceptedAt"
+                if ($task.PSObject.Properties.Name -contains 'requiresHumanAcceptance' -and $task.requiresHumanAcceptance -eq $true) {
+                    Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$task.humanAcceptance)) `
+                        "$id/$($task.id) requires explicit human acceptance"
+                }
+            }
+        }
+    }
+    foreach ($package in $packages | Where-Object { $_.state -eq 'in_progress' -and $crossCutting -notcontains $_.id }) {
+        Assert-Condition ($taskGroups -contains [string]$package.id) "$($package.id) needs a bounded delivery task group"
+    }
+    Assert-Condition ($activeTaskPackages.Count -le 3) "active development tasks consume the reserved recovery/acceptance slot"
+    Assert-Condition (@($activeTaskPorts | Sort-Object -Unique).Count -eq $activeTaskPorts.Count) `
+        "active delivery tasks cannot share a port group"
+    Assert-Condition (@($activeTaskRoots | Sort-Object -Unique).Count -eq $activeTaskRoots.Count) `
+        "active delivery tasks cannot share a data root"
+    $activeTaskPackages = @($activeTaskPackages | Sort-Object -Unique)
+    Assert-Condition ($activeTaskPackages.Count -le 3) "active non-cross-cutting development exceeds the default limit of three"
+    $recordedActive = @($Data.executionAudit.activeNonCrossCuttingPackages | ForEach-Object { [string]$_ })
+    Assert-Condition ($activeTaskPackages.Count -eq $recordedActive.Count) `
+        "execution audit active package count does not match delivery tasks"
+    if ($activeTaskPackages.Count -gt 0) {
+        Assert-Condition (@(Compare-Object ($activeTaskPackages | Sort-Object) ($recordedActive | Sort-Object)).Count -eq 0) `
+            "execution audit active packages do not match delivery tasks"
+    }
+    foreach ($package in $packages | Where-Object state -eq 'in_progress') {
+        $audit = $Data.executionAudit.packages.([string]$package.id)
+        Assert-Condition ($null -ne $audit) "$($package.id) has no current execution audit"
+        foreach ($field in @('assignment', 'owner', 'worktree', 'branch', 'lastProgressAt', 'lastEvidence', 'blocker', 'nextAction')) {
+            Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$audit.$field)) `
+                "$($package.id) execution audit is missing $field"
+        }
+        $null = Get-IsoTime $audit.lastProgressAt "$($package.id).lastProgressAt"
+    }
+
     foreach ($milestone in @($Data.milestones)) {
         $null = Get-IsoTime $milestone.at "milestone.at"
     }

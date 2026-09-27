@@ -98,7 +98,7 @@ function observeBrowserTargets(page) {
     if (url.origin !== app) forbidden.push(url.origin + url.pathname);
   });
   // This is a negative guard only. No response is mocked or fulfilled.
-  for (const port of [8001, 2026, 3000, 18018, 28018, 38018, 43018, 53018]) {
+  for (const port of [8001, 2026, 3000, 18018, 33018, 20618, 25618, 30618, 35618, 40618, 46618, 28018, 38018, 43018, 53018, 48018, 63018]) {
     for (const host of ["127.0.0.1", "localhost"]) {
       page.route(`http://${host}:${port}/**`, (route) => {
         forbidden.push(route.request().url());

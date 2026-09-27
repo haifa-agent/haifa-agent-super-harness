@@ -137,6 +137,17 @@
     .packages { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
     .package { display: flex; flex-direction: column; min-height: 285px; padding: 17px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); transition: transform .18s ease, border-color .18s ease; }
     .package:hover { transform: translateY(-2px); border-color: rgba(85, 167, 255, .34); }
+    .package.cross-cutting { border: 2px solid rgba(171, 140, 255, .58); background: linear-gradient(145deg, rgba(62, 41, 98, .38), var(--panel) 55%); }
+    .package.cross-cutting:hover { border-color: var(--violet); }
+    .package-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 18px 0 10px; }
+    .package-section-head h2 { margin: 0; font-size: 16px; }
+    .package-section-head span { color: var(--muted); font-size: 11px; }
+    .package-divider { height: 1px; margin: 24px 0 10px; background: linear-gradient(90deg, var(--violet), var(--line) 60%, transparent); }
+    .task-list { display: grid; gap: 7px; margin-top: 13px; padding-top: 11px; border-top: 1px solid var(--line); }
+    .task-list > b { color: var(--muted); font-size: 11px; }
+    .task-row { display: grid; grid-template-columns: 1fr auto; gap: 5px 9px; padding: 8px; border: 1px solid var(--line); border-radius: 9px; background: rgba(4, 16, 29, .32); font-size: 11px; }
+    .task-row small { grid-column: 1 / -1; color: var(--muted); line-height: 1.45; }
+    .task-state { font-weight: 750; white-space: nowrap; }
     .package.hidden { display: none; }
     .package-head { display: flex; justify-content: space-between; gap: 14px; }
     .package-id { color: var(--blue); font: 800 13px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
@@ -206,7 +217,7 @@
       <div class="hero-meta">
         <span class="pill">DeerFlow <code>e545c28a</code></span>
         <span class="pill">Haifa SDK <code>0.1.2-SNAPSHOT</code></span>
-        <span class="pill">主仓 <code>e1cbad5</code></span>
+        <span class="pill">最近产品合入 <code id="integratedCommit">待核实</code></span>
         <span class="pill">阶段：Wave A</span>
         <span class="pill">W00–W24 实际共 25 个工作包</span>
       </div>
@@ -222,7 +233,7 @@
         </div></section>
 
         <section class="panel"><div class="panel-body">
-          <h2>开发 Worktree</h2>
+          <h2>进行中包最近 Worktree（非运行任务）</h2>
           <div id="worktreeFacts"></div>
         </div></section>
 
@@ -237,7 +248,7 @@
           <div class="panel plan-intro">
             <h2>接下来做什么</h2>
             <p id="planFocus"></p>
-            <div class="plan-meta"><span id="planUpdated"></span><span id="planCounts"></span><span>安排由主控维护，验收状态仍以工作包为准。</span></div>
+            <div class="plan-meta"><span id="planUpdated"></span><span id="planCounts"></span><span id="activeCapacity"></span><span>安排由主控维护，验收状态仍以工作包为准。</span></div>
           </div>
           <div class="plan-grid" id="planItems"></div>
         </section>
@@ -251,7 +262,11 @@
             <div class="filter-set"><span class="filter-label">标签</span><div class="tabs" id="tagFilter" role="tablist" aria-label="按标签筛选"></div></div>
           </div>
         </div>
-        <div class="notice"><b>状态口径</b><span>数据来自 <code>work-packages.js</code>。工作包状态五选一：待开始、进行中、待验收、阻塞、已完成；只有退出条件、运行证据和验证结果齐全才可标记“待验收”或“已完成”。</span></div>
+        <div class="notice"><b>状态口径</b><span>数据来自 <code>work-packages.js</code>。工作包“进行中”是生命周期，不代表当前有人开发；实际派工请看卡片。默认同时最多 3 个非横切开发包，另留 1 个恢复/验收槽位；只有退出条件、运行证据和验证结果齐全才可标记“待验收”或“已完成”。</span></div>
+        <div class="package-section-head"><h2>长期横切工作包</h2><span>贯穿多轮交付，不计入单次非横切开发并发</span></div>
+        <section class="packages" id="crossCuttingPackages"></section>
+        <div class="package-divider" role="separator" aria-label="横切与非横切工作包分界"></div>
+        <div class="package-section-head"><h2>非横切交付工作包</h2><span>进行中工作包展示剩余 task-1～task-4</span></div>
         <section class="packages" id="packages"></section>
         <div class="empty" id="empty">没有符合当前筛选条件的工作包。</div>
         </section>
@@ -274,12 +289,17 @@
     const dashboardData = window.WORK_PACKAGES_DATA;
     const hasDashboardData = dashboardData && Array.isArray(dashboardData.workPackages);
     const packages = hasDashboardData && dashboardData.workPackages || [];
+    const crossCuttingIds = new Set(packages.filter(pkg => (pkg.tags || []).includes("长期横切")).map(pkg => pkg.id));
+    const executionAudit = dashboardData?.executionAudit?.packages || {};
+    const deliveryTasks = dashboardData?.deliveryTasks || {};
+    const packageById = new Map(packages.map(pkg => [pkg.id, pkg]));
 
     const search = document.querySelector("#search");
     const waveFilter = document.querySelector("#waveFilter");
     const stateFilter = document.querySelector("#stateFilter");
     const tagFilter = document.querySelector("#tagFilter");
     const packageRoot = document.querySelector("#packages");
+    const crossCuttingRoot = document.querySelector("#crossCuttingPackages");
     const empty = document.querySelector("#empty");
     const filters = { wave: "all", state: "all", tag: "all" };
     const viewTabs = [document.querySelector("#planTab"), document.querySelector("#packageTab")];
@@ -334,7 +354,9 @@
 
     function renderWorkPlan() {
       const plan = dashboardData.recentWorkPlan;
-      const items = Array.isArray(plan?.items) ? plan.items : [];
+      const planned = Array.isArray(plan?.items) ? plan.items : [];
+      const visibleIds = new Set(plan?.visibleItemIds || planned.map(item => item.id));
+      const items = planned.filter(item => visibleIds.has(item.id) && item.status !== "complete");
       const priorityOrder = { P0: 0, P1: 1, P2: 2 };
       const ordered = items.slice().sort((left, right) =>
         (priorityOrder[left.priority] ?? 99) - (priorityOrder[right.priority] ?? 99));
@@ -344,11 +366,19 @@
         at && !Number.isNaN(at.valueOf()) ? `安排更新：${at.toLocaleString("zh-CN", { hour12: false })}` : "安排更新时间待补";
       document.querySelector("#planCounts").textContent =
         `共 ${items.length} 项 · P0 ${items.filter(item => item.priority === "P0").length} 项 · 执行中 ${items.filter(item => item.status === "in_progress").length} 项`;
+      document.querySelector("#activeCapacity").textContent =
+        `实际非横切开发 ${dashboardData.executionAudit?.activeNonCrossCuttingPackages?.length ?? 0}/3 · 预留恢复/验收 ${dashboardData.executionAudit?.reservedRecoverySlots ?? 1} 槽`;
       document.querySelector("#planItems").innerHTML = ordered.length ? ordered.map(item => {
         const status = STATUS[item.status] || STATUS.pending;
         const priority = ["P0", "P1", "P2"].includes(item.priority) ? item.priority : "P2";
         const workPackages = (item.workPackages || []).map(id =>
           `<span class="tag">${escapeHtml(id)}</span>`).join("");
+        const taskCard = item.taskCard;
+        const taskDetails = taskCard ? `
+            <div class="detail"><b>任务提示词</b><span>${escapeHtml(taskCard.prompt)}</span></div>
+            <div class="detail"><b>执行位置</b><span>${escapeHtml(taskCard.branch)} · ${escapeHtml(taskCard.worktree)}</span></div>
+            <div class="detail"><b>槽位与数据</b><span>${escapeHtml(taskCard.slot)}：${escapeHtml(taskCard.ports)} · ${escapeHtml(taskCard.dataRoot)}</span></div>
+            <div class="detail"><b>退出与回报</b><span>${escapeHtml(taskCard.exit)} · 下次 checkpoint ${escapeHtml(taskCard.nextCheckpoint)}</span></div>` : "";
         return `<article class="plan-card">
           <div class="plan-card-head"><div><span class="plan-priority ${priority.toLowerCase()}">${priority}</span> <span class="plan-card-id">${escapeHtml(item.id)}</span><h3>${escapeHtml(item.title)}</h3></div><span class="plan-state ${status.className}">${status.label}</span></div>
           <div class="tags">${workPackages}</div>
@@ -356,7 +386,7 @@
             <div class="detail"><b>下一步</b><span>${escapeHtml(item.nextAction)}</span></div>
             <div class="detail"><b>完成判据</b><span>${escapeHtml(item.doneWhen)}</span></div>
             <div class="detail"><b>前置</b><span>${escapeHtml(item.dependency)}</span></div>
-            <div class="detail"><b>负责</b><span>${escapeHtml(item.owner)}</span></div>
+            <div class="detail"><b>负责</b><span>${escapeHtml(item.owner)}</span></div>${taskDetails}
           </div>
         </article>`;
       }).join("") : '<div class="empty" style="display:block">暂无最近工作安排。</div>';
@@ -366,13 +396,14 @@
       const baseline = dashboardData.baseline;
       const updated = new Date(dashboardData.updatedAt);
       document.querySelector("#updated").innerHTML = `数据更新时间：${updated.toLocaleString("zh-CN", { hour12: false })}<br>来源：work-packages.js`;
+      document.querySelector("#integratedCommit").textContent = dashboardData.executionAudit?.lastIntegratedCommit || "待核实";
       document.querySelector("#baselineFacts").innerHTML = `
-        <div class="fact"><label>主仓</label><code>main @ ${baseline.repositoryCommit.slice(0, 8)}</code></div>
+        <div class="fact"><label>初始仓库基线</label><code>${baseline.repositoryCommit.slice(0, 8)}</code></div>
         <div class="fact"><label>DeerFlow</label><code>detached @ ${baseline.deerFlowCommit.slice(0, 8)}</code> <span class="good">● clean</span></div>
         <div class="fact"><label>SDK</label><code>${baseline.haifaSdkVersion}</code></div>
         <div class="fact"><label>原修改保护</label><code>${baseline.preservedStash.split(":")[0]}</code> <span class="good">● preserved</span></div>
         <div class="fact"><label>证据门禁</label><span class="${baseline.evidenceGatePassed ? "good" : "warn"}">${baseline.evidenceGatePassed} 个工作包通过</span></div>`;
-      document.querySelector("#worktreeFacts").innerHTML = dashboardData.worktrees.map(item => `<div class="fact"><label>${item.workPackage}</label><code>${item.branch}</code></div>`).join("");
+      document.querySelector("#worktreeFacts").innerHTML = Object.entries(executionAudit).map(([id, audit]) => `<div class="fact"><label>${escapeHtml(id)} · ${escapeHtml(audit.assignment)}</label><code>${escapeHtml(audit.branch)}</code></div>`).join("");
       document.querySelector("#timeline").innerHTML = dashboardData.milestones.slice().sort((left, right) => Date.parse(right.at) - Date.parse(left.at)).map(item => {
         const at = new Date(item.at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
         return `<div class="event"><strong>${at} · ${item.title}</strong><span>${item.detail}</span></div>`;
@@ -393,19 +424,35 @@
     }
 
     function renderPackages() {
-      packageRoot.innerHTML = packages.map(pkg => {
+      function renderPackage(pkg) {
         const status = STATUS[pkg.state];
         const prerequisites = pkg.prerequisites?.length ? pkg.prerequisites.join("、") : "无";
         const startedAt = pkg.startedAt ? new Date(pkg.startedAt).toLocaleString("zh-CN", { hour12: false }) : "未开始";
         const completedAt = pkg.completedAt ? new Date(pkg.completedAt).toLocaleString("zh-CN", { hour12: false }) : "未完成";
+        const isCrossCutting = crossCuttingIds.has(pkg.id);
         const tags = pkg.tags || [];
-        const tagChips = tags.map(tag => `<span class="tag topic">${tag}</span>`).join("");
-        return `<article class="package" data-id="${pkg.id}" data-wave="${pkg.wave}" data-state="${pkg.state}" data-tags="${tags.join("|")}" data-search="${[pkg.id,pkg.title,pkg.lane,prerequisites,...tags,pkg.summary||"",pkg.exit,pkg.branch||"",pkg.owner||"",pkg.startedAt||"",pkg.completedAt||""].join(" ").toLowerCase()}">
-          <div class="package-head"><div><div class="package-id">${pkg.id}</div><h3>${pkg.title}</h3><p>${pkg.exit}</p></div><span class="status-select ${status.className}">${status.label}</span></div>
-          <div class="tags"><span class="tag wave-${pkg.wave.toLowerCase()}">Wave ${pkg.wave}</span><span class="tag">${pkg.lane}</span><span class="tag ${status.className}">${status.label}</span>${tagChips}</div>
-          <div class="details"><div class="detail"><b>进展</b><span>${pkg.summary || "尚未更新"}</span></div><div class="detail"><b>直接前置</b><span>${prerequisites}</span></div><div class="detail"><b>开始时间</b><span>${startedAt}</span></div><div class="detail"><b>完成时间</b><span>${completedAt}</span></div>${pkg.branch ? `<div class="detail"><b>分支</b><span class="branch">${pkg.branch}</span></div>` : ""}${pkg.owner ? `<div class="detail"><b>智能体</b><span class="branch">${pkg.owner}</span></div>` : ""}</div>
+        const tagChips = tags.map(tag => `<span class="tag topic">${escapeHtml(tag)}</span>`).join("");
+        const audit = executionAudit[pkg.id];
+        const unmet = (pkg.prerequisites || []).filter(id => packageById.get(id)?.state !== "complete");
+        const assignment = audit?.assignment || (pkg.state === "pending" ? (unmet.length ? `等待直接前置：${unmet.join("、")}` : "未派工，待确定优先级") : "历史验收已结算");
+        const auditDetails = audit ? `<div class="detail"><b>负责人</b><span>${escapeHtml(audit.owner)}</span></div><div class="detail"><b>最后进展</b><span>${escapeHtml(audit.lastProgressAt)} · ${escapeHtml(audit.lastEvidence)}</span></div><div class="detail"><b>阻塞</b><span>${escapeHtml(audit.blocker)}</span></div><div class="detail"><b>下一步</b><span>${escapeHtml(audit.nextAction)}</span></div><div class="detail"><b>最后工作树</b><span class="branch">${escapeHtml(audit.worktree)} · ${escapeHtml(audit.branch)}</span></div>` : pkg.state === "pending" ? `<div class="detail"><b>负责人</b><span>未分配</span></div><div class="detail"><b>工作树</b><span>无当前执行 worktree</span></div><div class="detail"><b>最后进展</b><span>产品开发未开始；SDK 前置就绪不算本包证据</span></div><div class="detail"><b>阻塞</b><span>${unmet.length ? "直接前置未完成：" + escapeHtml(unmet.join("、")) : "尚未排入当前开发波次"}</span></div><div class="detail"><b>下一步</b><span>前置与容量允许时，先写 task-1 提示词和完整任务卡</span></div>` : "";
+        const tasks = !isCrossCutting && pkg.state === "in_progress" ? (deliveryTasks[pkg.id] || []) : [];
+        const taskRows = tasks.map(task => {
+          const taskStatus = STATUS[task.status] || STATUS.pending;
+          const overdue = task.status === "in_progress" && task.nextCheckpoint && Date.now() > Date.parse(task.nextCheckpoint);
+          const checkpoint = task.nextCheckpoint ? ` · 下次 checkpoint：${escapeHtml(task.nextCheckpoint)}${overdue ? "（已超时，主控须点名核查）" : ""}` : "";
+          return `<div class="task-row"><span>${escapeHtml(task.id)} · ${escapeHtml(task.title)}</span><span class="task-state ${overdue ? "state-blocked" : taskStatus.className}">${overdue ? "checkpoint 超时" : taskStatus.label}</span><small>${escapeHtml(task.next)} · ${task.prompt ? "提示词：" + escapeHtml(task.prompt.split("/").pop()) : "提示词待编写"}${task.owner ? " · 负责：" + escapeHtml(task.owner) : " · 未派工"}${checkpoint}</small></div>`;
+        }).join("");
+        const taskSection = !isCrossCutting && pkg.state === "in_progress" ? `<div class="task-list"><b>剩余交付任务 ${tasks.length}/4 · 当前执行 ${tasks.filter(task => task.status === "in_progress").length}</b>${taskRows || '<span class="warn">任务待核实，暂停派工</span>'}</div>` : "";
+        const searchable = [pkg.id,pkg.title,pkg.lane,prerequisites,...tags,pkg.summary||"",pkg.exit,assignment,audit?.branch||"",audit?.nextAction||"",...tasks.map(task => task.title)].join(" ").toLowerCase();
+        return `<article class="package${isCrossCutting ? " cross-cutting" : ""}" data-id="${escapeHtml(pkg.id)}" data-wave="${escapeHtml(pkg.wave)}" data-state="${escapeHtml(pkg.state)}" data-tags="${escapeHtml(tags.join("|"))}" data-search="${escapeHtml(searchable)}">
+          <div class="package-head"><div><div class="package-id">${escapeHtml(pkg.id)}</div><h3>${escapeHtml(pkg.title)}</h3><p>${escapeHtml(pkg.exit)}</p></div><span class="status-select ${status.className}">${status.label}</span></div>
+          <div class="tags"><span class="tag wave-${pkg.wave.toLowerCase()}">Wave ${escapeHtml(pkg.wave)}</span><span class="tag">${escapeHtml(pkg.lane)}</span><span class="tag ${status.className}">${status.label}</span>${tagChips}</div>
+          ${taskSection}<div class="details"><div class="detail"><b>派工状态</b><span>${escapeHtml(assignment)}</span></div><div class="detail"><b>进展</b><span>${escapeHtml(pkg.summary || "尚未更新")}</span></div><div class="detail"><b>直接前置</b><span>${escapeHtml(prerequisites)}</span></div><div class="detail"><b>开始时间</b><span>${escapeHtml(startedAt)}</span></div><div class="detail"><b>完成时间</b><span>${escapeHtml(completedAt)}</span></div>${auditDetails}</div>
         </article>`;
-      }).join("");
+      }
+      crossCuttingRoot.innerHTML = packages.filter(pkg => crossCuttingIds.has(pkg.id)).map(renderPackage).join("");
+      packageRoot.innerHTML = packages.filter(pkg => !crossCuttingIds.has(pkg.id)).map(renderPackage).join("");
       applyFilters();
     }
 

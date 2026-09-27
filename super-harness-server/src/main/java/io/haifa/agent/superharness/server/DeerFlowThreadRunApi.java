@@ -2452,6 +2452,48 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         return record != null && projectId.equals(record.metadata.get("deerflow_project_id"));
     }
 
+    void unbindProject(String projectId) throws IOException {
+        if (projectId == null || projectId.isBlank()) {
+            return;
+        }
+        record ThreadSnapshot(ThreadRecord record, Map<String, Object> metadata, Instant updatedAt) {}
+        List<ThreadSnapshot> modified = new ArrayList<>();
+        try {
+            for (ThreadRecord record : threads.values()) {
+                synchronized (record) {
+                    if (projectId.equals(record.metadata.get("deerflow_project_id"))
+                            || projectId.equals(record.metadata.get("project_id"))) {
+                        modified.add(new ThreadSnapshot(record, record.metadata, record.updatedAt));
+                        Map<String, Object> updated = new LinkedHashMap<>(record.metadata);
+                        updated.remove("deerflow_project_id");
+                        updated.remove("project_id");
+                        record.metadata = Collections.unmodifiableMap(updated);
+                        record.updatedAt = Instant.now();
+                        persistThread(record);
+                    }
+                }
+            }
+        } catch (Exception failure) {
+            for (int i = modified.size() - 1; i >= 0; i--) {
+                ThreadSnapshot snap = modified.get(i);
+                synchronized (snap.record) {
+                    snap.record.metadata = snap.metadata;
+                    snap.record.updatedAt = snap.updatedAt;
+                    try {
+                        persistThread(snap.record);
+                    } catch (Exception rollbackError) {
+                        INTERACTION_LOG.log(System.Logger.Level.WARNING,
+                                "Failed to rollback thread unbind persistence for " + snap.record.threadId, rollbackError);
+                    }
+                }
+            }
+            if (failure instanceof IOException ioException) {
+                throw ioException;
+            }
+            throw new IOException("failed to unbind project from threads", failure);
+        }
+    }
+
     private String threadStatus(ThreadRecord record) {
         synchronized (record) {
             restoreDurableAdmission(record);

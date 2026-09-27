@@ -4,8 +4,8 @@ param(
     [string]$SourceRepository = 'D:\workspace\haifa-agent-super-harness\deer-flow',
     [ValidateRange(1, 3)]
     [int]$AgentSlot = 2,
-    [int]$GatewayPort = 38018,
-    [int]$FrontendPort = 53018,
+    [int]$GatewayPort = 30618,
+    [int]$FrontendPort = 35618,
     [int]$ProviderPort = 0,
     [string]$DataDirectory,
     [switch]$ActiveReconnect,
@@ -18,8 +18,8 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$expectedGatewayPort = 18018 + (10000 * $AgentSlot)
-$expectedFrontendPort = 33018 + (10000 * $AgentSlot)
+$expectedGatewayPort = 10618 + (10000 * $AgentSlot)
+$expectedFrontendPort = 15618 + (10000 * $AgentSlot)
 if ($GatewayPort -ne $expectedGatewayPort -or $FrontendPort -ne $expectedFrontendPort -or $ProviderPort -ne 0) {
     throw "W18 slot $AgentSlot requires Gateway=$expectedGatewayPort and Frontend=$expectedFrontendPort; controlled Provider must use OS-assigned port 0."
 }
@@ -50,6 +50,10 @@ foreach ($port in @($GatewayPort, $FrontendPort)) {
     if ($listener) {
         throw "Refusing occupied W18 slot port $port (PID $($listener.OwningProcess -join ','))."
     }
+    $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $port)
+    try { $probe.Start() }
+    catch { throw "W18 slot port $port cannot bind on loopback (check Windows excluded port ranges): $($_.Exception.Message)" }
+    finally { $probe.Stop() }
 }
 
 $null = New-Item -ItemType Directory -Force -Path $dataRoot

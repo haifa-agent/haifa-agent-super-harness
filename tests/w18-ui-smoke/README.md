@@ -78,11 +78,12 @@ official `https://api.deepseek.com` endpoint, which selects Haifa's
 a real external model call and therefore must only be run when explicitly
 authorized.
 
-The runner defaults to slot 2 gateway/frontend ports (`38018` and `53018`). A
+The runner defaults to slot 2 gateway/frontend ports (`30618` and `35618`). A
 subagent may pass its assigned `-AgentSlot`, `-GatewayPort`, and
 `-FrontendPort`; the runner verifies the registered port formula before
-starting anything. The
-controlled provider binds to `127.0.0.1:0`, publishes its actual address and PID
+starting anything. Historical evidence entries below retain the former ports
+and must not be used as defaults for new runs. The controlled provider binds
+to `127.0.0.1:0`, publishes its actual address and PID
 through repo-local ready metadata, and is stopped by its exact process object.
 Both `SUPER_HARNESS_DATA_ROOT` and `SUPER_HARNESS_DATA_DIR` point at
 the selected `target/agent-slot-<n>-data` unless an in-worktree data directory is
@@ -155,7 +156,7 @@ run took 133.155 seconds (including Maven reactor and frozen Next build); Playwr
 seconds per case. The first harness attempt exposed an early acceptance flag during Maven package;
 the second exposed a manually built Next rewrite fixed to port 8001. Both failed before product
 assertions, retained trace/screenshot/log evidence, and released all owned processes. The fixed
-runner keeps the flag off during ordinary tests and builds Next with the assigned 38018 gateway.
+runner keeps the flag off during ordinary tests and builds Next with the assigned slot gateway (now `30618`).
 The sanitized identities and health summary are recorded in
 `evidence/20260924-interaction-http-pass.json`.
 After a full six-module `mvn clean test` (90 tests, zero failures), a final browser execution also

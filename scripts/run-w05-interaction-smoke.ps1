@@ -11,8 +11,8 @@ Set-StrictMode -Version Latest
 & (Join-Path $PSScriptRoot 'run-w18-ui-smoke.ps1') `
     -RepositoryRoot $RepositoryRoot `
     -SourceRepository $SourceRepository `
-    -GatewayPort 38018 `
-    -FrontendPort 53018 `
+    -GatewayPort 30618 `
+    -FrontendPort 35618 `
     -ProviderPort 0 `
     -DataDirectory (Join-Path $RepositoryRoot 'target/agent-slot-2-interaction-data') `
     -Interaction `
