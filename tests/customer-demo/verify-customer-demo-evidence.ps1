@@ -27,6 +27,12 @@ function New-FixtureRoot([string]$Name) {
     $root = Join-Path $TempRoot $Name
     $null = New-Item -ItemType Directory -Force -Path (Join-Path $root 'contracts/customer-demo')
     Copy-Item -LiteralPath $SourceOracle -Destination (Join-Path $root 'contracts/customer-demo/customer-demo-v0-oracle.json')
+    $sourceEvidence = Join-Path $RepositoryRoot 'contracts/customer-demo/evidence'
+    if (Test-Path -LiteralPath $sourceEvidence -PathType Container) {
+        $targetEvidence = Join-Path $root 'contracts/customer-demo/evidence'
+        $null = New-Item -ItemType Directory -Force -Path $targetEvidence
+        Get-ChildItem -LiteralPath $sourceEvidence -File | Copy-Item -Destination $targetEvidence -Force
+    }
     return $root
 }
 
@@ -190,12 +196,13 @@ try {
 
     $notRunRoot = New-FixtureRoot 'not-run'
     Write-Bundle $notRunRoot (Read-SourceBundle) | Out-Null
-    Assert-Passes $notRunRoot 'valid-not-run-bundle'
+    Assert-Passes $notRunRoot 'valid-partial-bundle'
     $notRunManifest = Get-Content -LiteralPath (Join-Path $notRunRoot 'target/cde-evidence/customer-demo-evidence-manifest.json') -Raw |
         ConvertFrom-Json -Depth 40 -DateKind String
     Assert-True ($notRunManifest.validationStatus -eq 'PASS') 'valid bundle must record validation PASS'
     Assert-True ($notRunManifest.decision -eq 'NO_GO') 'current bundle must stay NO_GO'
-    Assert-True ($notRunManifest.details.stageResults.M0 -eq 'NOT_RUN') 'M0 must stay NOT_RUN'
+    Assert-True ($notRunManifest.details.stageResults.M0 -eq 'PASS') 'M0 must preserve its verified PASS'
+    Assert-True ($notRunManifest.details.stageResults.M2 -eq 'NOT_RUN') 'M2 must stay NOT_RUN'
     Assert-True (@($notRunManifest.details.sensitiveFindings).Count -eq 0) 'no sensitive values may be found'
     Assert-True (@($notRunManifest.details.firstFailureHistory).Count -ge 4) 'documented first failures must be retained'
     $firstHash = Get-Sha256 (Join-Path $notRunRoot 'target/cde-evidence/customer-demo-evidence-manifest.json')

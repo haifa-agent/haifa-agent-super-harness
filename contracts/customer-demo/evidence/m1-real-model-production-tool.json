@@ -1,0 +1,87 @@
+{
+  "schemaVersion": "haifa.customer-demo.stage-evidence/v1",
+  "demoId": "DEMO-V0",
+  "stage": "M1",
+  "result": "PASS",
+  "executedAt": "2026-09-27T21:43:13+08:00",
+  "acceptedAt": "2026-09-27T21:49:05+08:00",
+  "superHarnessSha": "23271ee6c5aeebdf4a9a7fabd4c8528c868f1bce",
+  "frontend": "bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294",
+  "model": {
+    "id": "main-deepseek",
+    "provider": "https://api.deepseek.com",
+    "credentialSource": "os",
+    "realModel": true
+  },
+  "input": {
+    "text": "请使用生产 write_file 工具在 /mnt/user-data/outputs/customer-demo-round-1.txt 新建文件，内容必须精确为 haifa-customer-demo-round-1。工具执行需要审批；获得批准后继续当前 Run。",
+    "sha256": "0ade59b6123fc9c5bd6a6e0390d39385a752f5817fef8fe53efeb2d54e41c0e1"
+  },
+  "identity": {
+    "threadId": "bd0e6b9b-8f44-4cf8-a798-5ffd874f1679",
+    "runId": "01a0e31b-03af-75f9-95af-604a1ff48b8a",
+    "toolCallId": "01a0e31b-0dbb-7edb-aa76-2ac3ea419cc6",
+    "interactionId": "01a0e31b-1028-72a7-a4ba-4804e22a8e26"
+  },
+  "approval": {
+    "tool": "write_file",
+    "toolFingerprint": "write_file@1.0.0#java.write_file#d4dc16b2a060aece682329119449434ea7991d8d5689257082ba4eeffae828a3",
+    "beforeFileHttpStatus": 404,
+    "reloadSameThread": true,
+    "reloadCardCount": 1,
+    "response": "approve",
+    "respondedExactlyOnce": true,
+    "afterReloadCardCount": 1,
+    "afterReloadApproveDisabled": true
+  },
+  "workspaceFile": {
+    "path": "/mnt/user-data/outputs/customer-demo-round-1.txt",
+    "httpStatus": 200,
+    "content": "haifa-customer-demo-round-1",
+    "byteCount": 27,
+    "sha256": "aee4acb8f114a98feb2ce8a193e3dc07bc75d79ee43c4c8ef525f5fff0127935",
+    "uiChangeCount": 1
+  },
+  "run": {
+    "status": "success",
+    "llmCallCount": 2,
+    "totalInputTokens": 1230,
+    "totalOutputTokens": 169,
+    "totalTokens": 1399,
+    "finalAnswerVisibleAfterReload": true
+  },
+  "automatedGates": {
+    "tests": 53,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "covered": [
+      "approval approve/reject",
+      "duplicate interaction 409",
+      "stale response 409",
+      "competing run 409",
+      "cross-thread response 409",
+      "wrong request 409",
+      "cancel and duplicate cancel",
+      "wrong principal",
+      "expired deadline",
+      "path escape and overwrite"
+    ]
+  },
+  "browserEvidence": [
+    {
+      "path": "contracts/customer-demo/evidence/m1-real-model-approval-final.png",
+      "sha256": "d8c687ac57a4dd5f105b008c70d1628a09e61d7a59f8d4c293bdf136158b4b14"
+    },
+    {
+      "path": "contracts/customer-demo/evidence/m1-real-model-approval-final.txt",
+      "sha256": "7f9c1ba68d646668c7e641c28e0b0d0896ef6f76becec9e5bc2e3ce4161d810c"
+    }
+  ],
+  "notRun": [
+    "Windows symbolic-link escape negative: host cannot create symbolic links; targeted test skipped 1/1",
+    "M2 SDK-owned Artifact publication and Tool transcript UI",
+    "M3 same-Run active Steer differential",
+    "M4 consecutive two-round full chain"
+  ]
+}

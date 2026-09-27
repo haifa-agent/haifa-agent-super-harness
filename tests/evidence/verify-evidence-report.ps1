@@ -92,6 +92,12 @@ function New-DemoEvidenceFixture([string]$Name) {
     $root = New-Fixture $Name
     Copy-FixtureFile $root 'contracts/customer-demo/customer-demo-v0-oracle.json'
     Copy-FixtureFile $root 'contracts/customer-demo/customer-demo-v0-evidence-bundle.json'
+    foreach ($relative in @(
+        'contracts/customer-demo/evidence/m0-doctor-authorized.json',
+        'contracts/customer-demo/evidence/m1-real-model-production-tool.json',
+        'contracts/customer-demo/evidence/m1-real-model-approval-final.png',
+        'contracts/customer-demo/evidence/m1-real-model-approval-final.txt'
+    )) { Copy-FixtureFile $root $relative }
     return $root
 }
 
@@ -240,12 +246,16 @@ try {
 
     $skippedDemoGate = New-Fixture 'skipped-demo-gate'
     $data = Read-WorkData $skippedDemoGate
+    $data.customerDemo.stages[0].workStatus = 'in_progress'
+    $data.customerDemo.stages[0].result = 'NOT_RUN'
+    $data.customerDemo.stages[0].proof = $null
+    $data.customerDemo.stages[0].mainCommit = $null
+    $data.customerDemo.stages[0].acceptedAt = $null
     $data.customerDemo.stages[1].workStatus = 'complete'
     $data.customerDemo.stages[1].result = 'PASS'
-    $data.customerDemo.stages[1] | Add-Member -NotePropertyMembers @{
-        proof = 'independent test evidence'; mainCommit = '1234567'
-        acceptedAt = '2026-09-27T14:00:00+08:00'
-    }
+    $data.customerDemo.stages[1].proof = 'independent test evidence'
+    $data.customerDemo.stages[1].mainCommit = '1234567'
+    $data.customerDemo.stages[1].acceptedAt = '2026-09-27T14:00:00+08:00'
     Write-WorkData $skippedDemoGate $data
     Assert-Fails $skippedDemoGate 'M1 cannot PASS before M0 PASS'
 
@@ -302,15 +312,15 @@ try {
 
     $demoStageFail = New-DemoEvidenceFixture 'demo-stage-fail'
     $demoBundle = Read-DemoBundle $demoStageFail
-    $demoBundle.stages[0].result = 'FAIL'
+    $demoBundle.stages[2].result = 'FAIL'
     Write-DemoBundle $demoStageFail $demoBundle
     $stageFailResult = Invoke-Generator $demoStageFail
     Assert-True ($stageFailResult.ExitCode -ne 0) 'stage FAIL must fail the aggregate gate'
     $demoStageFailManifest = Read-EvidenceManifest $demoStageFail
     Assert-True ($demoStageFailManifest.customerDemoEvidence.status -eq 'FAIL') 'stage FAIL must propagate to customerDemo.status'
     Assert-True ($demoStageFailManifest.overallStatus -eq 'FAIL') 'stage FAIL must propagate to overallStatus'
-    Assert-True (@($demoStageFailManifest.customerDemoEvidence.failed) -contains 'stage:M0=FAIL') 'failed stage must be listed as FAIL'
-    Assert-True (@($demoStageFailManifest.customerDemoEvidence.notRun) -notcontains 'stage:M0=FAIL') 'failed stage must not be disguised as NOT_RUN'
+    Assert-True (@($demoStageFailManifest.customerDemoEvidence.failed) -contains 'stage:M2=FAIL') 'failed stage must be listed as FAIL'
+    Assert-True (@($demoStageFailManifest.customerDemoEvidence.notRun) -notcontains 'stage:M2=FAIL') 'failed stage must not be disguised as NOT_RUN'
 
     $demoRoundFail = New-DemoEvidenceFixture 'demo-round-fail'
     $demoBundle = Read-DemoBundle $demoRoundFail
@@ -326,27 +336,27 @@ try {
 
     $demoBlocked = New-DemoEvidenceFixture 'demo-blocked-external'
     $demoBundle = Read-DemoBundle $demoBlocked
-    $demoBundle.stages[0].result = 'BLOCKED_EXTERNAL'
+    $demoBundle.stages[2].result = 'BLOCKED_EXTERNAL'
     Write-DemoBundle $demoBlocked $demoBundle
     $blockedResult = Invoke-Generator $demoBlocked
     Assert-True ($blockedResult.ExitCode -eq 0) 'BLOCKED_EXTERNAL is not FAIL and must not abort generation'
     $demoBlockedManifest = Read-EvidenceManifest $demoBlocked
     Assert-True ($demoBlockedManifest.customerDemoEvidence.status -eq 'BLOCKED_EXTERNAL') 'blocked state must be preserved on customerDemo.status'
     Assert-True ($demoBlockedManifest.overallStatus -eq 'BLOCKED_EXTERNAL') 'blocked state must propagate to overallStatus'
-    Assert-True (@($demoBlockedManifest.customerDemoEvidence.blockedExternal) -contains 'stage:M0=BLOCKED_EXTERNAL') 'blocked stage must be reported separately'
-    Assert-True (@($demoBlockedManifest.customerDemoEvidence.notRun) -notcontains 'stage:M0=BLOCKED_EXTERNAL') 'blocked stage must not be disguised as NOT_RUN'
+    Assert-True (@($demoBlockedManifest.customerDemoEvidence.blockedExternal) -contains 'stage:M2=BLOCKED_EXTERNAL') 'blocked stage must be reported separately'
+    Assert-True (@($demoBlockedManifest.customerDemoEvidence.notRun) -notcontains 'stage:M2=BLOCKED_EXTERNAL') 'blocked stage must not be disguised as NOT_RUN'
     Assert-True (@($demoBlockedManifest.customerDemoEvidence.failed).Count -eq 0) 'blocked state must not be reported as FAIL'
 
     $demoUpstream = New-DemoEvidenceFixture 'demo-upstream-unsupported'
     $demoBundle = Read-DemoBundle $demoUpstream
-    $demoBundle.stages[0].result = 'UPSTREAM_UNSUPPORTED'
+    $demoBundle.stages[2].result = 'UPSTREAM_UNSUPPORTED'
     Write-DemoBundle $demoUpstream $demoBundle
     $upstreamResult = Invoke-Generator $demoUpstream
     Assert-True ($upstreamResult.ExitCode -eq 0) 'UPSTREAM_UNSUPPORTED is not FAIL and must not abort generation'
     $demoUpstreamManifest = Read-EvidenceManifest $demoUpstream
     Assert-True ($demoUpstreamManifest.customerDemoEvidence.status -eq 'UPSTREAM_UNSUPPORTED') 'upstream state must be preserved on customerDemo.status'
-    Assert-True (@($demoUpstreamManifest.customerDemoEvidence.upstreamUnsupported) -contains 'stage:M0=UPSTREAM_UNSUPPORTED') 'upstream stage must be reported separately'
-    Assert-True (@($demoUpstreamManifest.customerDemoEvidence.notRun) -notcontains 'stage:M0=UPSTREAM_UNSUPPORTED') 'upstream stage must not be disguised as NOT_RUN'
+    Assert-True (@($demoUpstreamManifest.customerDemoEvidence.upstreamUnsupported) -contains 'stage:M2=UPSTREAM_UNSUPPORTED') 'upstream stage must be reported separately'
+    Assert-True (@($demoUpstreamManifest.customerDemoEvidence.notRun) -notcontains 'stage:M2=UPSTREAM_UNSUPPORTED') 'upstream stage must not be disguised as NOT_RUN'
 
     Write-Host "W24 evidence verifier tests passed: $Assertions assertions."
 }

@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "haifa.customer-demo.doctor-report/v1",
+  "generatedAt": "2026-09-27T21:45:44.7660483+08:00",
+  "demoId": "DEMO-V0",
+  "mode": "live-read-only",
+  "overall": "PASS",
+  "paidModelCalled": false,
+  "superHarnessSha": "23271ee6c5aeebdf4a9a7fabd4c8528c868f1bce",
+  "oracleSha256": "b202987fd602b8341020ada6f3b809cdc2d3b9d673472255da9b994623404a38",
+  "frozenDeerFlowSha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+  "sdkVersion": "0.1.2-SNAPSHOT",
+  "sdkArtifactSha256": {
+    "io/haifa/haifa-agent-bom/0.1.2-SNAPSHOT/haifa-agent-bom-0.1.2-SNAPSHOT.pom": "c2a5437615be4a98b79106a22c80023f6e3d6cd80d20f40f33d2a6dfdb12a896",
+    "io/haifa/haifa-agent-runtime-api/0.1.2-SNAPSHOT/haifa-agent-runtime-api-0.1.2-SNAPSHOT.jar": "dad3403d77520234ad6d0681d051eb11997130927ad9c0138648dd4ef56a5c1b",
+    "io/haifa/haifa-agent-artifact/0.1.2-SNAPSHOT/haifa-agent-artifact-0.1.2-SNAPSHOT.jar": "23fba56a9613c3f2f43106ef25d5986448b8eab1ddcd9657dc26aed17a579675"
+  },
+  "modelId": "main-deepseek",
+  "gatewayPort": 18018,
+  "frontendPort": 33018,
+  "dataRoot": "D:\\workspace\\haifa-agent-super-harness\\local-tmp\\main-service-data",
+  "checks": [
+    {
+      "id": "oracle-contract",
+      "status": "PASS",
+      "detail": "planSha256=b202987fd602b8341020ada6f3b809cdc2d3b9d673472255da9b994623404a38; cases=8; rounds=2"
+    },
+    {
+      "id": "frozen-frontend",
+      "status": "PASS",
+      "detail": "commit=e545c28ac301e6f9feae247c513d8ea8f83df294; manifestSha256=fce79e62b1b35c0587213d513117f1707bb5a2d59230f62932be7f2e82d8f2c5; fallback=false"
+    },
+    {
+      "id": "haifa-sdk",
+      "status": "PASS",
+      "detail": "version=0.1.2-SNAPSHOT; artifacts=3"
+    },
+    {
+      "id": "live-services",
+      "status": "PASS",
+      "detail": "gateway=http://127.0.0.1:18018; frontend=http://127.0.0.1:33018; model=main-deepseek; credential=os; dataRoot=D:\\workspace\\haifa-agent-super-harness\\local-tmp\\main-service-data"
+    },
+    {
+      "id": "budget-authorization",
+      "status": "PASS",
+      "detail": "operatorApproved=true; standingAuthorization=true"
+    }
+  ]
+}

@@ -5,7 +5,7 @@
     "path": "contracts/customer-demo/customer-demo-v0-oracle.json",
     "sha256": "b202987fd602b8341020ada6f3b809cdc2d3b9d673472255da9b994623404a38"
   },
-  "mainSha": null,
+  "mainSha": "23271ee6c5aeebdf4a9a7fabd4c8528c868f1bce",
   "frozenFrontendSha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
   "sdkVersion": "0.1.2-SNAPSHOT",
   "model": {
@@ -14,12 +14,12 @@
     "endpointHost": "api.deepseek.com",
     "credentialSource": "os",
     "secretPresent": false,
-    "paidModelCalled": false
+    "paidModelCalled": true
   },
   "budget": {
-    "authorized": false,
+    "authorized": true,
     "maxModelCallsPerRound": 3,
-    "authorizationRef": null
+    "authorizationRef": "operator-standing-authorization-2026-09-27"
   },
   "dataRoot": null,
   "dataRootPolicy": "preserve-between-rounds",
@@ -168,35 +168,53 @@
     {
       "id": "M0",
       "title": "冻结故事与 doctor",
-      "workStatus": "in_progress",
-      "result": "NOT_RUN",
+      "workStatus": "complete",
+      "result": "PASS",
       "workPackages": ["W24", "W00", "W03"],
       "dependsOn": [],
-      "proof": null,
-      "mainCommit": null,
-      "acceptedAt": null,
-      "evidence": [],
-      "blocker": "真实模型预算尚未获本轮明确授权，budget-authorization=NOT_RUN；Steer 窗口尚未在 M3/M4 真实链运行。",
-      "nextAction": "Oracle 已固定，W24 构建证据门禁；主控继续 M1，不把只读 doctor 提升为 M0 PASS。"
+      "proof": "固定 Oracle、授权版 live doctor、冻结前端/SDK/主端口/模型/OS 凭据检查全部通过；M0 不调用付费模型。",
+      "mainCommit": "23271ee6c5aeebdf4a9a7fabd4c8528c868f1bce",
+      "acceptedAt": "2026-09-27T21:45:44+08:00",
+      "evidence": [
+        {
+          "path": "contracts/customer-demo/evidence/m0-doctor-authorized.json",
+          "sha256": "9d12485b93a7b7d30873f5f9aedccd3df574d411141f2a711528ce8b4f0d2e0d"
+        }
+      ],
+      "blocker": "无 M0 阶段阻断；M3/M4 真实 Steer 和整链仍由后续阶段验收。",
+      "nextAction": "M0 已结算；后续最终 GO 前仍须在最终主线 SHA 重验证。"
     },
     {
       "id": "M1",
       "title": "生产 Tool 与 Approval",
-      "workStatus": "in_progress",
-      "result": "NOT_RUN",
+      "workStatus": "complete",
+      "result": "PASS",
       "workPackages": ["W05"],
       "dependsOn": ["M0"],
-      "proof": null,
-      "mainCommit": null,
-      "acceptedAt": null,
-      "evidence": [],
-      "blocker": "M0 尚未通过；完整 Approval 失败分支与主端口同链待验收；旧 Steer gap FAIL 与 symlink NOT_RUN 保留。",
-      "nextAction": "完成 M0 后执行生产 Tool/Approval 的阶段 Oracle，保留旧失败和未运行项。"
+      "proof": "真实 main-deepseek 在冻结 UI 发起生产 write_file，reload 后同一审批卡恢复，批准后同一 Run success 且只创建一个精确 27 字节文件；53 项负例门禁通过。",
+      "mainCommit": "23271ee6c5aeebdf4a9a7fabd4c8528c868f1bce",
+      "acceptedAt": "2026-09-27T21:49:05+08:00",
+      "evidence": [
+        {
+          "path": "contracts/customer-demo/evidence/m1-real-model-production-tool.json",
+          "sha256": "3f655b0523f59971d15abc27897a651bdd3f4bac1f6d31a19421e21b9fc20a2a"
+        },
+        {
+          "path": "contracts/customer-demo/evidence/m1-real-model-approval-final.png",
+          "sha256": "d8c687ac57a4dd5f105b008c70d1628a09e61d7a59f8d4c293bdf136158b4b14"
+        },
+        {
+          "path": "contracts/customer-demo/evidence/m1-real-model-approval-final.txt",
+          "sha256": "7f9c1ba68d646668c7e641c28e0b0d0896ef6f76becec9e5bc2e3ce4161d810c"
+        }
+      ],
+      "blocker": "无 M1 阶段阻断；Windows symlink 负例因宿主权限为 NOT_RUN，旧 Steer gap 归 M3，均继续披露且不冒充 PASS。",
+      "nextAction": "M1 已结算；进入已获批准的 M2 SDK Tool transcript 与真实 Artifact/UI 实现。"
     },
     {
       "id": "M2",
       "title": "真实 Artifact 与冻结 UI 卡片",
-      "workStatus": "pending",
+      "workStatus": "in_progress",
       "result": "NOT_RUN",
       "workPackages": ["W05", "W18", "W04"],
       "dependsOn": ["M1"],
@@ -204,8 +222,8 @@
       "mainCommit": null,
       "acceptedAt": null,
       "evidence": [],
-      "blocker": "完整 Tool transcript、普通 Tool 持久 Interaction 的 SDK 最小接口与 Artifact/UI 实际消费待设计。",
-      "nextAction": "M1 通过后派 W05 DemoArtifactUi；SDK/复杂度边界由主控先审。"
+      "blocker": "HA feat-012-tool-context-transcript-projection 正在开发；PR、发布、SH 消费回归及 Artifact/UI 产品实现尚未完成。",
+      "nextAction": "在独立 HA worktree实现可信 sessionId/toolCallId 传递和授权脱敏 ToolCall 投影，再发布 0.1.2-SNAPSHOT 并回归 SH。"
     },
     {
       "id": "M3",
@@ -232,8 +250,8 @@
       "mainCommit": null,
       "acceptedAt": null,
       "evidence": [],
-      "blocker": "M0–M3 未通过；尚未授权/执行有预算的真实模型整链。",
-      "nextAction": "前置门禁全部通过后在 18018/33018 执行两轮并请人工验收，未通过仍为 NO_GO。"
+      "blocker": "真实模型调用已获持续授权；M2–M3 尚未通过，完整两轮整链仍 NOT_RUN。",
+      "nextAction": "M2/M3 通过后无需再次申请预算，在 18018/33018 执行两轮并请人工验收，未通过仍为 NO_GO。"
     }
   ],
   "humanAcceptance": {

@@ -1,0 +1,112 @@
+- generic: DeerFlow
+- button "Toggle Sidebar":
+  - generic: Toggle Sidebar
+- list:
+  - link "新对话":
+    - /url: /workspace/chats/new
+    - generic: 新对话
+- list:
+  - link "对话":
+    - /url: /workspace/chats
+    - generic: 对话
+  - link "智能体":
+    - /url: /workspace/agents
+    - generic: 智能体
+  - link "定时任务":
+    - /url: /workspace/scheduled-tasks
+    - generic: 定时任务
+  - link "能力中心":
+    - /url: /workspace/capabilities
+    - generic: 能力中心
+- generic: 渠道
+- generic: 项目
+- button "按项目分组对话":
+- button "新建项目":
+- link "回收站":
+  - /url: /workspace/trash
+- generic: 最近的对话
+- list:
+  - link "请使用生产 write_file 工具在 /mnt/user-data/outputs/cus...":
+    - /url: /workspace/chats/bd0e6b9b-8f44-4cf8-a798-5ffd874f1679
+    - generic: 请使用生产 write_file 工具在 /mnt/user-data/outputs/cus...
+  - button "更多":
+    - generic: 更多
+  - link "你好 你有哪些skill":
+    - /url: /workspace/chats/ddaf7d2f-8734-4ac4-aaa1-9a8ccdb9be11
+    - generic: 你好 你有哪些skill
+  - button "更多":
+    - generic: 更多
+  - link "杭州在哪里":
+    - /url: /workspace/chats/0876be37-f8e0-4343-a9a6-2881da393c39
+    - generic: 杭州在哪里
+  - button "更多":
+    - generic: 更多
+  - link "Untitled":
+    - /url: /workspace/chats/d5db6efb-2425-42d5-b799-77798f19cba1
+    - generic: Untitled
+  - button "更多":
+    - generic: 更多
+  - link "Untitled":
+    - /url: /workspace/chats/b59e2c85-627e-4474-b962-8a85ac1b9645
+    - generic: Untitled
+  - button "更多":
+    - generic: 更多
+- list:
+  - button "设置和更多":
+    - generic: 设置和更多
+- button "Toggle Sidebar"
+- main:
+  - generic: 请使用生产 write_file 工具在 /mnt/user-data/outputs/cus...
+  - link "定时任务":
+    - /url: /workspace/scheduled-tasks?thread_id=bd0e6b9b-8f44-4cf8-a798-5ffd874f1679
+    - generic: 定时任务
+  - status "上下文窗口":
+  - button "导出":
+    - generic: 导出
+  - main:
+    - log:
+      - generic: 请使用生产 write_file 工具在 /mnt/user-data/outputs/customer-demo-round-1.txt 新建文件，内容必须精确为 haifa-customer-demo-round-1。工具执行需要审批；获得批准后继续当前 Run。
+      - button "复制到剪贴板":
+      - button "编辑并重新运行":
+      - region "Approval required":
+        - heading "Approval required" [level=2]
+        - paragraph: Approval required for write_file@1.0.0#java.write_file#d4dc16b2a060aece682329119449434ea7991d8d5689257082ba4eeffae828a3
+        - text: 已回答
+        - paragraph: Approve tool write_file (write_file@1.0.0#java.write_file#d4dc16b2a060aece682329119449434ea7991d8d5689257082ba4eeffae828a3)
+        - button "Approve" [disabled]:
+          - generic: Approve
+        - button "Reject" [disabled]:
+          - generic: Reject
+        - paragraph: 已回答：approve
+      - paragraph:
+        - text: 文件已成功创建。内容已精确写入为
+        - code: haifa-customer-demo-round-1
+        - text: ，位于
+        - code: /mnt/user-data/outputs/customer-demo-round-1.txt
+        - text: 。
+      - generic: 已编辑 1 个文件
+      - button "查看更改":
+        - text: 查看更改
+      - generic: "+1"
+      - generic: "-0"
+      - generic "/mnt/user-data/outputs/customer-demo-round-1.txt":
+        - generic: outputs/
+        - text: customer-demo-round-1.txt
+      - generic: "+1"
+      - generic: "-0"
+      - button "复制到剪贴板":
+      - button "分叉":
+      - button "重新生成":
+    - textbox "今天我能为你做些什么？"
+    - button "添加附件":
+    - button "语音输入":
+    - button "优化输入" [disabled]:
+    - button "闪速":
+      - generic: 闪速
+    - button "Main DeepSeek":
+      - generic: Main DeepSeek
+    - button "Submit":
+    - paragraph: 内容由AI生成，重要信息请务必核查
+  - separator [disabled]:
+- region "Notifications alt+T"
+- alert: DeerFlow

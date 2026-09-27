@@ -87,9 +87,11 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 projects,
                 dataDirectory,
                 continuationKey,
-                threadId -> testRunModelResolver == null
-                        ? List.of(new ProductionWriteFileTool(threadId, projects, toolWorkspace))
-                        : testRunTools);
+                threadId -> !testRunTools.isEmpty()
+                        ? testRunTools
+                        : testRunModelResolver == null
+                                ? List.of(new ProductionWriteFileTool(threadId, projects, toolWorkspace))
+                                : List.of());
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
         this.projectApi = new DeerFlowProjectApi(objectMapper, projects, threadRunApi, workspaceApi);

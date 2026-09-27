@@ -26,6 +26,8 @@
 
 # 主控 Agent 规则
 
+- 2026-09-27 起，人工已对本项目后续开发、回归与客户演示所需的真实模型调用给出持续授权，不限制调用次数或预算，主控无需再逐次申请模型调用或预算审批；该授权不等于任何演示阶段已执行或通过。主控仍须限定调用在当前任务范围内，使用已托管凭据引用，记录实际模型、Provider、时间、Usage、失败与重试，保留 W24 原始证据，并继续遵守密钥脱敏、客户数据隔离、无隐藏重试和阶段门禁规则。
+- 本次 038-05（`feat-012-attempt-finalization-atomicity`）获得一次性人工授权：HA 子智能体完成开发后仍须先向 `dev` 发起 GitHub PR，且不得自行合并；主控必须独立完成源码复审、提出并确认所有 review 问题已修复、相关门禁全部通过，之后可由主控将该 PR 合并到 `dev`。该授权只适用于本次 038-05，不自动适用于其它 HA PR；合并后仍须按公共规则发布 `0.1.2-SNAPSHOT` 并完成 Super Harness 消费回归。
 - 本轮客户演示 v0 按 `private-docs/roadmap/36-super-harness-customer-demo-v0.md` 调度，唯一整链目标是“真实模型 + 真实生产 Tool + Approval + Artifact + Reload/Reconnect + Steer，在冻结 DeerFlow UI 上连续跑两遍无异常”。主控须把每个新任务映射到该路线图的阶段、真实缺口和退出门槛，并同步 `docs/todo.md` 与 `work-packages.js.recentWorkPlan`；L1/L2 受控 Provider、测试 Tool、静态合同、分开的单项 PASS 不能替代同一主线 SHA 的两轮 L3 整链证据。两轮不得隐匿失败或重试；真实 Artifact 必须有可信 ID/provenance 与可核验下载字节。该 v0 纵向演示不等于 PRD D01–D05 的完整 Customer Demo Gate 或 Full Parity，W04 已知 P0 等范围外风险仍须披露，不为追演示绿灯放宽门禁。
 - 当前执行采用“双轨交付”：`customerDemo.stages` 的 M0–M4 是客户演示阶段门禁，W00–W24 是不变的长期能力工作包台账。开发仍按工作包 task 提示词、独立 worktree、定向测试和主控验收交付；演示任务卡另外标注 `demoStages` 和该阶段原子断言。工作包切片/整包完成不自动使演示阶段 PASS，演示 v0 GO 也不自动关闭工作包或 PRD D01–D05。W00 等长期横切工作只消费演示实际触及的来源，不因整包未完成而阻断正向演示；W04 暂停 P0 单列风险，若演示脚本实际触及其故障路径则如实 FAIL。
 - 演示执行顺序为 M0 脚本/Oracle/doctor → M1 生产 Tool 与审批主线集成 → M2 真 Artifact 与冻结 UI 消费 → M3 L2 同脚本两轮及双后端逐 case 差分 → M4 主端口真实模型 L3 连续两轮、W24 原始证据、人工体验。阶段 `workStatus` 只表示执行状态，`result` 独立使用 PASS/FAIL/NOT_RUN 等 case 口径；已有分项证据不得提升阶段门禁。主控在每次派工、复审、合入、失败或门禁变更时同次核对 `customerDemo`、`recentWorkPlan`、`deliveryTasks`、`docs/todo.md` 与实际 worktree；失败史保留。只有五阶段均 PASS、同一主线 SHA、人工验收记录齐全，才可把演示决策改为 GO。
