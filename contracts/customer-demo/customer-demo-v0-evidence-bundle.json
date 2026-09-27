@@ -1,0 +1,247 @@
+{
+  "schemaVersion": "haifa.customer-demo.evidence-bundle/v1",
+  "demoId": "DEMO-V0",
+  "oracle": {
+    "path": "contracts/customer-demo/customer-demo-v0-oracle.json",
+    "sha256": "b202987fd602b8341020ada6f3b809cdc2d3b9d673472255da9b994623404a38"
+  },
+  "mainSha": null,
+  "frozenFrontendSha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+  "sdkVersion": "0.1.2-SNAPSHOT",
+  "model": {
+    "id": "main-deepseek",
+    "provider": "openai-compatible",
+    "endpointHost": "api.deepseek.com",
+    "credentialSource": "os",
+    "secretPresent": false,
+    "paidModelCalled": false
+  },
+  "budget": {
+    "authorized": false,
+    "maxModelCallsPerRound": 3,
+    "authorizationRef": null
+  },
+  "dataRoot": null,
+  "dataRootPolicy": "preserve-between-rounds",
+  "roundResetBetweenRounds": false,
+  "configSha256": null,
+  "inputSha256": null,
+  "referenceFallbackEvidence": {
+    "fallbackAllowed": false,
+    "fallbackUsed": false,
+    "evidencePath": null,
+    "evidenceSha256": null
+  },
+  "rounds": [
+    {
+      "index": 1,
+      "sequence": 1,
+      "status": "NOT_RUN",
+      "modelId": null,
+      "mainSha": null,
+      "frozenFrontendSha": null,
+      "sdkVersion": null,
+      "configSha256": null,
+      "inputSha256": null,
+      "dataRoot": null,
+      "threadId": null,
+      "runId": null,
+      "toolCallId": null,
+      "interactionId": null,
+      "artifactId": null,
+      "fileName": null,
+      "fileSha256": null,
+      "artifactProvenance": null,
+      "artifactProvenanceEvidence": null,
+      "downloadSha256": null,
+      "downloadByteCount": null,
+      "downloadEvidence": null,
+      "approvalBefore": "none",
+      "approvalAfter": "none",
+      "steer": {
+        "targetRunId": null,
+        "request": null,
+        "response": null,
+        "ackText": null,
+        "sameRun": false
+      },
+      "networkTargets": [],
+      "usage": null,
+      "timeline": [],
+      "playwrightPath": null,
+      "playwrightSha256": null,
+      "logPaths": [],
+      "processCleanup": {
+        "portsReleased": false,
+        "processes": []
+      },
+      "attempts": 1,
+      "hiddenRetry": false,
+      "firstFailure": null
+    },
+    {
+      "index": 2,
+      "sequence": 2,
+      "status": "NOT_RUN",
+      "modelId": null,
+      "mainSha": null,
+      "frozenFrontendSha": null,
+      "sdkVersion": null,
+      "configSha256": null,
+      "inputSha256": null,
+      "dataRoot": null,
+      "threadId": null,
+      "runId": null,
+      "toolCallId": null,
+      "interactionId": null,
+      "artifactId": null,
+      "fileName": null,
+      "fileSha256": null,
+      "artifactProvenance": null,
+      "artifactProvenanceEvidence": null,
+      "downloadSha256": null,
+      "downloadByteCount": null,
+      "downloadEvidence": null,
+      "approvalBefore": "none",
+      "approvalAfter": "none",
+      "steer": {
+        "targetRunId": null,
+        "request": null,
+        "response": null,
+        "ackText": null,
+        "sameRun": false
+      },
+      "networkTargets": [],
+      "usage": null,
+      "timeline": [],
+      "playwrightPath": null,
+      "playwrightSha256": null,
+      "logPaths": [],
+      "processCleanup": {
+        "portsReleased": false,
+        "processes": []
+      },
+      "attempts": 1,
+      "hiddenRetry": false,
+      "firstFailure": null
+    }
+  ],
+  "firstFailureHistory": [
+    {
+      "id": "w05-first-steer-gap",
+      "stage": "M1",
+      "summary": "W05 首轮合并态整仓出现 Steer SSE gap FAIL；随后定向与第二轮 PASS。",
+      "originalAvailable": false,
+      "evidencePath": null,
+      "evidenceSha256": null,
+      "note": "终端/看板摘要，非原件；原始 surefire 报告已随后续 clean 删除。"
+    },
+    {
+      "id": "w00-first-surefire",
+      "stage": "M0",
+      "summary": "W00 首轮失败原始 surefire 报告已被后续 clean 删除，仅保留终端摘要。",
+      "originalAvailable": false,
+      "evidencePath": null,
+      "evidenceSha256": null,
+      "note": "摘要，非原件；不在本任务重建或冒充原始证据。"
+    },
+    {
+      "id": "w18-old-haifa-differential",
+      "stage": "M3",
+      "summary": "W18 旧合并态 Haifa 为 2 FAIL/2 NOT_RUN（W04 上传 2 FAIL、W05 生产 Tool 与 W12 启用态 WS NOT_RUN），红灯已保留。",
+      "originalAvailable": false,
+      "evidencePath": null,
+      "evidenceSha256": null,
+      "note": "看板与里程碑摘要，非原件；原件在对应工作包外置证据目录。"
+    },
+    {
+      "id": "w04-known-p0",
+      "stage": "M2",
+      "summary": "W04 已知 P0 数据一致性风险经人工接受带风险合入，未被宣称修复。",
+      "originalAvailable": false,
+      "evidencePath": null,
+      "evidenceSha256": null,
+      "note": "人工裁决与看板摘要，非原件。"
+    }
+  ],
+  "stages": [
+    {
+      "id": "M0",
+      "title": "冻结故事与 doctor",
+      "workStatus": "in_progress",
+      "result": "NOT_RUN",
+      "workPackages": ["W24", "W00", "W03"],
+      "dependsOn": [],
+      "proof": null,
+      "mainCommit": null,
+      "acceptedAt": null,
+      "evidence": [],
+      "blocker": "真实模型预算尚未获本轮明确授权，budget-authorization=NOT_RUN；Steer 窗口尚未在 M3/M4 真实链运行。",
+      "nextAction": "Oracle 已固定，W24 构建证据门禁；主控继续 M1，不把只读 doctor 提升为 M0 PASS。"
+    },
+    {
+      "id": "M1",
+      "title": "生产 Tool 与 Approval",
+      "workStatus": "in_progress",
+      "result": "NOT_RUN",
+      "workPackages": ["W05"],
+      "dependsOn": ["M0"],
+      "proof": null,
+      "mainCommit": null,
+      "acceptedAt": null,
+      "evidence": [],
+      "blocker": "M0 尚未通过；完整 Approval 失败分支与主端口同链待验收；旧 Steer gap FAIL 与 symlink NOT_RUN 保留。",
+      "nextAction": "完成 M0 后执行生产 Tool/Approval 的阶段 Oracle，保留旧失败和未运行项。"
+    },
+    {
+      "id": "M2",
+      "title": "真实 Artifact 与冻结 UI 卡片",
+      "workStatus": "pending",
+      "result": "NOT_RUN",
+      "workPackages": ["W05", "W18", "W04"],
+      "dependsOn": ["M1"],
+      "proof": null,
+      "mainCommit": null,
+      "acceptedAt": null,
+      "evidence": [],
+      "blocker": "完整 Tool transcript、普通 Tool 持久 Interaction 的 SDK 最小接口与 Artifact/UI 实际消费待设计。",
+      "nextAction": "M1 通过后派 W05 DemoArtifactUi；SDK/复杂度边界由主控先审。"
+    },
+    {
+      "id": "M3",
+      "title": "恢复、Steer 与 L2 双后端差分",
+      "workStatus": "pending",
+      "result": "NOT_RUN",
+      "workPackages": ["W05", "W18", "W24"],
+      "dependsOn": ["M2"],
+      "proof": null,
+      "mainCommit": null,
+      "acceptedAt": null,
+      "evidence": [],
+      "blocker": "M2 未闭环；不能拿 fixture 或分项 PASS 充当生产能力。",
+      "nextAction": "M2 合入并主线 smoke 后派 W18 DemoL2Differential；W24 只聚合真实证据。"
+    },
+    {
+      "id": "M4",
+      "title": "主线真实模型两轮与人工体验",
+      "workStatus": "pending",
+      "result": "NOT_RUN",
+      "workPackages": ["W05", "W18", "W24"],
+      "dependsOn": ["M3"],
+      "proof": null,
+      "mainCommit": null,
+      "acceptedAt": null,
+      "evidence": [],
+      "blocker": "M0–M3 未通过；尚未授权/执行有预算的真实模型整链。",
+      "nextAction": "前置门禁全部通过后在 18018/33018 执行两轮并请人工验收，未通过仍为 NO_GO。"
+    }
+  ],
+  "humanAcceptance": {
+    "present": false,
+    "path": null,
+    "sha256": null,
+    "acceptedBy": null,
+    "acceptedAt": null
+  },
+  "decision": "NO_GO"
+}

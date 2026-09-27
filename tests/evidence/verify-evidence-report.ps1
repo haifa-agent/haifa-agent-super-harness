@@ -88,6 +88,28 @@ function Assert-Fails([string]$Root, [string]$Pattern, [switch]$RequireSurefire)
     Assert-True ($result.Output -match $Pattern) "failure output did not match '$Pattern': $($result.Output)"
 }
 
+function New-DemoEvidenceFixture([string]$Name) {
+    $root = New-Fixture $Name
+    Copy-FixtureFile $root 'contracts/customer-demo/customer-demo-v0-oracle.json'
+    Copy-FixtureFile $root 'contracts/customer-demo/customer-demo-v0-evidence-bundle.json'
+    return $root
+}
+
+function Read-DemoBundle([string]$Root) {
+    return Get-Content -LiteralPath (Join-Path $Root 'contracts/customer-demo/customer-demo-v0-evidence-bundle.json') -Raw |
+        ConvertFrom-Json -Depth 64 -DateKind String
+}
+
+function Write-DemoBundle([string]$Root, [object]$Data) {
+    [IO.File]::WriteAllText((Join-Path $Root 'contracts/customer-demo/customer-demo-v0-evidence-bundle.json'),
+        (($Data | ConvertTo-Json -Depth 64) + "`n"), [Text.UTF8Encoding]::new($false))
+}
+
+function Read-EvidenceManifest([string]$Root) {
+    return Get-Content -LiteralPath (Join-Path $Root 'target/evidence/evidence-manifest.json') -Raw |
+        ConvertFrom-Json -Depth 40 -DateKind String
+}
+
 try {
     $null = New-Item -ItemType Directory -Force -Path $TempRoot
 
@@ -277,6 +299,54 @@ try {
     $badImportedHash = New-Fixture 'bad-imported-hash'
     Add-Content -LiteralPath (Join-Path $badImportedHash 'frontend/package.json') -Value 'tamper'
     Assert-Fails $badImportedHash 'hash mismatch'
+
+    $demoStageFail = New-DemoEvidenceFixture 'demo-stage-fail'
+    $demoBundle = Read-DemoBundle $demoStageFail
+    $demoBundle.stages[0].result = 'FAIL'
+    Write-DemoBundle $demoStageFail $demoBundle
+    $stageFailResult = Invoke-Generator $demoStageFail
+    Assert-True ($stageFailResult.ExitCode -ne 0) 'stage FAIL must fail the aggregate gate'
+    $demoStageFailManifest = Read-EvidenceManifest $demoStageFail
+    Assert-True ($demoStageFailManifest.customerDemoEvidence.status -eq 'FAIL') 'stage FAIL must propagate to customerDemo.status'
+    Assert-True ($demoStageFailManifest.overallStatus -eq 'FAIL') 'stage FAIL must propagate to overallStatus'
+    Assert-True (@($demoStageFailManifest.customerDemoEvidence.failed) -contains 'stage:M0=FAIL') 'failed stage must be listed as FAIL'
+    Assert-True (@($demoStageFailManifest.customerDemoEvidence.notRun) -notcontains 'stage:M0=FAIL') 'failed stage must not be disguised as NOT_RUN'
+
+    $demoRoundFail = New-DemoEvidenceFixture 'demo-round-fail'
+    $demoBundle = Read-DemoBundle $demoRoundFail
+    $demoBundle.rounds[0].status = 'FAIL'
+    Write-DemoBundle $demoRoundFail $demoBundle
+    $roundFailResult = Invoke-Generator $demoRoundFail
+    Assert-True ($roundFailResult.ExitCode -ne 0) 'round FAIL must fail the aggregate gate'
+    $demoRoundFailManifest = Read-EvidenceManifest $demoRoundFail
+    Assert-True ($demoRoundFailManifest.customerDemoEvidence.status -eq 'FAIL') 'round FAIL must propagate to customerDemo.status'
+    Assert-True ($demoRoundFailManifest.overallStatus -eq 'FAIL') 'round FAIL must propagate to overallStatus'
+    Assert-True (@($demoRoundFailManifest.customerDemoEvidence.failed) -contains 'round:1=FAIL') 'failed round must be listed as FAIL'
+    Assert-True (@($demoRoundFailManifest.customerDemoEvidence.notRun) -notcontains 'round:1=FAIL') 'failed round must not be disguised as NOT_RUN'
+
+    $demoBlocked = New-DemoEvidenceFixture 'demo-blocked-external'
+    $demoBundle = Read-DemoBundle $demoBlocked
+    $demoBundle.stages[0].result = 'BLOCKED_EXTERNAL'
+    Write-DemoBundle $demoBlocked $demoBundle
+    $blockedResult = Invoke-Generator $demoBlocked
+    Assert-True ($blockedResult.ExitCode -eq 0) 'BLOCKED_EXTERNAL is not FAIL and must not abort generation'
+    $demoBlockedManifest = Read-EvidenceManifest $demoBlocked
+    Assert-True ($demoBlockedManifest.customerDemoEvidence.status -eq 'BLOCKED_EXTERNAL') 'blocked state must be preserved on customerDemo.status'
+    Assert-True ($demoBlockedManifest.overallStatus -eq 'BLOCKED_EXTERNAL') 'blocked state must propagate to overallStatus'
+    Assert-True (@($demoBlockedManifest.customerDemoEvidence.blockedExternal) -contains 'stage:M0=BLOCKED_EXTERNAL') 'blocked stage must be reported separately'
+    Assert-True (@($demoBlockedManifest.customerDemoEvidence.notRun) -notcontains 'stage:M0=BLOCKED_EXTERNAL') 'blocked stage must not be disguised as NOT_RUN'
+    Assert-True (@($demoBlockedManifest.customerDemoEvidence.failed).Count -eq 0) 'blocked state must not be reported as FAIL'
+
+    $demoUpstream = New-DemoEvidenceFixture 'demo-upstream-unsupported'
+    $demoBundle = Read-DemoBundle $demoUpstream
+    $demoBundle.stages[0].result = 'UPSTREAM_UNSUPPORTED'
+    Write-DemoBundle $demoUpstream $demoBundle
+    $upstreamResult = Invoke-Generator $demoUpstream
+    Assert-True ($upstreamResult.ExitCode -eq 0) 'UPSTREAM_UNSUPPORTED is not FAIL and must not abort generation'
+    $demoUpstreamManifest = Read-EvidenceManifest $demoUpstream
+    Assert-True ($demoUpstreamManifest.customerDemoEvidence.status -eq 'UPSTREAM_UNSUPPORTED') 'upstream state must be preserved on customerDemo.status'
+    Assert-True (@($demoUpstreamManifest.customerDemoEvidence.upstreamUnsupported) -contains 'stage:M0=UPSTREAM_UNSUPPORTED') 'upstream stage must be reported separately'
+    Assert-True (@($demoUpstreamManifest.customerDemoEvidence.notRun) -notcontains 'stage:M0=UPSTREAM_UNSUPPORTED') 'upstream stage must not be disguised as NOT_RUN'
 
     Write-Host "W24 evidence verifier tests passed: $Assertions assertions."
 }

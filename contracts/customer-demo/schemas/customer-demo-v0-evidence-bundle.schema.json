@@ -1,0 +1,155 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "haifa.customer-demo.evidence-bundle/v1",
+  "title": "Customer demo v0 M0-M4 evidence bundle",
+  "description": "Fail-closed aggregate consumed by scripts/verify-customer-demo-evidence.ps1. It binds the two consecutive rounds and the five demo stages to the frozen M0 oracle. It never stores credential values and never upgrades a NOT_RUN stage.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "demoId",
+    "oracle",
+    "mainSha",
+    "frozenFrontendSha",
+    "sdkVersion",
+    "model",
+    "budget",
+    "dataRoot",
+    "dataRootPolicy",
+    "roundResetBetweenRounds",
+    "configSha256",
+    "inputSha256",
+    "referenceFallbackEvidence",
+    "rounds",
+    "firstFailureHistory",
+    "stages",
+    "humanAcceptance",
+    "decision"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "haifa.customer-demo.evidence-bundle/v1" },
+    "demoId": { "const": "DEMO-V0" },
+    "oracle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "mainSha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{7,40}$" },
+    "frozenFrontendSha": { "type": "string" },
+    "sdkVersion": { "type": "string" },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "provider", "endpointHost", "credentialSource", "secretPresent", "paidModelCalled"],
+      "properties": {
+        "id": { "type": "string" },
+        "provider": { "type": "string" },
+        "endpointHost": { "type": "string" },
+        "credentialSource": { "type": "string" },
+        "secretPresent": { "type": "boolean" },
+        "paidModelCalled": { "type": "boolean" }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authorized", "maxModelCallsPerRound", "authorizationRef"],
+      "properties": {
+        "authorized": { "type": "boolean" },
+        "maxModelCallsPerRound": { "type": "integer", "minimum": 1 },
+        "authorizationRef": { "type": ["string", "null"] }
+      }
+    },
+    "dataRoot": { "type": ["string", "null"] },
+    "dataRootPolicy": { "type": "string" },
+    "roundResetBetweenRounds": { "type": "boolean" },
+    "configSha256": { "type": ["string", "null"], "pattern": "^(|[0-9a-f]{64})$" },
+    "inputSha256": { "type": ["string", "null"], "pattern": "^(|[0-9a-f]{64})$" },
+    "referenceFallbackEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fallbackAllowed", "fallbackUsed", "evidencePath", "evidenceSha256"],
+      "properties": {
+        "fallbackAllowed": { "type": "boolean" },
+        "fallbackUsed": { "type": "boolean" },
+        "evidencePath": { "type": ["string", "null"] },
+        "evidenceSha256": { "type": ["string", "null"], "pattern": "^(|[0-9a-f]{64})$" }
+      }
+    },
+    "rounds": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "$ref": "customer-demo-v0-run-manifest.schema.json" }
+    },
+    "firstFailureHistory": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "stage", "summary", "originalAvailable", "evidencePath", "evidenceSha256", "note"],
+        "properties": {
+          "id": { "type": "string" },
+          "stage": { "type": "string" },
+          "summary": { "type": "string" },
+          "originalAvailable": { "type": "boolean" },
+          "evidencePath": { "type": ["string", "null"] },
+          "evidenceSha256": { "type": ["string", "null"] },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "workStatus", "result", "workPackages", "dependsOn", "proof", "mainCommit", "acceptedAt", "evidence", "blocker", "nextAction"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^M[0-4]$" },
+          "title": { "type": "string" },
+          "workStatus": { "type": "string", "enum": ["pending", "in_progress", "ready_for_acceptance", "blocked", "complete"] },
+          "result": { "type": "string", "enum": ["PASS", "FAIL", "NOT_RUN", "BLOCKED_EXTERNAL", "UPSTREAM_UNSUPPORTED"] },
+          "workPackages": { "type": "array", "items": { "type": "string" } },
+          "dependsOn": { "type": "array", "items": { "type": "string" } },
+          "proof": { "type": ["string", "null"] },
+          "mainCommit": { "type": ["string", "null"] },
+          "acceptedAt": { "type": ["string", "null"] },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "sha256"],
+              "properties": {
+                "path": { "type": "string" },
+                "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+              }
+            }
+          },
+          "blocker": { "type": "string" },
+          "nextAction": { "type": "string" }
+        }
+      }
+    },
+    "humanAcceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["present", "path", "sha256", "acceptedBy", "acceptedAt"],
+      "properties": {
+        "present": { "type": "boolean" },
+        "path": { "type": ["string", "null"] },
+        "sha256": { "type": ["string", "null"] },
+        "acceptedBy": { "type": ["string", "null"] },
+        "acceptedAt": { "type": ["string", "null"] }
+      }
+    },
+    "decision": { "type": "string", "enum": ["NO_GO", "GO"] }
+  }
+}

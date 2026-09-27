@@ -1,0 +1,161 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "haifa.customer-demo.run-manifest/v1",
+  "title": "Customer demo v0 single-round run manifest",
+  "description": "QA evidence metadata for one frozen-UI customer demo round. It records identifiers, hashes, approval/Steer transition and cleanup so the W24 validator can reject missing rounds, duplicate ids, SHA drift, hidden retries, fake artifacts and undocumented first failures. It is not a product domain object and carries no credential values.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "index",
+    "sequence",
+    "status",
+    "modelId",
+    "mainSha",
+    "frozenFrontendSha",
+    "sdkVersion",
+    "configSha256",
+    "inputSha256",
+    "dataRoot",
+    "threadId",
+    "runId",
+    "toolCallId",
+    "interactionId",
+    "artifactId",
+    "fileName",
+    "fileSha256",
+    "artifactProvenance",
+    "artifactProvenanceEvidence",
+    "downloadSha256",
+    "downloadByteCount",
+    "downloadEvidence",
+    "approvalBefore",
+    "approvalAfter",
+    "steer",
+    "networkTargets",
+    "usage",
+    "timeline",
+    "playwrightPath",
+    "playwrightSha256",
+    "logPaths",
+    "processCleanup",
+    "attempts",
+    "hiddenRetry",
+    "firstFailure"
+  ],
+  "properties": {
+    "index": { "type": "integer", "minimum": 1, "description": "1-based round index; must follow array order." },
+    "sequence": { "type": "integer", "minimum": 1, "description": "Consecutive execution sequence; must equal index." },
+    "status": { "$ref": "#/definitions/resultStatus" },
+    "modelId": { "type": ["string", "null"] },
+    "mainSha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{7,40}$" },
+    "frozenFrontendSha": { "type": ["string", "null"] },
+    "sdkVersion": { "type": ["string", "null"] },
+    "configSha256": { "type": ["string", "null"], "pattern": "^(|[0-9a-f]{64})$" },
+    "inputSha256": { "type": ["string", "null"], "pattern": "^(|[0-9a-f]{64})$" },
+    "dataRoot": { "type": ["string", "null"] },
+    "threadId": { "type": ["string", "null"] },
+    "runId": { "type": ["string", "null"] },
+    "toolCallId": { "type": ["string", "null"] },
+    "interactionId": { "type": ["string", "null"] },
+    "artifactId": { "type": ["string", "null"] },
+    "fileName": { "type": ["string", "null"] },
+    "fileSha256": { "type": ["string", "null"], "pattern": "^(|[0-9a-f]{64})$", "description": "SHA-256 of the file produced by the production write_file tool. When the round is PASS it must equal downloadSha256 and the actual downloaded Artifact bytes." },
+    "artifactProvenance": { "type": ["string", "null"] },
+    "artifactProvenanceEvidence": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "description": "Repository-relative original provenance record. When the round is PASS the referenced file must exist, its SHA-256 must match, and its JSON must bind artifactId/runId/toolCallId to this round plus the oracle story.tool (write_file), oracle story.artifact (sdk-owned-real-artifact), downloadSha256 and downloadByteCount."
+    },
+    "downloadSha256": { "type": ["string", "null"], "pattern": "^(|[0-9a-f]{64})$" },
+    "downloadByteCount": { "type": ["integer", "null"], "minimum": 0 },
+    "downloadEvidence": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "description": "Repository-relative real downloaded bytes. When the round is PASS the referenced file must exist and its actual SHA-256 and byte length must equal downloadSha256/downloadByteCount."
+    },
+    "approvalBefore": { "type": "string", "enum": ["none", "pending", "approved", "rejected", "expired", "unknown"] },
+    "approvalAfter": { "type": "string", "enum": ["none", "pending", "approved", "rejected", "expired", "unknown"] },
+    "steer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targetRunId", "request", "response", "ackText", "sameRun"],
+      "properties": {
+        "targetRunId": { "type": ["string", "null"] },
+        "request": { "type": ["string", "null"] },
+        "response": { "type": ["string", "null"] },
+        "ackText": { "type": ["string", "null"] },
+        "sameRun": { "type": "boolean" }
+      }
+    },
+    "networkTargets": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Host[:port] targets the round really contacted. Only the configured provider host and loopback are allowed."
+    },
+    "usage": { "type": ["object", "null"] },
+    "timeline": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["at", "event"],
+        "properties": {
+          "at": { "type": "string" },
+          "event": { "type": "string" }
+        }
+      }
+    },
+    "playwrightPath": { "type": ["string", "null"] },
+    "playwrightSha256": { "type": ["string", "null"], "pattern": "^(|[0-9a-f]{64})$" },
+    "logPaths": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": { "type": "string" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "processCleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["portsReleased", "processes"],
+      "properties": {
+        "portsReleased": { "type": "boolean" },
+        "processes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "attempts": { "type": "integer", "minimum": 1, "description": "Declared execution attempts. Values above 1 require firstFailure and matching firstFailureHistory." },
+    "hiddenRetry": { "type": "boolean" },
+    "firstFailure": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["at", "summary", "evidencePath", "evidenceSha256"],
+      "properties": {
+        "at": { "type": "string" },
+        "summary": { "type": "string" },
+        "evidencePath": { "type": "string" },
+        "evidenceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  },
+  "definitions": {
+    "resultStatus": {
+      "type": "string",
+      "enum": ["PASS", "FAIL", "NOT_RUN", "BLOCKED_EXTERNAL", "UPSTREAM_UNSUPPORTED"]
+    }
+  }
+}

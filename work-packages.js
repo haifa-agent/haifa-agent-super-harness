@@ -1,43 +1,43 @@
 window.WORK_PACKAGES_DATA = {
   "schemaVersion": 5,
-  "updatedAt": "2026-09-27T15:25:00+08:00",
+  "updatedAt": "2026-09-27T16:11:00+08:00",
   "source": "private-docs/roadmap/35-super-harness-deerflow-parity.md",
   "customerDemo": {
     "id": "DEMO-V0",
     "title": "客户演示 v0 · 冻结 UI 真实整链",
     "roadmap": "private-docs/roadmap/36-super-harness-customer-demo-v0.md",
-    "updatedAt": "2026-09-27T15:25:00+08:00",
+    "updatedAt": "2026-09-27T15:36:00+08:00",
     "target": "真实模型 + 真实生产 Tool + Approval + Artifact + Reload/Reconnect + Steer，在冻结 DeerFlow UI 上连续跑两遍无异常。",
     "decision": "NO_GO",
     "mainSha": null,
     "humanAcceptance": null,
     "scopeNote": "这是本地纵向演示，不是 PRD D01–D05 完整 Customer Demo Gate 或 Full Parity；W04 项目删除 P0、历史 W05 409 等范围外风险继续披露。",
     "stages": [
-      { "id": "M0", "title": "冻结故事与 doctor", "workStatus": "in_progress", "result": "NOT_RUN", "owner": "主控 /root；W24 证据、W00/W03 来源按需消费", "workPackages": ["W24", "W00", "W03"], "dependsOn": [], "exit": "固定无敏感脚本、真实模型/预算/凭据引用、同 Run Steer 窗口、逐 case Oracle、端口/数据根/前端与 SDK 来源 doctor；不调用付费模型", "evidence": "固定 Oracle b202987f... 含 2 轮/8 case/同 Run Steer 窗口；doctor 静态正例+4 负例 PASS，主端口只读核验前端/SDK/模型/OS 凭据/数据根 PASS，paidModelCalled=false", "blocker": "真实模型预算尚未获本轮明确授权，budget-authorization=NOT_RUN；Steer 窗口尚未在 M3/M4 真实链运行", "nextAction": "Oracle 已固定，可派 W24 构建证据门禁；主控继续 M1 Tool/Approval Oracle，不把只读 doctor 提升为 M0 PASS" },
+      { "id": "M0", "title": "冻结故事与 doctor", "workStatus": "in_progress", "result": "NOT_RUN", "owner": "主控 /root；W24 证据、W00/W03 来源按需消费", "workPackages": ["W24", "W00", "W03"], "dependsOn": [], "exit": "固定无敏感脚本、真实模型/预算/凭据引用、同 Run Steer 窗口、逐 case Oracle、端口/数据根/前端与 SDK 来源 doctor；不调用付费模型", "evidence": "固定 Oracle b202987f... 含 2 轮/8 case/同 Run Steer 窗口；doctor 静态正例+4 负例 PASS，主端口只读核验前端/SDK/模型/OS 凭据/数据根 PASS；W24 fail-closed 证据包 main@17cf028，64/29 与总门禁 81 assertions PASS；paidModelCalled=false", "blocker": "真实模型预算尚未获本轮明确授权，budget-authorization=NOT_RUN；Steer 窗口尚未在 M3/M4 真实链运行", "nextAction": "Oracle、doctor 与证据包已固定；主控只在预算授权和真实窗口证据具备后推进 M0，不把只读检查提升为演示运行 PASS" },
       { "id": "M1", "title": "生产 Tool 与 Approval", "workStatus": "in_progress", "result": "NOT_RUN", "owner": "主控 /root；W05 产品实现", "workPackages": ["W05"], "dependsOn": ["M0"], "exit": "W05 生产 write_file、Approval、拒绝/重复/越权/取消及主端口 smoke 同链验证", "evidence": "W05 文件新建切片 c6c2be9 已合入；主控 main@45a7ea6 补齐批准前 404、错误 request 409、跨线程 409、批准恰好一次、重复 409、拒绝后 404，定向 11/11 与六模块 clean verify（Server 157/0/0/2 skip）PASS；主端口 18018 health、33018 页面及 /api/models 200；未调用付费模型", "blocker": "M0 尚未通过；真实模型与完整 Tool/Approval/Artifact/Steer 整链仍 NOT_RUN；旧 Steer gap FAIL 与 symlink NOT_RUN 保留", "nextAction": "保留本轮受控阶段 Oracle；M0 及 W24 门禁就绪后再判断 M1 阶段结果，不以受控 Provider 或文件底座替代真实整链" },
-      { "id": "M2", "title": "真实 Artifact 与冻结 UI 卡片", "workStatus": "pending", "result": "NOT_RUN", "owner": "主控待派可交互子智能体；W05 产品、必要时 HA SDK", "workPackages": ["W05", "W18", "W04"], "dependsOn": ["M1"], "exit": "公开 SDK 发布带 ID/Run/Tool/provenance 的 Artifact；冻结 UI 展示 Tool/Approval/Artifact，下载字节与独立 SHA-256 一致", "evidence": "仅有 Workspace/文件下载及 SDK 局部底座；write_file 后真实 Artifact 发布与完整 UI 卡片 NOT_RUN", "blocker": "完整 Tool transcript、普通 Tool 持久 Interaction 的 SDK 最小接口与 Artifact/UI 实际消费待设计", "nextAction": "M1 通过后按 show-roadmap-1/W05-Developing/W05-DemoArtifactUi-Pending.md 派工；SDK/复杂度边界由主控先审，跨仓编码须人工裁决" },
+      { "id": "M2", "title": "真实 Artifact 与冻结 UI 卡片", "workStatus": "pending", "result": "NOT_RUN", "owner": "主控待派可交互子智能体；W05 产品、必要时 HA SDK", "workPackages": ["W05", "W18", "W04"], "dependsOn": ["M1"], "exit": "公开 SDK 发布带 ID/Run/Tool/provenance 的 Artifact；冻结 UI 展示 Tool/Approval/Artifact，下载字节与独立 SHA-256 一致", "evidence": "主控编码前证明 private-docs@f6ff0b4：现有 ArtifactService/RestrictedWorkspaceService 足够且不得新建 store；权威 ToolCall 已持久化完整参数/结果，但公开 API 无授权只读投影，JavaToolContext 缺 sessionId/toolCallId；write_file 后真实 Artifact/UI 仍 NOT_RUN", "blocker": "待人工裁决最小 HA SDK 方案：把既有 sessionId/toolCallId 传入 JavaToolContext，并在 AgentRuns 暴露授权、脱敏的只读 ToolCall 投影；M1 仍未 PASS", "nextAction": "保持 M2 Pending；先审阅同一任务提示词内的复杂度对照和最小 SDK 设计，获人工批准后才从 HA dev 建 feat-* worktree，发布 0.1.2-SNAPSHOT 并回到本仓派工" },
       { "id": "M3", "title": "恢复、Steer 与 L2 双后端差分", "workStatus": "pending", "result": "NOT_RUN", "owner": "主控待派可交互子智能体；W18、W24", "workPackages": ["W05", "W18", "W24"], "dependsOn": ["M2"], "exit": "受控 Provider 在冻结 UI 同脚本两轮 pending→reload/reconnect→approve→Tool→Artifact→active Steer→terminal，逐 case 报 reference/Haifa PASS/FAIL/NOT_RUN", "evidence": "现有重连、Steer 和 W18 差分均为分项证据；新整链两轮 NOT_RUN", "blocker": "M2 未闭环；不能拿 fixture 或分项 PASS 充当生产能力", "nextAction": "M2 合入并主线 smoke 后按 show-roadmap-1/W18-Developing/W18-DemoL2Differential-Pending.md 派工；W24 只聚合真实证据，保留旧 W04 上传 FAIL" },
       { "id": "M4", "title": "主线真实模型两轮与人工体验", "workStatus": "pending", "result": "NOT_RUN", "owner": "主控 /root；W18/W24 验证；人工最终体验", "workPackages": ["W05", "W18", "W24"], "dependsOn": ["M3"], "exit": "同一主线 SHA、模型/配置/数据根的冻结 UI L3 整链连续两轮 PASS，零隐藏重试；原始证据、主端口 smoke、人工体验齐全", "evidence": "真实模型文本聊天已单项验证；生产 Tool+Approval+Artifact+Reload/Reconnect+Steer 连续两轮 NOT_RUN", "blocker": "M0–M3 未通过；尚未授权/执行有预算的真实模型整链", "nextAction": "前置门禁全部通过后在 18018/33018 执行两轮并请人工验收，未通过仍为 NO_GO" }
     ]
   },
   "executionAudit": {
-    "verifiedAt": "2026-09-27T15:25:00+08:00",
-    "lastIntegratedCommit": "45a7ea6",
-    "activeNonCrossCuttingPackages": [],
+    "verifiedAt": "2026-09-27T15:52:00+08:00",
+    "lastIntegratedCommit": "17cf028",
+    "activeNonCrossCuttingPackages": ["W03"],
     "reservedRecoverySlots": 1,
     "packages": {
       "W00": { "assignment": "消费矩阵静态切片已复审合入；工作包仍进行中", "owner": "主控 /root；OpenCode deepseek/deepseek-flash 已交付", "worktree": "D:/workspace/haifa-agent-super-harness-worktrees/w00-consumer-matrix-opencode", "branch": "codex/w00-consumer-matrix-opencode", "lastProgressAt": "2026-09-27T14:18:00+08:00", "lastEvidence": "f49fad7+894cec2 / main@735fa22：28 条 hooks 消费、7 排除、3 未证边界；主控补独立 verifier 基线，双重删除负例 PASS；首轮 W05 SQLite FAIL 的原件已被 clean 删除，保留终端摘要；主线集成门禁另见本轮复验", "blocker": "SDK StreamManager 无本地包而 NOT_INVENTORIED；法律授权/NOTICE 未确认、运行互通 NOT_RUN", "nextAction": "按演示 M0 只消费所需静态来源；许可/NOTICE 与剩余未知边界后续独立核定" },
-      "W03": { "assignment": "等待依赖/派工", "owner": "主控 /root", "worktree": "D:/workspace/haifa-agent-super-harness-worktrees/w03-title-suggestions-opencode", "branch": "codex/w03-title-suggestions-opencode", "lastProgressAt": "2026-09-27T00:18:34+08:00", "lastEvidence": "e113a7f 已合入 main@aab7169；title/suggestions UI 2/2×3 PASS", "blocker": "同一 Conversation 换模型待 W05 准入边界复核；Input Polish 专项 UI 未测", "nextAction": "W05 边界明确后再派换模型；先写 Input Polish UI 独立提示词" },
+      "W03": { "assignment": "task-2 Input Polish 冻结 UI 消费已派 OpenCode；task-1 换模型仍等待 W05 边界", "owner": "OpenCode deepseek/deepseek-flash；主控 /root 监控与复审", "worktree": "D:/workspace/haifa-agent-super-harness-worktrees/w03-input-polish-ui-opencode", "branch": "codex/w03-input-polish-ui-opencode", "lastProgressAt": "2026-09-27T16:11:00+08:00", "lastEvidence": "受界 provider/runner/spec 已落盘；Java reactor package 与绑定 20618 的 Next production build PASS，构建产物代理目标核实为 20618；两轮 Playwright 已在 20618/25618 启动，结果尚未返回。主控提前发现逐轮 evidence 覆盖和端口释放断言待补", "blocker": "当前无运行阻断；候选在测试结束后必须补逐轮 results/artifacts 归档及端口/子进程释放断言，再重新跑双轮；禁止付费模型和修改冻结 UI", "nextAction": "等待当前双轮命令安全结束后由 OpenCode 修正证据健康度问题，16:24 前 checkpoint；之后主控独立复审和复跑" },
       "W04": { "assignment": "人工决定暂停 W04；task-1 P0 保留", "owner": "主控 /root；/root/w04_p0 已交付只读证明", "worktree": "D:/workspace/haifa-agent-super-harness-worktrees/w04-p0-consistency", "branch": "codex/w04-p0-consistency", "lastProgressAt": "2026-09-27T12:42:00+08:00", "lastEvidence": "方案 A 的共享锁/锁序和未决 API 屏障不成立；D: 同卷 ATOMIC_MOVE 仅受控探测通过。W04 worktree clean、未编码、未启动服务", "blocker": "人工明确暂停 W04、保留 P0；A2 未获批准，转换/预览/25 MiB 仍未验收", "nextAction": "保持现场与 P0 待办；只有人工明确恢复并重新裁决后才派工" },
-      "W05": { "assignment": "task-2 生产文件 Tool 安全新建切片已合入；主控补齐 M1 负向 Approval Oracle；task-1 旧 409 待证据", "owner": "主控 /root；/root/w05_production_tool 已交付", "worktree": "D:/workspace/haifa-agent-super-harness-worktrees/w05-production-tool-interaction", "branch": "codex/w05-production-tool-interaction", "lastProgressAt": "2026-09-27T15:00:00+08:00", "lastEvidence": "c6c2be9 + main@45a7ea6：批准前 404、错误 request/跨线程/重复 409、批准恰好一次、拒绝后 404；定向 11/11、六模块 clean verify PASS，Server 157/0/0/2 skip；主端口 health/page/models 200；未调用付费模型", "blocker": "历史 409 无 cause；symlink 负例 Windows NOT_RUN；完整 Tool transcript、普通 Tool clarification、真实 Artifact 与真实模型整链 NOT_RUN", "nextAction": "M1 保持 NOT_RUN 直至前置 M0 与阶段门禁裁定；M2 再补真实 Artifact 和冻结 UI 卡片；不宣告 W05 整包完成" },
+      "W05": { "assignment": "task-2 生产文件 Tool 安全新建切片已合入；task-4 M2 由主控完成 SDK 编码前证明；task-1 旧 409 待证据", "owner": "主控 /root；/root/w05_production_tool 已交付", "worktree": "D:/workspace/haifa-agent-super-harness-worktrees/w05-production-tool-interaction", "branch": "codex/w05-production-tool-interaction", "lastProgressAt": "2026-09-27T16:04:00+08:00", "lastEvidence": "c6c2be9 + main@45a7ea6 完成生产文件/Approval 受控门禁；M2 主控源码证明 private-docs@f6ff0b4 确认 Artifact 底座可复用，但 JavaToolContext 和授权只读 ToolCall 投影存在最小 SDK 缺口，尚未获跨仓编码批准", "blocker": "历史 409 无 cause；symlink 负例 Windows NOT_RUN；M2 最小 HA SDK 方案待人工裁决；真实 Artifact/UI 与真实模型整链 NOT_RUN", "nextAction": "M1 保持 NOT_RUN；人工批准最小 SDK 边界后才建 HA feat-* worktree，不在 SH 自建 transcript/Artifact 权威；不宣告 W05 整包完成" },
       "W18": { "assignment": "等待产品修复", "owner": "主控 /root", "worktree": "D:/workspace/haifa-agent-super-harness-worktrees/w18-dual-backend-differential", "branch": "codex/w18-dual-backend-differential", "lastProgressAt": "2026-09-27T10:33:28+08:00", "lastEvidence": "577a08c 已合入 main@f3944a4；reference 9/9×2、Haifa 5 PASS/2 FAIL/2 NOT_RUN×2", "blocker": "W04 上传两项 FAIL、W05 生产 Tool NOT_RUN、W12 启用态 WS NOT_RUN", "nextAction": "各产品缺口修复后复跑同一双后端用例，不用 fixture 代替生产能力" },
-      "W24": { "assignment": "OpenCode 候选 3fcc2f7 + 修复 3421a7a 已交付；主控要求最终补齐文件→Artifact→下载端到端绑定", "owner": "OpenCode deepseek/deepseek-flash；主控 /root 复审", "worktree": "D:/workspace/haifa-agent-super-harness-worktrees/w24-demo-evidence-opencode", "branch": "codex/w24-demo-evidence-opencode", "lastProgressAt": "2026-09-27T15:25:00+08:00", "lastEvidence": "3421a7a 已使 stage/round FAIL 传染 overall，五态分栏，并绑定真实下载文件与 provenance 原件；54/24、81 assertions PASS。主控复审要求再绑定 fileSha、Oracle tool/artifact 类型和 provenance 内 SHA/长度", "blocker": "最终 review：必须证明 fileSha256=实际下载 SHA，provenance 原件绑定 write_file、sdk-owned-real-artifact、下载 SHA/长度；M1–M4 仍 NOT_RUN/NO_GO", "nextAction": "OpenCode 正在同一 worktree 做最后小修，禁止外部路径；15:40 前主控检查新 commit 与独立复验" }
+      "W24": { "assignment": "客户演示证据包任务已由 OpenCode 交付并经主控复审合入；W24 长期横切整包继续消费后续真实证据", "owner": "主控 /root；OpenCode deepseek/deepseek-flash 切片已结算", "worktree": "D:/workspace/haifa-agent-super-harness-worktrees/w24-demo-evidence-opencode", "branch": "codex/w24-demo-evidence-opencode", "lastProgressAt": "2026-09-27T15:36:00+08:00", "lastEvidence": "3fcc2f7+3421a7a+a814bef / main@17cf028：FAIL 传染、五态分栏、真实下载文件与 provenance 原件、fileSha=downloadSha=实际字节及 Oracle write_file/sdk-owned-real-artifact 端到端绑定；主控独立 64 assertions/29 cases、W24 总门禁 81 assertions PASS；manifest 552e1114...，bundle 348ff6a0...", "blocker": "该切片无剩余 review 阻断；M0 预算/真实 Steer 与 M1–M4 整链仍 NOT_RUN/NO_GO", "nextAction": "W24 持续消费 M1–M4 的真实原始证据并保持 fail-closed；不以证据框架完成替代演示运行" }
     }
   },
   "deliveryTasks": {
     "W03": [
       { "id": "task-1", "title": "同一 Conversation 切换模型", "status": "blocked", "prompt": "private-docs/prompts/39-deerflow-parity-delivery/W03-Developing/W03-ConversationModelSwitch-Pending.md", "next": "先确认 W05 准入/恢复边界，再按提示词派工" },
-      { "id": "task-2", "title": "Input Polish 冻结 UI 消费", "status": "pending", "prompt": null, "next": "主控编写独立提示词，明确原样 UI 差分与错误语义" }
+      { "id": "task-2", "title": "Input Polish 冻结 UI 消费", "status": "in_progress", "prompt": "private-docs/prompts/39-deerflow-parity-delivery/W03-Developing/W03-InputPolishUi-Developing.md", "owner": "OpenCode deepseek/deepseek-flash；主控 /root 复审", "branch": "codex/w03-input-polish-ui-opencode", "worktree": "D:/workspace/haifa-agent-super-harness-worktrees/w03-input-polish-ui-opencode", "slot": "1", "ports": "20618/25618", "dataRoot": "D:/workspace/haifa-agent-super-harness-worktrees/w03-input-polish-ui-opencode/local-tmp/slot-1-w03-input-polish-ui", "exit": "冻结 UI polish/undo/cancel/失败边界同脚本两轮；生产同源 Haifa 路由、零 Thread/Run 事实、无真实模型调用", "lastCheckpointAt": "2026-09-27T16:11:00+08:00", "nextCheckpoint": "2026-09-27T16:24:00+08:00", "next": "两轮 UI 正在槽位 1 运行；结束后修复逐轮 evidence 隔离和端口释放断言并重跑，不以当前结果直接交付" }
     ],
     "W04": [
       { "id": "task-1", "title": "项目删除与 Trash 数据一致性", "status": "blocked", "prompt": "private-docs/prompts/39-deerflow-parity-delivery/W04-Developing/W04-ProjectDeleteConsistency-Developing.md", "owner": "主控 /root；/root/w04_p0 已交付只读证明", "branch": "codex/w04-p0-consistency", "worktree": "D:/workspace/haifa-agent-super-harness-worktrees/w04-p0-consistency", "slot": "1", "ports": "20618/25618", "dataRoot": "D:/workspace/haifa-agent-super-harness-worktrees/w04-p0-consistency/local-tmp/slot-1-w04-p0", "exit": "P0 失败注入、字节/hash、线程关联及重启重试 fail-closed 通过；主控再复审主线", "lastCheckpointAt": "2026-09-27T12:42:00+08:00", "nextCheckpoint": null, "next": "人工暂停 W04；保留 P0 与原 worktree，A2 不继续证明或编码" },
@@ -49,7 +49,7 @@ window.WORK_PACKAGES_DATA = {
       { "id": "task-1", "title": "重启 Interaction 历史 409 归因", "status": "blocked", "prompt": "private-docs/prompts/39-deerflow-parity-delivery/W05-Developing/W05-RestartInteraction409-Developing.md", "owner": "主控 /root；/root/w05_409 已交付证据", "branch": "codex/w05-409-root-cause", "worktree": "D:/workspace/haifa-agent-super-harness-worktrees/w05-409-root-cause", "slot": "2", "ports": "30618/35618", "dataRoot": "D:/workspace/haifa-agent-super-harness-worktrees/w05-409-root-cause/local-tmp/slot-2-w05-409", "exit": "旧 409 原始 cause、确定性复现与最小修复有跨进程回归；无 cause 则如实保留未完成", "lastCheckpointAt": "2026-09-27T12:47:00+08:00", "nextCheckpoint": null, "next": "无法从旧统一 409 文案倒推 cause；无源码提交，等待同因现场证据后再修复" },
 { "id": "task-2", "title": "生产文件 Tool 安全新建切片", "status": "complete", "demoStages": ["M1"], "prompt": "private-docs/prompts/39-deerflow-parity-delivery/W05-Developing/W05-ProductionFileTool-Finished.md", "owner": "/root/w05_production_tool 交付；主控 /root 复审", "branch": "codex/w05-production-tool-interaction", "worktree": "D:/workspace/haifa-agent-super-harness-worktrees/w05-production-tool-interaction", "slot": "2", "ports": "30618/35618", "dataRoot": "D:/workspace/haifa-agent-super-harness-worktrees/w05-production-tool-interaction/local-tmp/slot-2-w05-production", "commit": "c6c2be9890ee6b3e7e786936e1993f0c136cdddd", "mainCommit": "cf04388", "reviewEvidence": "主控审查生产按 Thread 绑定 Tool、principal/deadline/cancel/no-overwrite、受控 Run/HTTP 下载与失败史；定向 reactor workspace 10/0/1 skip、server 5/0/0 PASS；主线六模块 clean verify PASS", "mainSmoke": "主目录原数据根 Gateway 18018 health/auth 200、冻结前端 33018 /workspace/chats/new 和 /api/models 200；未发起付费模型对话", "acceptedAt": "2026-09-27T14:22:38+08:00", "targetedTests": "主控定向 reactor 测试 workspace 10/0/1 skip、server 5/0/0 PASS；子槽冻结 UI 同脚本 4/4×2 PASS；六模块首轮既有 Steer SSE gap FAIL，定向及第二轮 PASS，原件外置保留", "runtimeEvidence": "受控 loopback Provider 生产 Run/ToolCall：审批前下载 404，批准后 19 字节，SHA-256 7b421ed188a994cea216578182bc57c17c8e543a643bea278c48c1f4326bc7f5 与 ETag/changes 一致；子槽端口已释放", "notRun": "真实模型整链、真实 Artifact 发布及完整 UI Tool 卡片、普通 Tool clarification、覆盖/append、Windows symlink 负例", "worktreeClean": true, "exit": "仅生产 write_file 安全新建切片验收；W05 工作包和 M1 阶段仍未通过", "lastCheckpointAt": "2026-09-27T13:39:00+08:00", "nextCheckpoint": null, "next": "M1 完整阶段 Oracle、M2 Artifact/UI 和历史 409 分别后续处理" },
       { "id": "task-3", "title": "非 approval、多 Interaction 与跨进程恢复", "status": "pending", "prompt": null, "next": "独立 OS 进程、重复/过期/冲突与 SSE 重连正反例" },
-      { "id": "task-4", "title": "演示 M2 真实 Artifact 与冻结 UI 卡片", "status": "pending", "demoStages": ["M2"], "prompt": "private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-1/W05-Developing/W05-DemoArtifactUi-Pending.md", "owner": "待派可交互子智能体；主控负责 SDK/复杂度裁决与验收", "exit": "生产 Tool 经 Approval 恰好一次写入并发布真实 Artifact；冻结 UI 实时/历史卡片与下载 SHA 两轮一致", "next": "M0/M1 通过后由主控补齐 branch/worktree、槽位、数据根和 checkpoint 再正式派工；不新增 W05 第 5 个任务" }
+      { "id": "task-4", "title": "演示 M2 真实 Artifact 与冻结 UI 卡片", "status": "pending", "demoStages": ["M2"], "prompt": "private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-1/W05-Developing/W05-DemoArtifactUi-Pending.md", "owner": "待派可交互子智能体；主控负责 SDK/复杂度裁决与验收", "exit": "生产 Tool 经 Approval 恰好一次写入并发布真实 Artifact；冻结 UI 实时/历史卡片与下载 SHA 两轮一致", "next": "主控编码前证明已写入提示词：只补既有 session/toolCall 引用及授权只读 ToolCall 投影，不新增 store/state machine；待人工裁决且 M0/M1 通过后再正式派工" }
     ]
   },
   "baseline": {
@@ -62,8 +62,8 @@ window.WORK_PACKAGES_DATA = {
     "evidenceGatePassed": 1
   },
   "recentWorkPlan": {
-    "updatedAt": "2026-09-27T15:25:00+08:00",
-    "focus": "M0 Oracle 与只读 doctor 已实现并验证，未调用付费模型；预算授权和真实 Steer 仍 NOT_RUN，演示保持 NO_GO。主控已在 main@45a7ea6 完成 M1 Approval 负向 Oracle、全仓门禁与主端口 smoke，但不越过 M0 提升阶段结果；W24 候选 3fcc2f7 + 3421a7a 已修复 FAIL 折叠和实际原件校验，OpenCode 正按最终复审补齐文件→Artifact→下载的端到端绑定。W05 M2 等 M1 PASS，W18 M3 等 M2 合入。当前活跃非横切开发包 0/3，OpenCode 占用一个横切槽位。",
+    "updatedAt": "2026-09-27T16:04:00+08:00",
+    "focus": "客户演示 M2 不越过 M0/M1 门禁正式开工；主控已完成 SDK/复杂度编码前证明并等待人工裁决最小 HA SDK 边界。并行 W03 Input Polish 冻结 UI 尾项已从 OpenCode 路径权限误判中恢复，仍在开发。M0–M4 继续 NOT_RUN/NO_GO，未授权也未调用付费模型；当前活跃非横切开发包 1/3，保留一个恢复槽位。",
     "items": [
       {
         "id": "NEXT-M0",
@@ -73,7 +73,7 @@ window.WORK_PACKAGES_DATA = {
         "status": "in_progress",
         "workPackages": ["W24", "W00", "W03"],
         "owner": "主控 /root；W24 证据、W00/W03 来源按需消费，尚未派新开发",
-        "nextAction": "固定 Oracle 和 doctor 已落地；保留 budget-authorization=NOT_RUN，派 W24 消费该 schema，主控继续 M1，不发起真实模型调用。",
+        "nextAction": "固定 Oracle、doctor 和 W24 fail-closed 证据包已落地；保留 budget-authorization=NOT_RUN，不发起真实模型调用，等待明确预算授权及后续真实 Steer 窗口。",
         "doneWhen": "当前已具备可独立复核的 Oracle/doctor/hash；只有预算授权和后续真实窗口证据满足时才推进 M0 result，不能把只读检查记作演示运行 PASS。",
         "dependency": "不等待 W00 整包或全部矩阵验收；只消费本脚本实际触及的冻结协议来源。"
       },
@@ -90,6 +90,18 @@ window.WORK_PACKAGES_DATA = {
         "dependency": "依赖 M0 固定脚本与 doctor；W05 task-2 完成只提供文件写入底座。"
       },
       {
+        "id": "NEXT-W03-INPUT-POLISH-UI",
+        "priority": "P1",
+        "title": "W03 Input Polish 冻结 UI 专项",
+        "status": "in_progress",
+        "workPackages": ["W03"],
+        "owner": "OpenCode deepseek/deepseek-flash；主控独立复审",
+        "nextAction": "在 codex/w03-input-polish-ui-opencode 使用槽位 1（20618/25618）验证真实 polish/undo/cancel/错误边界两轮；禁止付费模型和冻结 UI 修改。",
+        "taskCard": { "prompt": "private-docs/prompts/39-deerflow-parity-delivery/W03-Developing/W03-InputPolishUi-Developing.md", "branch": "codex/w03-input-polish-ui-opencode", "worktree": "D:/workspace/haifa-agent-super-harness-worktrees/w03-input-polish-ui-opencode", "slot": "1", "ports": "20618/25618", "dataRoot": "D:/workspace/haifa-agent-super-harness-worktrees/w03-input-polish-ui-opencode/local-tmp/slot-1-w03-input-polish-ui", "exit": "两轮 UI 与 HTTP/零 Run 证据、端口释放、clean commit", "nextCheckpoint": "2026-09-27T16:24:00+08:00" },
+        "doneWhen": "主控复审候选并独立复跑 polish/undo/cancel/失败语义、同源路由、零 Thread/Run 事实及两轮健康度；子任务完成不关闭 W03。",
+        "dependency": "后端 acf8061/main@85b2a5b 已具备；不依赖客户演示 M0–M4，也不解除同一 Conversation 换模型 blocker。"
+      },
+      {
         "id": "NEXT-M2-W05",
         "demoStage": "M2",
         "priority": "P0",
@@ -97,22 +109,9 @@ window.WORK_PACKAGES_DATA = {
         "status": "pending",
         "workPackages": ["W05"],
         "owner": "待派可交互子智能体；主控负责 SDK/复杂度裁决",
-        "nextAction": "M1 通过后按 private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-1/W05-Developing/W05-DemoArtifactUi-Pending.md 补齐任务卡并派工。",
+        "nextAction": "主控已把源码证明和最小 HA SDK 方案写入 private-docs@f6ff0b4：复用 ArtifactService，只传递既有 sessionId/toolCallId 并增加授权脱敏 ToolCall 只读投影；等待人工裁决，不提前建跨仓分支。",
         "doneWhen": "真实 Tool/Approval/Artifact 在冻结 UI 实时与历史路径两轮一致，Artifact ID/provenance/下载字节和 SHA 可核验；SDK 缺口不在 SH 自建第二权威。",
         "dependency": "M1 PASS；任何上游 SDK 修改须先由主控评审复杂度，再等待人工裁决。"
-      },
-      {
-        "id": "NEXT-W24-DEMO-EVIDENCE",
-        "demoStage": "M0",
-        "priority": "P1",
-        "title": "W24 客户演示证据包与 fail-closed 门禁",
-        "status": "in_progress",
-        "workPackages": ["W24"],
-        "owner": "OpenCode deepseek/deepseek-flash；主控独立复审",
-        "nextAction": "3421a7a 已修复原两项阻断并通过 54/24、81 assertions；最终复审要求 fileSha、Oracle tool/artifact 类型、provenance SHA/长度与真实下载原件形成同一链。OpenCode 正另交小修，未改受保护状态文件、未调用付费模型。",
-        "taskCard": { "prompt": "private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-1/W24-Developing/W24-DemoEvidenceBundle-Developing.md", "branch": "codex/w24-demo-evidence-opencode", "worktree": "D:/workspace/haifa-agent-super-harness-worktrees/w24-demo-evidence-opencode", "slot": "3", "ports": "40618/45618", "dataRoot": "D:/workspace/haifa-agent-super-harness-worktrees/w24-demo-evidence-opencode/local-tmp/slot-3-w24-demo-evidence", "exit": "证据 manifest 与 fail-closed 负例通过；缺 M1–M4 原件时保持 NOT_RUN/NO_GO；不运行付费模型", "nextCheckpoint": "2026-09-27T15:40:00+08:00" },
-        "doneWhen": "manifest 与负例拒绝缺轮次、假 Artifact、隐藏重试、SHA 漂移、缺失败史、无人工验收及自报 GO；没有后续阶段原件时保持 NOT_RUN。",
-        "dependency": "只依赖 M0 证据字段与 Oracle 固定；不得运行付费模型或代替主控签收。"
       },
       {
         "id": "NEXT-M3-W18",
@@ -265,7 +264,10 @@ window.WORK_PACKAGES_DATA = {
     { "at": "2026-09-27T13:13:00+08:00", "title": "W00 消费矩阵独立派工", "detail": "主控私有提示词 ed98733 转 Developing，从 main@a02398e 建立 codex/w00-consumer-matrix-opencode 独立 worktree，分配 OpenCode deepseek/deepseek-flash 和槽位 3：40618/45618。范围只含冻结 hooks/StreamManager 静态分支/载荷矩阵及正负门禁；当前代码和运行证据尚未交付，W04 P0 不阻断此独立工作。" },
     { "at": "2026-09-27T13:41:00+08:00", "title": "确立客户演示 v0 纵向交付目标", "detail": "主控建立 private-docs/roadmap/36-super-harness-customer-demo-v0.md：真实模型、生产 Tool、Approval、可信 Artifact、Reload/Reconnect、Steer 在同一冻结 UI 连续两轮。W05 c6c2be9 与 W00 f49fad7 候选已交付但尚未主控验收/合入；分项 L2/静态 PASS 不替代整链 L3，当前整链 NOT_RUN；W04 已知 P0 继续单列披露。" },
     { "at": "2026-09-27T14:00:00+08:00", "title": "客户演示双轨工作流进入 Dashboard", "detail": "默认客户演示 Tab 由 customerDemo 单一数据源展示 M0–M4，原最近安排与 25 包总览保留；阶段门禁与工作包状态独立，证据 verifier 61 断言和 file:// Playwright 同脚本两轮 PASS。当前 M0/M1 在准备/复审，五阶段结果均 NOT_RUN、演示 NO_GO；未改动产品运行服务。" },
-    { "at": "2026-09-27T14:22:38+08:00", "title": "W00 静态矩阵与 W05 生产文件切片主控验收", "detail": "W00 f49fad7+894cec2 / main@735fa22 的 28 条 hooks 静态矩阵与独立删除负例通过；W05 c6c2be9 / main@cf04388 的安全新建文件切片完成受控 Run/Approval/19 字节 SHA 和冻结 UI 4/4×2，主控定向测试 PASS。合入后主线六模块 clean verify、合同负例通过；原数据根 Gateway 18018 重启，冻结前端 33018 页面和同源 models 200。候选首轮 Steer gap FAIL、Windows symlink NOT_RUN、W04 P0、历史 409 与客户演示整链均继续披露，M0–M4 NOT_RUN/NO_GO。" }
+    { "at": "2026-09-27T14:22:38+08:00", "title": "W00 静态矩阵与 W05 生产文件切片主控验收", "detail": "W00 f49fad7+894cec2 / main@735fa22 的 28 条 hooks 静态矩阵与独立删除负例通过；W05 c6c2be9 / main@cf04388 的安全新建文件切片完成受控 Run/Approval/19 字节 SHA 和冻结 UI 4/4×2，主控定向测试 PASS。合入后主线六模块 clean verify、合同负例通过；原数据根 Gateway 18018 重启，冻结前端 33018 页面和同源 models 200。候选首轮 Steer gap FAIL、Windows symlink NOT_RUN、W04 P0、历史 409 与客户演示整链均继续披露，M0–M4 NOT_RUN/NO_GO。" },
+    { "at": "2026-09-27T15:36:00+08:00", "title": "W24 客户演示证据包经 OpenCode 交付并由主控验收", "detail": "OpenCode deepseek/deepseek-flash 候选 3fcc2f7 经两轮阻断复审，以 3421a7a+a814bef 补齐 FAIL 传染、真实下载字节/provenance 及 fileSha/Oracle Tool/Artifact 端到端绑定，合入 main@17cf028。主控独立复验客户演示 64 assertions/29 cases、W24 总门禁 81 assertions、doctor 5 assertions PASS；生成器仍为 NOT_RUN，未调用付费模型。OpenCode 第二轮曾越界读取主树 deer-flow 并写用户临时目录，最终轮已收紧为 worktree 本地路径，偏差记录进交付报告。W24 整包继续 in_progress，M0–M4 仍 NOT_RUN/NO_GO。" },
+    { "at": "2026-09-27T15:43:00+08:00", "title": "W24 合入后主端口刷新与 smoke", "detail": "主控核对原 Gateway PID 及 Super Harness JAR 命令行后精确重启，沿用 local-tmp/main-service-data，Gateway 18018 新 PID 45624；health/auth 200。冻结前端 33018 保持运行，workspace/chats/new 与同源 /api/models 200，main-deepseek 的 supports_reasoning_effort=false；只读 smoke 未发起模型调用。" },
+    { "at": "2026-09-27T15:52:00+08:00", "title": "W03 Input Polish 冻结 UI 尾项派给 OpenCode", "detail": "主控先写私有提示词 private-docs@8aa81a0，从 main@cc69a7a 创建 codex/w03-input-polish-ui-opencode 独立 worktree，分配槽位 1：20618/25618 和独立 data-root；NAT 排除段及 loopback bind 预检通过。OpenCode 固定 deepseek/deepseek-flash，只做 polish/undo/cancel/失败边界双轮 UI 与必要最小后端兼容，不调用付费模型、不修改冻结 UI。当前仅派工，代码与运行证据尚未交付。" }
   ],
   "workPackages": [
 { "id": "W00", "title": "固定快照、前端消费协议与资源种子", "wave": "A", "lane": "G · 协议/Verifier", "state": "in_progress", "startedAt": "2026-09-22T15:18:36+08:00", "completedAt": null, "tags": ["长期横切"], "prerequisites": [], "branch": "codex/w00-consumer-matrix-opencode", "owner": "主控 /root；OpenCode 静态矩阵已交付", "summary": "冻结消费清单覆盖 48 surfaces、20 families/92 额外 browser operations，22/22 core api.ts、16/16 Next route 与唯一 browser WS 入口有源码归属；资源事实盘点 main@224db89 覆盖 40 媒体、23 Skill、104 依赖。OpenCode hooks.ts 静态矩阵 f49fad7 经主控独立 baseline 修复 894cec2 合入 main@735fa22：28 条消费、7 排除、3 未证；SDK StreamManager 包和法律授权/NOTICE 未闭合，运行互通归 W18 且 NOT_RUN，W00 保持进行中。", "evidence": ["protocol seed f901baf + 213a4be; expansion cd45adf / main b1352a4; wave2 18bd681 / main 60a5022","28 surfaces + 18 core contracts + 19 source-derived fixtures PASS against frozen e545c28","13 positive/negative verifier gates PASS；wrong SHA、missing source、runtime escalation 与 schema drift fail closed","messages request→wire event、history/messages-page/runs-list、Project config/CRUD/threads、workspace-changes empty/query: SOURCE_VERIFIED + STATIC_CONTRACT_VERIFIED","7 resources: SOURCE_VERIFIED; W18 imported assets split from dedicated parity fixtures","implementation NOT_ASSESSED / runtime NOT_RUN are independently enforced","reference DeerFlow runtime、WS、live reconnect 与 full differential: NOT_RUN","2026-09-26 旧退出复核 13/13 PASS，但消费/许可未盘全，W00 未转待验收","2026-09-26 子任务 14dc4a7+2470676+8bfc849 / 主线 a1eb6d4：48 surfaces、20 families/92 operations、13 资源，26/26 合同门禁主线复跑 PASS；子任务 clean verify 6 模块 PASS、server 111/0/2，diff/secret scan PASS","2026-09-27 资源事实盘点 5fdbbde / main@224db89：40 媒体、23 未导入 Skill 路径/SHA 对照冻结一致，104 前端依赖有机器清单；分支六模块 verify、合同 26/26、证据 53/53 与主线资源正负 24/24 PASS；授权/NOTICE UNKNOWN，运行互通 NOT_RUN","2026-09-27 消费矩阵从 main@a02398e 派 OpenCode deepseek/deepseek-flash 至 codex/w00-consumer-matrix-opencode；提示词 private-docs@ed98733，派单历史，不代表验收","2026-09-27 候选 f49fad7：28 条 hooks 矩阵、7 排除、3 未证边界；合同 33/33、资源 24、W24 53、第二轮六模块 verify PASS；首轮 W05 SQLite 用例 FAIL 且 surefire 原件已被 clean 删除，主控复审待办；runtime NOT_RUN"], "exit": "固定同 SHA 前后端；形成 REST/SSE/WS/文件/auth/SSR 调用清单、来源许可与首批 Oracle。" },

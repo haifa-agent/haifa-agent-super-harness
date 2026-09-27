@@ -8,6 +8,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot 'lib/customer-demo-evidence.ps1')
+
 $PinnedDeerFlowSha = "e545c28ac301e6f9feae247c513d8ea8f83df294"
 $AllowedStates = @("pending", "in_progress", "ready_for_acceptance", "blocked", "complete")
 $RuntimeStatuses = @("PASS", "FAIL", "NOT_RUN")
@@ -541,6 +543,54 @@ function Write-DeterministicText {
     [IO.File]::WriteAllText($Path, (($Content -replace "`r`n", "`n").TrimEnd() + "`n"), $Utf8NoBom)
 }
 
+function Get-CustomerDemoEvidence {
+    param([string]$Root)
+    $bundlePath = Join-Path $Root 'contracts/customer-demo/customer-demo-v0-evidence-bundle.json'
+    if (-not (Test-Path -LiteralPath $bundlePath -PathType Leaf)) {
+        return [ordered]@{
+            status = 'NOT_RUN'
+            decision = 'NO_GO'
+            detail = 'customer demo evidence bundle is absent'
+            failed = @()
+            blockedExternal = @()
+            upstreamUnsupported = @()
+            notRun = @()
+        }
+    }
+    try {
+        $bundle = Get-CdeJson $bundlePath
+        $result = Test-CdeEvidenceBundle -Root $Root -Bundle $bundle -BundlePath $bundlePath
+        $summary = $result.summary
+        return [ordered]@{
+            status = $summary.gateStatus
+            decision = $summary.decision
+            bundleSha256 = $summary.bundleSha256
+            oracleSha256 = $summary.oracleSha256
+            mainSha = $summary.mainSha
+            stageResults = $summary.stageResults
+            rounds = $summary.rounds
+            humanAcceptancePresent = $summary.humanAcceptance.present
+            referenceFallbackUsed = $summary.referenceFallback.fallbackUsed
+            firstFailureHistory = $summary.firstFailureHistory
+            failed = $summary.failed
+            blockedExternal = $summary.blockedExternal
+            upstreamUnsupported = $summary.upstreamUnsupported
+            notRun = $summary.notRun
+        }
+    }
+    catch {
+        return [ordered]@{
+            status = 'FAIL'
+            decision = 'NO_GO'
+            detail = $_.Exception.Message
+            failed = @()
+            blockedExternal = @()
+            upstreamUnsupported = @()
+            notRun = @()
+        }
+    }
+}
+
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 $output = if ([IO.Path]::IsPathRooted($OutputDirectory)) {
     [IO.Path]::GetFullPath($OutputDirectory)
@@ -556,19 +606,22 @@ $governance = Test-WorkPackages $data
 $dashboard = Test-DashboardConsumers $root
 $surefire = Get-SurefireEvidence $root
 $deerflow = Get-DeerFlowEvidence $root
+$customerDemo = Get-CustomerDemoEvidence $root
 
-$overall = if ($surefire.status -eq 'FAIL' -or $deerflow.runtimeStatus -eq 'FAIL') {
+$overall = if ($surefire.status -eq 'FAIL' -or $deerflow.runtimeStatus -eq 'FAIL' -or $customerDemo.status -eq 'FAIL') {
     'FAIL'
-} elseif ($surefire.status -eq 'NOT_RUN' -or $deerflow.runtimeStatus -eq 'NOT_RUN') {
-    'NOT_RUN'
-} else {
+} elseif ($surefire.status -eq 'PASS' -and $deerflow.runtimeStatus -eq 'PASS' -and $customerDemo.status -eq 'PASS') {
     'PASS'
+} elseif ($customerDemo.status -in @('BLOCKED_EXTERNAL', 'UPSTREAM_UNSUPPORTED')) {
+    $customerDemo.status
+} else {
+    'NOT_RUN'
 }
 
 $manifest = [ordered]@{
     schemaVersion = 1
     overallStatus = $overall
-    statusPolicy = "PASS/FAIL/NOT_RUN are preserved; static validation never upgrades runtime NOT_RUN"
+    statusPolicy = "PASS/FAIL/NOT_RUN/BLOCKED_EXTERNAL/UPSTREAM_UNSUPPORTED are preserved; any stage or round FAIL propagates to the aggregate; static validation never upgrades runtime NOT_RUN"
     architecturePolicy = [ordered]@{
         status = "NOT_RUN"
         decision = "A product model more complex than frozen DeerFlow requires pre-code maintainer review"
@@ -578,6 +631,7 @@ $manifest = [ordered]@{
     dashboard = $dashboard
     mavenSurefire = $surefire
     deerflow = $deerflow
+    customerDemoEvidence = $customerDemo
     inputs = [ordered]@{
         workPackagesSha256 = Get-Sha256 $dataPath
         haifaSdkVersion = [string]$data.baseline.haifaSdkVersion
@@ -590,6 +644,19 @@ Write-DeterministicText $manifestPath ($manifest | ConvertTo-Json -Depth 20)
 $manifestHash = Get-Sha256 $manifestPath
 Write-DeterministicText (Join-Path $output 'evidence-manifest.sha256') "$manifestHash  evidence-manifest.json"
 
+$demoNotes = @(
+    "- Customer demo evidence bundle: **$($customerDemo.status)** (decision $($customerDemo.decision))"
+)
+if (@($customerDemo.failed).Count -gt 0) {
+    $demoNotes += "- Customer demo failed items: $(($customerDemo.failed) -join ', ')"
+}
+if (@($customerDemo.blockedExternal).Count -gt 0) {
+    $demoNotes += "- Customer demo blocked-external items: $(($customerDemo.blockedExternal) -join ', ')"
+}
+if (@($customerDemo.upstreamUnsupported).Count -gt 0) {
+    $demoNotes += "- Customer demo upstream-unsupported items: $(($customerDemo.upstreamUnsupported) -join ', ')"
+}
+
 $reportLines = @(
     '# W24 deterministic evidence report',
     '',
@@ -598,12 +665,13 @@ $reportLines = @(
     "- Dashboard consumers: **$($dashboard.status)** ($(@($dashboard.pages).Count) pages)",
     "- Maven Surefire: **$($surefire.status)** ($($surefire.totals.tests) tests, $($surefire.totals.failures) failures, $($surefire.totals.errors) errors, $($surefire.totals.skipped) skipped)",
     "- DeerFlow static provenance/contracts: **$($deerflow.validationStatus)**",
-    "- DeerFlow runtime parity: **$($deerflow.runtimeStatus)**",
+    "- DeerFlow runtime parity: **$($deerflow.runtimeStatus)**"
+) + $demoNotes + @(
     '- Product-model complexity gate: **NOT_RUN** (manual review is required when a product model would be more complex than frozen DeerFlow)',
     ('- Frozen DeerFlow SHA: `{0}`' -f $deerflow.sourceSha),
     ('- Manifest SHA-256: `{0}`' -f $manifestHash),
     '',
-    'Static SOURCE_VERIFIED or IMPORTED evidence does not prove runtime parity. Runtime NOT_RUN remains NOT_RUN.'
+    'Static SOURCE_VERIFIED or IMPORTED evidence does not prove runtime parity. A stage or round FAIL propagates to the aggregate; runtime NOT_RUN remains NOT_RUN.'
 )
 Write-DeterministicText (Join-Path $output 'evidence-report.md') ($reportLines -join "`n")
 
@@ -623,4 +691,7 @@ if ($RequireSurefire -and $surefire.status -ne 'PASS') {
 }
 if ($deerflow.runtimeStatus -eq 'FAIL') {
     throw "DeerFlow contract runtime evidence contains FAIL"
+}
+if ($customerDemo.status -eq 'FAIL') {
+    throw "Customer demo evidence bundle failed fail-closed validation"
 }

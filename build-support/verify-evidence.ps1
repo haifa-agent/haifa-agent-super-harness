@@ -16,6 +16,8 @@ try {
 
     & (Join-Path $root 'tests/evidence/verify-evidence-report.ps1') -RepositoryRoot $root
 
+    & (Join-Path $root 'tests/customer-demo/verify-customer-demo-evidence.ps1') -RepositoryRoot $root
+
     & (Join-Path $root 'scripts/generate-evidence-report.ps1') `
         -RepositoryRoot $root -OutputDirectory $OutputDirectory -RequireSurefire
 }
