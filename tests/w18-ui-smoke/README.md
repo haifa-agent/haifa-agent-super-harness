@@ -42,6 +42,25 @@ message read model. The SDK duplicate path is intentionally covered by the HTTP 
 as a fabricated replay stream. This profile is fixture evidence only; product Tool configuration
 and process-restart restoration remain `NOT_RUN`.
 
+The W03 title/suggestions profile reuses the controlled loopback provider and the unmodified frozen
+frontend. It never mocks the page or the protocol: the auto-title travels through the real
+Run/SSE/metadata path and the follow-up suggestions through the real
+`POST /api/threads/{thread_id}/suggestions` call, whose controlled provider answer is a deterministic
+JSON array. It asserts the first-turn header/document title, `GET /api/suggestions/config`
+(`enabled`/`max_suggestions`), the rendered suggestion buttons, and an explicit rename that wins and
+survives a reload:
+
+```powershell
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 `
+  -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow `
+  -AgentSlot 3 -TitleSuggestions
+```
+
+`-TitleSuggestions` selects `w03-title-suggestions.spec.cjs`, uses
+`target/agent-slot-<n>-title-suggestions-data`, and writes evidence under
+`target/w03-title-suggestions-evidence/playwright`. It is mutually exclusive with
+`-ActiveReconnect`, `-Interaction`, and `-LiveDeepSeek`, and it never starts the live provider.
+
 The explicitly authorized DeepSeek L3 variant uses the same runner and slot,
 but a separate data/evidence directory and one independent Playwright case:
 

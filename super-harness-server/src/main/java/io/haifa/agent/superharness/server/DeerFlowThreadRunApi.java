@@ -97,6 +97,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     static final Duration WORKSPACE_COMPLETION_OBSERVER_MAX_WAIT = Duration.ofHours(24);
     static final Duration WORKSPACE_COMPLETION_OBSERVER_INITIAL_POLL = Duration.ofMillis(25);
     static final Duration WORKSPACE_COMPLETION_OBSERVER_MAX_POLL = Duration.ofSeconds(1);
+    static final Duration TITLE_DURABILITY_GRACE = Duration.ofSeconds(2);
     private static final Set<String> BINARY_EXTENSIONS = Set.of(
             ".7z", ".avif", ".bmp", ".class", ".db", ".dll", ".dmg", ".doc", ".docx", ".exe",
             ".gif", ".gz", ".ico", ".jar", ".jpeg", ".jpg", ".mov", ".mp3", ".mp4", ".o",
@@ -120,6 +121,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
     private final Map<String, RunRecord> runs = new ConcurrentHashMap<>();
     private final Set<Thread> workspaceCompletionObservers = ConcurrentHashMap.newKeySet();
+    private final Set<Thread> titleCompletionObservers = ConcurrentHashMap.newKeySet();
+    private volatile DurableTurnScanner durableTurnScanner = this::scanPersistedUserTurns;
     private volatile boolean closed;
 
     DeerFlowThreadRunApi(
@@ -166,6 +169,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             Matcher match = THREAD_STATE.matcher(path);
             if (match.matches() && exchange.getRequestMethod().equals("GET")) {
                 getThreadState(exchange, match.group(1));
+                return;
+            }
+            if (match.matches() && exchange.getRequestMethod().equals("POST")) {
+                updateThreadState(exchange, match.group(1));
                 return;
             }
             match = THREAD_HISTORY.matcher(path);
@@ -280,6 +287,102 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return;
         }
         sendJson(exchange, 200, threadStateResponse(thread));
+    }
+
+    /**
+     * Frozen thread state write used by the rename dialog (`threads.updateState`). Only the
+     * {@code values.title} projection is durable here; unknown state fields fail closed and a Run
+     * in flight rejects the write exactly like the frozen router.
+     */
+    private void updateThreadState(HttpExchange exchange, String threadId) throws IOException {
+        ThreadRecord thread = threads.get(threadId);
+        if (thread == null) {
+            sendJson(exchange, 404, Map.of("detail", "Thread not found"));
+            return;
+        }
+        JsonNode body = readBody(exchange);
+        for (java.util.Iterator<String> fields = body.fieldNames(); fields.hasNext(); ) {
+            String field = fields.next();
+            if (!Set.of("values", "checkpoint", "checkpoint_id", "as_node").contains(field)) {
+                sendJson(exchange, 422, Map.of("detail", "Unsupported state field '" + field + "'"));
+                return;
+            }
+        }
+        JsonNode values = body.get("values");
+        if (values == null || values.isNull()) {
+            sendJson(exchange, 422, Map.of("detail", "values is required"));
+            return;
+        }
+        if (!values.isObject()) {
+            sendJson(exchange, 422, Map.of("detail", "values must be an object"));
+            return;
+        }
+        for (java.util.Iterator<String> fields = values.fieldNames(); fields.hasNext(); ) {
+            String field = fields.next();
+            if (!field.equals("title")) {
+                sendJson(
+                        exchange,
+                        422,
+                        Map.of("detail", "Unsupported thread state value '" + field + "'"));
+                return;
+            }
+        }
+        JsonNode title = values.get("title");
+        String renamed = null;
+        if (title != null && !title.isNull()) {
+            if (!title.isTextual()) {
+                sendJson(exchange, 422, Map.of("detail", "values.title must be a string"));
+                return;
+            }
+            renamed = title.asText().strip();
+            if (renamed.isEmpty()) {
+                sendJson(exchange, 422, Map.of("detail", "values.title must be a non-empty string"));
+                return;
+            }
+        }
+        // The busy check and the write share the admission lock so a Run cannot start between
+        // them; an explicit rename therefore either wins before admission or is rejected with 409.
+        final String newTitle = renamed;
+        synchronized (thread) {
+            if (threadStatus(thread).equals("busy")) {
+                sendJson(exchange, 409, Map.of("detail", "Thread has an active run"));
+                return;
+            }
+            if (newTitle != null) {
+                thread.setTitle(newTitle);
+                thread.updatedAt = Instant.now();
+                persistThread(thread);
+            }
+        }
+        sendJson(exchange, 200, threadStateResponse(thread));
+    }
+
+    /** Frozen title fallback bound; the configured title model's max_chars is clamped to this. */
+    static final int TITLE_FALLBACK_MAX_CHARS = 50;
+
+    /**
+     * DeerFlow TitleMiddleware's deterministic local fallback when no title model is configured:
+     * the first user message, truncated so the ellipsis is included in the character bound.
+     */
+    static String fallbackTitle(String message) {
+        return fallbackTitle(message, TITLE_FALLBACK_MAX_CHARS);
+    }
+
+    static String fallbackTitle(String message, int maxChars) {
+        String item = message == null ? "" : message.strip();
+        if (item.isEmpty()) {
+            return "New Conversation";
+        }
+        int limit = Math.max(1, Math.min(maxChars, TITLE_FALLBACK_MAX_CHARS));
+        // Frozen Python indexes by Unicode code point, not UTF-16 code unit, so supplementary
+        // characters (emoji) must count as one character toward the bound.
+        int codePoints = item.codePointCount(0, item.length());
+        if (codePoints <= limit) {
+            return item;
+        }
+        int body = Math.max(0, limit - 3);
+        int end = item.offsetByCodePoints(0, body);
+        return item.substring(0, end).stripTrailing() + "...";
     }
 
     private void getThreadHistory(HttpExchange exchange, String threadId) throws IOException {
@@ -555,6 +658,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                                 "Thread is already bound to a different model revision; create a new thread"));
                 return;
             }
+            // Frozen TitleMiddleware names the thread only from its first user Turn. The boundary is
+            // the in-memory message sequence (seeded from durable turns when a persisted session is
+            // restored), so a prior failed turn keeps its slot even if its durable read lags, and no
+            // auxiliary durable read can throw out of Run admission and block the main Run.
+            boolean titleCandidate = thread.title() == null && thread.nextMessageSequence == 1;
             StagedRunChanges staged = null;
             try {
                 WorkspaceBinding workspace = workspaceChanges.bindThreadWorkspace(
@@ -597,7 +705,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     Instant.now(),
                     humanSequence,
                     workspaceRecordingEnabled,
-                    requestedStreamModes(body));
+                    requestedStreamModes(body),
+                    titleCandidate);
             runs.put(run.runId.value(), run);
             persistThread(thread);
             }
@@ -614,6 +723,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return;
         }
         observeWorkspaceCompletion(run);
+        observeTitleCompletion(thread, run);
 
         try {
             streamRunEvents(
@@ -1291,8 +1401,134 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     .orElse("Run failed");
             writeSse(output, "error", Map.of("message", message), null);
         }
+        // The frozen UI refreshes thread metadata as soon as this stream ends. Finalize the
+        // fallback before publishing the title/end frames, otherwise that refresh can race the
+        // independent completion observer and cache an "Untitled" thread for this page lifetime.
+        // The observer still covers disconnects and streams without the updates mode.
+        if (run.titleCandidate
+                && run.streamModes.contains("updates")
+                && shouldGenerateFallbackTitle(
+                        terminalSnapshot.status(), terminalSnapshot.output().isPresent())) {
+            finalizeFallbackTitle(thread, run, terminalSnapshot);
+            // A failed/lagging durable user-Turn read must not advertise a title that the
+            // thread metadata does not actually contain.
+            if (thread.title() != null) {
+                maybePublishTitle(output, thread, run);
+            }
+        }
         writeSse(output, "end", null, cursor);
         return true;
+    }
+
+    private void maybePublishTitle(OutputStream output, ThreadRecord thread, RunRecord run)
+            throws IOException {
+        String title = thread.title();
+        if (title == null) {
+            title = fallbackTitle(run.humanMessage);
+        }
+        writeSse(output, "updates", Map.of("__title__", Map.of("title", title)), null);
+    }
+
+    /**
+     * Frozen {@code TitleMiddleware._should_generate_title}: a completed first exchange with an
+     * assistant answer, or (with {@code allow_partial_exchange=True}) an interrupted first turn
+     * whose lone user message was persisted. Failed and timed-out runs never gain a fallback title.
+     */
+    static boolean shouldGenerateFallbackTitle(AgentRunStatus status, boolean hasOutput) {
+        if (status == AgentRunStatus.COMPLETED) {
+            return hasOutput;
+        }
+        return status == AgentRunStatus.CANCELLED;
+    }
+
+    /**
+     * The terminal-status rule is necessary but not sufficient: the frozen middleware also requires
+     * exactly one persisted user Turn. {@code run.titleCandidate} already asserts the thread had no
+     * durable user Turn at admission; this confirms the current Run's lone user Turn actually
+     * landed before naming the thread. The SSE frame uses only the admission boundary so a lagging
+     * durable feed cannot drop the projection, while persistence waits out that lag here.
+     */
+    private boolean generatedFromLoneDurableUserTurn(ThreadRecord thread, RunRecord run) {
+        if (!run.titleCandidate) {
+            return false;
+        }
+        long deadline = System.nanoTime() + TITLE_DURABILITY_GRACE.toNanos();
+        while (true) {
+            int durableUserTurns;
+            try {
+                durableUserTurns = durableTurnScanner.scan(thread.threadId);
+            } catch (RuntimeException failure) {
+                // The auxiliary durable read may lag or fail like any SQLite/SDK read. Naming the
+                // thread is optional, so fail conservative without leaking input text or blocking.
+                logTitleDiagnostic("W03_TITLE_TURN_READ_FAILURE", run.runId.value(), failure);
+                return false;
+            }
+            if (durableUserTurns == 1) {
+                return true;
+            }
+            if (durableUserTurns > 1 || System.nanoTime() >= deadline) {
+                return false;
+            }
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+    }
+
+    private int scanPersistedUserTurns(String threadId) {
+        ThreadRecord thread = threads.get(threadId);
+        return thread == null ? 0 : persistedUserTurnCount(thread);
+    }
+
+    @FunctionalInterface
+    interface DurableTurnScanner {
+        int scan(String threadId);
+    }
+
+    /** Package-private seam so a controlled test can force the auxiliary durable turn read to fail. */
+    void setDurableTurnScannerForTests(DurableTurnScanner scanner) {
+        this.durableTurnScanner = scanner == null ? this::scanPersistedUserTurns : scanner;
+    }
+
+    static void logTitleDiagnostic(String code, String runId, RuntimeException failure) {
+        // A stable server code, the server-generated run id and the error class only. The client
+        // controls thread_id (createThread permits CR/LF), so echoing it would allow log
+        // injection; the exception message, request text, credential and provider body are also
+        // excluded. run_id is SDK-generated and format-controlled.
+        System.err.println(code + " run_id=" + runId + " error=" + failure.getClass().getName());
+    }
+
+    /** Bounded count of durable USER turns; stops as soon as a second turn proves the first-turn boundary is gone. */
+    private int persistedUserTurnCount(ThreadRecord thread) {
+        if (thread.persistedSessionId == null) {
+            return 0;
+        }
+        HaifaRunBridge bridge = bridgeForPersistedThread(thread);
+        Optional<ConversationTurnCursor> cursor = Optional.empty();
+        int pages = 0;
+        int count = 0;
+        while (true) {
+            var page = bridge.turns(
+                    thread.persistedSessionId,
+                    new ConversationTurnQuery(cursor, TURN_SCAN_PAGE_SIZE));
+            pages++;
+            for (ConversationTurn turn : page.items()) {
+                if (turn.role() == io.haifa.agent.core.message.MessageRole.USER) {
+                    count++;
+                    if (count > 1) {
+                        return count;
+                    }
+                }
+            }
+            if (page.nextCursor().isEmpty()) {
+                return count;
+            }
+            requireAnotherScanPage(pages);
+            cursor = page.nextCursor();
+        }
     }
 
     private void writeReplayGap(
@@ -1444,7 +1680,12 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                                 .filter(sequence -> sequence < checkpoint.sequence())
                                 .max(Long::compareTo)
                                 .orElse(null)), ordinals);
-        response.put("values", Map.of("messages", overlaidMessages(thread, turns, ordinals)));
+        Map<String, Object> values = new LinkedHashMap<>();
+        values.put("messages", overlaidMessages(thread, turns, ordinals));
+        if (thread.title() != null) {
+            values.put("title", thread.title());
+        }
+        response.put("values", values);
         response.put("checkpoint", Map.of());
         response.put("tasks", List.of());
         return response;
@@ -1829,7 +2070,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 turn.createdAt(),
                 turn.sequence(),
                 false,
-                Set.of("messages-tuple"));
+                Set.of("messages-tuple"),
+                false);
         bridge.pendingInteraction(requested).ifPresent(pending -> {
             try {
                 restored.interactionRequestMessage =
@@ -2282,6 +2524,93 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         return workspaceCompletionObservers.size();
     }
 
+    /**
+     * Persists the deterministic fallback title once a Run is known terminal, independent of any
+     * SSE connection. An observer per created Run outlives the creator handler so a disconnect
+     * with {@code on_disconnect=continue} and a stream that omits the {@code updates} mode still
+     * finalize the title.
+     */
+    private void observeTitleCompletion(ThreadRecord thread, RunRecord run) {
+        if (closed) {
+            return;
+        }
+        Thread observer = Thread.ofVirtual()
+                .name("super-harness-title-completion-" + run.runId.value())
+                .unstarted(() -> {
+                    try {
+                        long startedNanos = System.nanoTime();
+                        long maxWaitNanos = WORKSPACE_COMPLETION_OBSERVER_MAX_WAIT.toNanos();
+                        long pollMillis = WORKSPACE_COMPLETION_OBSERVER_INITIAL_POLL.toMillis();
+                        while (!closed && System.nanoTime() - startedNanos < maxWaitNanos) {
+                            AgentRunSnapshot snapshot;
+                            try {
+                                snapshot = run.bridge.snapshot(run.runId);
+                            } catch (RuntimeException unavailable) {
+                                return;
+                            }
+                            if (snapshot.status().isTerminal()) {
+                                finalizeFallbackTitle(thread, run, snapshot);
+                                return;
+                            }
+                            Thread.sleep(pollMillis);
+                            pollMillis = nextWorkspaceCompletionPollMillis(pollMillis);
+                        }
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    } catch (RuntimeException failure) {
+                        // Auxiliary title work must never escape as an uncaught observer failure.
+                        logTitleDiagnostic("W03_TITLE_OBSERVER_FAILURE", run.runId.value(), failure);
+                    } finally {
+                        titleCompletionObservers.remove(Thread.currentThread());
+                    }
+                });
+        titleCompletionObservers.add(observer);
+        observer.start();
+    }
+
+    private void finalizeFallbackTitle(ThreadRecord thread, RunRecord run, AgentRunSnapshot snapshot) {
+        if (thread.title() != null
+                || !shouldGenerateFallbackTitle(snapshot.status(), snapshot.output().isPresent())
+                || !generatedFromLoneDurableUserTurn(thread, run)) {
+            return;
+        }
+        synchronized (thread) {
+            if (thread.title() != null) {
+                return;
+            }
+            thread.setTitle(fallbackTitle(run.humanMessage));
+            thread.updatedAt = Instant.now();
+            runBestEffort(run.runId.value(), () -> persistThread(thread));
+        }
+    }
+
+    @FunctionalInterface
+    interface PersistAction {
+        void run() throws IOException;
+    }
+
+    /**
+     * Best-effort title durability: a catalog failure must never turn a completed Run into a
+     * failure, and the sanitized evidence (thread/run identity plus the error class) must not
+     * reflect the user's request text.
+     */
+    static boolean runBestEffort(String runId, PersistAction action) {
+        try {
+            action.run();
+            return true;
+        } catch (IOException | RuntimeException failure) {
+            // Stable code plus the SDK-generated run id and error class; never the client
+            // thread_id, exception message, request text, credential or provider body.
+            System.err.println("W03_TITLE_PERSIST_FAILURE run_id=" + runId
+                    + " error=" + failure.getClass().getName());
+            return false;
+        }
+    }
+
+    int titleCompletionObserverCount() {
+        return titleCompletionObservers.size();
+    }
+
     private JsonNode readBody(HttpExchange exchange) throws IOException {
         byte[] bytes = exchange.getRequestBody().readAllBytes();
         if (bytes.length == 0) {
@@ -2446,15 +2775,21 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         // finally block publishes its workspace snapshot. Flush terminal runs
         // before interrupting completion observers or closing the SDK.
         runs.values().forEach(this::completeWorkspaceChangesIfTerminal);
+        // A terminal Run whose title observer has not yet fired must still persist before the
+        // process exits; a persistence fault is best-effort and never changes the Run outcome.
+        runs.values().forEach(this::flushTerminalTitle);
         closed = true;
         workspaceCompletionObservers.forEach(Thread::interrupt);
+        titleCompletionObservers.forEach(Thread::interrupt);
         threads.values().stream()
                 .map(thread -> thread.bridge)
                 .filter(java.util.Objects::nonNull)
                 .distinct()
                 .forEach(HaifaRunBridge::close);
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
-        for (Thread observer : List.copyOf(workspaceCompletionObservers)) {
+        List<Thread> observers = new ArrayList<>(workspaceCompletionObservers);
+        observers.addAll(titleCompletionObservers);
+        for (Thread observer : observers) {
             long remaining = deadline - System.nanoTime();
             if (remaining <= 0) break;
             try {
@@ -2467,9 +2802,25 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         foundation.close();
     }
 
+    private void flushTerminalTitle(RunRecord run) {
+        ThreadRecord thread = threads.get(run.threadId);
+        if (thread == null) {
+            return;
+        }
+        try {
+            AgentRunSnapshot snapshot = run.bridge.snapshot(run.runId);
+            if (snapshot.status().isTerminal()) {
+                finalizeFallbackTitle(thread, run, snapshot);
+            }
+        } catch (RuntimeException failure) {
+            // Shutdown must not be aborted by auxiliary title work.
+            logTitleDiagnostic("W03_TITLE_FLUSH_FAILURE", run.runId.value(), failure);
+        }
+    }
+
     private static final class ThreadRecord {
         private final String threadId;
-        private final Map<String, Object> metadata;
+        private volatile Map<String, Object> metadata;
         private final Instant createdAt;
         private volatile Instant updatedAt;
         private volatile HaifaRunBridge.SessionState session;
@@ -2497,6 +2848,18 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             this.persistedSessionId = entry.sessionId().orElse(null);
             this.modelBindingIdentity = entry.modelBindingIdentity().orElse(null);
         }
+
+        private String title() {
+            Object value = metadata.get("title");
+            return value instanceof String text && !text.isBlank() ? text : null;
+        }
+
+        /** Explicit user rename wins over any later auto-title because auto-title is skipped once set. */
+        private void setTitle(String title) {
+            Map<String, Object> updated = new LinkedHashMap<>(metadata);
+            updated.put("title", title);
+            this.metadata = Collections.unmodifiableMap(updated);
+        }
     }
 
     private static final class RunRecord {
@@ -2516,6 +2879,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private Map<String, Object> interactionRequestMessage;
         private AcceptedInteractionResponse acceptedInteractionResponse;
         private final Set<String> streamModes;
+        private final boolean titleCandidate;
         private io.haifa.agent.runtime.api.RunEventCursor sdkCursor;
         private final Set<Long> deferredEventSequences = ConcurrentHashMap.newKeySet();
 
@@ -2528,7 +2892,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 Instant createdAt,
                 long humanSequence,
                 boolean workspaceRecordingEnabled,
-                Set<String> streamModes) {
+                Set<String> streamModes,
+                boolean titleCandidate) {
             this.runId = runId;
             this.threadId = threadId;
             this.assistantId = assistantId;
@@ -2544,6 +2909,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             this.workspaceRecordingEnabled = workspaceRecordingEnabled;
             this.assistantSequence = humanSequence + 1;
             this.streamModes = Set.copyOf(streamModes);
+            this.titleCandidate = titleCandidate;
         }
     }
 

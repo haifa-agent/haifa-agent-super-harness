@@ -54,6 +54,21 @@ function toolNames(body) {
     .filter((name) => typeof name === "string");
 }
 
+// The frozen DeerFlow follow-up route sends a one-shot non-streaming request whose
+// system instruction is boilerplate about "follow-up questions"; answer it with a
+// deterministic JSON array so the frozen UI can render the suggestions verbatim.
+function isSuggestionsRequest(body) {
+  if (!Array.isArray(body.messages)) return false;
+  return body.messages.some(
+    (message) =>
+      message?.role === "system" &&
+      typeof textOfContent(message.content) === "string" &&
+      textOfContent(message.content).includes("follow-up questions"),
+  );
+}
+
+const SUGGESTIONS = ["What changed?", "Why now?", "What next?"];
+
 function hasToolResult(body) {
   return (
     Array.isArray(body.messages) &&
@@ -119,6 +134,14 @@ const server = http.createServer((request, response) => {
     );
 
     if (body.stream !== true && !probe) {
+      const suggestion = isSuggestionsRequest(body);
+      console.log(
+        JSON.stringify({
+          type: "provider_nonstream",
+          suggestion,
+          stream: false,
+        }),
+      );
       sendJson(response, 200, {
         id: `w18-nonstream-${Date.now()}`,
         object: "chat.completion",
@@ -126,7 +149,12 @@ const server = http.createServer((request, response) => {
         model: "w18-controlled-model",
         choices: [{
           index: 0,
-          message: { role: "assistant", content: `Controlled provider: ${prompt}` },
+          message: {
+            role: "assistant",
+            content: suggestion
+              ? JSON.stringify(SUGGESTIONS)
+              : `Controlled provider: ${prompt}`,
+          },
           finish_reason: "stop",
         }],
         usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 },

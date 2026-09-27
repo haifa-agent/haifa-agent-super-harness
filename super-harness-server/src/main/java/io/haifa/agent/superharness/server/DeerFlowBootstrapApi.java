@@ -55,6 +55,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final DeerFlowWorkspaceApi workspaceApi;
     private final DeerFlowProjectApi projectApi;
     private final DeerFlowInputPolishApi inputPolishApi;
+    private final DeerFlowSuggestionsApi suggestionsApi;
 
     private DeerFlowBootstrapApi(
             HttpServer server,
@@ -62,7 +63,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Path dataDirectory,
             SecretKey continuationKey,
             Function<JsonNode, HaifaRunBridge.ModelBinding> testRunModelResolver,
-            List<? extends JavaTool<?, ?>> testRunTools)
+            List<? extends JavaTool<?, ?>> testRunTools,
+            DeerFlowSuggestionsApi.Settings suggestionsSettings)
             throws IOException {
         this.server = server;
         this.executor = executor;
@@ -86,6 +88,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
         this.projectApi = new DeerFlowProjectApi(objectMapper, projects, threadRunApi, workspaceApi);
         this.inputPolishApi = new DeerFlowInputPolishApi(objectMapper, modelResolver);
+        this.suggestionsApi = new DeerFlowSuggestionsApi(
+                objectMapper, modelResolver, threadRunApi::hasThread, suggestionsSettings);
         registerRoutes();
     }
 
@@ -99,7 +103,12 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
 
     static DeerFlowBootstrapApi create(LocalServerConfiguration configuration, Path dataDirectory)
             throws IOException {
-        return createWithKey(configuration, dataDirectory, generateContinuationKey(), null);
+        return createWithKey(
+                configuration,
+                dataDirectory,
+                generateContinuationKey(),
+                null,
+                DeerFlowSuggestionsApi.Settings.defaults());
     }
 
     static DeerFlowBootstrapApi create(
@@ -107,19 +116,26 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Path dataDirectory,
             Map<String, String> environment)
             throws IOException {
-        return createWithKey(configuration, dataDirectory, continuationKey(environment, dataDirectory), null);
+        return createWithKey(
+                configuration,
+                dataDirectory,
+                continuationKey(environment, dataDirectory),
+                null,
+                DeerFlowSuggestionsApi.Settings.fromEnvironment(environment));
     }
 
     private static DeerFlowBootstrapApi createWithKey(
             LocalServerConfiguration configuration,
             Path dataDirectory,
             SecretKey continuationKey,
-            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver)
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            DeerFlowSuggestionsApi.Settings suggestionsSettings)
             throws IOException {
         HttpServer server = HttpServer.create(configuration.socketAddress(), 0);
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         server.setExecutor(executor);
-        return new DeerFlowBootstrapApi(server, executor, dataDirectory, continuationKey, runModelResolver, List.of());
+        return new DeerFlowBootstrapApi(
+                server, executor, dataDirectory, continuationKey, runModelResolver, List.of(), suggestionsSettings);
     }
 
     static DeerFlowBootstrapApi createForTests(
@@ -127,7 +143,22 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Path dataDirectory,
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver)
             throws IOException {
-        return createWithKey(configuration, dataDirectory, generateContinuationKey(), runModelResolver);
+        return createWithKey(
+                configuration,
+                dataDirectory,
+                generateContinuationKey(),
+                runModelResolver,
+                DeerFlowSuggestionsApi.Settings.defaults());
+    }
+
+    static DeerFlowBootstrapApi createForTests(
+            LocalServerConfiguration configuration,
+            Path dataDirectory,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            DeerFlowSuggestionsApi.Settings suggestionsSettings)
+            throws IOException {
+        return createWithKey(
+                configuration, dataDirectory, generateContinuationKey(), runModelResolver, suggestionsSettings);
     }
 
     static DeerFlowBootstrapApi createForInteractionTests(
@@ -150,7 +181,14 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         HttpServer server = HttpServer.create(configuration.socketAddress(), 0);
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         server.setExecutor(executor);
-        return new DeerFlowBootstrapApi(server, executor, dataDirectory, continuationKey, runModelResolver, tools);
+        return new DeerFlowBootstrapApi(
+                server,
+                executor,
+                dataDirectory,
+                continuationKey,
+                runModelResolver,
+                tools,
+                DeerFlowSuggestionsApi.Settings.defaults());
     }
 
     static DeerFlowBootstrapApi createForTests(
@@ -159,7 +197,12 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
             SecretKey continuationKey)
             throws IOException {
-        return createWithKey(configuration, dataDirectory, continuationKey, runModelResolver);
+        return createWithKey(
+                configuration,
+                dataDirectory,
+                continuationKey,
+                runModelResolver,
+                DeerFlowSuggestionsApi.Settings.defaults());
     }
 
     private static SecretKey continuationKey(Map<String, String> environment, Path dataDirectory) {
@@ -349,9 +392,10 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         server.createContext("/api/managed-models", configurationApi);
         server.createContext("/api/agents", configurationApi);
         server.createContext(DeerFlowInputPolishApi.PATH, inputPolishApi);
+        server.createContext("/api/suggestions", suggestionsApi);
         server.createContext("/api/projects", projectApi);
         server.createContext("/api/threads", exchange -> {
-            if (!workspaceApi.tryHandle(exchange)) {
+            if (!workspaceApi.tryHandle(exchange) && !suggestionsApi.tryHandle(exchange)) {
                 threadRunApi.handle(exchange);
             }
         });
