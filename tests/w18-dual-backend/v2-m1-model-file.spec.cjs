@@ -120,11 +120,15 @@ function runRequestBodyModel(response) {
 // Frozen composer availability signal. `chat-page.tsx` derives the composer
 // `status` from `thread.isLoading`, and `input-box.tsx::handleSubmit` routes
 // Enter to a same-Run active Steer whenever that status is still "streaming".
-// `PromptInputSubmit` renders SquareIcon (class `lucide-square`) while
-// streaming and ArrowUpIcon once ready, so the stop icon is the frozen UI's own
-// "not yet submittable" marker — not a mock.
+// `PromptInputSubmit` renders SquareIcon while streaming, Loader2Icon while
+// submitted, XIcon on error, and ArrowUpIcon only when ready. Require the
+// positive ready icon instead of treating an absent stop icon as readiness.
 function composerStopIcon(page) {
   return page.locator('button[type="submit"] svg.lucide-square');
+}
+
+function composerReadyIcon(page) {
+  return page.locator('button[type="submit"] svg.lucide-arrow-up');
 }
 
 // Bounded wait for the real UI to finish its previous Run before the next Turn
@@ -135,12 +139,12 @@ function composerStopIcon(page) {
 async function waitForComposerReady(page, { timeout = 20_000 } = {}) {
   const submit = page.locator('button[type="submit"]').first();
   const stop = composerStopIcon(page);
+  const ready = composerReadyIcon(page);
   const started = Date.now();
   let observedStreaming = false;
   for (;;) {
-    const submitMounted = (await submit.count()) > 0;
     const streaming = (await stop.count()) > 0;
-    if (submitMounted && !streaming) {
+    if ((await ready.count()) > 0 && !(await submit.isDisabled())) {
       return { ready: true, observedStreaming, waitedMs: Date.now() - started };
     }
     observedStreaming = observedStreaming || streaming;
@@ -164,6 +168,11 @@ function requestPostData(request) {
 async function sendRun(page, input, text, options = {}) {
   const { timeout = 30_000, readinessTimeout = 20_000 } = options;
   const readiness = await waitForComposerReady(page, { timeout: readinessTimeout });
+  if (!readiness.ready) {
+    const error = new Error(`frozen composer did not become ready within ${readinessTimeout}ms`);
+    error.readiness = readiness;
+    throw error;
+  }
   const runStream = page.waitForResponse((response) =>
     response.request().method() === "POST" &&
     /\/api\/langgraph\/threads\/[^/]+\/runs\/stream$/.test(new URL(response.url()).pathname),
@@ -431,7 +440,7 @@ test(`${backend}: V2-M1-01 same conversation Turn A then Turn B keeps Thread and
       error: String(error.message),
       composerReadiness: error.readiness ?? null,
       steerCapture: error.steer ?? null,
-      note: "same-Thread model switch failed; the composer readiness observation and any active-Steer request/response are captured above; owner W03 (per-Run model freeze) is not merged at this base SHA",
+      note: "same-Thread model switch failed after W03 was merged at this base SHA; inspect the captured composer readiness and request path before assigning ownership",
     });
     throw error;
   }

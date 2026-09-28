@@ -58,20 +58,25 @@ async function notRunUnlessOffered(testInfo, requests, tool, owner, evidence) {
 // (and rejects a file-bearing submit with `steerPlainTextOnly` before any
 // request). `PromptInputSubmit` renders SquareIcon (class `lucide-square`)
 // while streaming and ArrowUpIcon once ready, so the stop icon is the frozen
-// UI's own "not yet submittable" marker.
+// UI's own "not yet submittable" marker. Loader2Icon means submitted and
+// XIcon means error, so only ArrowUpIcon is a positive ready signal.
 function composerStopIcon(page) {
   return page.locator('button[type="submit"] svg.lucide-square');
+}
+
+function composerReadyIcon(page) {
+  return page.locator('button[type="submit"] svg.lucide-arrow-up');
 }
 
 async function waitForComposerReady(page, { timeout = 20_000 } = {}) {
   const submit = page.locator('button[type="submit"]').first();
   const stop = composerStopIcon(page);
+  const ready = composerReadyIcon(page);
   const started = Date.now();
   let observedStreaming = false;
   for (;;) {
-    const submitMounted = (await submit.count()) > 0;
     const streaming = (await stop.count()) > 0;
-    if (submitMounted && !streaming) {
+    if ((await ready.count()) > 0 && !(await submit.isDisabled())) {
       return { ready: true, observedStreaming, waitedMs: Date.now() - started };
     }
     observedStreaming = observedStreaming || streaming;
@@ -108,6 +113,11 @@ function requestPostData(request) {
 async function sendAndCaptureRun(page, input, text, options = {}) {
   const { timeout = 20_000, readinessTimeout = 20_000 } = options;
   const readiness = await waitForComposerReady(page, { timeout: readinessTimeout });
+  if (!readiness.ready) {
+    const error = new Error(`frozen composer did not become ready within ${readinessTimeout}ms`);
+    error.readiness = readiness;
+    throw error;
+  }
   const runStream = page.waitForResponse((response) =>
     response.request().method() === "POST" &&
     /\/api\/langgraph\/threads\/[^/]+\/runs\/stream$/.test(new URL(response.url()).pathname),
@@ -551,6 +561,19 @@ test(`${backend}: uploaded file reaches the Run model context`, async ({ context
   // opener Run (status back to ready); otherwise Enter is routed to the active
   // Steer path and a file-bearing submit is rejected before any upload POST.
   const preUploadReadiness = await waitForComposerReady(page);
+  if (!preUploadReadiness.ready) {
+    await save(testInfo, "upload-model-context-failure", {
+      backend,
+      case: "upload-model-context",
+      filename,
+      marker,
+      preUploadReadiness,
+      composer: await composerSnapshot(page),
+      uploadPostObserved: false,
+      note: "the composer never became ready after the opener Run; upload was not attempted",
+    });
+    throw new Error("frozen composer did not become ready before upload staging");
+  }
   const uploadPromise = page.waitForResponse((response) =>
     response.request().method() === "POST" && /\/api\/threads\/[^/]+\/uploads$/.test(new URL(response.url()).pathname),
     { timeout: 20_000 },
@@ -561,7 +584,7 @@ test(`${backend}: uploaded file reaches the Run model context`, async ({ context
   });
   let send;
   try {
-    send = await sendAndCaptureRun(page, input, marker);
+    send = await sendAndCaptureRun(page, input, marker, { readinessTimeout: 5_000 });
   } catch (error) {
     // The upload POST only fires from a real normal submit; capture the
     // untouched staged file/text and the absent POST so a mis-routed or

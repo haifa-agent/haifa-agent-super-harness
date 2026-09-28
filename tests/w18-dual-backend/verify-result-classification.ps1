@@ -142,7 +142,10 @@ foreach ($source in $review4Sources) {
     foreach ($needle in @(
         'function composerStopIcon(',
         'svg.lucide-square',
+        'function composerReadyIcon(',
+        'svg.lucide-arrow-up',
         'async function waitForComposerReady(',
+        'if (!readiness.ready)',
         'Promise.race(',
         'error.steer = {',
         $source.submit
