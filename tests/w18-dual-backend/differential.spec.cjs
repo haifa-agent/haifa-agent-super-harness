@@ -52,22 +52,102 @@ async function notRunUnlessOffered(testInfo, requests, tool, owner, evidence) {
   return true;
 }
 
-async function sendAndCaptureRun(page, input, text) {
-  const streamPromise = page.waitForResponse((response) =>
+// Frozen composer availability signal: `chat-page.tsx` derives the composer
+// `status` from `thread.isLoading`, and `input-box.tsx::handleSubmit` routes
+// Enter to a same-Run active Steer while that status is still "streaming"
+// (and rejects a file-bearing submit with `steerPlainTextOnly` before any
+// request). `PromptInputSubmit` renders SquareIcon (class `lucide-square`)
+// while streaming and ArrowUpIcon once ready, so the stop icon is the frozen
+// UI's own "not yet submittable" marker.
+function composerStopIcon(page) {
+  return page.locator('button[type="submit"] svg.lucide-square');
+}
+
+async function waitForComposerReady(page, { timeout = 20_000 } = {}) {
+  const submit = page.locator('button[type="submit"]').first();
+  const stop = composerStopIcon(page);
+  const started = Date.now();
+  let observedStreaming = false;
+  for (;;) {
+    const submitMounted = (await submit.count()) > 0;
+    const streaming = (await stop.count()) > 0;
+    if (submitMounted && !streaming) {
+      return { ready: true, observedStreaming, waitedMs: Date.now() - started };
+    }
+    observedStreaming = observedStreaming || streaming;
+    if (Date.now() - started >= timeout) {
+      return { ready: false, observedStreaming, waitedMs: Date.now() - started, timedOut: true };
+    }
+    await page.waitForTimeout(250);
+  }
+}
+
+// Composer DOM projection for failure evidence: proves whether a staged
+// attachment/text was actually sent (real upload/run POST) or left behind.
+async function composerSnapshot(page) {
+  const submit = page.locator('button[type="submit"]').first();
+  const textarea = page.locator('textarea[name="message"]').first();
+  return {
+    composerStreaming: (await composerStopIcon(page).count()) > 0,
+    submitDisabled: (await submit.count()) ? await submit.isDisabled().catch(() => null) : null,
+    textareaValue: (await textarea.count()) ? await textarea.inputValue().catch(() => null) : null,
+    stagedAttachmentCount: await page.locator('[aria-label="Remove attachment"]').count().catch(() => 0),
+  };
+}
+
+function requestPostData(request) {
+  try { return request.postData() ?? null; } catch { return null; }
+}
+
+// Submit one Turn from the frozen composer while observing both the new-Run
+// path (LangGraph SDK `/api/langgraph/threads/{id}/runs/stream`) and the
+// mid-flight Steer path (Haifa gateway `/api/threads/{id}/runs/stream`). The
+// composer is bounded-waited until its own Run finished so Enter starts a new
+// Run; if it is still mis-routed to Steer the raw request/response ride the
+// thrown error.
+async function sendAndCaptureRun(page, input, text, options = {}) {
+  const { timeout = 20_000, readinessTimeout = 20_000 } = options;
+  const readiness = await waitForComposerReady(page, { timeout: readinessTimeout });
+  const runStream = page.waitForResponse((response) =>
     response.request().method() === "POST" &&
     /\/api\/langgraph\/threads\/[^/]+\/runs\/stream$/.test(new URL(response.url()).pathname),
-    { timeout: 20_000 },
+    { timeout },
   );
+  const steerStream = page.waitForResponse((response) =>
+    response.request().method() === "POST" &&
+    /\/api\/threads\/[^/]+\/runs\/stream$/.test(new URL(response.url()).pathname),
+    { timeout },
+  );
+  runStream.catch(() => {});
+  steerStream.catch(() => {});
   await input.fill(text);
   await input.press("Enter");
-  const stream = await streamPromise;
+  const winner = await Promise.race([
+    runStream.then((response) => ({ kind: "run", response })),
+    steerStream.then((response) => ({ kind: "steer", response })),
+  ]);
+  if (winner.kind === "steer") {
+    const responseBody = await winner.response.text().catch(() => "");
+    const error = new Error(
+      `the Turn was routed to the active-Steer path ${new URL(winner.response.url()).pathname} ` +
+      `and returned ${winner.response.status()}: ${responseBody}`);
+    error.steer = {
+      url: winner.response.url(),
+      status: winner.response.status(),
+      requestBody: requestPostData(winner.response.request()),
+      responseBody,
+    };
+    error.readiness = readiness;
+    throw error;
+  }
+  const stream = winner.response;
   if (stream.status() !== 200) {
     throw new Error(`Run stream returned ${stream.status()}: ${await stream.text()}`);
   }
   const location = stream.headers()["content-location"];
   expect(location).toMatch(/\/api\/threads\/[^/]+\/runs\/[^/]+$/);
   const [, threadId, runId] = location.match(/\/api\/threads\/([^/]+)\/runs\/([^/]+)$/);
-  return { stream, location, threadId, runId };
+  return { stream, location, threadId, runId, readiness };
 }
 
 async function pollRunStatus(context, threadId, runId, expected, timeout = 20_000) {
@@ -467,14 +547,44 @@ test(`${backend}: uploaded file reaches the Run model context`, async ({ context
   const opener = await sendAndCaptureRun(page, input, `w18-context-open-${suffix}`);
   await pollRunStatus(context, opener.threadId, opener.runId, "success");
   await expect(page.locator("#chat").getByText(`Controlled provider: w18-context-open-${suffix}`, { exact: true })).toBeVisible();
+  // The next Turn must be typed only after the frozen composer finished the
+  // opener Run (status back to ready); otherwise Enter is routed to the active
+  // Steer path and a file-bearing submit is rejected before any upload POST.
+  const preUploadReadiness = await waitForComposerReady(page);
   const uploadPromise = page.waitForResponse((response) =>
     response.request().method() === "POST" && /\/api\/threads\/[^/]+\/uploads$/.test(new URL(response.url()).pathname),
     { timeout: 20_000 },
   );
+  uploadPromise.catch(() => {});
   await page.getByLabel("Upload files").setInputFiles({
     name: filename, mimeType: "text/plain", buffer: Buffer.from(`context ${suffix}\n`, "utf8"),
   });
-  const { threadId, runId } = await sendAndCaptureRun(page, input, marker);
+  let send;
+  try {
+    send = await sendAndCaptureRun(page, input, marker);
+  } catch (error) {
+    // The upload POST only fires from a real normal submit; capture the
+    // untouched staged file/text and the absent POST so a mis-routed or
+    // rejected submit is a precise FAIL, not a bare timeout.
+    await save(testInfo, "upload-model-context-failure", {
+      backend,
+      case: "upload-model-context",
+      filename,
+      marker,
+      error: String(error.message),
+      preUploadReadiness,
+      composerReadiness: error.readiness ?? null,
+      steerCapture: error.steer ?? null,
+      composer: await composerSnapshot(page),
+      uploadPostObserved: false,
+      note: "no upload POST and no new Run stream were observed; the staged file/text are captured from the composer",
+      browserApiTargets: targets.requests,
+      forbiddenBrowserTargets: targets.forbidden,
+    });
+    await uploadPromise.catch(() => null);
+    throw error;
+  }
+  const { threadId, runId } = send;
   const uploadResponse = await uploadPromise;
   expect(uploadResponse.status(), await uploadResponse.text()).toBe(200);
   expect(threadId).toBe(opener.threadId);
@@ -488,6 +598,11 @@ test(`${backend}: uploaded file reaches the Run model context`, async ({ context
     runId,
     terminalStatus: run.status,
     filename,
+    preUploadReadiness,
+    runReadiness: send.readiness,
+    uploadPostObserved: true,
+    uploadPostUrl: uploadResponse.url(),
+    uploadPostStatus: uploadResponse.status(),
     providerRequests: requests.length,
     uploadPathsSeenByModel: seenPaths,
     browserApiTargets: targets.requests,

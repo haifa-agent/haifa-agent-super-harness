@@ -117,21 +117,91 @@ function runRequestBodyModel(response) {
   }
 }
 
-async function sendRun(page, input, text, timeout = 30_000) {
-  const streamPromise = page.waitForResponse((response) =>
+// Frozen composer availability signal. `chat-page.tsx` derives the composer
+// `status` from `thread.isLoading`, and `input-box.tsx::handleSubmit` routes
+// Enter to a same-Run active Steer whenever that status is still "streaming".
+// `PromptInputSubmit` renders SquareIcon (class `lucide-square`) while
+// streaming and ArrowUpIcon once ready, so the stop icon is the frozen UI's own
+// "not yet submittable" marker — not a mock.
+function composerStopIcon(page) {
+  return page.locator('button[type="submit"] svg.lucide-square');
+}
+
+// Bounded wait for the real UI to finish its previous Run before the next Turn
+// is typed. Polling only the backend Run status races the composer: the Run can
+// be terminal server-side while `thread.isLoading` is still true, which turns
+// Enter into an active Steer. Returns the observation so the case records
+// whether the composer was actually still streaming.
+async function waitForComposerReady(page, { timeout = 20_000 } = {}) {
+  const submit = page.locator('button[type="submit"]').first();
+  const stop = composerStopIcon(page);
+  const started = Date.now();
+  let observedStreaming = false;
+  for (;;) {
+    const submitMounted = (await submit.count()) > 0;
+    const streaming = (await stop.count()) > 0;
+    if (submitMounted && !streaming) {
+      return { ready: true, observedStreaming, waitedMs: Date.now() - started };
+    }
+    observedStreaming = observedStreaming || streaming;
+    if (Date.now() - started >= timeout) {
+      return { ready: false, observedStreaming, waitedMs: Date.now() - started, timedOut: true };
+    }
+    await page.waitForTimeout(250);
+  }
+}
+
+function requestPostData(request) {
+  try { return request.postData() ?? null; } catch { return null; }
+}
+
+// Submit one Turn from the frozen composer. The frozen UI emits a new Run on
+// `/api/langgraph/threads/{id}/runs/stream` (LangGraph SDK) but a mid-flight
+// Steer on `/api/threads/{id}/runs/stream` (Haifa gateway, header
+// X-Haifa-Run-Input). Both paths are observed; if Enter is mis-routed to the
+// Steer path the raw request/response are attached to the thrown error and the
+// case fails instead of surfacing a bare response timeout.
+async function sendRun(page, input, text, options = {}) {
+  const { timeout = 30_000, readinessTimeout = 20_000 } = options;
+  const readiness = await waitForComposerReady(page, { timeout: readinessTimeout });
+  const runStream = page.waitForResponse((response) =>
     response.request().method() === "POST" &&
     /\/api\/langgraph\/threads\/[^/]+\/runs\/stream$/.test(new URL(response.url()).pathname),
     { timeout });
+  const steerStream = page.waitForResponse((response) =>
+    response.request().method() === "POST" &&
+    /\/api\/threads\/[^/]+\/runs\/stream$/.test(new URL(response.url()).pathname),
+    { timeout });
+  runStream.catch(() => {});
+  steerStream.catch(() => {});
   await input.fill(text);
   await input.press("Enter");
-  const response = await streamPromise;
+  const winner = await Promise.race([
+    runStream.then((response) => ({ kind: "run", response })),
+    steerStream.then((response) => ({ kind: "steer", response })),
+  ]);
+  if (winner.kind === "steer") {
+    const responseBody = await winner.response.text().catch(() => "");
+    const error = new Error(
+      `the next Turn was routed to the active-Steer path ${new URL(winner.response.url()).pathname} ` +
+      `and returned ${winner.response.status()}: ${responseBody}`);
+    error.steer = {
+      url: winner.response.url(),
+      status: winner.response.status(),
+      requestBody: requestPostData(winner.response.request()),
+      responseBody,
+    };
+    error.readiness = readiness;
+    throw error;
+  }
+  const response = winner.response;
   if (response.status() !== 200) {
     throw new Error(`Run stream returned ${response.status()}: ${await response.text()}`);
   }
   const location = response.headers()["content-location"];
   const match = location?.match(/\/api\/threads\/([^/]+)\/runs\/([^/]+)$/);
   if (!match) throw new Error(`unexpected Run Content-Location: ${location}`);
-  return { response, threadId: match[1], runId: match[2], modelName: runRequestBodyModel(response) };
+  return { response, threadId: match[1], runId: match[2], modelName: runRequestBodyModel(response), readiness };
 }
 
 async function pollRun(request, threadId, runId, expected = "success", timeout = 40_000) {
@@ -359,7 +429,9 @@ test(`${backend}: V2-M1-01 same conversation Turn A then Turn B keeps Thread and
       turnA: { runId: first.runId, requestedModel: first.modelName },
       turnB: { requestedModel: "w18-controlled-b" },
       error: String(error.message),
-      note: "same-Thread model switch failed; owner W03 (per-Run model freeze) is not merged at this base SHA",
+      composerReadiness: error.readiness ?? null,
+      steerCapture: error.steer ?? null,
+      note: "same-Thread model switch failed; the composer readiness observation and any active-Steer request/response are captured above; owner W03 (per-Run model freeze) is not merged at this base SHA",
     });
     throw error;
   }
@@ -459,7 +531,9 @@ test(`${backend}: V2-M1-02 active Run keeps its frozen model and refuses a mid-f
       activeRunModel: active.modelName,
       nextRequestedModel: "w18-controlled-b",
       error: String(error.message),
-      note: "the follow-up after terminal A did not produce a new Run stream; inspect the captured UI request path and response before assigning ownership",
+      composerReadiness: error.readiness ?? null,
+      steerCapture: error.steer ?? null,
+      note: "the follow-up after terminal A did not produce a new Run stream; the composer readiness observation and any active-Steer request/response are captured above",
     });
     throw error;
   }
@@ -482,6 +556,7 @@ test(`${backend}: V2-M1-02 active Run keeps its frozen model and refuses a mid-f
     bRequestsDuringActive,
     nextRunId: next.runId,
     nextRunModel: next.modelName,
+    nextRunReadiness: next.readiness,
     browserApiTargets: targets.requests,
     forbiddenBrowserTargets: targets.forbidden,
   });

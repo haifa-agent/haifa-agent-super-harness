@@ -128,4 +128,38 @@ if (-not $specText.Contains('testInfo.annotations.push({ type: "NOT_RUN"')) {
 }
 $caseListAssertions++
 
+# review4: both spec files must observe the frozen composer's own completion
+# before a follow-up Turn and must capture the active-Steer path (and its raw
+# request/response) if Enter is still mis-routed, instead of surfacing a bare
+# response timeout. These are source-level guards for the wait/capture helpers;
+# they never replace the executed round evidence.
+$differentialSpecText = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'differential.spec.cjs')
+$review4Sources = @(
+    @{ name = 'v2-m1-model-file.spec.cjs'; text = $specText; submit = 'async function sendRun(' },
+    @{ name = 'differential.spec.cjs'; text = $differentialSpecText; submit = 'async function sendAndCaptureRun(' }
+)
+foreach ($source in $review4Sources) {
+    foreach ($needle in @(
+        'function composerStopIcon(',
+        'svg.lucide-square',
+        'async function waitForComposerReady(',
+        'Promise.race(',
+        'error.steer = {',
+        $source.submit
+    )) {
+        if (-not $source.text.Contains($needle)) {
+            throw "$($source.name) is missing the review4 composer-ready/steer-capture guard '$needle'"
+        }
+        $caseListAssertions++
+    }
+}
+if (-not $differentialSpecText.Contains('upload-model-context-failure')) {
+    throw "differential.spec.cjs must persist the upload-context failure (no POST/staged file) before failing"
+}
+$caseListAssertions++
+if (-not $specText.Contains('v2-m1-02-next-run-failure')) {
+    throw "v2-m1-model-file.spec.cjs must persist the V2-M1-02 steer capture before failing"
+}
+$caseListAssertions++
+
 Write-Output "W18_RESULT_CLASSIFICATION PASS assertions=$script:classificationAssertions branch_assertions=$branchAssertions oracle_assertions=$oracleAssertions case_list_assertions=$caseListAssertions"
