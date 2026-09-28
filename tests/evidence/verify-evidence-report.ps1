@@ -9,6 +9,8 @@ $Generator = Join-Path $RepositoryRoot 'scripts/generate-evidence-report.ps1'
 $TempParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')
 $TempRoot = Join-Path $TempParent ("w24-evidence-test-" + [Guid]::NewGuid().ToString('N'))
 $Assertions = 0
+$BaseSnapshot = Join-Path $TempRoot 'base-shpm-snapshot.json'
+. (Join-Path $RepositoryRoot 'scripts/lib/shpm-governance.ps1')
 
 function Assert-True([bool]$Condition, [string]$Message) {
     $script:Assertions++
@@ -27,9 +29,7 @@ function New-Fixture([string]$Name, [ValidateSet('PASS', 'FAIL', 'NOT_RUN')][str
     $root = Join-Path $TempRoot $Name
     $null = New-Item -ItemType Directory -Force -Path $root
     foreach ($relative in @(
-        'work-packages.js',
-        'dashboard.html',
-        'work-package-dag.html',
+        'pom.xml',
         'contracts/upstream/deerflow/frontend-consumer-manifest.json',
         'contracts/upstream/deerflow/frontend-consumer-expanded.json',
         'contracts/upstream/deerflow/resource-seed.json',
@@ -48,6 +48,7 @@ function New-Fixture([string]$Name, [ValidateSet('PASS', 'FAIL', 'NOT_RUN')][str
             Copy-FixtureFile $root ([string]$resource.intended_local_path)
         }
     }
+    Copy-Item -LiteralPath $BaseSnapshot -Destination (Join-Path $root 'shpm-snapshot.json')
     if ($Surefire -ne 'NOT_RUN') {
         $report = Join-Path $root 'sample/target/surefire-reports/TEST-sample.xml'
         $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $report)
@@ -64,20 +65,55 @@ function New-Fixture([string]$Name, [ValidateSet('PASS', 'FAIL', 'NOT_RUN')][str
     return $root
 }
 
-function Read-WorkData([string]$Root) {
-    $source = Get-Content -LiteralPath (Join-Path $Root 'work-packages.js') -Raw
-    $match = [regex]::Match($source, '^\s*window\.WORK_PACKAGES_DATA\s*=\s*(?<json>\{[\s\S]*\})\s*;\s*$')
-    return $match.Groups['json'].Value | ConvertFrom-Json -DateKind String
+function Read-Snap([string]$Root) {
+    return Get-Content -LiteralPath (Join-Path $Root 'shpm-snapshot.json') -Raw -Encoding utf8 |
+        ConvertFrom-Json -Depth 64 -DateKind String
 }
 
-function Write-WorkData([string]$Root, [object]$Data) {
-    $json = $Data | ConvertTo-Json -Depth 20
-    [IO.File]::WriteAllText((Join-Path $Root 'work-packages.js'),
-        "window.WORK_PACKAGES_DATA = $json;`n", [Text.UTF8Encoding]::new($false))
+function Write-Snap([string]$Root, [object]$Snapshot) {
+    [IO.File]::WriteAllText((Join-Path $Root 'shpm-snapshot.json'),
+        ($Snapshot | ConvertTo-Json -Depth 64), [Text.UTF8Encoding]::new($false))
+}
+
+function Get-Row([object]$Snapshot, [string]$Table, [string]$Id) {
+    return @($Snapshot.tables.$Table | Where-Object id -eq $Id)[0]
+}
+
+function Set-Details([object]$Row, [scriptblock]$Change) {
+    $details = if ([string]::IsNullOrWhiteSpace([string]$Row.details_json)) { [pscustomobject]@{} }
+        else { [string]$Row.details_json | ConvertFrom-Json -DateKind String }
+    & $Change $details
+    $Row.details_json = $details | ConvertTo-Json -Depth 20 -Compress
+}
+
+function Add-Relation([object]$Snapshot, [string]$SourceType, [string]$SourceId, [string]$TargetType,
+        [string]$TargetId, [string]$Kind, [int]$Required = 0) {
+    $Snapshot.tables.relation = @($Snapshot.tables.relation) + [pscustomobject]@{
+        id = "rel-test-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"; source_type = $SourceType; source_id = $SourceId
+        target_type = $TargetType; target_id = $TargetId; kind = $Kind; required = $Required
+        created_at = '2026-09-28T00:00:00+00:00'
+    }
+}
+
+function Set-DevelopingTask([object]$Snapshot, [string]$TaskId, [string]$AssignmentId, [int]$Slot, [string]$Ports,
+        [string]$DataRoot, [string]$Last = '2026-09-28T12:00:00+08:00', [string]$Next = '2026-09-28T12:15:00+08:00') {
+    $task = Get-Row $Snapshot 'task' $TaskId
+    $task.state = 'developing'
+    if ([string]::IsNullOrWhiteSpace([string]$task.prompt_path)) { $task.prompt_path = 'private-docs/prompts/test-prompt.md' }
+    $gateway, $frontend = $Ports.Split('/')
+    $Snapshot.tables.assignment = @($Snapshot.tables.assignment) + [pscustomobject]@{
+        id = $AssignmentId; task_id = $TaskId; executor_type = 'opencode'; executor_ref = 'test'; model = 'test/model'
+        state = 'running'; repository = 'D:/workspace/test'; base_sha = '52ad9a7'; branch = "test/$AssignmentId"
+        worktree = "D:/workspace/test/$AssignmentId"; slot = $Slot
+        ports_json = "{`"gateway`": $gateway, `"frontend`": $frontend}"; data_root = $DataRoot
+        delivered_sha = $null; merged_sha = $null; started_at = $Last; ended_at = $null; created_at = $Last; updated_at = $Last
+        details_json = "{`"next_checkpoint_at`": `"$Next`", `"last_checkpoint_at`": `"$Last`"}"
+    }
 }
 
 function Invoke-Generator([string]$Root, [string]$Output = 'target/evidence', [switch]$RequireSurefire) {
-    $arguments = @('-NoProfile', '-File', $Generator, '-RepositoryRoot', $Root, '-OutputDirectory', $Output)
+    $arguments = @('-NoProfile', '-File', $Generator, '-RepositoryRoot', $Root, '-OutputDirectory', $Output,
+        '-ShpmSnapshot', (Join-Path $Root 'shpm-snapshot.json'))
     if ($RequireSurefire) { $arguments += '-RequireSurefire' }
     $result = @(& pwsh @arguments 2>&1)
     return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($result -join "`n") }
@@ -143,6 +179,8 @@ function Read-EvidenceManifest([string]$Root) {
 
 try {
     $null = New-Item -ItemType Directory -Force -Path $TempRoot
+    # Fixtures mutate a copy of the live SHPM export; the live database is never written.
+    $null = Export-ShpmSnapshot -Database $env:SHPM_DB -OutputPath $BaseSnapshot
 
     $valid = New-Fixture 'valid'
     $first = Invoke-Generator $valid 'target/evidence-one' -RequireSurefire
@@ -150,16 +188,37 @@ try {
     $manifestOnePath = Join-Path $valid 'target/evidence-one/evidence-manifest.json'
     $manifestOne = Get-Content -LiteralPath $manifestOnePath -Raw | ConvertFrom-Json -DateKind String
     Assert-True ($manifestOne.governance.status -eq 'PASS') "governance status must be PASS"
+    Assert-True ($manifestOne.governance.source -eq 'SHPM snapshot') "governance must read the SHPM snapshot"
+    Assert-True ($manifestOne.governance.promptPathCheck -eq 'NOT_RUN') "prompt paths without private-docs must stay NOT_RUN"
+    Assert-True ($manifestOne.PSObject.Properties.Name -notcontains 'dashboard') "dashboard consumers are no longer part of the gate"
+    Assert-True ($manifestOne.inputs.haifaSdkVersion -eq '0.1.2-SNAPSHOT') "Haifa SDK version must come from pom.xml"
     Assert-True ($manifestOne.mavenSurefire.status -eq 'PASS') "Surefire status must be PASS"
     Assert-True ($manifestOne.deerflow.runtimeStatus -eq 'NOT_RUN') "runtime NOT_RUN must be preserved"
     Assert-True ($manifestOne.overallStatus -eq 'NOT_RUN') "overall cannot become PASS while runtime is NOT_RUN"
-    $expectedPageCount = if (Test-Path -LiteralPath (Join-Path $RepositoryRoot 'work-package-dag.html')) { 2 } else { 1 }
-    Assert-True (@($manifestOne.dashboard.pages).Count -eq $expectedPageCount) "all dashboard consumers must be verified"
     $second = Invoke-Generator $valid 'target/evidence-two' -RequireSurefire
     Assert-True ($second.ExitCode -eq 0) "second deterministic generation must pass"
     $firstHash = (Get-FileHash -LiteralPath $manifestOnePath -Algorithm SHA256).Hash
     $secondHash = (Get-FileHash -LiteralPath (Join-Path $valid 'target/evidence-two/evidence-manifest.json') -Algorithm SHA256).Hash
     Assert-True ($firstHash -eq $secondHash) "identical inputs must produce identical manifest hashes"
+
+    $withPrompts = New-Fixture 'with-prompts'
+    $snap = Read-Snap $withPrompts
+    $paths = @(@($snap.tables.task | Where-Object { $_.prompt_path } | ForEach-Object { [string]$_.prompt_path }) +
+        @($snap.tables.sprint | ForEach-Object { [string]$_.roadmap_path }))
+    foreach ($path in $paths | Sort-Object -Unique) { Copy-FixtureFile $withPrompts $path }
+    $promptResult = Invoke-Generator $withPrompts
+    Assert-True ($promptResult.ExitCode -eq 0) "registered prompt and roadmap paths must resolve: $($promptResult.Output)"
+    Assert-True ((Read-EvidenceManifest $withPrompts).governance.promptPathCheck -eq 'PASS') "prompt path check must run when private-docs exists"
+    @($snap.tables.task | Where-Object { $_.prompt_path })[0].prompt_path = 'private-docs/prompts/does-not-exist.md'
+    Write-Snap $withPrompts $snap
+    Assert-Fails $withPrompts 'prompt_path does not exist'
+
+    $missingDb = New-Fixture 'missing-db'
+    $missingDbResult = @(& pwsh -NoProfile -File $Generator -RepositoryRoot $missingDb -OutputDirectory 'target/evidence' `
+        -ShpmDatabase (Join-Path $missingDb 'no-such.db') 2>&1)
+    Assert-True ($LASTEXITCODE -ne 0) 'a missing SHPM database must fail closed'
+    Assert-True (($missingDbResult -join "`n") -match 'SHPM database is missing') 'missing database must be reported, never recreated'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $missingDb 'local-data'))) 'the gate must not create an empty local SHPM database'
 
     $notRun = New-Fixture 'not-run' 'NOT_RUN'
     $notRunResult = Invoke-Generator $notRun
@@ -175,160 +234,42 @@ try {
         ConvertFrom-Json -DateKind String
     Assert-True ($failedManifest.mavenSurefire.status -eq 'FAIL') "failing tests must remain FAIL in emitted evidence"
 
-    $badSchema = New-Fixture 'bad-schema'
-    $data = Read-WorkData $badSchema
-    $data.schemaVersion = 4
-    Write-WorkData $badSchema $data
-    Assert-Fails $badSchema 'schemaVersion must be 5'
-
-    $duplicate = New-Fixture 'duplicate-id'
-    $data = Read-WorkData $duplicate
-    $data.workPackages[24].id = 'W23'
-    Write-WorkData $duplicate $data
-    Assert-Fails $duplicate 'ids must be unique'
-
-    $lifecycle = New-Fixture 'bad-lifecycle'
-    $data = Read-WorkData $lifecycle
-    $data.workPackages[24].state = 'pending'
-    $data.workPackages[24].startedAt = '2026-09-22T21:00:00+08:00'
-    Write-WorkData $lifecycle $data
-    Assert-Fails $lifecycle 'pending lifecycle requires'
-
-    $readyLifecycle = New-Fixture 'bad-ready-lifecycle'
-    $data = Read-WorkData $readyLifecycle
-    $data.workPackages[24].state = 'ready_for_acceptance'
-    $data.workPackages[24].completedAt = '2026-09-22T22:00:00+08:00'
-    Write-WorkData $readyLifecycle $data
-    Assert-Fails $readyLifecycle 'ready_for_acceptance lifecycle requires'
-
-    $missingPrerequisite = New-Fixture 'missing-prerequisite'
-    $data = Read-WorkData $missingPrerequisite
-    $data.workPackages[0].prerequisites = @('W99')
-    Write-WorkData $missingPrerequisite $data
-    Assert-Fails $missingPrerequisite 'references missing prerequisite W99'
-
-    $selfReference = New-Fixture 'self-reference'
-    $data = Read-WorkData $selfReference
-    $data.workPackages[0].prerequisites = @('W00')
-    Write-WorkData $selfReference $data
-    Assert-Fails $selfReference 'cannot reference itself'
-
-    $cycle = New-Fixture 'cycle'
-    $data = Read-WorkData $cycle
-    $data.workPackages[0].prerequisites = @('W01')
-    Write-WorkData $cycle $data
-    Assert-Fails $cycle 'prerequisite cycle detected'
-
-    $crossCuttingTask = New-Fixture 'cross-cutting-delivery-task'
-    $data = Read-WorkData $crossCuttingTask
-    $data.workPackages[3] | Add-Member -NotePropertyName tags -NotePropertyValue @('长期横切')
-    Write-WorkData $crossCuttingTask $data
-    Assert-Fails $crossCuttingTask 'W03 is cross-cutting and must not use a bounded delivery task group'
-
-    $tooManyTasks = New-Fixture 'too-many-delivery-tasks'
-    $data = Read-WorkData $tooManyTasks
-    $data.deliveryTasks.W04 = @($data.deliveryTasks.W04) + @($data.deliveryTasks.W04[0])
-    Write-WorkData $tooManyTasks $data
-    Assert-Fails $tooManyTasks 'must have 1 to 4 delivery tasks'
-
-    $missingTaskCard = New-Fixture 'missing-active-task-card'
-    $data = Read-WorkData $missingTaskCard
-    $data.deliveryTasks.W04[1].status = 'in_progress'
-    Write-WorkData $missingTaskCard $data
-    Assert-Fails $missingTaskCard 'in progress without a complete task card: prompt'
-
-    $oldSlotPorts = New-Fixture 'old-slot-ports'
-    $data = Read-WorkData $oldSlotPorts
-    $task = $data.deliveryTasks.W04[1]
-    $task.status = 'in_progress'
-    $task.prompt = 'private-docs/prompts/39-deerflow-parity-delivery/W04-Developing/W04-FaultIsolation-Pending.md'
-    $task | Add-Member -NotePropertyMembers @{
-        owner = '/root/test'; branch = 'feat-test'; worktree = 'D:/workspace/test'
-        slot = '2'; ports = '38018/53018'; dataRoot = 'D:/workspace/test/local-tmp'
-        exit = 'controlled failure test'; lastCheckpointAt = '2026-09-27T12:00:00+08:00'
-        nextCheckpoint = '2026-09-27T12:15:00+08:00'
+    # Each SHPM governance rule must fail closed on a single targeted mutation.
+    $cases = [ordered]@{
+        'bad-schema' = @({ param($s) $s.schema_version = 2 }, 'schema_version must be 1')
+        'missing-table' = @({ param($s) $s.tables.PSObject.Properties.Remove('verification') }, 'missing table verification')
+        'duplicate-id' = @({ param($s) $s.tables.work_package[24].id = 'W23' }, 'ids must be unique')
+        'bad-lifecycle' = @({ param($s) $w = Get-Row $s 'work_package' 'W24'; $w.state = 'pending'; $w.started_at = '2026-09-22T21:00:00+08:00' }, 'pending lifecycle requires')
+        'bad-ready-lifecycle' = @({ param($s) $w = Get-Row $s 'work_package' 'W24'; $w.state = 'ready_for_acceptance'; $w.completed_at = '2026-09-22T22:00:00+08:00' }, 'ready_for_acceptance lifecycle requires')
+        'missing-prerequisite' = @({ param($s) Add-Relation $s 'work_package' 'W00' 'work_package' 'W99' 'requires' }, 'references missing prerequisite W99')
+        'self-reference' = @({ param($s) Add-Relation $s 'work_package' 'W00' 'work_package' 'W00' 'requires' }, 'cannot reference itself')
+        'cycle' = @({ param($s) Add-Relation $s 'work_package' 'W00' 'work_package' 'W01' 'requires' }, 'prerequisite cycle detected')
+        'too-many-tasks' = @({ param($s) $extra = (Get-Row $s 'task' 'W05-task-1').PSObject.Copy(); $extra.id = 'W05-task-5'; $s.tables.task = @($s.tables.task) + $extra }, 'must have at most 4 tasks')
+        'developing-without-assignment' = @({ param($s) $t = Get-Row $s 'task' 'W04-task-2'; $t.state = 'developing'; $t.prompt_path = 'private-docs/prompts/test.md' }, 'developing without exactly one running assignment')
+        'started-without-prompt' = @({ param($s) (Get-Row $s 'task' 'W04-task-2').state = 'blocked' }, 'left pending without a prompt_path')
+        'old-slot-ports' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '38018/53018' 'D:/workspace/test/a' }, 'slot and child port group do not match')
+        'late-checkpoint' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '30618/35618' 'D:/workspace/test/a' '2026-09-28T12:00:00+08:00' '2026-09-28T12:30:00+08:00' }, 'next checkpoint must be within 15 minutes')
+        'shared-port-group' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '30618/35618' 'D:/workspace/test/a'; Set-DevelopingTask $s 'W04-task-3' 'asg-test-2' 2 '30618/35618' 'D:/workspace/test/b' }, 'cannot share a port group')
+        'shared-data-root' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '30618/35618' 'D:/workspace/test/a'; Set-DevelopingTask $s 'W04-task-3' 'asg-test-2' 3 '40618/45618' 'D:/workspace/test/a' }, 'cannot share a data root')
+        'ready-without-delivery' = @({ param($s) $t = Get-Row $s 'task' 'W04-task-2'; $t.state = 'ready_for_acceptance'; $t.prompt_path = 'private-docs/prompts/test.md' }, 'ready without delivery evidence: delivered_sha')
+        'finished-without-merge' = @({ param($s) foreach ($a in @($s.tables.assignment | Where-Object task_id -eq 'W05-task-2')) { $a.merged_sha = $null } }, 'cannot finish before mainline acceptance: merged_sha')
+        'skipped-demo-gate' = @({ param($s) $m0 = Get-Row $s 'sprint_stage' 'DEMO-V0/M0'; $m0.result = 'NOT_RUN'; $m0.work_status = 'in_progress'; (Get-Row $s 'sprint' 'DEMO-V0').decision = 'NO_GO' }, 'DEMO-V0/M1 cannot PASS before DEMO-V0/M0 PASS')
+        'invalid-demo-mapping' = @({ param($s) Add-Relation $s 'sprint_stage' 'DEMO-V0/M1' 'work_package' 'W99' 'evidence_source' }, 'DEMO-V0/M1 maps to missing work package W99')
+        'stage-pass-without-proof' = @({ param($s) Set-Details (Get-Row $s 'sprint_stage' 'DEMO-V0/M0') { param($d) $d.proof = $null } }, 'DEMO-V0/M0 PASS requires independent gate evidence')
+        'stage-pass-unfinished-task' = @({ param($s) Add-Relation $s 'sprint_stage' 'DEMO-V0/M0' 'task' 'W03-task-1' 'delivers' 1 }, 'DEMO-V0/M0 PASS requires task W03-task-1 finished')
+        'self-certified-go' = @({ param($s) (Get-Row $s 'sprint' 'DEMO-V2').decision = 'GO' }, 'DEMO-V2 GO requires all stage gates PASS')
+        'go-without-human' = @({ param($s) Set-Details (Get-Row $s 'sprint' 'DEMO-V0') { param($d) $d.humanAcceptance = $null } }, 'DEMO-V0 GO requires explicit human acceptance')
+        'go-stale-stage-sha' = @({ param($s) Set-Details (Get-Row $s 'sprint_stage' 'DEMO-V0/M2') { param($d) $d.mainCommit = '1234567' } }, 'DEMO-V0 GO requires DEMO-V0/M2 to be revalidated')
+        'missing-evidence' = @({ param($s) Set-Details (Get-Row $s 'work_package' 'W01') { param($d) $d.evidence = @() }; $s.tables.verification = @($s.tables.verification | Where-Object subject_id -ne 'W01') }, 'W01 is complete but has no evidence')
+        'unverifiable-evidence' = @({ param($s) Set-Details (Get-Row $s 'work_package' 'W01') { param($d) $d.evidence = @('looks good') }; $s.tables.verification = @($s.tables.verification | Where-Object subject_id -ne 'W01') }, 'no machine-recognizable evidence reference')
     }
-    Write-WorkData $oldSlotPorts $data
-    Assert-Fails $oldSlotPorts 'slot and child port group do not match'
-
-    $unreviewedTask = New-Fixture 'unreviewed-delivery-task'
-    $data = Read-WorkData $unreviewedTask
-    $data.deliveryTasks.W04[0].status = 'ready_for_acceptance'
-    Write-WorkData $unreviewedTask $data
-    Assert-Fails $unreviewedTask 'is ready without delivery evidence: commit'
-
-    $missingDemoStage = New-Fixture 'missing-demo-stage'
-    $data = Read-WorkData $missingDemoStage
-    $data.customerDemo.stages = @($data.customerDemo.stages | Where-Object id -ne 'M3')
-    Write-WorkData $missingDemoStage $data
-    Assert-Fails $missingDemoStage 'customer demo must contain exactly M0 through M4'
-
-    $invalidDemoMapping = New-Fixture 'invalid-demo-mapping'
-    $data = Read-WorkData $invalidDemoMapping
-    $data.customerDemo.stages[1].workPackages = @('W99')
-    Write-WorkData $invalidDemoMapping $data
-    Assert-Fails $invalidDemoMapping 'M1 maps to missing work package W99'
-
-    $skippedDemoGate = New-Fixture 'skipped-demo-gate'
-    $data = Read-WorkData $skippedDemoGate
-    $data.customerDemo.stages[0].workStatus = 'in_progress'
-    $data.customerDemo.stages[0].result = 'NOT_RUN'
-    $data.customerDemo.stages[0].proof = $null
-    $data.customerDemo.stages[0].mainCommit = $null
-    $data.customerDemo.stages[0].acceptedAt = $null
-    $data.customerDemo.stages[1].workStatus = 'complete'
-    $data.customerDemo.stages[1].result = 'PASS'
-    $data.customerDemo.stages[1].proof = 'independent test evidence'
-    $data.customerDemo.stages[1].mainCommit = '1234567'
-    $data.customerDemo.stages[1].acceptedAt = '2026-09-27T14:00:00+08:00'
-    Write-WorkData $skippedDemoGate $data
-    Assert-Fails $skippedDemoGate 'M1 cannot PASS before M0 PASS'
-
-    $selfCertifiedDemo = New-Fixture 'self-certified-demo-go'
-    $data = Read-WorkData $selfCertifiedDemo
-    $data.customerDemo.stages[4].workStatus = 'pending'
-    $data.customerDemo.stages[4].result = 'NOT_RUN'
-    $data.customerDemo.stages[4].proof = $null
-    $data.customerDemo.stages[4].mainCommit = $null
-    $data.customerDemo.stages[4].acceptedAt = $null
-    $data.customerDemo.humanAcceptance = $null
-    $data.customerDemo.decision = 'GO'
-    Write-WorkData $selfCertifiedDemo $data
-    Assert-Fails $selfCertifiedDemo 'customer demo GO requires all M0-M4 gates PASS'
-
-    $missingAudit = New-Fixture 'missing-execution-audit'
-    $data = Read-WorkData $missingAudit
-    $data.executionAudit.packages.W24.owner = ''
-    Write-WorkData $missingAudit $data
-    Assert-Fails $missingAudit 'W24 execution audit is missing owner'
-
-    $missingEvidence = New-Fixture 'missing-evidence'
-    $data = Read-WorkData $missingEvidence
-    $complete = @($data.workPackages | Where-Object state -eq 'complete')[0]
-    $complete.evidence = @()
-    Write-WorkData $missingEvidence $data
-    Assert-Fails $missingEvidence 'complete but has no evidence'
-
-    $unverifiableEvidence = New-Fixture 'unverifiable-evidence'
-    $data = Read-WorkData $unverifiableEvidence
-    $complete = @($data.workPackages | Where-Object state -eq 'complete')[0]
-    $complete.evidence = @('looks good')
-    Write-WorkData $unverifiableEvidence $data
-    Assert-Fails $unverifiableEvidence 'no machine-recognizable evidence reference'
-
-    $mutatingDashboard = New-Fixture 'mutating-dashboard'
-    $dashboardPath = Join-Path $mutatingDashboard 'dashboard.html'
-    $dashboard = (Get-Content -LiteralPath $dashboardPath -Raw).Replace('milestones.slice().sort(', 'milestones.sort(')
-    [IO.File]::WriteAllText($dashboardPath, $dashboard, [Text.UTF8Encoding]::new($false))
-    Assert-Fails $mutatingDashboard 'must sort a copied milestones array'
-
-    $embeddedData = New-Fixture 'embedded-data'
-    $dashboardPath = Join-Path $embeddedData 'dashboard.html'
-    $dashboard = (Get-Content -LiteralPath $dashboardPath -Raw).Replace(
-        'const dashboardData = window.WORK_PACKAGES_DATA;',
-        'window.WORK_PACKAGES_DATA = {}; const dashboardData = window.WORK_PACKAGES_DATA;')
-    [IO.File]::WriteAllText($dashboardPath, $dashboard, [Text.UTF8Encoding]::new($false))
-    Assert-Fails $embeddedData 'must consume window.WORK_PACKAGES_DATA exactly once|must not define WORK_PACKAGES_DATA'
+    foreach ($name in $cases.Keys) {
+        $fixture = New-Fixture $name
+        $snap = Read-Snap $fixture
+        & $cases[$name][0] $snap
+        Write-Snap $fixture $snap
+        Assert-Fails $fixture $cases[$name][1]
+    }
 
     $fakeRuntimePass = New-Fixture 'fake-runtime-pass'
     $contractPath = Join-Path $fakeRuntimePass 'contracts/upstream/deerflow/frontend-consumer-manifest.json'

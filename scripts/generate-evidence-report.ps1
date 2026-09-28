@@ -2,16 +2,19 @@
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$OutputDirectory = "target/evidence",
-    [switch]$RequireSurefire
+    [switch]$RequireSurefire,
+    # Pre-exported SHPM snapshot (tests/fixtures). When omitted, the live SHPM database is exported.
+    [string]$ShpmSnapshot,
+    [string]$ShpmDatabase
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot 'lib/customer-demo-evidence.ps1')
+. (Join-Path $PSScriptRoot 'lib/shpm-governance.ps1')
 
 $PinnedDeerFlowSha = "e545c28ac301e6f9feae247c513d8ea8f83df294"
-$AllowedStates = @("pending", "in_progress", "ready_for_acceptance", "blocked", "complete")
 $RuntimeStatuses = @("PASS", "FAIL", "NOT_RUN")
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
@@ -41,361 +44,6 @@ function Get-JsonFile {
     catch {
         throw "Invalid JSON evidence input '$Path': $($_.Exception.Message)"
     }
-}
-
-function Get-WorkPackageData {
-    param([string]$Path)
-    Assert-Condition (Test-Path -LiteralPath $Path -PathType Leaf) "work-packages.js is missing"
-    $source = Get-Content -LiteralPath $Path -Raw
-    $match = [regex]::Match($source,
-        '^\s*window\.WORK_PACKAGES_DATA\s*=\s*(?<json>\{[\s\S]*\})\s*;\s*$')
-    Assert-Condition $match.Success "work-packages.js must contain only window.WORK_PACKAGES_DATA = <JSON>;"
-    try {
-        return $match.Groups['json'].Value | ConvertFrom-Json -DateKind String
-    }
-    catch {
-        throw "work-packages.js contains invalid JSON: $($_.Exception.Message)"
-    }
-}
-
-function Get-IsoTime {
-    param([object]$Value, [string]$Field)
-    Assert-Condition ($Value -is [string] -and
-        $Value -match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$') `
-        "$Field must be an ISO 8601 timestamp with a timezone"
-    try {
-        return [DateTimeOffset]::Parse($Value, [Globalization.CultureInfo]::InvariantCulture)
-    }
-    catch {
-        throw "$Field is not a valid timestamp: $Value"
-    }
-}
-
-function Test-EvidenceReference {
-    param([string]$Value)
-    return $Value -match '(?i)(?:\bPASS\b|\bcommit\b|\bbranch\s+[0-9a-f]{7,40}\b|\bmain\s+[0-9a-f]{7,40}\b|SHA-?256|\bRun\s+[0-9a-f-]{16,}\b|\bArtifact\b|\btests?\s+PASS\b)'
-}
-
-function Test-WorkPackages {
-    param([object]$Data)
-
-    Assert-Condition ($Data.schemaVersion -eq 5) "work-packages schemaVersion must be 5"
-    $packages = @($Data.workPackages)
-    Assert-Condition ($packages.Count -eq 25) "work-packages must contain exactly 25 entries"
-    $expectedIds = @(0..24 | ForEach-Object { "W{0:D2}" -f $_ })
-    $actualIds = @($packages | ForEach-Object { [string]$_.id })
-    Assert-Condition (@($actualIds | Sort-Object -Unique).Count -eq 25) "work-package ids must be unique"
-    Assert-Condition (@(Compare-Object ($expectedIds | Sort-Object) ($actualIds | Sort-Object)).Count -eq 0) `
-        "work-package ids must be exactly W00 through W24"
-
-    $byId = @{}
-    foreach ($package in $packages) {
-        $id = [string]$package.id
-        $byId[$id] = $package
-        Assert-Condition ($AllowedStates -contains [string]$package.state) "$id has an invalid state"
-        Assert-Condition ($package.PSObject.Properties.Name -contains 'startedAt') "$id is missing startedAt"
-        Assert-Condition ($package.PSObject.Properties.Name -contains 'completedAt') "$id is missing completedAt"
-
-        $started = $null
-        $completed = $null
-        if ($null -ne $package.startedAt) { $started = Get-IsoTime $package.startedAt "$id.startedAt" }
-        if ($null -ne $package.completedAt) { $completed = Get-IsoTime $package.completedAt "$id.completedAt" }
-
-        switch ([string]$package.state) {
-            'pending' {
-                Assert-Condition ($null -eq $started -and $null -eq $completed) `
-                    "$id pending lifecycle requires startedAt=null and completedAt=null"
-            }
-            'in_progress' {
-                Assert-Condition ($null -ne $started -and $null -eq $completed) `
-                    "$id in_progress lifecycle requires startedAt and completedAt=null"
-            }
-            'ready_for_acceptance' {
-                Assert-Condition ($null -ne $started -and $null -eq $completed) `
-                    "$id ready_for_acceptance lifecycle requires startedAt and completedAt=null"
-                $evidence = @($package.evidence)
-                Assert-Condition ($evidence.Count -gt 0) "$id is ready_for_acceptance but has no evidence"
-                Assert-Condition (@($evidence | Where-Object { Test-EvidenceReference ([string]$_) }).Count -gt 0) `
-                    "$id is ready_for_acceptance but has no machine-recognizable evidence reference"
-            }
-            'blocked' {
-                Assert-Condition ($null -eq $completed) "$id blocked lifecycle requires completedAt=null"
-            }
-            'complete' {
-                Assert-Condition ($null -ne $started -and $null -ne $completed) `
-                    "$id complete lifecycle requires both timestamps"
-                Assert-Condition ($completed -ge $started) "$id completedAt precedes startedAt"
-                $evidence = @($package.evidence)
-                Assert-Condition ($evidence.Count -gt 0) "$id is complete but has no evidence"
-                Assert-Condition (@($evidence | Where-Object { Test-EvidenceReference ([string]$_) }).Count -gt 0) `
-                    "$id is complete but has no machine-recognizable evidence reference"
-            }
-        }
-    }
-
-    foreach ($package in $packages) {
-        $id = [string]$package.id
-        $prerequisites = @($package.prerequisites | ForEach-Object { [string]$_ })
-        Assert-Condition (@($prerequisites | Sort-Object -Unique).Count -eq $prerequisites.Count) `
-            "$id contains duplicate prerequisites"
-        foreach ($prerequisite in $prerequisites) {
-            Assert-Condition $byId.ContainsKey($prerequisite) "$id references missing prerequisite $prerequisite"
-            Assert-Condition ($prerequisite -ne $id) "$id cannot reference itself as a prerequisite"
-        }
-    }
-
-    $colors = @{}
-    function Visit-Package([string]$Id, [string[]]$Stack) {
-        if ($colors[$Id] -eq 'gray') {
-            throw "work-package prerequisite cycle detected: $($Stack + $Id -join ' -> ')"
-        }
-        if ($colors[$Id] -eq 'black') { return }
-        $colors[$Id] = 'gray'
-        foreach ($prerequisite in @($byId[$Id].prerequisites)) {
-            Visit-Package ([string]$prerequisite) ($Stack + $Id)
-        }
-        $colors[$Id] = 'black'
-    }
-    foreach ($id in $actualIds) { Visit-Package $id @() }
-
-    $crossCutting = @($packages | Where-Object {
-        $_.PSObject.Properties.Name -contains 'tags' -and @($_.tags) -contains '长期横切'
-    } | ForEach-Object { [string]$_.id })
-    $taskGroups = @($Data.deliveryTasks.PSObject.Properties.Name)
-    $activeTaskPackages = @()
-    $activeTaskPorts = @()
-    $activeTaskRoots = @()
-    foreach ($id in $taskGroups) {
-        Assert-Condition $byId.ContainsKey($id) "delivery tasks reference missing work package $id"
-        Assert-Condition ($crossCutting -notcontains $id) "$id is cross-cutting and must not use a bounded delivery task group"
-        $tasks = @($Data.deliveryTasks.$id)
-        Assert-Condition ($tasks.Count -ge 1 -and $tasks.Count -le 4) "$id must have 1 to 4 delivery tasks; more requires human scope decision"
-        for ($index = 0; $index -lt $tasks.Count; $index++) {
-            $task = $tasks[$index]
-            Assert-Condition ([string]$task.id -eq "task-$($index + 1)") "$id delivery task ids must be sequential task-1 through task-4"
-            Assert-Condition ($AllowedStates -contains [string]$task.status) "$id/$($task.id) has an invalid state"
-            Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$task.title)) "$id/$($task.id) is missing a title"
-            if ([string]$task.status -eq 'in_progress') {
-                $activeTaskPackages += $id
-                foreach ($field in @('prompt', 'owner', 'branch', 'worktree', 'slot', 'ports', 'dataRoot', 'exit', 'lastCheckpointAt', 'nextCheckpoint')) {
-                    Assert-Condition ($task.PSObject.Properties.Name -contains $field -and
-                        -not [string]::IsNullOrWhiteSpace([string]$task.$field)) `
-                        "$id/$($task.id) is in progress without a complete task card: $field"
-                }
-                $lastCheckpoint = Get-IsoTime $task.lastCheckpointAt "$id/$($task.id).lastCheckpointAt"
-                $nextCheckpoint = Get-IsoTime $task.nextCheckpoint "$id/$($task.id).nextCheckpoint"
-                Assert-Condition ($nextCheckpoint -gt $lastCheckpoint -and
-                    $nextCheckpoint -le $lastCheckpoint.AddMinutes(15)) `
-                    "$id/$($task.id) next checkpoint must be within 15 minutes"
-                $slotPorts = @{ '1' = '20618/25618'; '2' = '30618/35618'; '3' = '40618/45618' }
-                Assert-Condition ($slotPorts.ContainsKey([string]$task.slot) -and
-                    [string]$task.ports -eq $slotPorts[[string]$task.slot]) `
-                    "$id/$($task.id) slot and child port group do not match"
-                $activeTaskPorts += [string]$task.ports
-                $activeTaskRoots += [string]$task.dataRoot
-            }
-            if ([string]$task.status -in @('ready_for_acceptance', 'complete')) {
-                foreach ($field in @('commit', 'targetedTests', 'runtimeEvidence', 'exit')) {
-                    Assert-Condition ($task.PSObject.Properties.Name -contains $field -and
-                        -not [string]::IsNullOrWhiteSpace([string]$task.$field)) `
-                        "$id/$($task.id) is ready without delivery evidence: $field"
-                }
-                Assert-Condition ($task.PSObject.Properties.Name -contains 'notRun') `
-                    "$id/$($task.id) must explicitly list NOT_RUN cases"
-                Assert-Condition ($task.PSObject.Properties.Name -contains 'worktreeClean' -and $task.worktreeClean -eq $true) `
-                    "$id/$($task.id) delivery worktree is not recorded clean"
-            }
-            if ([string]$task.status -eq 'complete') {
-                foreach ($field in @('mainCommit', 'reviewEvidence', 'mainSmoke', 'acceptedAt')) {
-                    Assert-Condition ($task.PSObject.Properties.Name -contains $field -and
-                        -not [string]::IsNullOrWhiteSpace([string]$task.$field)) `
-                        "$id/$($task.id) cannot complete before mainline review and acceptance: $field"
-                }
-                $null = Get-IsoTime $task.acceptedAt "$id/$($task.id).acceptedAt"
-                if ($task.PSObject.Properties.Name -contains 'requiresHumanAcceptance' -and $task.requiresHumanAcceptance -eq $true) {
-                    Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$task.humanAcceptance)) `
-                        "$id/$($task.id) requires explicit human acceptance"
-                }
-            }
-        }
-    }
-    foreach ($package in $packages | Where-Object { $_.state -eq 'in_progress' -and $crossCutting -notcontains $_.id }) {
-        Assert-Condition ($taskGroups -contains [string]$package.id) "$($package.id) needs a bounded delivery task group"
-    }
-    Assert-Condition ($activeTaskPackages.Count -le 3) "active development tasks consume the reserved recovery/acceptance slot"
-    Assert-Condition (@($activeTaskPorts | Sort-Object -Unique).Count -eq $activeTaskPorts.Count) `
-        "active delivery tasks cannot share a port group"
-    Assert-Condition (@($activeTaskRoots | Sort-Object -Unique).Count -eq $activeTaskRoots.Count) `
-        "active delivery tasks cannot share a data root"
-    $activeTaskPackages = @($activeTaskPackages | Sort-Object -Unique)
-    Assert-Condition ($activeTaskPackages.Count -le 3) "active non-cross-cutting development exceeds the default limit of three"
-    $recordedActive = @($Data.executionAudit.activeNonCrossCuttingPackages | ForEach-Object { [string]$_ })
-    Assert-Condition ($activeTaskPackages.Count -eq $recordedActive.Count) `
-        "execution audit active package count does not match delivery tasks"
-    if ($activeTaskPackages.Count -gt 0) {
-        Assert-Condition (@(Compare-Object ($activeTaskPackages | Sort-Object) ($recordedActive | Sort-Object)).Count -eq 0) `
-            "execution audit active packages do not match delivery tasks"
-    }
-    foreach ($package in $packages | Where-Object state -eq 'in_progress') {
-        $audit = $Data.executionAudit.packages.([string]$package.id)
-        Assert-Condition ($null -ne $audit) "$($package.id) has no current execution audit"
-        foreach ($field in @('assignment', 'owner', 'worktree', 'branch', 'lastProgressAt', 'lastEvidence', 'blocker', 'nextAction')) {
-            Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$audit.$field)) `
-                "$($package.id) execution audit is missing $field"
-        }
-        $null = Get-IsoTime $audit.lastProgressAt "$($package.id).lastProgressAt"
-    }
-
-    $demo = $Data.customerDemo
-    Assert-Condition ($null -ne $demo -and [string]$demo.id -eq 'DEMO-V0') `
-        'customer demo ledger DEMO-V0 is required'
-    Assert-Condition ([string]$demo.roadmap -eq 'private-docs/roadmap/36-super-harness-customer-demo-v0.md') `
-        'customer demo roadmap must be the frozen v0 delivery plan'
-    $null = Get-IsoTime $demo.updatedAt 'customerDemo.updatedAt'
-    Assert-Condition ([string]$demo.decision -in @('NO_GO', 'GO')) 'customer demo decision must be NO_GO or GO'
-    $stages = @($demo.stages)
-    Assert-Condition ($stages.Count -eq 5) 'customer demo must contain exactly M0 through M4'
-    for ($index = 0; $index -lt $stages.Count; $index++) {
-        $stage = $stages[$index]
-        $id = "M$index"
-        Assert-Condition ([string]$stage.id -eq $id) "customer demo stages must be ordered M0 through M4"
-        Assert-Condition ($AllowedStates -contains [string]$stage.workStatus) "$id has an invalid workStatus"
-        Assert-Condition ([string]$stage.result -in @('PASS', 'FAIL', 'NOT_RUN', 'BLOCKED_EXTERNAL', 'UPSTREAM_UNSUPPORTED')) `
-            "$id has an invalid gate result"
-        foreach ($field in @('title', 'owner', 'exit', 'evidence', 'blocker', 'nextAction')) {
-            Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$stage.$field)) `
-                "$id is missing customer demo field $field"
-        }
-        $mapped = @($stage.workPackages | ForEach-Object { [string]$_ })
-        Assert-Condition ($mapped.Count -gt 0 -and @($mapped | Sort-Object -Unique).Count -eq $mapped.Count) `
-            "$id needs unique mapped work packages"
-        foreach ($packageId in $mapped) {
-            Assert-Condition $byId.ContainsKey($packageId) "$id maps to missing work package $packageId"
-        }
-        $dependencies = @($stage.dependsOn)
-        if ($index -eq 0) {
-            Assert-Condition ($dependencies.Count -eq 0) 'M0 must not have a demo-stage dependency'
-        }
-        else {
-            Assert-Condition ($dependencies.Count -eq 1 -and [string]$dependencies[0] -eq "M$($index - 1)") `
-                "$id must depend only on its immediately preceding demo stage"
-        }
-        if ([string]$stage.result -eq 'PASS') {
-            Assert-Condition ([string]$stage.workStatus -eq 'complete') "$id PASS requires complete workStatus"
-            if ($index -gt 0) {
-                Assert-Condition ([string]$stages[$index - 1].result -eq 'PASS') `
-                    "$id cannot PASS before M$($index - 1) PASS"
-            }
-            foreach ($field in @('proof', 'mainCommit', 'acceptedAt')) {
-                Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$stage.$field)) `
-                    "$id PASS requires independent gate evidence: $field"
-            }
-            Assert-Condition ([string]$stage.mainCommit -match '^[0-9a-f]{7,40}$') "$id mainCommit must be a Git SHA"
-            $null = Get-IsoTime $stage.acceptedAt "$id.acceptedAt"
-            if ($id -eq 'M4') {
-                Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$demo.humanAcceptance)) `
-                    'M4 PASS requires explicit human acceptance'
-            }
-        }
-        if ([string]$stage.workStatus -eq 'complete') {
-            Assert-Condition ([string]$stage.result -eq 'PASS') "$id complete workStatus requires PASS gate result"
-        }
-    }
-    $stageIds = @($stages | ForEach-Object { [string]$_.id })
-    foreach ($taskGroup in $taskGroups) {
-        foreach ($task in @($Data.deliveryTasks.$taskGroup)) {
-            if ($task.PSObject.Properties.Name -contains 'demoStages') {
-                $mappedStages = @($task.demoStages | ForEach-Object { [string]$_ })
-                Assert-Condition ($mappedStages.Count -gt 0 -and @($mappedStages | Sort-Object -Unique).Count -eq $mappedStages.Count) `
-                    "$taskGroup/$($task.id) needs unique demo-stage mappings"
-                foreach ($mappedStage in $mappedStages) {
-                    Assert-Condition ($stageIds -contains $mappedStage) `
-                        "$taskGroup/$($task.id) maps to missing demo stage $mappedStage"
-                }
-            }
-        }
-    }
-    foreach ($item in @($Data.recentWorkPlan.items)) {
-        if ($item.PSObject.Properties.Name -contains 'demoStage') {
-            Assert-Condition ($stageIds -contains [string]$item.demoStage) `
-                "recent work $($item.id) maps to missing demo stage $($item.demoStage)"
-        }
-    }
-    if ([string]$demo.decision -eq 'GO') {
-        Assert-Condition (@($stages | Where-Object result -ne 'PASS').Count -eq 0) `
-            'customer demo GO requires all M0-M4 gates PASS'
-        Assert-Condition ([string]$demo.mainSha -match '^[0-9a-f]{7,40}$') `
-            'customer demo GO requires a mainline Git SHA'
-        Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$demo.humanAcceptance)) `
-            'customer demo GO requires explicit human acceptance'
-        Assert-Condition ([string]$stages[4].mainCommit -eq [string]$demo.mainSha) `
-            'customer demo GO must match M4 mainline SHA'
-        foreach ($stage in $stages) {
-            Assert-Condition ([string]$stage.mainCommit -eq [string]$demo.mainSha) `
-                "customer demo GO requires $($stage.id) to be revalidated on the final mainline SHA"
-        }
-    }
-
-    foreach ($milestone in @($Data.milestones)) {
-        $null = Get-IsoTime $milestone.at "milestone.at"
-    }
-
-    return [ordered]@{
-        status = "PASS"
-        schemaVersion = 5
-        packageCount = 25
-        stateCounts = [ordered]@{
-            pending = @($packages | Where-Object state -eq 'pending').Count
-            in_progress = @($packages | Where-Object state -eq 'in_progress').Count
-            ready_for_acceptance = @($packages | Where-Object state -eq 'ready_for_acceptance').Count
-            blocked = @($packages | Where-Object state -eq 'blocked').Count
-            complete = @($packages | Where-Object state -eq 'complete').Count
-        }
-        customerDemo = [ordered]@{
-            decision = [string]$demo.decision
-            passedStages = @($stages | Where-Object result -eq 'PASS').Count
-            totalStages = $stages.Count
-        }
-    }
-}
-
-function Test-ConsumerPage {
-    param([string]$Path, [bool]$RequireMilestoneOrdering)
-    $source = Get-Content -LiteralPath $Path -Raw
-    $name = Split-Path -Leaf $Path
-    Assert-Condition ([regex]::Matches($source,
-        '<script\s+src=["''](?:\./)?work-packages\.js["'']\s*>').Count -eq 1) `
-        "$name must load work-packages.js exactly once"
-    Assert-Condition ([regex]::Matches($source, 'window\.WORK_PACKAGES_DATA').Count -eq 1) `
-        "$name must consume window.WORK_PACKAGES_DATA exactly once"
-    Assert-Condition (-not [regex]::IsMatch($source, 'window\.WORK_PACKAGES_DATA\s*=')) `
-        "$name must not define WORK_PACKAGES_DATA"
-    Assert-Condition (-not [regex]::IsMatch($source, '\bworkPackages\s*:')) `
-        "$name must not embed a workPackages array"
-    Assert-Condition (-not [regex]::IsMatch($source,
-        '(?i)(?:===|==|case\s+)[\s(]*["'']W\d{2}["'']|["'']W\d{2}["'']\s*:')) `
-        "$name must not contain work-package-id-specific rendering logic"
-    if ($RequireMilestoneOrdering) {
-        Assert-Condition ([regex]::IsMatch($source,
-            'dashboardData\.milestones\.slice\(\)\.sort\(\s*\(left,\s*right\)\s*=>\s*Date\.parse\(right\.at\)\s*-\s*Date\.parse\(left\.at\)\s*\)')) `
-            "$name must sort a copied milestones array by at descending"
-        Assert-Condition (-not [regex]::IsMatch($source, 'dashboardData\.milestones\.sort\(')) `
-            "$name must not sort the source milestones array in place"
-    }
-    return [ordered]@{ page = $name; status = "PASS"; sha256 = Get-Sha256 $Path }
-}
-
-function Test-DashboardConsumers {
-    param([string]$Root)
-    $results = @()
-    $dashboard = Join-Path $Root 'dashboard.html'
-    Assert-Condition (Test-Path -LiteralPath $dashboard -PathType Leaf) "dashboard.html is missing"
-    $results += Test-ConsumerPage $dashboard $true
-    $dag = Join-Path $Root 'work-package-dag.html'
-    if (Test-Path -LiteralPath $dag -PathType Leaf) {
-        $results += Test-ConsumerPage $dag $false
-    }
-    return [ordered]@{ status = "PASS"; pages = $results }
 }
 
 function Get-SurefireEvidence {
@@ -600,10 +248,16 @@ $output = if ([IO.Path]::IsPathRooted($OutputDirectory)) {
 Assert-Condition ($output.StartsWith($root + [IO.Path]::DirectorySeparatorChar,
     [StringComparison]::OrdinalIgnoreCase)) "OutputDirectory must stay inside RepositoryRoot"
 
-$dataPath = Join-Path $root 'work-packages.js'
-$data = Get-WorkPackageData $dataPath
-$governance = Test-WorkPackages $data
-$dashboard = Test-DashboardConsumers $root
+$null = New-Item -ItemType Directory -Force -Path $output
+$snapshotPath = if (-not [string]::IsNullOrWhiteSpace($ShpmSnapshot)) {
+    (Resolve-Path -LiteralPath $ShpmSnapshot).Path
+} else {
+    Export-ShpmSnapshot -Database $ShpmDatabase -OutputPath (Join-Path $output 'shpm-snapshot.json')
+}
+$snapshot = Read-ShpmSnapshot $snapshotPath
+$governance = Test-ShpmGovernance -Snapshot $snapshot -RepositoryRoot $root
+[xml]$pom = Get-Content -LiteralPath (Join-Path $root 'pom.xml') -Raw
+$haifaSdkVersion = [string]$pom.project.properties.'haifa.version'
 $surefire = Get-SurefireEvidence $root
 $deerflow = Get-DeerFlowEvidence $root
 $customerDemo = Get-CustomerDemoEvidence $root
@@ -628,17 +282,16 @@ $manifest = [ordered]@{
         w24Scope = "QA-only aggregation; no product domain object or business runtime is introduced"
     }
     governance = $governance
-    dashboard = $dashboard
     mavenSurefire = $surefire
     deerflow = $deerflow
     customerDemoEvidence = $customerDemo
     inputs = [ordered]@{
-        workPackagesSha256 = Get-Sha256 $dataPath
-        haifaSdkVersion = [string]$data.baseline.haifaSdkVersion
+        shpmSnapshotSha256 = Get-Sha256 $snapshotPath
+        shpmSnapshotExportedAt = [string]$snapshot.exported_at
+        haifaSdkVersion = $haifaSdkVersion
     }
 }
 
-$null = New-Item -ItemType Directory -Force -Path $output
 $manifestPath = Join-Path $output 'evidence-manifest.json'
 Write-DeterministicText $manifestPath ($manifest | ConvertTo-Json -Depth 20)
 $manifestHash = Get-Sha256 $manifestPath
@@ -661,8 +314,7 @@ $reportLines = @(
     '# W24 deterministic evidence report',
     '',
     "- Overall: **$overall**",
-    "- Governance: **$($governance.status)** ($($governance.packageCount) unique packages, schema $($governance.schemaVersion))",
-    "- Dashboard consumers: **$($dashboard.status)** ($(@($dashboard.pages).Count) pages)",
+    "- SHPM governance: **$($governance.status)** ($($governance.packageCount) work packages, $($governance.taskCount) tasks, $($governance.runningAssignments) running assignments; prompt paths $($governance.promptPathCheck))",
     "- Maven Surefire: **$($surefire.status)** ($($surefire.totals.tests) tests, $($surefire.totals.failures) failures, $($surefire.totals.errors) errors, $($surefire.totals.skipped) skipped)",
     "- DeerFlow static provenance/contracts: **$($deerflow.validationStatus)**",
     "- DeerFlow runtime parity: **$($deerflow.runtimeStatus)**"

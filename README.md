@@ -4,15 +4,17 @@
 
 ## 客户演示与项目看板
 
-双击根目录 `dashboard.html` 可离线查看项目看板，默认进入“客户演示交付”Tab，按 M0–M4 显示当前演示阶段的执行状态、独立门禁结果、负责人、阻断和下一步；点击阶段上的 W 编号可跳到“工作包总览”。“最近工作安排”显示当前派工，“工作包总览”保留 W00–W24 的完整长期范围。三个视图只读根目录 `work-packages.js`，刷新页面获取最新记录；看板显示不等于运行验收。
+项目的任务状态、派工、checkpoint、验收证据和客户演示门禁由 SHPM（Super Harness Project Manager）维护；人工可在 http://127.0.0.1:8787/ 只读查看。只有主控智能体通过 `shpm` 命令写入，子智能体不写 SHPM。提示词、roadmap、交付报告和原始证据的正文仍在 `private-docs`、`contracts` 与各 worktree 的 `local-tmp` 等原位置，SHPM 只保存路径。
 
-已按冻结 lockfile 准备好 `frontend/node_modules` 和本地 Playwright 浏览器时，可在仓库根目录运行看板的本地 `file://` 切换回归：
+原 `work-packages.js`、`docs/todo.md`、`dashboard.html` 与 `work-package-dag.html` 已删除，进度只看 SHPM。W24 证据门禁与主控派工审计直接读取 SHPM 快照（数据库缺失时 fail closed，不会新建空库）：
 
 ```powershell
-frontend/node_modules/.bin/playwright.cmd test -c tests/dashboard/playwright.config.cjs
+$env:SHPM_DB='C:\Users\wangr\.shpm\data\project.db'
+pwsh -NoProfile -File scripts/audit-work-package-delivery.ps1
+pwsh -NoProfile -File tests/evidence/verify-evidence-report.ps1
 ```
 
-本轮演示目标与 Go/No-Go 见[客户演示 v0 路线图](private-docs/roadmap/36-super-harness-customer-demo-v0.md)：真实模型、生产 Tool、Approval、Artifact、Reload/Reconnect、Steer 在冻结 DeerFlow UI 上连续两轮。演示阶段通过不会自动关闭工作包，也不代表 PRD D01–D05 完整 Customer Demo Gate 或 Full Parity。当前整链尚未验收，不能把已通过的文本聊天或受控 Provider 测试当成客户演示完成。
+客户演示按轮次推进：客户演示 v0（亦称 V1，[路线图](private-docs/roadmap/36-super-harness-customer-demo-v0.md)）已在 `main@c112012` 结算 `GO`；客户演示 V2 的范围与阶段退出标准见 [show-roadmap-2](private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-2/README.md)，当前状态以 `shpm sprint gate DEMO-V2 --json` 为准。演示阶段通过不会自动关闭工作包，也不代表 PRD D01–D05 完整 Customer Demo Gate 或 Full Parity。
 
 ## W01 基础工程
 
@@ -116,7 +118,7 @@ pwsh -NoProfile -File tests/customer-demo/verify-customer-demo-doctor.ps1
 
 客户演示两轮 Run 的原始证据由 `contracts/customer-demo/customer-demo-v0-evidence-bundle.json` 聚合，字段与字段约束见 `contracts/customer-demo/schemas/customer-demo-v0-run-manifest.schema.json` 和 `contracts/customer-demo/schemas/customer-demo-v0-evidence-bundle.schema.json`。它绑定 M0 Oracle 与其 SHA-256，记录主线/前端/SDK/config/input 哈希、模型/Provider（不含 secret）、预算、两轮的 Thread/Run/ToolCall/Interaction/Artifact ID、审批前后状态、Steer、网络目标、文件与下载 SHA、Usage、时间线、Playwright/日志路径、进程/端口清理，以及逐阶段原始证据引用和人工验收。每一轮 PASS 还必须提供仓库内真实下载字节文件（`downloadEvidence` 的 repo path + SHA，校验实际文件存在且实际 SHA 与字节长度分别等于声明的 `downloadSha256`/`downloadByteCount`）和 Artifact provenance 原件引用（`artifactProvenanceEvidence` 的 repo path + SHA）。为保证生产 `write_file` 生成的文件与 Artifact 下载字节一致，该轮 `fileSha256` 必须同时等于 `downloadSha256` 与该下载文件的实际 SHA；provenance 原件 JSON 除 `artifactId`/`runId`/`toolCallId` 外，还必须绑定 Oracle `story.tool`（`write_file`）、Oracle `story.artifact`（`sdk-owned-real-artifact`）、`downloadSha256` 与 `downloadByteCount`，校验器用传入的 OraclePlan 对照这些字段，只填字符串不再算 PASS。
 
-以下命令只做只读校验与聚合，输出面向主控的机器 JSON 与简明汇总，不会启动服务、不会调用任何真实或付费模型，也不会写入 `work-packages.js` 或自动宣布阶段完成：
+以下命令只做只读校验与聚合，输出面向主控的机器 JSON 与简明汇总，不会启动服务、不会调用任何真实或付费模型，也不会写入 SHPM 或自动宣布阶段完成：
 
 ```powershell
 pwsh -NoProfile -File scripts/verify-customer-demo-evidence.ps1 `
