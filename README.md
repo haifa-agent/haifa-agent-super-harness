@@ -76,6 +76,15 @@ Gateway 通过 `GET /api/suggestions/config` 暴露冻结前端的后续建议�
 
 线程标题由 Gateway 在首个完成的 user+assistant 交换后按冻结 `TitleMiddleware` 的本地回退规则生成（首轮被取消时允许仅凭首个 user 消息生成），持久化到线程 metadata 与 `values.title`；显式重命名在 Run 运行期间返回 409，且不会被后续自动标题覆盖。
 
+同一 Conversation 可在前一个 Run 终止后的下一 Turn 选择另一模型；当前 Run 的模型保持冻结，历史中的 Tool 与待审批 Interaction 仍归原 Run。可在独立槽位 1 用冻结 UI 和两个本地受控模型复验（不调用真实模型）：
+
+```powershell
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 1 -GatewayPort 20618 -FrontendPort 25618 -V2ModelSwitch -DataDirectory local-tmp/slot-1-w03-v2-model-switch/data/ui-round-1
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 1 -GatewayPort 20618 -FrontendPort 25618 -V2ModelSwitch -DataDirectory local-tmp/slot-1-w03-v2-model-switch/data/ui-round-2 -SkipBuild
+```
+
+第二轮的 `-SkipBuild` 只能用于首轮已按同一 Gateway 代理目标构建的前端；每轮使用独立数据目录，trace、截图及前后端/Provider 日志写入 `local-tmp/slot-1-w03-v2-model-switch/evidence/ui/run-<时间戳>/`。该受控 UI 回归不代替 W18 双后端差分、真实模型链或 V2 阶段门禁。
+
 ## 启动主工作树供人工验收
 
 主工作树固定使用本地回环端口：Gateway `18018`、冻结前端 `33018`。重启时应保持数据目录不变；默认使用被 Git 忽略的 `local-tmp/main-service-data`，其中包含持久化 SQLite Runtime 和日志。重启时不要删除该目录或 Windows 凭据管理器中的 continuation key。
