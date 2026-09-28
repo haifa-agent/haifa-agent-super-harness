@@ -347,6 +347,10 @@ export interface Translations {
         }
     )[];
     pleaseWaitStreaming: string;
+    steerAccepted: string;
+    steerInProgress: string;
+    steerPlainTextOnly: string;
+    steerUnavailable: string;
     stopStreamingUnavailable: string;
     startTurnUnavailable: string;
   };

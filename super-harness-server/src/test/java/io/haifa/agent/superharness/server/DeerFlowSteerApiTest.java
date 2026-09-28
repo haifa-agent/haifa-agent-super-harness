@@ -624,6 +624,8 @@ public class DeerFlowSteerApiTest {
         HttpResponse<java.io.InputStream> steerStreamResponse = client.send(
                 steerRequest, HttpResponse.BodyHandlers.ofInputStream());
         assertThat(steerStreamResponse.statusCode()).isEqualTo(200);
+        assertThat(steerStreamResponse.headers().firstValue("content-location"))
+                .contains(runLocation);
 
         // 4. Release Model Call 1 -> triggers completion.deferred
         firstModelRelease.countDown();
@@ -1124,6 +1126,13 @@ public class DeerFlowSteerApiTest {
         JsonNode state = getJson("/api/threads/" + threadId + "/state");
         JsonNode messages = state.path("values").path("messages");
         assertThat(messages.size()).isGreaterThanOrEqualTo(3);
+        assertThat(countToolRequests(messages, "search_weather")).isEqualTo(1);
+        assertThat(countToolResults(messages, "search_weather")).isEqualTo(1);
+
+        JsonNode historyMessages = postJson("/api/threads/" + threadId + "/history", "{\"limit\":10}")
+                .get(0).path("values").path("messages");
+        assertThat(countToolRequests(historyMessages, "search_weather")).isEqualTo(1);
+        assertThat(countToolResults(historyMessages, "search_weather")).isEqualTo(1);
     }
 
     @Test
@@ -1352,5 +1361,26 @@ public class DeerFlowSteerApiTest {
                 HttpResponse.BodyHandlers.ofString());
         assertThat(response.statusCode()).isEqualTo(200);
         return json.readTree(response.body());
+    }
+
+    private static int countToolRequests(JsonNode messages, String toolName) {
+        int count = 0;
+        for (JsonNode message : messages) {
+            for (JsonNode toolCall : message.path("tool_calls")) {
+                if (toolName.equals(toolCall.path("name").asText())) count++;
+            }
+        }
+        return count;
+    }
+
+    private static int countToolResults(JsonNode messages, String toolName) {
+        int count = 0;
+        for (JsonNode message : messages) {
+            if ("tool".equals(message.path("type").asText())
+                    && toolName.equals(message.path("name").asText())) {
+                count++;
+            }
+        }
+        return count;
     }
 }

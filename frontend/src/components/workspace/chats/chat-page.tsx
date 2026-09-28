@@ -178,6 +178,7 @@ export default function ChatPage() {
     thread,
     pendingUsageMessages,
     sendMessage,
+    sendSteer,
     regenerateMessage,
     editAndRegenerateMessage,
     isUploading,
@@ -635,6 +636,7 @@ export default function ChatPage() {
                       onGoalChange={setLocalGoal}
                       onPrepareThread={ensureProjectThread}
                       onSubmit={handleSubmit}
+                      onSteer={(message) => sendSteer(threadId, message)}
                       onStop={handleStop}
                       canStopStreaming={canStopStreaming}
                       canCreateRuns={canCreateRuns}

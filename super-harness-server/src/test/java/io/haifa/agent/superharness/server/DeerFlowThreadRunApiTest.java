@@ -693,6 +693,7 @@ class DeerFlowThreadRunApiTest {
         HttpResponse<InputStream> observer =
                 client.send(joinRequest(location, "-1"), HttpResponse.BodyHandlers.ofInputStream());
         assertThat(observer.statusCode()).isEqualTo(200);
+        assertThat(observer.headers().firstValue("content-location")).contains(location);
         observer.body().close();
         Thread.sleep(75);
         assertThat(getJson(location).path("status").asText()).isEqualTo("running");

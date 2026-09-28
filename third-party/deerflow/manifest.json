@@ -31,11 +31,30 @@
           "frontend/src/app/api/memory/[...path]/route.ts",
           "frontend/tests/unit/app/memory-route.test.ts"
         ]
+      },
+      {
+        "id": "0002-active-steer-composer",
+        "file": "third-party/deerflow/patches/0002-active-steer-composer.patch",
+        "sha256": "9da9bfbc7251c6b44a7c370b9fc9fe3cc385045f581f1fbe1c4c802e1d6aa778",
+        "reason": "Allow the frozen composer to submit one explicit, plain-text X-Haifa-Run-Input: steer request to the existing active Run without introducing a second stream authority.",
+        "affectedFiles": [
+          "frontend/src/app/workspace/agents/[agent_name]/chats/[thread_id]/page.tsx",
+          "frontend/src/components/workspace/chats/chat-page.tsx",
+          "frontend/src/components/workspace/input-box.tsx",
+          "frontend/src/core/i18n/locales/en-US.ts",
+          "frontend/src/core/i18n/locales/types.ts",
+          "frontend/src/core/i18n/locales/zh-CN.ts",
+          "frontend/src/core/threads/active-steer.ts",
+          "frontend/src/core/threads/hooks.ts",
+          "frontend/tests/unit/components/workspace/active-steer-call-sites.test.ts",
+          "frontend/tests/unit/components/workspace/input-box-active-steer.dom.test.tsx",
+          "frontend/tests/unit/core/threads/active-steer.test.ts"
+        ]
       }
     ],
-    "fileCount": 981,
-    "totalBytes": 21172960,
-    "contentInventorySha256": "1fc6b2e42ac36b4669f6b9a374241b09428e2c0406796392fc3adb4519a5f8a3"
+    "fileCount": 985,
+    "totalBytes": 21191902,
+    "contentInventorySha256": "280df8c3239bb6bd5c5d21f32f4d26ac0291827da9264e2a8bfc879c05f282db"
   },
   "build": {
     "node": ">=22",

@@ -164,6 +164,7 @@ export default function AgentChatPage() {
     thread,
     pendingUsageMessages,
     sendMessage,
+    sendSteer,
     regenerateMessage,
     editAndRegenerateMessage,
     isUploading,
@@ -560,6 +561,7 @@ export default function AgentChatPage() {
                     }}
                     onGoalChange={setLocalGoal}
                     onSubmit={handleSubmit}
+                    onSteer={(message) => sendSteer(threadId, message)}
                     onStop={handleStop}
                     canStopStreaming={canStopStreaming}
                     canCreateRuns={canCreateRuns}

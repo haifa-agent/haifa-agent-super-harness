@@ -415,6 +415,11 @@ export const zhCN: Translations = {
       },
     ],
     pleaseWaitStreaming: "请等待当前响应完成。",
+    steerAccepted: "已将你的指令加入当前响应。",
+    steerInProgress: "上一条指令仍在提交中。",
+    steerPlainTextOnly:
+      "当前响应只接受纯文本指令。请移除附件、引用或技能后重试。",
+    steerUnavailable: "当前响应暂时无法接收指令。",
     stopStreamingUnavailable: "你的角色无权停止正在运行的回合。",
     startTurnUnavailable: "你的角色无权开启新的回合。",
   },

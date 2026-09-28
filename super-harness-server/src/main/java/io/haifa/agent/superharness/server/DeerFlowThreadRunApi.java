@@ -1076,11 +1076,12 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         exchange.getResponseHeaders().set("Cache-Control", "no-cache");
         exchange.getResponseHeaders().set("Connection", "keep-alive");
         exchange.getResponseHeaders().set("X-Accel-Buffering", "no");
-        if (creator) {
-            exchange.getResponseHeaders().set(
-                    "Content-Location",
-                    "/api/threads/" + run.threadId + "/runs/" + run.runId.value());
-        }
+        // Every stream response is already bound to this authoritative RunRecord. Expose the
+        // same canonical identity for creator, Steer observer and reconnect/joiner responses;
+        // never derive a Run id from request input.
+        exchange.getResponseHeaders().set(
+                "Content-Location",
+                "/api/threads/" + run.threadId + "/runs/" + run.runId.value());
         if (creator) awaitRunStart(run);
         exchange.sendResponseHeaders(200, 0);
 
@@ -1948,11 +1949,14 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 .sorted((left, right) -> Long.compare(left.humanSequence, right.humanSequence))
                 .forEach(run -> cached.put(run.runId.value(), run));
         Set<String> durableHumanRuns = durableHumanRunIds(turns);
+        Set<String> supportProjectedRuns = new HashSet<>();
         List<Map<String, Object>> messages = new ArrayList<>();
         for (ConversationTurn turn : turns) {
             int ordinal = ordinals.getOrDefault(turn.sequence(), 0);
             messages.add(messageForTurn(turn, ordinal));
-            if (turn.role() == io.haifa.agent.core.message.MessageRole.USER && turn.runId().isPresent()) {
+            if (turn.role() == io.haifa.agent.core.message.MessageRole.USER
+                    && turn.runId().isPresent()
+                    && supportProjectedRuns.add(turn.runId().orElseThrow().value())) {
                 RunRecord run = cached.get(turn.runId().orElseThrow().value());
                 addRunSupportMessages(thread, turn.runId().orElseThrow(), run, messages);
             }
@@ -1961,7 +1965,9 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             for (RunRecord run : cached.values()) {
                 if (!isInFlightWithoutDurableHuman(run, durableHumanRuns)) continue;
                 messages.add(pendingHumanMessage(run));
-                addRunSupportMessages(thread, run.runId, run, messages);
+                if (supportProjectedRuns.add(run.runId.value())) {
+                    addRunSupportMessages(thread, run.runId, run, messages);
+                }
             }
         }
         return messages;

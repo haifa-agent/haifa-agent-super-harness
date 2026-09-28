@@ -443,6 +443,12 @@ export const enUS: Translations = {
       },
     ],
     pleaseWaitStreaming: "Please wait for the current response to finish.",
+    steerAccepted: "Your instruction was added to the active response.",
+    steerInProgress: "The previous instruction is still being submitted.",
+    steerPlainTextOnly:
+      "Active responses only accept plain-text instructions. Remove attachments, references, or skills and try again.",
+    steerUnavailable:
+      "The active response cannot accept instructions right now.",
     stopStreamingUnavailable:
       "Stopping the running turn is not permitted for your role.",
     startTurnUnavailable: "Starting a new turn is not permitted for your role.",

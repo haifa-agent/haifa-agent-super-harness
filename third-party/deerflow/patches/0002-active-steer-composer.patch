@@ -1,0 +1,663 @@
+diff --git a/frontend/src/app/workspace/agents/[agent_name]/chats/[thread_id]/page.tsx b/frontend/src/app/workspace/agents/[agent_name]/chats/[thread_id]/page.tsx
+index 3a1d5f7..c386425 100644
+--- a/frontend/src/app/workspace/agents/[agent_name]/chats/[thread_id]/page.tsx
++++ b/frontend/src/app/workspace/agents/[agent_name]/chats/[thread_id]/page.tsx
+@@ -166,0 +167 @@ export default function AgentChatPage() {
++    sendSteer,
+@@ -562,0 +564 @@ export default function AgentChatPage() {
++                    onSteer={(message) => sendSteer(threadId, message)}
+diff --git a/frontend/src/components/workspace/chats/chat-page.tsx b/frontend/src/components/workspace/chats/chat-page.tsx
+index e054962..5269cd4 100644
+--- a/frontend/src/components/workspace/chats/chat-page.tsx
++++ b/frontend/src/components/workspace/chats/chat-page.tsx
+@@ -180,0 +181 @@ export default function ChatPage() {
++    sendSteer,
+@@ -637,0 +639 @@ export default function ChatPage() {
++                      onSteer={(message) => sendSteer(threadId, message)}
+diff --git a/frontend/src/components/workspace/input-box.tsx b/frontend/src/components/workspace/input-box.tsx
+index e1b181b..0b85c89 100644
+--- a/frontend/src/components/workspace/input-box.tsx
++++ b/frontend/src/components/workspace/input-box.tsx
+@@ -311,0 +312 @@ export function InputBox({
++  onSteer,
+@@ -380,0 +382 @@ export function InputBox({
++  onSteer?: (message: PromptInputMessage) => void | Promise<unknown>;
+@@ -404,0 +407 @@ export function InputBox({
++  const steerInFlightRef = useRef(false);
+@@ -1282,2 +1285,48 @@ export function InputBox({
+-        toast.info(t.inputBox.pleaseWaitStreaming);
+-        return Promise.reject(new Error("streaming"));
++        abortVoiceInput();
++        if (!canCreateRuns) {
++          toast.info(t.inputBox.startTurnUnavailable);
++          return Promise.reject(new Error("runs-create-denied"));
++        }
++        const hasNonTextInput =
++          message.files.length > 0 ||
++          projectAttachments.length > 0 ||
++          conversationReferences.length > 0 ||
++          (sidecar?.conversationQuotes.length ?? 0) > 0 ||
++          selectedSlashSkill !== null;
++        if (!message.text.trim() || hasNonTextInput) {
++          toast.error(t.inputBox.steerPlainTextOnly);
++          return Promise.reject(new Error("steer-plain-text-only"));
++        }
++        if (!onSteer) {
++          toast.error(t.inputBox.steerUnavailable);
++          return Promise.reject(new Error("steer-unavailable"));
++        }
++        if (steerInFlightRef.current) {
++          toast.info(t.inputBox.steerInProgress);
++          return Promise.reject(new Error("steer-in-progress"));
++        }
++        steerInFlightRef.current = true;
++        try {
++          await onSteer({ text: message.text.trim(), files: [] });
++          promptHistoryIndexRef.current = null;
++          promptHistoryDraftRef.current = "";
++          setInputPolishUndo(null);
++          setFollowups([]);
++          setFollowupsHidden(false);
++          setFollowupsLoading(false);
++          pendingDraftSubmissionKeyRef.current = null;
++          latestDraftRef.current = null;
++          invalidateDraftSaveTimer();
++          clearComposerDraft(getSessionComposerDraftStorage(), draftKey);
++          toast.success(t.inputBox.steerAccepted);
++          return;
++        } catch (error) {
++          toast.error(
++            error instanceof Error
++              ? error.message
++              : t.inputBox.steerUnavailable,
++          );
++          throw error;
++        } finally {
++          steerInFlightRef.current = false;
++        }
+@@ -1386,0 +1436,2 @@ export function InputBox({
++      conversationReferences.length,
++      draftKey,
+@@ -1388,0 +1440,2 @@ export function InputBox({
++      invalidateDraftSaveTimer,
++      onSteer,
+@@ -1391,0 +1445 @@ export function InputBox({
++      sidecar,
+@@ -1395 +1449,4 @@ export function InputBox({
+-      t.inputBox.pleaseWaitStreaming,
++      t.inputBox.steerAccepted,
++      t.inputBox.steerInProgress,
++      t.inputBox.steerPlainTextOnly,
++      t.inputBox.steerUnavailable,
+diff --git a/frontend/src/core/i18n/locales/en-US.ts b/frontend/src/core/i18n/locales/en-US.ts
+index 6223866..5101c15 100644
+--- a/frontend/src/core/i18n/locales/en-US.ts
++++ b/frontend/src/core/i18n/locales/en-US.ts
+@@ -445,0 +446,6 @@ export const enUS: Translations = {
++    steerAccepted: "Your instruction was added to the active response.",
++    steerInProgress: "The previous instruction is still being submitted.",
++    steerPlainTextOnly:
++      "Active responses only accept plain-text instructions. Remove attachments, references, or skills and try again.",
++    steerUnavailable:
++      "The active response cannot accept instructions right now.",
+diff --git a/frontend/src/core/i18n/locales/types.ts b/frontend/src/core/i18n/locales/types.ts
+index 264b922..e67f69a 100644
+--- a/frontend/src/core/i18n/locales/types.ts
++++ b/frontend/src/core/i18n/locales/types.ts
+@@ -349,0 +350,4 @@ export interface Translations {
++    steerAccepted: string;
++    steerInProgress: string;
++    steerPlainTextOnly: string;
++    steerUnavailable: string;
+diff --git a/frontend/src/core/i18n/locales/zh-CN.ts b/frontend/src/core/i18n/locales/zh-CN.ts
+index 82ec8fd..21018c6 100644
+--- a/frontend/src/core/i18n/locales/zh-CN.ts
++++ b/frontend/src/core/i18n/locales/zh-CN.ts
+@@ -417,0 +418,5 @@ export const zhCN: Translations = {
++    steerAccepted: "已将你的指令加入当前响应。",
++    steerInProgress: "上一条指令仍在提交中。",
++    steerPlainTextOnly:
++      "当前响应只接受纯文本指令。请移除附件、引用或技能后重试。",
++    steerUnavailable: "当前响应暂时无法接收指令。",
+diff --git a/frontend/src/core/threads/active-steer.ts b/frontend/src/core/threads/active-steer.ts
+new file mode 100644
+index 0000000..f90eae6
+--- /dev/null
++++ b/frontend/src/core/threads/active-steer.ts
+@@ -0,0 +1,113 @@
++import { fetch as fetchWithAuth } from "../api/fetcher";
++import { getBackendBaseURL } from "../config";
++
++export type ActiveSteerRequest = {
++  assistantId: string;
++  context: Record<string, unknown>;
++  messageId: string;
++  text: string;
++  threadId: string;
++};
++
++export type ActiveSteerResult = {
++  messageId: string;
++};
++
++type SteerFetch = (
++  input: RequestInfo | string,
++  init?: RequestInit,
++) => Promise<Response>;
++
++/**
++ * Build the deliberately small active-input payload accepted by the Haifa
++ * Gateway.  In particular this is not a normal LangGraph multitask submit:
++ * the explicit header is the sole opt-in to same-Run Steer.
++ */
++export function buildActiveSteerBody({
++  assistantId,
++  context,
++  messageId,
++  text,
++}: Omit<ActiveSteerRequest, "threadId">): Record<string, unknown> {
++  return {
++    assistant_id: assistantId,
++    input: {
++      messages: [
++        {
++          id: messageId,
++          type: "human",
++          content: [{ type: "text", text }],
++          additional_kwargs: {},
++        },
++      ],
++    },
++    stream_mode: ["messages-tuple", "updates", "custom"],
++    context,
++    on_disconnect: "continue",
++  };
++}
++
++async function readSteerError(response: Response): Promise<string> {
++  try {
++    const data = (await response.json()) as { detail?: unknown };
++    if (typeof data.detail === "string" && data.detail.trim()) {
++      return data.detail;
++    }
++  } catch {
++    // Fall through to the bounded status message below.
++  }
++  return response.statusText || `HTTP ${response.status}`;
++}
++
++/**
++ * Submit one explicit same-Run Steer input without adopting the extra SSE
++ * response as a second UI authority.  The creator/reconnect stream remains
++ * authoritative; after the 200 headers confirm admission, this observer body
++ * is cancelled.  The Gateway's Steer observer is non-creator, so disconnecting
++ * it cannot cancel or replace the active Run.
++ */
++export async function postActiveSteer(
++  request: ActiveSteerRequest,
++  requestFetch: SteerFetch = fetchWithAuth,
++): Promise<ActiveSteerResult> {
++  const text = request.text.trim();
++  if (!text) {
++    throw new Error("Steer input must not be empty.");
++  }
++
++  const response = await requestFetch(
++    `${getBackendBaseURL()}/api/threads/${encodeURIComponent(
++      request.threadId,
++    )}/runs/stream`,
++    {
++      method: "POST",
++      headers: {
++        "Content-Type": "application/json",
++        "X-Haifa-Run-Input": "steer",
++      },
++      body: JSON.stringify(
++        buildActiveSteerBody({
++          assistantId: request.assistantId,
++          context: request.context,
++          messageId: request.messageId,
++          text,
++        }),
++      ),
++    },
++  );
++
++  if (!response.ok) {
++    throw new Error(await readSteerError(response));
++  }
++
++  // Admission is complete once fetch resolves with 200 response headers.
++  // Do not consume a duplicate event stream; the existing active stream owns
++  // all message/state rendering. Failure to cancel an already accepted
++  // observer must not turn the accepted input into a misleading UI failure.
++  try {
++    await response.body?.cancel();
++  } catch {
++    // The browser may already have closed a header-only/test response.
++  }
++  return { messageId: request.messageId };
++}
+diff --git a/frontend/src/core/threads/hooks.ts b/frontend/src/core/threads/hooks.ts
+index f31ed67..91c66bc 100644
+--- a/frontend/src/core/threads/hooks.ts
++++ b/frontend/src/core/threads/hooks.ts
+@@ -38,0 +39 @@ import { uuid } from "../utils/uuid";
++import { postActiveSteer } from "./active-steer";
+@@ -97,0 +99,4 @@ export type ThreadStreamOptions = {
++export type SendSteerResult = {
++  messageId: string;
++};
++
+@@ -2284,0 +2290,6 @@ export function useThreadStream({
++  const steerInFlightRef = useRef(false);
++  const retryableSteerRef = useRef<{
++    messageId: string;
++    text: string;
++    threadId: string;
++  } | null>(null);
+@@ -2642,0 +2654,47 @@ export function useThreadStream({
++  const sendSteer = useCallback(
++    async (
++      steerThreadId: string,
++      message: PromptInputMessage,
++    ): Promise<SendSteerResult> => {
++      if (steerInFlightRef.current) {
++        throw new Error("A Steer request is already in progress.");
++      }
++      if (message.files.length > 0) {
++        throw new Error("Active Steer currently supports plain text only.");
++      }
++      const text = message.text.trim();
++      if (!text) {
++        throw new Error("Steer input must not be empty.");
++      }
++
++      const retryable = retryableSteerRef.current;
++      const messageId =
++        retryable?.threadId === steerThreadId && retryable.text === text
++          ? retryable.messageId
++          : `local-steer-${uuid()}`;
++      retryableSteerRef.current = {
++        messageId,
++        text,
++        threadId: steerThreadId,
++      };
++      steerInFlightRef.current = true;
++      try {
++        const result = await postActiveSteer({
++          assistantId,
++          context: buildRunContext({
++            settings: context,
++            threadId: steerThreadId,
++          }),
++          messageId,
++          text,
++          threadId: steerThreadId,
++        });
++        retryableSteerRef.current = null;
++        return result;
++      } finally {
++        steerInFlightRef.current = false;
++      }
++    },
++    [assistantId, context],
++  );
++
+@@ -3080,0 +3139 @@ export function useThreadStream({
++    sendSteer,
+diff --git a/frontend/tests/unit/components/workspace/active-steer-call-sites.test.ts b/frontend/tests/unit/components/workspace/active-steer-call-sites.test.ts
+new file mode 100644
+index 0000000..c184f07
+--- /dev/null
++++ b/frontend/tests/unit/components/workspace/active-steer-call-sites.test.ts
+@@ -0,0 +1,32 @@
++import { readFileSync } from "node:fs";
++import path from "node:path";
++
++import { describe, expect, it } from "@rstest/core";
++
++const FRONTEND_ROOT = path.resolve(import.meta.dirname, "../../../..");
++
++function source(relativePath: string) {
++  return readFileSync(path.join(FRONTEND_ROOT, relativePath), "utf8");
++}
++
++describe("active Steer composer call sites", () => {
++  it.each([
++    "src/components/workspace/chats/chat-page.tsx",
++    "src/app/workspace/agents/[agent_name]/chats/[thread_id]/page.tsx",
++  ])("wires %s to the useThreadStream Steer path", (relativePath) => {
++    const page = source(relativePath);
++
++    expect(page).toMatch(/\bsendSteer,\s*\n/);
++    expect(page).toContain(
++      "onSteer={(message) => sendSteer(threadId, message)}",
++    );
++  });
++
++  it("keeps custom-agent identity on the same stream hook", () => {
++    const page = source(
++      "src/app/workspace/agents/[agent_name]/chats/[thread_id]/page.tsx",
++    );
++
++    expect(page).toContain("assistantId: agent_name");
++  });
++});
+diff --git a/frontend/tests/unit/components/workspace/input-box-active-steer.dom.test.tsx b/frontend/tests/unit/components/workspace/input-box-active-steer.dom.test.tsx
+new file mode 100644
+index 0000000..b1a75f0
+--- /dev/null
++++ b/frontend/tests/unit/components/workspace/input-box-active-steer.dom.test.tsx
+@@ -0,0 +1,206 @@
++import { afterEach, beforeEach, describe, expect, it, rs } from "@rstest/core";
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
++import type { ReactNode } from "react";
++import { toast } from "sonner";
++
++import { PromptInputProvider } from "@/components/ai-elements/prompt-input";
++import { InputBox } from "@/components/workspace/input-box";
++import { ThreadContext } from "@/components/workspace/messages/context";
++import { AuthProvider } from "@/core/auth/AuthProvider";
++import { DEFAULT_LOCALE } from "@/core/i18n";
++import { I18nProvider } from "@/core/i18n/context";
++
++rs.mock("next/navigation", () => ({
++  useRouter: () => ({ push: rs.fn(), replace: rs.fn(), refresh: rs.fn() }),
++  usePathname: () => "/workspace/chats/thread-1",
++  useSearchParams: () => new URLSearchParams(),
++}));
++
++rs.mock("@/core/models/hooks", () => ({
++  useModels: () => ({
++    models: [],
++    tokenUsageEnabled: false,
++    isLoading: false,
++    isFetching: false,
++    error: null,
++    refetch: rs.fn(),
++  }),
++}));
++
++type ComposerProps = {
++  canCreateRuns?: boolean;
++  onSteer?: (message: { text: string; files: unknown[] }) => Promise<unknown>;
++  onSubmit?: (message: { text: string; files: unknown[] }) => Promise<void>;
++  status?: "ready" | "streaming";
++};
++
++function renderComposer({
++  canCreateRuns,
++  onSteer,
++  onSubmit,
++  status = "streaming",
++}: ComposerProps) {
++  const queryClient = new QueryClient({
++    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
++  });
++  const tree: ReactNode = (
++    <I18nProvider initialLocale={DEFAULT_LOCALE}>
++      <QueryClientProvider client={queryClient}>
++        <AuthProvider
++          initialUser={{
++            id: "user-1",
++            email: "user@example.test",
++            system_role: "user",
++            needs_setup: false,
++            oauth_provider: null,
++          }}
++        >
++          <ThreadContext.Provider
++            value={{ thread: { messages: [] } as never, isMock: true }}
++          >
++            <PromptInputProvider>
++              <InputBox
++                threadId="thread-1"
++                status={status}
++                context={{ mode: "flash" } as never}
++                canCreateRuns={canCreateRuns}
++                onSteer={onSteer as never}
++                onSubmit={onSubmit as never}
++              />
++            </PromptInputProvider>
++          </ThreadContext.Provider>
++        </AuthProvider>
++      </QueryClientProvider>
++    </I18nProvider>
++  );
++  return render(tree);
++}
++
++function setText(container: HTMLElement, text: string) {
++  const textarea = container.querySelector("textarea");
++  if (!(textarea instanceof HTMLTextAreaElement)) {
++    throw new Error("composer textarea not rendered");
++  }
++  fireEvent.change(textarea, { target: { value: text } });
++  return textarea;
++}
++
++function submit(container: HTMLElement) {
++  const form = container.querySelector("form");
++  if (!(form instanceof HTMLFormElement)) {
++    throw new Error("composer form not rendered");
++  }
++  fireEvent.submit(form);
++}
++
++beforeEach(() => {
++  window.sessionStorage.clear();
++  rs.spyOn(URL, "createObjectURL").mockReturnValue("blob:test-attachment");
++  rs.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
++});
++
++afterEach(() => {
++  rs.restoreAllMocks();
++  cleanup();
++});
++
++describe("InputBox active Steer", () => {
++  it("routes streaming plain text to Steer while ready text stays on normal submit", async () => {
++    const onSteer = rs.fn(async () => undefined);
++    const onSubmit = rs.fn(async () => undefined);
++    const streaming = renderComposer({ onSteer, onSubmit });
++    setText(streaming.container, "  revise this answer  ");
++    submit(streaming.container);
++    await waitFor(() => expect(onSteer).toHaveBeenCalledTimes(1));
++    expect(onSteer).toHaveBeenCalledWith({
++      text: "revise this answer",
++      files: [],
++    });
++    expect(onSubmit).not.toHaveBeenCalled();
++    streaming.unmount();
++
++    const ready = renderComposer({ status: "ready", onSteer, onSubmit });
++    setText(ready.container, "start a new turn");
++    submit(ready.container);
++    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
++    expect(onSteer).toHaveBeenCalledTimes(1);
++  });
++
++  it("prevents duplicate in-flight Steer requests", async () => {
++    let resolveSteer: (() => void) | undefined;
++    const onSteer = rs.fn(
++      () =>
++        new Promise<void>((resolve) => {
++          resolveSteer = resolve;
++        }),
++    );
++    const { container } = renderComposer({ onSteer });
++    setText(container, "one instruction");
++
++    submit(container);
++    submit(container);
++    await waitFor(() => expect(onSteer).toHaveBeenCalledTimes(1));
++    resolveSteer?.();
++    await waitFor(() =>
++      expect(container.querySelector("textarea")?.value).toBe(""),
++    );
++  });
++
++  it("keeps input visible and surfaces 403/409/422 or network failures", async () => {
++    const errorToast = rs.spyOn(toast, "error");
++    const onSteer = rs.fn(async () => {
++      throw new Error("Thread already has an incompatible active input");
++    });
++    const { container } = renderComposer({ onSteer });
++    const textarea = setText(container, "keep this instruction");
++
++    submit(container);
++    await waitFor(() => expect(onSteer).toHaveBeenCalledTimes(1));
++    await waitFor(() => expect(textarea.value).toBe("keep this instruction"));
++    expect(errorToast).toHaveBeenCalledWith(
++      "Thread already has an incompatible active input",
++    );
++  });
++
++  it("fails closed for attachments and does not route them as normal sends", async () => {
++    const errorToast = rs.spyOn(toast, "error");
++    const onSteer = rs.fn(async () => undefined);
++    const onSubmit = rs.fn(async () => undefined);
++    const { container } = renderComposer({ onSteer, onSubmit });
++    setText(container, "use this attachment");
++    const fileInput = container.querySelector('input[type="file"]');
++    if (!(fileInput instanceof HTMLInputElement)) {
++      throw new Error("file input not rendered");
++    }
++    fireEvent.change(fileInput, {
++      target: {
++        files: [new File(["demo"], "demo.txt", { type: "text/plain" })],
++      },
++    });
++
++    submit(container);
++    await waitFor(() =>
++      expect(errorToast).toHaveBeenCalledWith(
++        expect.stringContaining("plain-text"),
++      ),
++    );
++    expect(onSteer).not.toHaveBeenCalled();
++    expect(onSubmit).not.toHaveBeenCalled();
++  });
++
++  it("requires runs:create for the Enter Steer path", async () => {
++    const infoToast = rs.spyOn(toast, "info");
++    const onSteer = rs.fn(async () => undefined);
++    const { container } = renderComposer({ canCreateRuns: false, onSteer });
++    setText(container, "revise this answer");
++
++    submit(container);
++    await waitFor(() =>
++      expect(infoToast).toHaveBeenCalledWith(
++        expect.stringContaining("not permitted"),
++      ),
++    );
++    expect(onSteer).not.toHaveBeenCalled();
++  });
++});
+diff --git a/frontend/tests/unit/core/threads/active-steer.test.ts b/frontend/tests/unit/core/threads/active-steer.test.ts
+new file mode 100644
+index 0000000..2e50d10
+--- /dev/null
++++ b/frontend/tests/unit/core/threads/active-steer.test.ts
+@@ -0,0 +1,99 @@
++import { describe, expect, it, rs } from "@rstest/core";
++
++import {
++  buildActiveSteerBody,
++  postActiveSteer,
++} from "@/core/threads/active-steer";
++
++const request = {
++  assistantId: "lead_agent",
++  context: { mode: "flash", thread_id: "thread/with space" },
++  messageId: "local-steer-1",
++  text: "  revise the answer  ",
++  threadId: "thread/with space",
++};
++
++describe("active Steer request", () => {
++  it("builds one explicit human message without a multitask strategy", () => {
++    const body = buildActiveSteerBody({
++      assistantId: request.assistantId,
++      context: request.context,
++      messageId: request.messageId,
++      text: "revise the answer",
++    });
++
++    expect(body).toEqual({
++      assistant_id: "lead_agent",
++      input: {
++        messages: [
++          {
++            id: "local-steer-1",
++            type: "human",
++            content: [{ type: "text", text: "revise the answer" }],
++            additional_kwargs: {},
++          },
++        ],
++      },
++      stream_mode: ["messages-tuple", "updates", "custom"],
++      context: request.context,
++      on_disconnect: "continue",
++    });
++    expect(body).not.toHaveProperty("multitask_strategy");
++  });
++
++  it("marks the request explicitly, reuses auth fetch semantics, and releases the observer stream", async () => {
++    const cancel = rs.fn(async () => undefined);
++    const requestFetch = rs.fn(
++      async (_input: RequestInfo | string, _init?: RequestInit) => {
++        return {
++          ok: true,
++          status: 200,
++          statusText: "OK",
++          body: { cancel },
++        } as unknown as Response;
++      },
++    );
++
++    await expect(postActiveSteer(request, requestFetch)).resolves.toEqual({
++      messageId: "local-steer-1",
++    });
++    expect(requestFetch).toHaveBeenCalledTimes(1);
++    const [url, init] = requestFetch.mock.calls[0] ?? [];
++    expect(url).toContain("/api/threads/thread%2Fwith%20space/runs/stream");
++    expect(init?.method).toBe("POST");
++    expect(new Headers(init?.headers).get("X-Haifa-Run-Input")).toBe("steer");
++    const serializedBody = typeof init?.body === "string" ? init.body : "";
++    expect(serializedBody).not.toBe("");
++    expect(JSON.parse(serializedBody)).not.toHaveProperty("multitask_strategy");
++    expect(cancel).toHaveBeenCalledTimes(1);
++  });
++
++  it.each([403, 409, 422])(
++    "surfaces HTTP %s detail without retrying",
++    async (status) => {
++      const requestFetch = rs.fn(
++        async () =>
++          new Response(JSON.stringify({ detail: `rejected-${status}` }), {
++            status,
++            headers: { "Content-Type": "application/json" },
++          }),
++      );
++
++      await expect(postActiveSteer(request, requestFetch)).rejects.toThrow(
++        `rejected-${status}`,
++      );
++      expect(requestFetch).toHaveBeenCalledTimes(1);
++    },
++  );
++
++  it("surfaces a network failure without retrying", async () => {
++    const requestFetch = rs.fn(async () => {
++      throw new Error("network unavailable");
++    });
++
++    await expect(postActiveSteer(request, requestFetch)).rejects.toThrow(
++      "network unavailable",
++    );
++    expect(requestFetch).toHaveBeenCalledTimes(1);
++  });
++});

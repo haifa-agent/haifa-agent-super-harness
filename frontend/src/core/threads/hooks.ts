@@ -36,6 +36,7 @@ import type { UploadedFileInfo } from "../uploads";
 import { promptInputFilePartToFile, uploadFiles } from "../uploads";
 import { uuid } from "../utils/uuid";
 
+import { postActiveSteer } from "./active-steer";
 import {
   branchThreadFromTurn,
   fetchThreadTokenUsage,
@@ -93,6 +94,10 @@ export type ThreadStreamOptions = {
   onSend?: (threadId: string) => void;
   onStart?: (threadId: string, runId: string) => void;
   onFinish?: (state: AgentThreadState) => void;
+};
+
+export type SendSteerResult = {
+  messageId: string;
 };
 
 type SendMessageOptions = {
@@ -2282,6 +2287,12 @@ export function useThreadStream({
   ).length;
   const latestMessageCountsRef = useRef({ humanMessageCount });
   const sendInFlightRef = useRef(false);
+  const steerInFlightRef = useRef(false);
+  const retryableSteerRef = useRef<{
+    messageId: string;
+    text: string;
+    threadId: string;
+  } | null>(null);
   const messagesRef = useRef<Message[]>([]);
   // Non-null only after a turn submitted by this mounted client. Keep it after
   // finish/stop/error because the SDK can retain its transient event order in
@@ -2638,6 +2649,53 @@ export function useThreadStream({
       persistedMessages,
       visibleHistory,
     ],
+  );
+
+  const sendSteer = useCallback(
+    async (
+      steerThreadId: string,
+      message: PromptInputMessage,
+    ): Promise<SendSteerResult> => {
+      if (steerInFlightRef.current) {
+        throw new Error("A Steer request is already in progress.");
+      }
+      if (message.files.length > 0) {
+        throw new Error("Active Steer currently supports plain text only.");
+      }
+      const text = message.text.trim();
+      if (!text) {
+        throw new Error("Steer input must not be empty.");
+      }
+
+      const retryable = retryableSteerRef.current;
+      const messageId =
+        retryable?.threadId === steerThreadId && retryable.text === text
+          ? retryable.messageId
+          : `local-steer-${uuid()}`;
+      retryableSteerRef.current = {
+        messageId,
+        text,
+        threadId: steerThreadId,
+      };
+      steerInFlightRef.current = true;
+      try {
+        const result = await postActiveSteer({
+          assistantId,
+          context: buildRunContext({
+            settings: context,
+            threadId: steerThreadId,
+          }),
+          messageId,
+          text,
+          threadId: steerThreadId,
+        });
+        retryableSteerRef.current = null;
+        return result;
+      } finally {
+        steerInFlightRef.current = false;
+      }
+    },
+    [assistantId, context],
   );
 
   const submitPreparedReplay = useCallback(
@@ -3078,6 +3136,7 @@ export function useThreadStream({
     thread: mergedThread,
     pendingUsageMessages,
     sendMessage,
+    sendSteer,
     regenerateMessage,
     editAndRegenerateMessage,
     isUploading,

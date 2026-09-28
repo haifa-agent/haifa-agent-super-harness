@@ -14,12 +14,15 @@ test("本地 Dashboard 以客户演示为首页，三页签与工作包跳转可
   await expect(page.locator(".demo-card")).toHaveCount(5);
   await expect(page.locator("#demoStages")).toContainText("M0");
   await expect(page.locator("#demoStages")).toContainText("PASS");
+  await expect(page.locator("#demoStages")).toContainText("M3");
   await expect(page.locator("#demoStages")).toContainText("M4");
   await expect(page.locator("#demoStages")).toContainText("NOT_RUN");
 
   await page.getByRole("tab", { name: "最近工作安排" }).click();
   await expect(page.locator("#planView")).toBeVisible();
-  await expect(page.locator("#planItems")).toContainText("主线 M3 双后端集成复验");
+  await expect(page.locator("#planItems")).toContainText("主端口真实模型双轮与人工验收");
+  await expect(page.locator("#planItems")).toContainText("等待人工确认M4启动");
+  await expect(page.locator("#planItems")).not.toContainText("主线 M3 双后端集成复验");
   await expect(page.locator("#planItems")).not.toContainText("W05 真实 Artifact 与冻结 UI 卡片");
   await expect(page.locator("#planItems")).not.toContainText("M0 冻结客户演示脚本与 doctor");
 

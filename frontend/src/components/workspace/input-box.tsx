@@ -309,6 +309,7 @@ export function InputBox({
   onGoalChange,
   onPrepareThread,
   onSubmit,
+  onSteer,
   onStop,
   canStopStreaming = true,
   canCreateRuns = true,
@@ -378,6 +379,7 @@ export function InputBox({
     message: PromptInputMessage,
     options?: InputBoxSubmitOptions,
   ) => void | Promise<void>;
+  onSteer?: (message: PromptInputMessage) => void | Promise<unknown>;
   onStop?: () => void;
   /**
    * Whether the caller's role holds `runs:cancel` (RFC #4063 Phase 4).
@@ -402,6 +404,7 @@ export function InputBox({
   const { user } = useAuth();
   const { thread, isMock } = useThread();
   const { attachments, textInput } = usePromptInputController();
+  const steerInFlightRef = useRef(false);
   const setTextInput = textInput.setInput;
   const sidecar = useMaybeSidecar();
   const attachmentParts = attachments.files;
@@ -1279,8 +1282,54 @@ export function InputBox({
   const handleSubmit = useCallback(
     async (message: PromptInputMessage) => {
       if (status === "streaming") {
-        toast.info(t.inputBox.pleaseWaitStreaming);
-        return Promise.reject(new Error("streaming"));
+        abortVoiceInput();
+        if (!canCreateRuns) {
+          toast.info(t.inputBox.startTurnUnavailable);
+          return Promise.reject(new Error("runs-create-denied"));
+        }
+        const hasNonTextInput =
+          message.files.length > 0 ||
+          projectAttachments.length > 0 ||
+          conversationReferences.length > 0 ||
+          (sidecar?.conversationQuotes.length ?? 0) > 0 ||
+          selectedSlashSkill !== null;
+        if (!message.text.trim() || hasNonTextInput) {
+          toast.error(t.inputBox.steerPlainTextOnly);
+          return Promise.reject(new Error("steer-plain-text-only"));
+        }
+        if (!onSteer) {
+          toast.error(t.inputBox.steerUnavailable);
+          return Promise.reject(new Error("steer-unavailable"));
+        }
+        if (steerInFlightRef.current) {
+          toast.info(t.inputBox.steerInProgress);
+          return Promise.reject(new Error("steer-in-progress"));
+        }
+        steerInFlightRef.current = true;
+        try {
+          await onSteer({ text: message.text.trim(), files: [] });
+          promptHistoryIndexRef.current = null;
+          promptHistoryDraftRef.current = "";
+          setInputPolishUndo(null);
+          setFollowups([]);
+          setFollowupsHidden(false);
+          setFollowupsLoading(false);
+          pendingDraftSubmissionKeyRef.current = null;
+          latestDraftRef.current = null;
+          invalidateDraftSaveTimer();
+          clearComposerDraft(getSessionComposerDraftStorage(), draftKey);
+          toast.success(t.inputBox.steerAccepted);
+          return;
+        } catch (error) {
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : t.inputBox.steerUnavailable,
+          );
+          throw error;
+        } finally {
+          steerInFlightRef.current = false;
+        }
       }
       abortVoiceInput();
       const messageWithSlashSkill = selectedSlashSkill
@@ -1384,15 +1433,23 @@ export function InputBox({
     [
       abortVoiceInput,
       canCreateRuns,
+      conversationReferences.length,
+      draftKey,
       handleCompactCommand,
       handleGoalCommand,
+      invalidateDraftSaveTimer,
+      onSteer,
       onPrepareThread,
       projectAttachments.length,
       selectedSlashSkill,
+      sidecar,
       status,
       submitThreadMessage,
       t.inputBox.goalTooLong,
-      t.inputBox.pleaseWaitStreaming,
+      t.inputBox.steerAccepted,
+      t.inputBox.steerInProgress,
+      t.inputBox.steerPlainTextOnly,
+      t.inputBox.steerUnavailable,
       t.inputBox.startTurnUnavailable,
     ],
   );

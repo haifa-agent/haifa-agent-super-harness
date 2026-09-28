@@ -36,6 +36,7 @@ function New-Fixture([string]$Name, [ValidateSet('PASS', 'FAIL', 'NOT_RUN')][str
         'third-party/deerflow/manifest.json',
         'third-party/deerflow/LICENSES/deer-flow-MIT.txt',
         'third-party/deerflow/patches/0001-memory-bff-use-server-gateway.patch',
+        'third-party/deerflow/patches/0002-active-steer-composer.patch',
         'frontend/package.json',
         'frontend/pnpm-lock.yaml',
         'frontend/next.config.js'
