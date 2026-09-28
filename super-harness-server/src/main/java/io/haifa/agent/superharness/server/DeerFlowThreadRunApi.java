@@ -720,6 +720,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     steerCursor,
                     false,
                     text(body, "on_disconnect").orElse("continue"),
+                    false,
                     false);
             return;
         }
@@ -734,7 +735,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     new ProjectionCursor(run.runId.value(), 0),
                     true,
                     text(body, "on_disconnect").orElse("cancel"),
-                    true);
+                    true,
+                    false);
         } finally {
             completeWorkspaceChangesIfTerminal(run);
         }
@@ -778,7 +780,18 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 // A restored Run starts with an empty in-memory projector. Consume its
                 // pre-response durable events before accepting the reply, otherwise the
                 // old pending card is replayed and prematurely ends the reply stream.
-                synchronizeAllAvailable(run);
+                try {
+                    synchronizeAllAvailable(run);
+                } catch (EventProjectionException terminalRace) {
+                    // The Run reached a terminal state (for example a cancel) while this
+                    // response was in flight; the reply can no longer apply and the tool must
+                    // not be replayed.
+                    sendJson(
+                            exchange,
+                            409,
+                            Map.of("detail", "Run is no longer accepting an Interaction response"));
+                    return;
+                }
                 responseCursor = run.projector.head();
                 if (run.acceptedInteractionResponse != null) {
                     if (!run.acceptedInteractionResponse.response().equals(response)) {
@@ -805,6 +818,16 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     sendJson(exchange, 409, Map.of("detail", "Interaction response already accepted"));
                     return;
                 } else {
+                    // A terminal Run (including a cancel) can no longer apply an Interaction
+                    // response. The SDK may still expose a stale pending view, so reject here
+                    // instead of surfacing an opaque 500 and never blindly replaying the tool.
+                    if (run.bridge.snapshot(run.runId).status().isTerminal()) {
+                        sendJson(
+                                exchange,
+                                409,
+                                Map.of("detail", "Run is no longer accepting an Interaction response"));
+                        return;
+                    }
                     Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
                     if (pending.isEmpty()
                             || run.interactionRequestId == null
@@ -851,7 +874,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     responseCursor,
                     true,
                     onDisconnect,
-                    true);
+                    true,
+                    false);
         } finally {
             completeWorkspaceChangesIfTerminal(run);
         }
@@ -1041,7 +1065,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             sendJson(exchange, 409, Map.of("detail", invalid.getMessage()));
             return;
         }
-        streamRunEvents(exchange, thread, run, cursor, false, "continue", false);
+        streamRunEvents(exchange, thread, run, cursor, false, "continue", false, true);
     }
 
     /**
@@ -1070,7 +1094,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             ProjectionCursor initialCursor,
             boolean creator,
             String onDisconnect,
-            boolean includeMetadata)
+            boolean includeMetadata,
+            boolean reemitPendingCard)
             throws IOException {
         exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
         exchange.getResponseHeaders().set("Cache-Control", "no-cache");
@@ -1115,6 +1140,26 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                         AppendResult.Gap gap = sourceGap.orElseThrow();
                         writeReplayGap(output, run, gap.gap(), gap.authoritativeView(), delivered);
                         return;
+                    }
+                    if (reemitPendingCard && run.projector.head().equals(delivered)) {
+                        // A reconnect can catch up past the durable interaction event (or the
+                        // event left the bounded replay window). Re-project the SDK-authored
+                        // pending card instead of leaving the client with a heartbeat-only
+                        // stream that never observes the waiting Interaction.
+                        Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
+                        if (pending.isPresent()
+                                && (run.interactionRequestId == null
+                                        || run.interactionRequestId.equals(
+                                                pending.orElseThrow().requestId().value()))) {
+                            if (writePendingInteractionCard(
+                                    output,
+                                    thread,
+                                    run,
+                                    pending.orElseThrow().requestId().value(),
+                                    sseCursor(delivered))) {
+                                return;
+                            }
+                        }
                     }
                     if (run.projector.head().equals(delivered)
                             && run.bridge.snapshot(run.runId).status().isTerminal()) {
@@ -1284,71 +1329,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (projected.state() != InteractionState.PENDING) {
                 return false;
             }
-            Map<String, Object> requestMessage;
-            synchronized (thread) {
-                synchronized (run) {
-                    if (run.interactionRequestMessage == null) {
-                        Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
-                        if (pending.isEmpty()
-                                || !pending.orElseThrow()
-                                        .requestId()
-                                        .value()
-                                        .equals(projected.requestId())) {
-                            writeSse(
-                                    output,
-                                    "error",
-                                    Map.of(
-                                            "code", "interaction_view_unavailable",
-                                            "request_id", projected.requestId(),
-                                            "message", "Pending Interaction view is unavailable"),
-                                    cursor);
-                            return true;
-                        }
-                        try {
-                            run.interactionRequestMessage =
-                                    DeerFlowInteractionHttpProjection.requestMessage(
-                                            pending.orElseThrow(), run.runId.value());
-                        } catch (IllegalArgumentException unsupported) {
-                            writeSse(
-                                    output,
-                                    "error",
-                                    Map.of(
-                                            "code", "unsupported_interaction_projection",
-                                            "request_id", projected.requestId(),
-                                            "message", unsupported.getMessage()),
-                                    cursor);
-                            return true;
-                        }
-                        run.interactionRequestId = projected.requestId();
-                        run.interactionRequestSequence = run.humanSequence + 1;
-                        run.interactionResponseSequence = run.humanSequence + 2;
-                        run.assistantSequence = run.humanSequence + 3;
-                        thread.nextMessageSequence += 2;
-                    } else if (!projected.requestId().equals(run.interactionRequestId)) {
-                        writeSse(
-                                output,
-                                "error",
-                                Map.of(
-                                        "code", "multiple_interactions_unsupported",
-                                        "request_id", projected.requestId(),
-                                        "message", "Only one Interaction per Run is supported"),
-                                cursor);
-                        return true;
-                    }
-                    requestMessage = run.interactionRequestMessage;
-                }
-            }
-            writeToolRequestIfAvailable(output, run, null);
-            writeSse(
-                    output,
-                    "messages",
-                    List.of(requestMessage, Map.of("langgraph_node", "tools")),
-                    cursor);
-            // Frozen HumanInputCard disables itself while useStream is loading. End this
-            // transport while the SDK-owned Run remains waiting; the hidden reply reopens the
-            // same Run and streams its continuation.
-            writeSse(output, "end", null, null);
-            return true;
+            return writePendingInteractionCard(output, thread, run, projected.requestId(), cursor);
         }
         if (event.source().payload() instanceof RunEventPayloads.RunInputLifecycle) {
             return false;
@@ -1441,6 +1422,83 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
         }
         writeSse(output, "end", null, cursor);
+        return true;
+    }
+
+    /**
+     * Emits the SDK-authoritative pending approval card exactly once for this transport and ends it.
+     * A reconnect can join after the durable interaction event has left the bounded replay window (or
+     * from a cursor past it), so the card must be rebuilt from the public SDK pending view instead of
+     * assuming the interaction event itself will be replayed. The SDK still owns the pending request;
+     * this only re-projects it.
+     */
+    private boolean writePendingInteractionCard(
+            OutputStream output, ThreadRecord thread, RunRecord run, String projectedRequestId, String cursor)
+            throws IOException {
+        Map<String, Object> requestMessage;
+        synchronized (thread) {
+            synchronized (run) {
+                if (run.interactionRequestMessage == null) {
+                    Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
+                    if (pending.isEmpty()
+                            || !pending.orElseThrow()
+                                    .requestId()
+                                    .value()
+                                    .equals(projectedRequestId)) {
+                        writeSse(
+                                output,
+                                "error",
+                                Map.of(
+                                        "code", "interaction_view_unavailable",
+                                        "request_id", projectedRequestId,
+                                        "message", "Pending Interaction view is unavailable"),
+                                cursor);
+                        return true;
+                    }
+                    try {
+                        run.interactionRequestMessage =
+                                DeerFlowInteractionHttpProjection.requestMessage(
+                                        pending.orElseThrow(), run.runId.value());
+                    } catch (IllegalArgumentException unsupported) {
+                        writeSse(
+                                output,
+                                "error",
+                                Map.of(
+                                        "code", "unsupported_interaction_projection",
+                                        "request_id", projectedRequestId,
+                                        "message", unsupported.getMessage()),
+                                cursor);
+                        return true;
+                    }
+                    run.interactionRequestId = projectedRequestId;
+                    run.interactionRequestSequence = run.humanSequence + 1;
+                    run.interactionResponseSequence = run.humanSequence + 2;
+                    run.assistantSequence = run.humanSequence + 3;
+                    thread.nextMessageSequence += 2;
+                } else if (!projectedRequestId.equals(run.interactionRequestId)) {
+                    writeSse(
+                            output,
+                            "error",
+                            Map.of(
+                                    "code", "multiple_interactions_unsupported",
+                                    "request_id", projectedRequestId,
+                                    "message", "Only one Interaction per Run is supported"),
+                            cursor);
+                    return true;
+                }
+                requestMessage = run.interactionRequestMessage;
+            }
+        }
+        writeToolRequestIfAvailable(output, run, null);
+        writeSse(
+                output,
+                "messages",
+                List.of(requestMessage, Map.of("langgraph_node", "tools")),
+                cursor);
+        // Frozen HumanInputCard disables itself while useStream is loading. End this
+        // transport while the SDK-owned Run remains waiting; the hidden reply reopens the
+        // same Run and streams its continuation.
+        writeSse(output, "end", null, null);
         return true;
     }
 
