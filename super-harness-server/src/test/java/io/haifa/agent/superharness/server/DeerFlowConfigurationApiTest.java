@@ -487,10 +487,31 @@ class DeerFlowConfigurationApiTest {
             assertThat(updated.statusCode()).isEqualTo(200);
             HttpResponse<String> drifted =
                     request("POST", "/api/threads/managed-run/runs/stream", runBody);
-            assertThat(drifted.statusCode()).isEqualTo(409);
-            assertThat(drifted.body()).contains("different model revision");
+            assertThat(drifted.statusCode()).isEqualTo(200);
+            assertThat(drifted.body()).contains("controlled provider response", "event: end");
+            assertThat(drifted.headers().firstValue("content-location")).isNotEqualTo(runLocation);
 
-            assertThat(providerRequests).hasSize(2);
+            String secondModelConfig = saveModelAt(null, "controlled-secret", endpoint)
+                    .replace("\"name\":\"demo-model\"", "\"name\":\"second-model\"")
+                    .replace("\"model\":\"demo-provider-id\"", "\"model\":\"second-provider-id\"");
+            assertThat(request("PUT", "/api/managed-models", secondModelConfig).statusCode())
+                    .isEqualTo(200);
+            String secondRunBody = runBody.replace("\"model_name\":\"demo-model\"",
+                    "\"model_name\":\"second-model\"");
+            HttpResponse<String> switched = request(
+                    "POST", "/api/threads/managed-run/runs/stream", secondRunBody);
+            assertThat(switched.statusCode()).isEqualTo(200);
+            assertThat(switched.body()).contains("controlled provider response", "event: end");
+            String switchedLocation = switched.headers().firstValue("content-location").orElseThrow();
+            assertThat(switchedLocation).isNotEqualTo(runLocation);
+            assertThat(providerRequests.getLast().path("model").asText()).isEqualTo("second-provider-id");
+            restart();
+            assertThat(request("GET", "/api/threads/managed-run/messages/page", null).body())
+                    .contains(runView.path("run_id").asText(), switchedLocation.replaceFirst(".*/", ""));
+            assertThat(request("GET", "/api/threads/managed-run/runs", null).statusCode())
+                    .isEqualTo(200);
+
+            assertThat(providerRequests).hasSize(4);
             assertThat(providerRequests.get(0).path("tools")).isNotEmpty();
             assertThat(providerRequests.get(0).path("stream").asBoolean()).isTrue();
             assertThat(providerRequests.get(1).path("tools").findValuesAsText("name"))

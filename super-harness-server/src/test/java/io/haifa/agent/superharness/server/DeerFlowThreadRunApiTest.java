@@ -328,7 +328,7 @@ class DeerFlowThreadRunApiTest {
     }
 
     @Test
-    void historicalTranscriptRemainsReadableWhenCurrentModelRevisionChanges() throws Exception {
+    void historicalTranscriptRemainsReadableAndNextTurnUsesCurrentModelAfterRevisionChanges() throws Exception {
         createThread("thread-historical-binding");
         HttpResponse<String> original = client.send(
                 runRequest("thread-historical-binding", "before provider restart"),
@@ -356,10 +356,14 @@ class DeerFlowThreadRunApiTest {
         assertThat(get("/api/threads/thread-historical-binding/runs").statusCode()).isEqualTo(200);
 
         HttpResponse<String> driftedRun = client.send(
-                runRequest("thread-historical-binding", "must not change binding"),
+                runRequest("thread-historical-binding", "after provider revision change"),
                 HttpResponse.BodyHandlers.ofString());
-        assertThat(driftedRun.statusCode()).isEqualTo(409);
-        assertThat(driftedRun.body()).contains("already bound to a different model revision");
+        assertThat(driftedRun.statusCode()).isEqualTo(200);
+        String nextRunId = driftedRun.headers().firstValue("content-location").orElseThrow().replaceFirst(".*/", "");
+        assertThat(nextRunId).isNotEqualTo(runId);
+        assertThat(driftedRun.body()).contains("after provider revision change");
+        assertThat(get("/api/threads/thread-historical-binding/messages/page").body())
+                .contains("before provider restart", "after provider revision change", runId, nextRunId);
     }
 
     @Test

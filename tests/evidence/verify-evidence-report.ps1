@@ -111,6 +111,15 @@ function Set-DevelopingTask([object]$Snapshot, [string]$TaskId, [string]$Assignm
     }
 }
 
+function Remove-ActiveAssignmentsFromFixture([object]$Snapshot) {
+    # These two conflict cases add their own assignments. Keep the assertions
+    # independent of how many real child slots are occupied in the live export.
+    foreach ($assignment in @($Snapshot.tables.assignment | Where-Object state -eq 'running')) {
+        (Get-Row $Snapshot 'task' ([string]$assignment.task_id)).state = 'blocked'
+    }
+    $Snapshot.tables.assignment = @($Snapshot.tables.assignment | Where-Object state -ne 'running')
+}
+
 function Invoke-Generator([string]$Root, [string]$Output = 'target/evidence', [switch]$RequireSurefire) {
     $arguments = @('-NoProfile', '-File', $Generator, '-RepositoryRoot', $Root, '-OutputDirectory', $Output,
         '-ShpmSnapshot', (Join-Path $Root 'shpm-snapshot.json'))
@@ -249,8 +258,8 @@ try {
         'started-without-prompt' = @({ param($s) $t = Get-Row $s 'task' 'W04-task-2'; $t.state = 'blocked'; $t.started_at = '2026-09-28T10:00:00+08:00' }, 'left pending without a prompt_path')
         'old-slot-ports' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '38018/53018' 'D:/workspace/test/a' }, 'slot and child port group do not match')
         'late-checkpoint' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '30618/35618' 'D:/workspace/test/a' '2026-09-28T12:00:00+08:00' '2026-09-28T12:30:00+08:00' }, 'next checkpoint must be within 15 minutes')
-        'shared-port-group' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '30618/35618' 'D:/workspace/test/a'; Set-DevelopingTask $s 'W04-task-3' 'asg-test-2' 2 '30618/35618' 'D:/workspace/test/b' }, 'cannot share a port group')
-        'shared-data-root' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '30618/35618' 'D:/workspace/test/a'; Set-DevelopingTask $s 'W04-task-3' 'asg-test-2' 3 '40618/45618' 'D:/workspace/test/a' }, 'cannot share a data root')
+        'shared-port-group' = @({ param($s) Remove-ActiveAssignmentsFromFixture $s; Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '30618/35618' 'D:/workspace/test/a'; Set-DevelopingTask $s 'W04-task-3' 'asg-test-2' 2 '30618/35618' 'D:/workspace/test/b' }, 'cannot share a port group')
+        'shared-data-root' = @({ param($s) Remove-ActiveAssignmentsFromFixture $s; Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '30618/35618' 'D:/workspace/test/a'; Set-DevelopingTask $s 'W04-task-3' 'asg-test-2' 3 '40618/45618' 'D:/workspace/test/a' }, 'cannot share a data root')
         'ready-without-delivery' = @({ param($s) $t = Get-Row $s 'task' 'W04-task-2'; $t.state = 'ready_for_acceptance'; $t.prompt_path = 'private-docs/prompts/test.md' }, 'ready without delivery evidence: delivered_sha')
         'finished-without-merge' = @({ param($s) foreach ($a in @($s.tables.assignment | Where-Object task_id -eq 'W05-task-2')) { $a.merged_sha = $null } }, 'cannot finish before mainline acceptance: merged_sha')
         'skipped-demo-gate' = @({ param($s) $m0 = Get-Row $s 'sprint_stage' 'DEMO-V0/M0'; $m0.result = 'NOT_RUN'; $m0.work_status = 'in_progress'; (Get-Row $s 'sprint' 'DEMO-V0').decision = 'NO_GO' }, 'DEMO-V0/M1 cannot PASS before DEMO-V0/M0 PASS')

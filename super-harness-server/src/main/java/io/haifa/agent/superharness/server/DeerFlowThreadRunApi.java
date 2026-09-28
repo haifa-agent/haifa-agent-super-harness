@@ -122,6 +122,9 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private final DurableHaifaFoundation foundation;
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
     private final Map<String, RunRecord> runs = new ConcurrentHashMap<>();
+    // A terminal Run can leave the hot cache while its bridge still owns SDK resources.
+    // Keep process-lifetime ownership separate from the bounded Run projection cache.
+    private final Set<HaifaRunBridge> ownedBridges = ConcurrentHashMap.newKeySet();
     private final Set<Thread> workspaceCompletionObservers = ConcurrentHashMap.newKeySet();
     private final Set<Thread> titleCompletionObservers = ConcurrentHashMap.newKeySet();
     private volatile DurableTurnScanner durableTurnScanner = this::scanPersistedUserTurns;
@@ -644,28 +647,20 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 return;
             }
             if (steerRun == null) {
+            boolean createdBridge = thread.bridge == null;
             if (thread.bridge == null) {
                 HaifaRunBridge bridge = new HaifaRunBridge(binding, toolsForThread(thread), foundation);
-                if (thread.modelBindingIdentity != null
-                        && !thread.modelBindingIdentity.equals(bridge.bindingIdentity())) {
-                    bridge.close();
-                    sendJson(
-                            exchange,
-                            409,
-                            Map.of(
-                                    "detail",
-                                    "Thread is already bound to a different model revision; create a new thread"));
-                    return;
-                }
-                attachBridge(thread, bridge);
-            } else if (!thread.modelBindingIdentity.equals(binding.name() + "@" + binding.revision())) {
-                sendJson(
-                        exchange,
-                        409,
-                        Map.of(
-                                "detail",
-                                "Thread is already bound to a different model revision; create a new thread"));
-                return;
+                // Restoring the Conversation is read-only; claim the selected model only
+                // after the SDK has admitted the new Run successfully.
+                attachBridge(thread, bridge, false);
+            }
+            // A Conversation is durable across Turns, but the SDK freezes its model per Run.
+            // Keep the old Run's bridge for replay/Interaction; only the new Turn changes model.
+            HaifaRunBridge selectedBridge = thread.bridge;
+            boolean switchingModel = !selectedBridge.bindingIdentity()
+                    .equals(binding.name() + "@" + binding.revision());
+            if (switchingModel) {
+                selectedBridge = new HaifaRunBridge(binding, toolsForThread(thread), foundation);
             }
             // Frozen TitleMiddleware names the thread only from its first user Turn. The boundary is
             // the in-memory message sequence (seeded from durable turns when a persisted session is
@@ -683,12 +678,22 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
             HaifaRunBridge.StartedRun started;
             try {
-                started = thread.bridge.start(threadId, modelInput, Optional.ofNullable(thread.session));
+                started = selectedBridge.start(threadId, modelInput, Optional.ofNullable(thread.session));
             } catch (RuntimeException failure) {
+                if (switchingModel || createdBridge) {
+                    if (createdBridge) thread.bridge = null;
+                    ownedBridges.remove(selectedBridge);
+                    selectedBridge.close();
+                }
                 workspaceChanges.discardRunChanges(staged);
                 sendJson(exchange, 500, Map.of("detail", "Run could not start"));
                 return;
             }
+            if (switchingModel) {
+                thread.bridge = selectedBridge;
+                ownedBridges.add(selectedBridge);
+            }
+            thread.modelBindingIdentity = selectedBridge.bindingIdentity();
             boolean workspaceRecordingEnabled = false;
             if (staged != null) {
                 try {
@@ -710,7 +715,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     threadId,
                     text(body, "assistant_id").orElse(null),
                     message,
-                    thread.bridge,
+                    selectedBridge,
                     Instant.now(),
                     humanSequence,
                     workspaceRecordingEnabled,
@@ -782,6 +787,13 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
             if (run == null || !run.threadId.equals(thread.threadId)) {
                 sendJson(exchange, 409, Map.of("detail", "Thread has no matching Interaction"));
+                return;
+            }
+            // A read-only fallback bridge may expose the durable pending card, but must never
+            // admit its side effect if the original Run's model revision is unavailable.
+            if (thread.modelBindingIdentity != null
+                    && !thread.modelBindingIdentity.equals(run.bridge.bindingIdentity())) {
+                sendJson(exchange, 409, Map.of("detail", "Pending Run model is unavailable"));
                 return;
             }
             synchronized (run) {
@@ -960,7 +972,20 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private HaifaRunBridge bridgeForPersistedThread(ThreadRecord thread) {
         synchronized (thread) {
             if (thread.bridge != null) return thread.bridge;
-            HaifaRunBridge.ModelBinding binding = runModelResolver.apply(json.createObjectNode());
+            HaifaRunBridge.ModelBinding binding = null;
+            String lastBinding = thread.modelBindingIdentity;
+            if (lastBinding != null && lastBinding.lastIndexOf('@') > 0) {
+                var resolverBody = json.createObjectNode();
+                resolverBody.putObject("context")
+                        .put("model_name", lastBinding.substring(0, lastBinding.lastIndexOf('@')));
+                try {
+                    binding = runModelResolver.apply(resolverBody);
+                } catch (IllegalArgumentException unavailable) {
+                    // Historical Conversation reads remain possible when a model is disabled.
+                    // Interaction admission below still requires the exact original binding.
+                }
+            }
+            if (binding == null) binding = runModelResolver.apply(json.createObjectNode());
             // The same published Tool registrations must be available when the SDK resumes
             // an approved Interaction after a process restart. The SDK still owns the
             // pending request and its side-effect admission; this bridge only restores it.
@@ -968,10 +993,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     binding, toolsForThread(thread), foundation);
             boolean claimBinding = thread.modelBindingIdentity == null
                     || thread.modelBindingIdentity.equals(bridge.bindingIdentity());
-            // Conversation and run reads are backed by the shared SQLite authority and do not
-            // execute the model. Preserve a historical binding across provider restarts so the
-            // transcript remains readable, while streamRun still rejects a new run whose current
-            // binding does not match the persisted identity.
+            // Conversation/run reads use shared SQLite. The last selected model is preferred
+            // so a pending Run resumes with its own model after a gateway restart.
             attachBridge(thread, bridge, claimBinding);
             return bridge;
         }
@@ -998,6 +1021,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             thread.bridge = bridge;
             if (claimBinding) thread.modelBindingIdentity = bridge.bindingIdentity();
             restoreSession(thread);
+            ownedBridges.add(bridge);
         } catch (RuntimeException | Error failure) {
             thread.bridge = previousBridge;
             thread.modelBindingIdentity = previousBinding;
@@ -3018,11 +3042,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         closed = true;
         workspaceCompletionObservers.forEach(Thread::interrupt);
         titleCompletionObservers.forEach(Thread::interrupt);
-        threads.values().stream()
-                .map(thread -> thread.bridge)
-                .filter(java.util.Objects::nonNull)
-                .distinct()
-                .forEach(HaifaRunBridge::close);
+        ownedBridges.forEach(HaifaRunBridge::close);
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
         List<Thread> observers = new ArrayList<>(workspaceCompletionObservers);
         observers.addAll(titleCompletionObservers);

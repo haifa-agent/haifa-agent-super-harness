@@ -26,6 +26,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -48,6 +49,7 @@ class W05PendingApprovalRecoveryTest {
             .connectTimeout(Duration.ofSeconds(5))
             .build();
     private final AtomicInteger toolInvocations = new AtomicInteger();
+    private final AtomicBoolean secondModelAvailable = new AtomicBoolean(true);
     private final SecretKey continuationKey = new SecretKeySpec(new byte[32], "AES");
     private final HaifaPublicInteractionSpikeTest.ApprovalProbeModel model =
             new HaifaPublicInteractionSpikeTest.ApprovalProbeModel();
@@ -192,6 +194,95 @@ class W05PendingApprovalRecoveryTest {
         System.out.println("W05_PENDING_RECOVERY_EVIDENCE scenario=restart-approve run="
                 + location.substring(location.lastIndexOf('/') + 1) + " request=" + requestId
                 + " card=" + cardId + " duplicate=409 tool_calls=1");
+    }
+
+    @Test
+    void pendingSecondModelKeepsItsOriginalRunAcrossGatewayRestart() throws Exception {
+        api.close();
+        startServerWithModelSwitch();
+        createThread("cross-model-pending");
+        String firstBody = withModel(ordinaryRunBody("first model terminal"),
+                "super-harness-local-probe");
+        HttpResponse<String> first = postJson("/api/threads/cross-model-pending/runs/stream", firstBody);
+        assertThat(first.statusCode()).isEqualTo(200);
+        assertThat(first.body()).contains("first model terminal", "event: end");
+
+        HttpResponse<String> pending = postJson("/api/threads/cross-model-pending/runs/stream",
+                withModel(ordinaryRunBody("second model approval"), "interaction-probe"));
+        assertThat(pending.statusCode()).isEqualTo(200);
+        String location = pending.headers().firstValue("content-location").orElseThrow();
+        String requestId = requestId(humanInputCard(pending.body()));
+        assertThat(toolInvocations).hasValue(0);
+
+        api.close();
+        startServerWithModelSwitch();
+        assertThat(requestId(messageWithHumanInput(
+                getJson("/api/threads/cross-model-pending/state").path("values").path("messages"))))
+                .isEqualTo(requestId);
+        HttpResponse<String> duplicate = postJson("/api/threads/cross-model-pending/runs/stream",
+                withModel(ordinaryRunBody("new turn while pending"), "super-harness-local-probe"));
+        assertThat(duplicate.statusCode()).isEqualTo(409);
+        HttpResponse<String> approved = postJson("/api/threads/cross-model-pending/runs/stream",
+                hiddenResponseBody(requestId, "approve", "approve"));
+        assertThat(approved.statusCode()).as(approved.body()).isEqualTo(200);
+        assertThat(approved.headers().firstValue("content-location")).contains(location);
+        assertThat(approved.body()).contains("interaction resolved", "event: end");
+        assertThat(toolInvocations).hasValue(1);
+        System.out.println("W03_CROSS_MODEL_PENDING_EVIDENCE run=" + runId(location)
+                + " request=" + requestId + " tool_calls=" + toolInvocations.get());
+    }
+
+    @Test
+    void unavailablePendingModelCannotApplyApprovalSideEffect() throws Exception {
+        api.close();
+        startServerWithModelSwitch();
+        createThread("cross-model-unavailable");
+        assertThat(postJson("/api/threads/cross-model-unavailable/runs/stream",
+                withModel(ordinaryRunBody("first terminal"), "super-harness-local-probe")).statusCode())
+                .isEqualTo(200);
+        HttpResponse<String> pending = postJson("/api/threads/cross-model-unavailable/runs/stream",
+                withModel(ordinaryRunBody("second approval"), "interaction-probe"));
+        String requestId = requestId(humanInputCard(pending.body()));
+        api.close();
+        secondModelAvailable.set(false);
+        startServerWithModelSwitch();
+        assertThat(getJson("/api/threads/cross-model-unavailable/state").toString())
+                .contains(requestId);
+        HttpResponse<String> refused = postJson("/api/threads/cross-model-unavailable/runs/stream",
+                hiddenResponseBody(requestId, "approve", "approve"));
+        assertThat(refused.statusCode()).as(refused.body()).isEqualTo(409);
+        assertThat(refused.body()).contains("Pending Run model is unavailable");
+        assertThat(toolInvocations).hasValue(0);
+        System.out.println("W03_PENDING_MODEL_UNAVAILABLE_EVIDENCE request=" + requestId
+                + " status=409 tool_calls=0");
+    }
+
+    private void startServerWithModelSwitch() throws Exception {
+        var first = LocalProbeModelTestSupport.binding();
+        var second = new HaifaRunBridge.ModelBinding(
+                "interaction-probe", "1.0.0", model,
+                HaifaPublicInteractionSpikeTest.modelSnapshot());
+        api = DeerFlowBootstrapApi.createForInteractionTests(
+                new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
+                dataDirectory,
+                continuationKey,
+                body -> {
+                    if ("interaction-probe".equals(body.path("context").path("model_name").asText())) {
+                        if (!secondModelAvailable.get()) {
+                            throw new IllegalArgumentException("Model is unavailable");
+                        }
+                        return second;
+                    }
+                    return first;
+                },
+                List.of(new HaifaPublicInteractionSpikeTest.MutatingProbeTool(toolInvocations)));
+        api.start();
+        baseUri = URI.create("http://127.0.0.1:" + api.address().getPort());
+    }
+
+    private String withModel(String body, String modelName) {
+        return body.replace("\"on_disconnect\"",
+                "\"context\":{\"model_name\":\"" + modelName + "\"},\"on_disconnect\"");
     }
 
     @Test

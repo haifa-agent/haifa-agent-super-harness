@@ -117,6 +117,50 @@ class DeerFlowUploadRunContextHttpTest {
     }
 
     @Test
+    void nextModelReceivesPriorReadFileCallAndResultWithoutExecutingItAgain() throws Exception {
+        String threadId = "v2-cross-model-tool";
+        assertThat(request("POST", "/api/threads", "{\"thread_id\":\"" + threadId + "\"}").statusCode())
+                .isEqualTo(200);
+        assertThat(upload(threadId, "customers.csv", fixture).statusCode()).isEqualTo(200);
+        RunResult first = runWithFiles(threadId, "read the uploaded CSV and report totals",
+                List.of(fileRef("customers.csv", fixture.length)));
+        assertThat(first.status()).isEqualTo("success");
+        assertCsvOracle(first.answer());
+        assertThat(first.readFileToolCallId()).isNotBlank();
+
+        String endpoint = "http://127.0.0.1:" + provider.getAddress().getPort() + "/v1";
+        String secondConfig = """
+                {"config":{"name":"v2-second-model","display_name":"V2 Second Controlled",
+                "provider":"openai-compatible","model":"v2-second-provider",
+                "base_url":"%s","enabled":true,"supports_vision":false,
+                "context_window":8192,"max_tokens":1024,"api_key":"controlled-key"},
+                "expected_revision":null}
+                """.formatted(endpoint);
+        assertThat(request("PUT", "/api/managed-models", secondConfig).statusCode()).isEqualTo(200);
+
+        int callsBeforeSecond = providerCalls.get();
+        RunResult second = runWithFiles(threadId, "reuse previous tool result for totals",
+                List.of(), "v2-second-model");
+        assertThat(second.status()).isEqualTo("success");
+        assertThat(second.answer()).isEqualTo("PRIOR_" + first.answer());
+        assertThat(second.readFileToolCallId()).isNull();
+        assertThat(providerCalls.get()).isEqualTo(callsBeforeSecond + 1);
+        JsonNode secondRequest = providerRequests.getLast();
+        assertThat(secondRequest.path("model").asText()).isEqualTo("v2-second-provider");
+        List<String> handoffIds = secondRequest.path("messages").findValuesAsText("tool_call_id");
+        assertThat(handoffIds).singleElement().satisfies(
+                value -> assertThat(value).matches("haifa_handoff_[0-9a-f]{40}"));
+        assertThat(secondRequest.path("messages").findValuesAsText("id")).contains(handoffIds.getFirst());
+        assertThat(request("GET", "/api/threads/" + threadId + "/messages/page", null).body())
+                .contains(first.runId(), second.runId());
+        assertThat(request("GET", "/api/threads/" + threadId + "/state", null).body())
+                .contains(first.readFileToolCallId());
+        System.out.println("W03_CROSS_MODEL_TOOL_EVIDENCE thread=" + threadId
+                + " first=" + first.runId() + " second=" + second.runId()
+                + " toolCall=" + first.readFileToolCallId() + " providerCalls=" + providerCalls.get());
+    }
+
+    @Test
     void uploadRejectsInvalidThreadIdentifiersLikeTheFrozenThreadIdType() throws Exception {
         assertThat(upload("bad.thread", "customers.csv", fixture).statusCode()).isEqualTo(422);
         assertThat(upload("x".repeat(65), "customers.csv", fixture).statusCode()).isEqualTo(422);
@@ -357,7 +401,17 @@ class DeerFlowUploadRunContextHttpTest {
         } else {
             String user = textOf(last.path("content"));
             Matcher path = CONTEXT_PATH.matcher(user);
-            if (user.contains("<current_uploads>") && path.find() && tools.contains("read_file")) {
+            if (user.contains("reuse previous tool result for totals")) {
+                String previousTool = null;
+                for (JsonNode message : messages) {
+                    if ("tool".equals(message.path("role").asText())) {
+                        previousTool = toolText(message.path("content").asText());
+                    }
+                }
+                chunk = textChunk(responseId, previousTool == null
+                        ? "MISSING_STRUCTURED_HISTORY"
+                        : "PRIOR_" + answerFromToolResult(previousTool));
+            } else if (user.contains("<current_uploads>") && path.find() && tools.contains("read_file")) {
                 String arguments = json.writeValueAsString(Map.of("path", path.group(1)));
                 chunk = json.writeValueAsString(Map.of(
                         "id", responseId, "model", "v2-controlled",
@@ -457,6 +511,11 @@ class DeerFlowUploadRunContextHttpTest {
     }
 
     private RunResult runWithFiles(String threadId, String text, List<Map<String, Object>> files) throws Exception {
+        return runWithFiles(threadId, text, files, "v2-model");
+    }
+
+    private RunResult runWithFiles(String threadId, String text, List<Map<String, Object>> files,
+            String modelName) throws Exception {
         Map<String, Object> message = new LinkedHashMap<>();
         message.put("type", "human");
         message.put("content", List.of(Map.of("type", "text", "text", text)));
@@ -465,7 +524,7 @@ class DeerFlowUploadRunContextHttpTest {
         body.put("assistant_id", "lead_agent");
         body.put("input", Map.of("messages", List.of(message)));
         body.put("stream_mode", List.of("messages-tuple", "updates", "custom"));
-        body.put("context", Map.of("model_name", "v2-model", "mode", "flash", "thread_id", threadId));
+        body.put("context", Map.of("model_name", modelName, "mode", "flash", "thread_id", threadId));
         body.put("on_disconnect", "continue");
         body.put("multitask_strategy", "reject");
         HttpResponse<String> stream = request(
