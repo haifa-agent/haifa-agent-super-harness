@@ -582,10 +582,10 @@ test(`${backend}: V2-M1-03-N3 oversized shelf file is rejected with 413`, async 
   const maxFileSize = Number(limits.max_file_size);
   expect(maxFileSize, `backend must advertise a positive per-file upload limit: ${JSON.stringify(limits)}`).toBeGreaterThan(0);
   // Bounded, controlled oversize derived from the backend's own advertised
-  // limit (never a fixed >50 MiB blob). The extra 512 KiB also exceeds the
-  // bounded multipart body envelope, so a backend that checks the declared
-  // length rejects it without buffering the whole payload.
-  const oversizeBytes = maxFileSize + 512 * 1024;
+  // limit (never a fixed >50 MiB blob). Exactly one byte over keeps the body
+  // inside the backend's multipart envelope so the server reads it and answers
+  // with a normal 413 instead of racing a declared-length early close.
+  const oversizeBytes = maxFileSize + 1;
   const gateway = process.env.W18_DIFFERENTIAL_GATEWAY || app;
   const project = await createProject(context.request, `V2M1 oversized ${Date.now()}`);
   const upload = await uploadProjectDocument(context.request, project.id, {
