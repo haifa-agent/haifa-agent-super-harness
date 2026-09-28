@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "haifa://customer-demo-v2/consulting-analysis-dependency-review",
+  "title": "consulting-analysis dependency review",
+  "type": "object",
+  "required": ["schemaVersion", "skill", "reviewedSource", "frozenCommit", "verdict", "v2UsablePhase", "findings", "hardDependencyFound", "stopImplementation", "escalationRequired", "notRun"],
+  "properties": {
+    "schemaVersion": {"const": "haifa.customer-demo-v2.consulting-analysis-dependency-review/v1"},
+    "skill": {"const": "consulting-analysis"},
+    "frozenCommit": {"const": "e545c28ac301e6f9feae247c513d8ea8f83df294"},
+    "verdict": {"enum": ["NO_HARD_DEPENDENCY_ON_DEFERRED_CAPABILITIES", "HARD_DEPENDENCY_FOUND_PENDING_ARBITRATION"]},
+    "findings": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["topic", "dependencyClass", "evidence", "v2Impact"],
+        "properties": {"dependencyClass": {"enum": ["not-a-dependency", "optional-input", "optional-with-explicit-fallback", "soft-config", "hard-dependency"]}}
+      }
+    },
+    "hardDependencyFound": {"type": "boolean"},
+    "stopImplementation": {"type": "boolean"},
+    "escalationRequired": {"type": "boolean"}
+  }
+}

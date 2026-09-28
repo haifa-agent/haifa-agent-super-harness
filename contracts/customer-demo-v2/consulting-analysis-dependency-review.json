@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "haifa.customer-demo-v2.consulting-analysis-dependency-review/v1",
+  "skill": "consulting-analysis",
+  "reviewedSource": "deer-flow/skills/public/consulting-analysis/SKILL.md",
+  "reviewedSourceSha256Ref": "contracts/customer-demo-v2/source-index.json",
+  "frozenCommit": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+  "verdict": "NO_HARD_DEPENDENCY_ON_DEFERRED_CAPABILITIES",
+  "v2UsablePhase": "Phase 2 (Report Generation)",
+  "conclusion": "The V2 selection path (Phase 2 only, consuming an already-provided Data Summary and a real MCP fact) has no hard dependency on W07 (Goal/Todo/Context), W11 (Web/Image Search/Knowledge), W14 (shell/Python/CLI execution), or any external search/chart capability. The skill explicitly does not collect data and explicitly falls back to comparison tables when no visualization skill is available. Therefore the dependent implementation may proceed; this is a static review, not a runtime PASS.",
+  "findings": [
+    {
+      "topic": "data-collection",
+      "dependencyClass": "not-a-dependency",
+      "triggerPath": "SKILL.md line 306 (Phase 1->2 handoff) names other data collection skills",
+      "evidence": "SKILL.md line 316: 'This skill does NOT perform data collection. It only produces the framework (Phase 1) and the final report (Phase 2).'",
+      "v2Impact": "V2 selects Phase 2 only. Data Summary and the MCP policy fact are supplied as inputs by W04/W10/W16; the skill does not fetch them."
+    },
+    {
+      "topic": "external-search",
+      "dependencyClass": "optional-input",
+      "triggerPath": "Phase 2 input 'External Search Findings' (SKILL.md line 335, marked Optional)",
+      "evidence": "Phase 2 Inputs table marks External Search Findings Optional; citations use them 'where applicable'.",
+      "v2Impact": "Absent External Search Findings the report must flag missing data and avoid fabrication (SKILL.md line 347, 628). No W11 requirement."
+    },
+    {
+      "topic": "charts",
+      "dependencyClass": "optional-with-explicit-fallback",
+      "triggerPath": "Step 2.3 chart generation delegates to a visualization skill when available",
+      "evidence": "SKILL.md lines 363-367: 'No Chart Files and no visualization skill available: Skip this step - use comparison tables as the primary visual anchor ... and note the absence of charts.'",
+      "v2Impact": "No chart capability is required. V2 uses tables and explicitly notes the absence of charts; this must not be presented as full report capability."
+    },
+    {
+      "topic": "shell-python-cli",
+      "dependencyClass": "not-a-dependency",
+      "triggerPath": "none",
+      "evidence": "consulting-analysis has no allowed-tools frontmatter in SKILL.md and no script execution instructions.",
+      "v2Impact": "No W14 execution provider is required; W14 stays default-off."
+    },
+    {
+      "topic": "goal-todo-context",
+      "dependencyClass": "not-a-dependency",
+      "triggerPath": "none",
+      "evidence": "No reference to Goal/Todo/Memory/Context infrastructure in SKILL.md.",
+      "v2Impact": "No W07 requirement."
+    },
+    {
+      "topic": "locale-settings",
+      "dependencyClass": "soft-config",
+      "triggerPath": "SKILL.md lines 15, 613-618 (output_locale, reasoning_locale)",
+      "evidence": "output_locale defaults to zh_CN; language configurable.",
+      "v2Impact": "Informational only; no deferred work package dependency."
+    }
+  ],
+  "hardDependencyFound": false,
+  "stopImplementation": false,
+  "escalationRequired": false,
+  "boundary": "If W16 later finds that implementing the slice actually produces a hard dependency on W07/W11/W14, it must stop and re-escalate per the roadmap; this review does not authorize any substitute for those capabilities.",
+  "notRun": [
+    "No live activation of consulting-analysis was performed in this static task.",
+    "The chart-absence table fallback is a documented property of the frozen SKILL.md, not a runtime acceptance result."
+  ]
+}
