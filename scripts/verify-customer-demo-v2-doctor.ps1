@@ -196,8 +196,14 @@ else {
                 $isSuperHarness = ($null -ne $owner) -and ($owner -like "*$root*" -or $owner -like '*super-harness*')
                 $entry = [ordered]@{ port = $port; state = 'listening'; pid = $pid0; superHarness = $isSuperHarness }
                 if ($mainPorts -contains $port) { $entry.role = 'main' }
+                # The human-authorized L3 Pilot MCP is expected to listen on its own port; it is
+                # recognized only by the process marker committed in the decision record.
+                $l3Marker = [string](Get-V2Prop (Get-V2Prop (Get-V2Prop $v2Decisions 'decisions') 'l3McpSelection') 'processMarker')
+                $isAuthorizedL3 = ($port -eq $L3McpPort) -and ($null -ne $owner) -and
+                    -not [string]::IsNullOrWhiteSpace($l3Marker) -and $owner.Contains($l3Marker)
+                if ($isAuthorizedL3) { $entry.role = 'l3-mcp'; $entry.l3ProcessMarker = $l3Marker }
                 $bindResults += $entry
-                if (-not $isSuperHarness) { $occupied += $port }
+                if (-not $isSuperHarness -and -not $isAuthorizedL3) { $occupied += $port }
                 continue
             }
             try {

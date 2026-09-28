@@ -37,6 +37,7 @@
       "protocolVersion": "2025-06-18",
       "authentication": "none",
       "credentialRef": "none-local-profile",
+      "processMarker": "UtilityMcpServerApplication",
       "tool": "calculate",
       "factSpec": "east-amount-share",
       "factDetail": {
