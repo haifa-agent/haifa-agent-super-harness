@@ -260,12 +260,6 @@ async function assertUnavailableModelRefused(context, page, testInfo, { caseId, 
   const first = await sendRun(page, input, markerA);
   await pollRun(context.request, first.threadId, first.runId, "success");
   const aRequests = providerRequests(markerA);
-  // The provider slice is the authoritative evidence that turn A was served by
-  // A; the request field is recorded but not the sole criterion.
-  expect(
-    aRequests.some((entry) => entry.model === "w18-controlled-model"),
-    `turn A must reach the provider as model A: ${JSON.stringify(aRequests.map((entry) => entry.model))}`,
-  ).toBe(true);
 
   const requestBody = {
     assistant_id: "lead_agent",
@@ -281,13 +275,9 @@ async function assertUnavailableModelRefused(context, page, testInfo, { caseId, 
   const visibleModels = (await (await context.request.get(`${app}/api/models`)).json())
     .models.map((model) => model.name);
 
-  expect(visibleModels, `${unavailableModel} must not be a selectable model`).not.toContain(unavailableModel);
-  expect(servedByA, "an unavailable model must never silently fall back to A").toEqual([]);
-  expect(
-    second.status,
-    `an unavailable model must be refused explicitly, got ${second.status}: ${second.body}`,
-  ).toBeGreaterThanOrEqual(400);
-
+  // Raw request body, status, response body and provider slice are written to
+  // this round's external evidence BEFORE any assertion, so a failing negative
+  // still leaves its original request/response on disk.
   await save(testInfo, artifactName, {
     case: caseId,
     backend,
@@ -305,6 +295,19 @@ async function assertUnavailableModelRefused(context, page, testInfo, { caseId, 
     visibleModels,
     noSilentFallbackToA: servedByA.length === 0,
   });
+
+  // The provider slice is the authoritative evidence that turn A was served by
+  // A; the request field is recorded but not the sole criterion.
+  expect(
+    aRequests.some((entry) => entry.model === "w18-controlled-model"),
+    `turn A must reach the provider as model A: ${JSON.stringify(aRequests.map((entry) => entry.model))}`,
+  ).toBe(true);
+  expect(visibleModels, `${unavailableModel} must not be a selectable model`).not.toContain(unavailableModel);
+  expect(servedByA, "an unavailable model must never silently fall back to A").toEqual([]);
+  expect(
+    second.status,
+    `an unavailable model must be refused explicitly, got ${second.status}: ${second.body}`,
+  ).toBeGreaterThanOrEqual(400);
 }
 
 async function readUploadLimits(request, threadId) {
@@ -323,7 +326,6 @@ async function captureOracleRun(page, context, prefix) {
   const marker = `v2-m1-file-${Date.now()}`;
   const run = await sendOnCurrentThread(page, `${marker}: report data row 17's customer_id and the East, West and overall amount totals`);
   const requests = providerRequests(marker);
-  assertReadFileOffered(requests);
   const actions = v2FileActions(marker);
   const state = await (await context.request.get(`${app}/api/langgraph/threads/${attached.threadId}/state`)).json();
   const runMessages = (state.values?.messages ?? []).filter((message) => !message.run_id || message.run_id === run.runId);
@@ -554,11 +556,11 @@ test(`${backend}: V2-M1-03-N1 unsafe shelf filename is rejected`, async ({ conte
   const upload = await uploadProjectDocument(context.request, project.id, {
     name: unsafeName, mimeType: "text/csv", buffer: bytes,
   });
-  expect(upload.status, `unsafe filename must match the frozen 400 contract: ${upload.text}`).toBe(400);
   await save(testInfo, "v2-m1-03-n1-unsafe-filename", {
     case: "V2-M1-03-N1", backend, projectId: project.id, attemptedNameBytes: Buffer.byteLength(unsafeName),
     status: upload.status, referenceExpectedStatus: 400, body: upload.body ?? upload.text,
   });
+  expect(upload.status, `unsafe filename must match the frozen 400 contract: ${upload.text}`).toBe(400);
 });
 
 test(`${backend}: V2-M1-03-N2 zero-byte shelf file is rejected with 400`, async ({ context }, testInfo) => {
@@ -566,13 +568,13 @@ test(`${backend}: V2-M1-03-N2 zero-byte shelf file is rejected with 400`, async 
   const upload = await uploadProjectDocument(context.request, project.id, {
     name: "empty.csv", mimeType: "text/csv", buffer: Buffer.alloc(0),
   });
-  // Frozen project_documents.py rejects an empty staged file with 400 ("Empty
-  // file"); it is not the oversized 413 path, so accept only 400.
-  expect(upload.status, `zero-byte file must match the frozen 400 contract: ${upload.text}`).toBe(400);
   await save(testInfo, "v2-m1-03-n2-empty-file", {
     case: "V2-M1-03-N2", backend, projectId: project.id, status: upload.status,
     frozenEmptyStatus: 400, body: upload.body ?? upload.text,
   });
+  // Frozen project_documents.py rejects an empty staged file with 400 ("Empty
+  // file"); it is not the oversized 413 path, so accept only 400.
+  expect(upload.status, `zero-byte file must match the frozen 400 contract: ${upload.text}`).toBe(400);
 });
 
 test(`${backend}: V2-M1-03-N3 oversized shelf file is rejected with 413`, async ({ context }, testInfo) => {
@@ -595,11 +597,11 @@ test(`${backend}: V2-M1-03-N3 oversized shelf file is rejected with 413`, async 
     origin: gateway,
     timeout: 120_000,
   });
-  expect(upload.status, `oversized file must match the frozen 413 contract: ${upload.text}`).toBe(413);
   await save(testInfo, "v2-m1-03-n3-oversized-file", {
     case: "V2-M1-03-N3", backend, projectId: project.id, maxFileSize, oversizeBytes,
     uploadOrigin: gateway, status: upload.status, body: upload.body ?? upload.text,
   });
+  expect(upload.status, `oversized file must match the frozen 413 contract: ${upload.text}`).toBe(413);
 });
 
 async function createThreadWithTitle(request, threadId, projectId, title) {
@@ -693,40 +695,51 @@ test(`${backend}: V2-M1-04 attached Project document enters the Run context`, as
   const marker = `v2-m1-file-${Date.now()}`;
 
   const listed = await context.request.get(`${app}/api/threads/${attached.threadId}/uploads/list`);
-  expect(listed.status(), await listed.text()).toBe(200);
-  const listedNames = (await listed.json()).files.map((entry) => entry.filename);
+  const listedStatus = listed.status();
+  let listedBody = null;
+  try { listedBody = await listed.json(); } catch { listedBody = null; }
+  const listedNames = (listedBody?.files ?? []).map((entry) => entry.filename);
 
   const run = await sendOnCurrentThread(page, `${marker}: report data row 17's customer_id and the East, West and overall amount totals`);
   const requests = providerRequests(marker);
-  assertReadFileOffered(requests);
-
   const actions = v2FileActions(marker);
-  expect(actions.map((entry) => entry.action), JSON.stringify(actions)).toEqual(["read_file", "answer"]);
-  expect(actions[0].path).toBe(UPLOAD_PATH);
   const first = requests.find((entry) => entry.toolResults === 0);
-  expect(first.uploadPaths, "the attached file must be an input reference, not inlined").toContain(UPLOAD_PATH);
-  expect(first.rawPrompt).not.toContain("C017");
-  expect(first.offeredTools).toContain("read_file");
 
   const state = await (await context.request.get(`${app}/api/langgraph/threads/${attached.threadId}/state`)).json();
   const humans = (state.values?.messages ?? []).filter((message) => message.type === "human")
     .map((message) => (typeof message.content === "string" ? message.content : JSON.stringify(message.content))).join("\n");
-  expect(humans).toContain(`Path: ${UPLOAD_PATH}`);
-  expect(humans).not.toContain("C017");
 
-  expect(targets.forbidden).toEqual([]);
+  // Raw provider slice, upload listing and Thread path reference are written
+  // before assertions so a first failure still leaves this case's evidence.
   await save(testInfo, "v2-m1-04-attach-context", {
     case: "V2-M1-04",
     backend,
     threadId: attached.threadId,
     runId: run.runId,
+    listedStatus,
     listedNames,
     providerActions: actions,
-    firstRequestUploadPaths: first.uploadPaths,
-    humanReferencesPathNotValue: true,
+    providerRequestCount: requests.length,
+    firstRequestUploadPaths: first?.uploadPaths ?? null,
+    firstRequestOfferedTools: first?.offeredTools ?? null,
+    firstRequestRawPromptHasValue: first ? Boolean(first.rawPrompt?.includes("C017")) : null,
+    humanMessages: humans,
+    humanReferencesPathNotValue: humans.includes(`Path: ${UPLOAD_PATH}`) && !humans.includes("C017"),
     browserApiTargets: targets.requests,
     forbiddenBrowserTargets: targets.forbidden,
   });
+
+  expect(listedStatus, "the uploads list must be readable").toBe(200);
+  assertReadFileOffered(requests);
+  expect(actions.map((entry) => entry.action), JSON.stringify(actions)).toEqual(["read_file", "answer"]);
+  expect(actions[0].path).toBe(UPLOAD_PATH);
+  expect(first, "the first provider request must precede the read_file Tool result").toBeTruthy();
+  expect(first.uploadPaths, "the attached file must be an input reference, not inlined").toContain(UPLOAD_PATH);
+  expect(first.rawPrompt).not.toContain("C017");
+  expect(first.offeredTools).toContain("read_file");
+  expect(humans).toContain(`Path: ${UPLOAD_PATH}`);
+  expect(humans).not.toContain("C017");
+  expect(targets.forbidden).toEqual([]);
 });
 
 test(`${backend}: V2-M1-04-N1 un-attached Project document does not enter the Run context`, async ({ context, page }, testInfo) => {
@@ -735,32 +748,36 @@ test(`${backend}: V2-M1-04-N1 un-attached Project document does not enter the Ru
   const orphanUpload = await uploadProjectDocument(context.request, orphanProject.id, {
     name: "customers.csv", mimeType: "text/csv", buffer: fixtureBytes(),
   });
-  expect(orphanUpload.status, await orphanUpload.text).toBe(201);
   const orphanThread = `v2m1-orphan-${Date.now()}`;
   await createThread(context.request, orphanThread, orphanProject.id);
   const orphanMarker = `v2-m1-file-${Date.now()}`;
   await runOnThread(page, orphanThread, orphanMarker);
   const orphanRequests = providerRequests(orphanMarker);
   const orphanPaths = [...new Set(orphanRequests.flatMap((entry) => entry.uploadPaths ?? []))];
-  expect(orphanPaths, "an un-attached document must not enter the Run context").toEqual([]);
   const orphanActions = v2FileActions(orphanMarker);
-  expect(orphanActions.map((entry) => entry.action), JSON.stringify(orphanActions)).toEqual(["no_file_context"]);
   const orphanState = await (await context.request.get(`${app}/api/langgraph/threads/${orphanThread}/state`)).json();
   const orphanText = (orphanState.values?.messages ?? []).filter((message) => message.type === "ai")
     .map((message) => (typeof message.content === "string" ? message.content : "")).join("\n");
-  expect(orphanText).toContain(`${orphanMarker} NO_FILE_CONTEXT`);
-  expect(targets.forbidden).toEqual([]);
+
   await save(testInfo, "v2-m1-04-n1-unattached", {
     case: "V2-M1-04-N1",
     backend,
     threadId: orphanThread,
     projectId: orphanProject.id,
+    uploadStatus: orphanUpload.status,
     runAnswer: orphanText,
+    providerRequestCount: orphanRequests.length,
     providerUploadPaths: orphanPaths,
     providerActions: orphanActions,
     browserApiTargets: targets.requests,
     forbiddenBrowserTargets: targets.forbidden,
   });
+
+  expect(orphanUpload.status, orphanUpload.text).toBe(201);
+  expect(orphanPaths, "an un-attached document must not enter the Run context").toEqual([]);
+  expect(orphanActions.map((entry) => entry.action), JSON.stringify(orphanActions)).toEqual(["no_file_context"]);
+  expect(orphanText).toContain(`${orphanMarker} NO_FILE_CONTEXT`);
+  expect(targets.forbidden).toEqual([]);
 });
 
 test(`${backend}: V2-M1-04-N2 attaching to an unknown Thread fails closed`, async ({ context }, testInfo) => {
@@ -771,10 +788,11 @@ test(`${backend}: V2-M1-04-N2 attaching to an unknown Thread fails closed`, asyn
   });
   expect(upload.status, await upload.text).toBe(201);
   const attach = await attachDocument(context.request, project.id, upload.body.document.id, `v2m1-missing-${suffix}`);
-  expect(attach.status, `attach to an unknown Thread must be 404, got ${attach.status}: ${attach.text}`).toBe(404);
   await save(testInfo, "v2-m1-04-n2-foreign-thread", {
-    case: "V2-M1-04-N2", backend, projectId: project.id, status: attach.status, body: attach.text,
+    case: "V2-M1-04-N2", backend, projectId: project.id, documentId: upload.body.document.id,
+    targetThreadId: `v2m1-missing-${suffix}`, status: attach.status, body: attach.text,
   });
+  expect(attach.status, `attach to an unknown Thread must be 404, got ${attach.status}: ${attach.text}`).toBe(404);
 });
 
 test(`${backend}: V2-M1-05 model reads the saved original and answers the CSV oracle`, async ({ context, page }, testInfo) => {
@@ -782,6 +800,25 @@ test(`${backend}: V2-M1-05 model reads the saved original and answers the CSV or
   const captured = await captureOracleRun(page, context, "oracle");
   const { expected, attached, marker, run, actions, call } = captured;
 
+  await save(testInfo, "v2-m1-05-csv-oracle", {
+    case: "V2-M1-05",
+    backend,
+    threadId: attached.threadId,
+    runId: run.runId,
+    answer: actions[1]?.answer ?? null,
+    expectedOracle: expected,
+    providerActions: actions,
+    providerRequestCount: captured.requests.length,
+    readFile: call ? { toolCallId: call.id, path: call.args?.path ?? null, resultSha256: actions[1]?.toolResultSha256 ?? null } : null,
+    contentStatus: captured.contentStatus,
+    downloadedSha256: sha256(captured.downloaded),
+    downloadedByteLength: captured.downloaded.length,
+    fixtureSha256: FIXTURE_SHA256,
+    browserApiTargets: targets.requests,
+    forbiddenBrowserTargets: targets.forbidden,
+  });
+
+  assertReadFileOffered(captured.requests);
   expect(actions.map((entry) => entry.action), JSON.stringify(actions)).toEqual(["read_file", "answer"]);
   expect(actions[0].path).toBe(UPLOAD_PATH);
   expect(actions[1].answer).toBe(`${marker} ${expected}`);
@@ -792,20 +829,6 @@ test(`${backend}: V2-M1-05 model reads the saved original and answers the CSV or
   expect(captured.contentStatus, "the saved original must download").toBe(200);
   expect(sha256(captured.downloaded)).toBe(FIXTURE_SHA256);
   expect(targets.forbidden).toEqual([]);
-
-  await save(testInfo, "v2-m1-05-csv-oracle", {
-    case: "V2-M1-05",
-    backend,
-    threadId: attached.threadId,
-    runId: run.runId,
-    answer: actions[1].answer,
-    expectedOracle: expected,
-    readFile: { toolCallId: call.id, path: call.args.path, resultSha256: actions[1].toolResultSha256 },
-    downloadedSha256: sha256(captured.downloaded),
-    fixtureSha256: FIXTURE_SHA256,
-    browserApiTargets: targets.requests,
-    forbiddenBrowserTargets: targets.forbidden,
-  });
 });
 
 test(`${backend}: V2-M1-05-N1 row offset answers the 1-based row 17, not an off-by-one row`, async ({ context, page }, testInfo) => {
@@ -814,30 +837,36 @@ test(`${backend}: V2-M1-05-N1 row offset answers the 1-based row 17, not an off-
   const correctRowId = rows[16][0];
   const nextRowId = rows[17]?.[0];
   const previousRowId = rows[15]?.[0];
-  expect(correctRowId, "the independent 1-based row 17 is C017").toBe("C017");
-  const answer = captured.actions[1].answer;
-  expect(answer, "the answer must resolve row 17 with 1-based indexing").toContain(`row17=${correctRowId}`);
-  expect(answer, "a 0-based/off-by-one row offset must not pass").not.toContain(`row17=${nextRowId}`);
-  expect(answer, "a shifted-up row offset must not pass").not.toContain(`row17=${previousRowId}`);
+  const answer = captured.actions[1]?.answer ?? null;
   await save(testInfo, "v2-m1-05-n1-row-offset", {
     case: "V2-M1-05-N1", backend, threadId: captured.attached.threadId, runId: captured.run.runId,
     correctRowId, nextRowId, previousRowId, answer,
+    providerActions: captured.actions, providerRequestCount: captured.requests.length,
   });
+  assertReadFileOffered(captured.requests);
+  expect(correctRowId, "the independent 1-based row 17 is C017").toBe("C017");
+  expect(answer, "the answer must resolve row 17 with 1-based indexing").toContain(`row17=${correctRowId}`);
+  expect(answer, "a 0-based/off-by-one row offset must not pass").not.toContain(`row17=${nextRowId}`);
+  expect(answer, "a shifted-up row offset must not pass").not.toContain(`row17=${previousRowId}`);
 });
 
 test(`${backend}: V2-M1-05-N2 a BOM or mojibake Tool result would break the pinned bytes`, async ({ context, page }, testInfo) => {
   const captured = await captureOracleRun(page, context, "oracle-n2");
+  await save(testInfo, "v2-m1-05-n2-encoding", {
+    case: "V2-M1-05-N2", backend, threadId: captured.attached.threadId, runId: captured.run.runId,
+    toolResultSha256: captured.actions[1]?.toolResultSha256 ?? null, fixtureSha256: FIXTURE_SHA256,
+    downloadedSha256: sha256(captured.downloaded),
+    firstFixtureCharCode: captured.bytes.toString("utf8").charCodeAt(0),
+    answer: captured.actions[1]?.answer ?? null,
+    providerActions: captured.actions, providerRequestCount: captured.requests.length,
+  });
+  assertReadFileOffered(captured.requests);
   // The provider hashes the CSV lines it actually saw through the production
   // read_file Tool; a BOM or mojibake would break header detection or the digest.
   expect(captured.actions[1].toolResultSha256, "the read_file Tool result must still hash to the pinned LF fixture").toBe(FIXTURE_SHA256);
   expect(sha256(captured.downloaded)).toBe(FIXTURE_SHA256);
   expect(captured.bytes.toString("utf8").charCodeAt(0), "the committed fixture is UTF-8 without BOM").not.toBe(0xfeff);
   expect(captured.actions[1].answer).toContain("rows=20");
-  await save(testInfo, "v2-m1-05-n2-encoding", {
-    case: "V2-M1-05-N2", backend, threadId: captured.attached.threadId, runId: captured.run.runId,
-    toolResultSha256: captured.actions[1].toolResultSha256, fixtureSha256: FIXTURE_SHA256,
-    answer: captured.actions[1].answer,
-  });
 });
 
 test(`${backend}: V2-M1-05-N3 recomputed region and grand totals match the independent oracle`, async ({ context, page }, testInfo) => {
@@ -848,16 +877,18 @@ test(`${backend}: V2-M1-05-N3 recomputed region and grand totals match the indep
   const west = sum("West");
   const total = east + west;
   const high = rows.filter((row) => Number(row[2]) >= 1500).length;
+  const answer = captured.actions[1]?.answer ?? null;
+  await save(testInfo, "v2-m1-05-n3-totals", {
+    case: "V2-M1-05-N3", backend, threadId: captured.attached.threadId, runId: captured.run.runId,
+    recomputed: { east, west, total, high, rows: rows.length }, answer,
+    providerActions: captured.actions, providerRequestCount: captured.requests.length,
+  });
+  assertReadFileOffered(captured.requests);
   expect({ east, west, total, high, rows: rows.length }).toEqual({ east: 10000, west: 11000, total: 21000, high: 6, rows: 20 });
-  const answer = captured.actions[1].answer;
   expect(answer).toContain(`east=${east}`);
   expect(answer).toContain(`west=${west}`);
   expect(answer).toContain(`total=${total}`);
   expect(answer).toContain(`high=${high}`);
   expect(answer, "a drifted grand total must not pass").not.toContain(`total=${total + 1}`);
   expect(answer, "a wrong high-amount threshold must not pass").not.toContain(`high=${high + 1}`);
-  await save(testInfo, "v2-m1-05-n3-totals", {
-    case: "V2-M1-05-N3", backend, threadId: captured.attached.threadId, runId: captured.run.runId,
-    recomputed: { east, west, total, high, rows: rows.length }, answer,
-  });
 });
