@@ -244,7 +244,7 @@ try {
         'missing-prerequisite' = @({ param($s) Add-Relation $s 'work_package' 'W00' 'work_package' 'W99' 'requires' }, 'references missing prerequisite W99')
         'self-reference' = @({ param($s) Add-Relation $s 'work_package' 'W00' 'work_package' 'W00' 'requires' }, 'cannot reference itself')
         'cycle' = @({ param($s) Add-Relation $s 'work_package' 'W00' 'work_package' 'W01' 'requires' }, 'prerequisite cycle detected')
-        'too-many-tasks' = @({ param($s) $extra = (Get-Row $s 'task' 'W05-task-1').PSObject.Copy(); $extra.id = 'W05-task-5'; $s.tables.task = @($s.tables.task) + $extra }, 'must have at most 4 tasks')
+        'too-many-tasks' = @({ param($s) $base = Get-Row $s 'task' 'W05-task-1'; $existing = @($s.tables.task | Where-Object work_package_id -eq 'W05').Count; $extras = @(($existing + 1)..9 | ForEach-Object { $t = $base.PSObject.Copy(); $t.id = "W05-task-$_"; $t }); $s.tables.task = @($s.tables.task) + $extras }, 'must have at most 8 tasks')
         'developing-without-assignment' = @({ param($s) $t = Get-Row $s 'task' 'W04-task-2'; $t.state = 'developing'; $t.prompt_path = 'private-docs/prompts/test.md' }, 'developing without exactly one running assignment')
         'started-without-prompt' = @({ param($s) (Get-Row $s 'task' 'W04-task-2').state = 'blocked' }, 'left pending without a prompt_path')
         'old-slot-ports' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '38018/53018' 'D:/workspace/test/a' }, 'slot and child port group do not match')
