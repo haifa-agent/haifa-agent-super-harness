@@ -112,6 +112,36 @@
       "sha256": "5bc99df7e5f8af5471eaa5d20b85fc46e99895cf3f2642fa9da94108d03ca13e"
     },
     {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/packages/harness/deerflow/agents/interaction_policy.py",
+      "path": "deer-flow/backend/packages/harness/deerflow/agents/interaction_policy.py",
+      "sha256": "a4d861afd13c39dbfbc7b81deaecaacad9148d36bcd11cd928214381467b040b"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py",
+      "path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py",
+      "sha256": "2650ebedbff0ac5535838a608ba811ac14b29b66587d5f876c54517c2d3dee36"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/packages/harness/deerflow/AGENTS.md",
+      "path": "deer-flow/backend/packages/harness/deerflow/AGENTS.md",
+      "sha256": "bf960bf1b1cc403d2d0d79b88f0d00045fc940a50cbd4cf16f745646ea0d5bc2"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/packages/harness/deerflow/agents/middlewares/AGENTS.md",
+      "path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/AGENTS.md",
+      "sha256": "6421d7436411df5dd49e56bcc4d6b3bc8f3f74afc0e67b3dd8e14b4eb7d23681"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/app/gateway/AGENTS.md",
+      "path": "deer-flow/backend/app/gateway/AGENTS.md",
+      "sha256": "1ab83b52bb93f3d357f66dd5a159938300f8d693670108a8e1ab774e07bb330e"
+    },
+    {
       "kind": "frontend",
       "path": "frontend/src/core/api/api-client.ts",
       "sha256": "60120b0361e04a9ffa293154c85112bbabeece0ee41b349ba395ffb1a0735118"
@@ -185,6 +215,16 @@
       "kind": "frontend",
       "path": "frontend/src/components/workspace/input-box.tsx",
       "sha256": "b5ed3d718397527d036ee4b8314630f66e44e5dccfdeba3870cd7752d435d411"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/components/workspace/chats/chat-page.tsx",
+      "sha256": "5085fad81e45b32409858553f66324db1eb2dba3f0c09397084a4dc21a646d5d"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/components/workspace/messages/message-list.tsx",
+      "sha256": "76cc13f7ee0a6d3bd4585b293f07d9b445bcc7f876ec3b9084ec2ddc520bc6c3"
     },
     {
       "kind": "contracts",

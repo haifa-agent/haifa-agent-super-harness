@@ -678,18 +678,38 @@
       "prerequisites": ["V1 write_file production path", "consulting-analysis active"],
       "input": "agent calls production write_file to create customer-summary.md",
       "reference": {
-        "support": "UPSTREAM_UNSUPPORTED",
+        "support": "PARTIAL",
         "sourceRefs": [
-          {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 945, "note": "reference run router exposes no interaction/approval semantics"}
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/interaction_policy.py", "line": 47, "note": "risk_confirmation is a mandatory ask_clarification scenario, so a risky write_file turn pauses for explicit confirmation"},
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/interaction_policy.py", "line": 64, "note": "the interactive clarification system states execution is interrupted automatically after ask_clarification"},
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 518, "note": "the middleware returns Command(goto=END), interrupting before the pending tool runs"}
+        ],
+        "unsupportedAssertions": [
+          {
+            "assertion": "an interaction of type approval is pending",
+            "reason": "reference has no typed approval interaction; the pause is an ask_clarification ToolMessage carrying artifact.human_input (a human-input request), never an approval entity or interaction registry",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/packages/harness/deerflow/agents/interaction_policy.py", "line": 10, "note": "the only interaction tool is ASK_CLARIFICATION_TOOL_NAME = ask_clarification"},
+              {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 510, "note": "the payload is artifact={\"human_input\": ...}, not an approval"}
+            ]
+          },
+          {
+            "assertion": "the production write_file Haifa Approval card",
+            "reason": "the clarification card is model-initiated and generic; reference has no production tool-call approval gate bound to write_file, and it never replays the paused tool after the answer",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/packages/harness/deerflow/AGENTS.md", "line": 99, "note": "\"Approvals never replay tools\" - the paused write_file is not executed after the answer"},
+              {"path": "deer-flow/backend/app/gateway/AGENTS.md", "line": 110, "note": "the Thread Runs route table lists create/stream/wait/regenerate/cancel; no approval route exists"}
+            ]
+          }
         ],
         "frontendConsumers": [],
-        "haifaTarget": "Haifa SDK authoritative pending Interaction; approval before side effects"
+        "haifaTarget": "Haifa SDK authoritative pending Interaction; approval before side effects (reference can only pause via ask_clarification, not approve in place)"
       },
       "positiveOracle": ["an interaction of type approval is pending", "the target file does not exist yet", "no artifact exists yet", "the tool call id is stable"],
       "negativeCases": [
         {"id": "V2-M3-01-N1", "assertion": "the file or artifact existing before approval FAILs"}
       ],
-      "runner": "W05/W18 runner; reference DeerFlow this case is UPSTREAM_UNSUPPORTED and must be recorded as such (not a Haifa FAIL)",
+      "runner": "W05/W18 runner; reference DeerFlow pauses via ask_clarification (differentiable, default NOT_RUN) but has no typed approval, so only the typed-approval/approval-card assertions are UPSTREAM_UNSUPPORTED (not a Haifa FAIL)",
       "evidencePaths": ["local-tmp/slot-1-w00-v2-oracle/evidence/l2/V2-M3-01-*.json"],
       "defaultResult": "NOT_RUN"
     },
@@ -702,12 +722,32 @@
       "prerequisites": ["V2-M3-01"],
       "input": "approve the pending interaction",
       "reference": {
-        "support": "UPSTREAM_UNSUPPORTED",
+        "support": "PARTIAL",
         "sourceRefs": [
-          {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1237, "note": "reference has run cancel only; no approval"}
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 518, "note": "the pause ends the run via Command(goto=END); the answer is not an in-place approval"},
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/interaction_policy.py", "line": 64, "note": "execution is interrupted automatically after ask_clarification"}
         ],
-        "frontendConsumers": [],
-        "haifaTarget": "exactly-once tool execution and artifact publication"
+        "unsupportedAssertions": [
+          {
+            "assertion": "the run continues in the same run id",
+            "reason": "reference has no same-run continuation after an answer; the reply is submitted as a normal human message that starts a new run, so no approval resumes the original run id",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 520, "note": "goto=END terminates the run instead of holding it open for a resume"},
+              {"path": "frontend/src/components/workspace/chats/chat-page.tsx", "line": 332, "note": "handleSubmitHumanInput calls sendMessage, i.e. a new run, for the clarification reply"}
+            ]
+          },
+          {
+            "assertion": "exactly-once execution guaranteed by the approval",
+            "reason": "reference has no approval idempotency; it never replays the paused tool, so there is no approve-executes-once primitive to compare",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/packages/harness/deerflow/AGENTS.md", "line": 99, "note": "\"Approvals never replay tools\""}
+            ]
+          }
+        ],
+        "frontendConsumers": [
+          {"path": "frontend/src/components/workspace/chats/chat-page.tsx", "line": 332, "note": "handleSubmitHumanInput -> sendMessage (new run)"}
+        ],
+        "haifaTarget": "exactly-once tool execution and artifact publication in the same run"
       },
       "positiveOracle": ["the tool executes exactly once", "exactly one artifact is published", "the run continues in the same run id"],
       "negativeCases": [
@@ -812,7 +852,25 @@
       "level": "L2",
       "prerequisites": ["V2-M3-01"],
       "input": "reject the pending interaction",
-      "reference": {"support": "UPSTREAM_UNSUPPORTED", "sourceRefs": [], "frontendConsumers": [], "haifaTarget": "reject produces no file/artifact side effect"},
+      "reference": {
+        "support": "PARTIAL",
+        "sourceRefs": [
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 446, "note": "sibling tool calls (e.g. the pending write_file) are dropped so nothing runs before the user answers"},
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 518, "note": "the run ends via Command(goto=END) with no side effect from the paused tool"}
+        ],
+        "unsupportedAssertions": [
+          {
+            "assertion": "the rejection is recorded with the interaction id",
+            "reason": "reference records a generic human-input reply/new run, not a typed rejection keyed by an interaction id; the deterministic id is derived from the provider tool_call_id",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 99, "note": "_stable_message_id derives clarification:{tool_call_id}, not a server-side interaction id"},
+              {"path": "deer-flow/backend/app/gateway/AGENTS.md", "line": 110, "note": "no approval/rejection route exists in the Thread Runs table"}
+            ]
+          }
+        ],
+        "frontendConsumers": [],
+        "haifaTarget": "reject produces no file/artifact side effect (reference supports the no-side-effect pause; the typed rejection record is Haifa-only)"
+      },
       "positiveOracle": ["the run terminates without creating the file or artifact", "the rejection is recorded with the interaction id"],
       "negativeCases": [{"id": "V2-M3-06-N1", "assertion": "any side effect after reject FAILs"}],
       "runner": "W05/W18 runner",
@@ -827,7 +885,16 @@
       "level": "L2",
       "prerequisites": ["V2-M3-01"],
       "input": "submit the same approval twice",
-      "reference": {"support": "UPSTREAM_UNSUPPORTED", "sourceRefs": [], "frontendConsumers": [], "haifaTarget": "idempotent; single side effect"},
+      "reference": {
+        "support": "UPSTREAM_UNSUPPORTED",
+        "sourceRefs": [
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/interaction_policy.py", "line": 64, "note": "ask_clarification interrupts; there is no approval primitive to submit twice"},
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 518, "note": "the pause is a Command(goto=END); no approve endpoint or idempotency key exists"},
+          {"path": "deer-flow/backend/packages/harness/deerflow/AGENTS.md", "line": 99, "note": "\"Approvals never replay tools\""}
+        ],
+        "frontendConsumers": [],
+        "haifaTarget": "idempotent; single side effect"
+      },
       "positiveOracle": ["the second approve is rejected or is a no-op", "exactly one tool execution and one artifact"],
       "negativeCases": [{"id": "V2-M3-07-N1", "assertion": "a duplicate causing a second side effect FAILs"}],
       "runner": "W05/W18 runner",
@@ -842,7 +909,15 @@
       "level": "L2",
       "prerequisites": ["V2-M3-01"],
       "input": "approve an interaction whose run already moved on",
-      "reference": {"support": "UPSTREAM_UNSUPPORTED", "sourceRefs": [], "frontendConsumers": [], "haifaTarget": "stale approve rejected"},
+      "reference": {
+        "support": "UPSTREAM_UNSUPPORTED",
+        "sourceRefs": [
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 518, "note": "there is no interaction token/version to become stale; the pause is a terminal Command(goto=END)"},
+          {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 741, "note": "reference only exposes an interrupted run status, not a stale approvable interaction"}
+        ],
+        "frontendConsumers": [],
+        "haifaTarget": "stale approve rejected"
+      },
       "positiveOracle": ["the stale approve is rejected with a clear status"],
       "negativeCases": [{"id": "V2-M3-08-N1", "assertion": "a stale approve executing a tool FAILs"}],
       "runner": "W05/W18 runner",
@@ -857,7 +932,15 @@
       "level": "L2",
       "prerequisites": ["V2-M3-01", "two isolated users"],
       "input": "a different user attempts to approve the interaction",
-      "reference": {"support": "UPSTREAM_UNSUPPORTED", "sourceRefs": [], "frontendConsumers": [], "haifaTarget": "fail closed"},
+      "reference": {
+        "support": "UPSTREAM_UNSUPPORTED",
+        "sourceRefs": [
+          {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1238, "note": "runs are owner-checked, but there is no approval route to protect"},
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 518, "note": "the pause is a ToolMessage/Command, not a foreign-approvable interaction"}
+        ],
+        "frontendConsumers": [],
+        "haifaTarget": "fail closed (reference enforces owner checks on runs/threads; the foreign approve of a Haifa interaction has no reference counterpart)"
+      },
       "positiveOracle": ["the foreign approve is denied", "no side effect occurs"],
       "negativeCases": [{"id": "V2-M3-09-N1", "assertion": "a foreign approve succeeding FAILs"}],
       "runner": "W05/W18 runner",
@@ -893,10 +976,26 @@
       "prerequisites": ["V2-M3-01 pending"],
       "input": "reload the frozen UI while the approval is pending",
       "reference": {
-        "support": "UPSTREAM_UNSUPPORTED",
-        "sourceRefs": [{"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1416, "note": "run stream reconnect exists, but no interaction state"}],
-        "frontendConsumers": [{"path": "frontend/src/core/threads/hooks.ts", "line": 2207, "note": "joinStream on reconnect"}],
-        "haifaTarget": "same run id and same interaction id, one card"
+        "support": "PARTIAL",
+        "sourceRefs": [
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 505, "note": "the pending question is persisted as a ToolMessage with artifact.human_input and reconstructed on reload"},
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/AGENTS.md", "line": 128, "note": "RunJournal reconciles ask_clarification ToolMessages so the card survives checkpoint compaction/reload"}
+        ],
+        "unsupportedAssertions": [
+          {
+            "assertion": "the same Haifa-authoritative interaction id after reload",
+            "reason": "reference has no interaction registry; only a deterministic clarification message id derived from the tool_call_id, so there is no authoritative interaction id to preserve",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 99, "note": "_stable_message_id = clarification:{tool_call_id}"},
+              {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/AGENTS.md", "line": 128, "note": "no interaction id is mentioned; persistence is message/journal-based"}
+            ]
+          }
+        ],
+        "frontendConsumers": [
+          {"path": "frontend/src/core/threads/hooks.ts", "line": 2207, "note": "joinStream on reload"},
+          {"path": "frontend/src/components/workspace/messages/message-list.tsx", "line": 630, "note": "reconstructs the human-input card from thread messages"}
+        ],
+        "haifaTarget": "same run id and same interaction id, one card (reference keeps the run id and one card; the authoritative interaction id is Haifa-only)"
       },
       "positiveOracle": ["after reload the same run id and interaction id are shown", "exactly one approval card"],
       "negativeCases": [{"id": "V2-M4-01-N1", "assertion": "a duplicate card or a new interaction id FAILs"}],
@@ -934,9 +1033,13 @@
       "input": "stop and restart the exact Gateway process, then resume",
       "reference": {
         "support": "UPSTREAM_UNSUPPORTED",
-        "sourceRefs": [],
+        "sourceRefs": [
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 518, "note": "the pending decision is a Command(goto=END) + ToolMessage, not an authoritative interaction id that survives restart"},
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/interaction_policy.py", "line": 64, "note": "ask_clarification interrupts the run; resume is a new user turn"},
+          {"path": "deer-flow/backend/packages/harness/deerflow/AGENTS.md", "line": 99, "note": "\"Approvals never replay tools\"; no approve-executes-once primitive exists across restart"}
+        ],
         "frontendConsumers": [],
-        "haifaTarget": "authoritative interaction state survives restart; approve executes once"
+        "haifaTarget": "authoritative interaction state survives restart; approve executes once (reference has durable run/checkpoint history but no authoritative interaction id, no same-run approve, and no continuation key)"
       },
       "positiveOracle": ["the same interaction id is present after restart", "approving it executes the tool exactly once", "the run completes in the same run id"],
       "negativeCases": [
@@ -1045,7 +1148,7 @@
         "support": "PARTIAL",
         "sourceRefs": [],
         "frontendConsumers": [],
-        "haifaTarget": "reference runs with isolated data-root; steer/approval/interaction cases report UPSTREAM_UNSUPPORTED"
+        "haifaTarget": "reference runs with isolated data-root; the ask_clarification pause/reject/answer cases are differentiable (NOT_RUN pending the round), while only the Haifa-only assertions (same-run approve, authoritative interaction id, production write_file approval card, same-run steer) report UPSTREAM_UNSUPPORTED"
       },
       "positiveOracle": ["two consecutive rounds on reference, same scenario and case ids", "each case reports one of PASS/FAIL/NOT_RUN/BLOCKED_EXTERNAL/UPSTREAM_UNSUPPORTED", "no hidden retry"],
       "negativeCases": [{"id": "V2-M5-01-N1", "assertion": "reporting Haifa failures as reference results FAILs"}],
@@ -1077,7 +1180,7 @@
       "prerequisites": ["V2-M5-01/02"],
       "input": "diff reference vs Haifa per case",
       "reference": {"support": "SUPPORTED", "sourceRefs": [], "frontendConsumers": [], "haifaTarget": "normalize only ids/timestamps"},
-      "positiveOracle": ["differences in source, files, permissions, cancel, config effect or side-effect counts are preserved", "reference UPSTREAM_UNSUPPORTED and Haifa FAIL/NOT_RUN are separate"],
+      "positiveOracle": ["differences in source, files, permissions, cancel, config effect or side-effect counts are preserved", "the differentiable ask_clarification pause/reject/answer assertions are compared per case (reference NOT_RUN until run)", "reference UPSTREAM_UNSUPPORTED applies only to the Haifa-only assertions, and reference UPSTREAM_UNSUPPORTED is separate from Haifa FAIL/NOT_RUN"],
       "negativeCases": [{"id": "V2-M5-03-N1", "assertion": "masking a semantic difference as a normalization FAILs"}],
       "runner": "W18 runner",
       "evidencePaths": ["local-tmp/slot-1-w00-v2-oracle/evidence/l2/diff-*.json"],

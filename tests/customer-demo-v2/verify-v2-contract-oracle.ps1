@@ -13,9 +13,12 @@ $ErrorActionPreference = 'Stop'
 #   1. Fixture SHA-256 for customers.csv and reporting-policy.json.
 #   2. Independent CSV oracle recomputation (row 17, region totals, high rows).
 #   3. Case oracle completeness / coverage / result vocabulary.
-#   4. Source index files exist and SHA-256 matches (snapshot + frontend + contracts).
-#   5. MCP and Skill collection semantics are not narrowed.
-#   6. consulting-analysis dependency review verdict is fail-closed.
+#   4. Reference source traceability: every UPSTREAM_UNSUPPORTED/NOT_INVENTORIED
+#      case/assertion cites real frozen source (existence + in-range line), and
+#      approval-class cases cite the reference interaction implementation.
+#   5. Source index files exist and SHA-256 matches (snapshot + frontend + contracts).
+#   6. MCP and Skill collection semantics are not narrowed.
+#   7. consulting-analysis dependency review verdict is fail-closed.
 # Negative self-tests deliberately corrupt a copy and require the corresponding
 # check to FAIL.
 # ---------------------------------------------------------------------------
@@ -23,6 +26,14 @@ $ErrorActionPreference = 'Stop'
 $ContractRoot = Join-Path $RepositoryRoot 'contracts/customer-demo-v2'
 $SnapshotRoot = Join-Path $RepositoryRoot 'local-tmp/slot-1-w00-v2-oracle/upstream-snapshot'
 $Assertions = 0
+$SkippedChecks = 0
+
+# Approval/rejection/interaction case ids. When one of these is declared
+# UPSTREAM_UNSUPPORTED it MUST cite the reference's actual interaction
+# implementation (clarification_middleware.py / interaction_policy.py), not just
+# a generic run route: the original R1 defect cited only thread_runs.py:945 (the
+# create_run decorator) while claiming "no approval semantics".
+$ApprovalCaseIds = @('V2-M3-01', 'V2-M3-02', 'V2-M3-06', 'V2-M3-07', 'V2-M3-08', 'V2-M3-09', 'V2-M4-01', 'V2-M4-03')
 
 $CsvPath = Join-Path $ContractRoot 'fixtures/customers.csv'
 $PolicyPath = Join-Path $ContractRoot 'fixtures/reporting-policy.json'
@@ -48,6 +59,39 @@ function Get-Sha256([string]$Path) {
 
 function Read-Json([string]$Path) {
     return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -Depth 64 -DateKind String)
+}
+
+function Get-Prop([object]$Object, [string]$Name) {
+    $p = $Object.PSObject.Properties[$Name]
+    if ($null -eq $p) { return $null }
+    return $p.Value
+}
+
+# Resolve one sourceRef path to a real file. `deer-flow/...` refs live in the
+# read-only upstream snapshot; `frontend/...` and everything else are committed
+# in this worktree.
+function Resolve-RefFile([string]$RefPath) {
+    if ($RefPath.StartsWith('deer-flow/')) {
+        $rel = $RefPath.Substring('deer-flow/'.Length)
+        return [pscustomobject]@{ FullPath = (Join-Path $SnapshotRoot $rel); SnapshotBacked = $true }
+    }
+    return [pscustomobject]@{ FullPath = (Join-Path $RepositoryRoot $RefPath); SnapshotBacked = $false }
+}
+
+# Existence/line-range check for one sourceRef. Snapshot-backed refs are
+# SKIPPED (not counted as PASS) when the snapshot is absent, so this verifier
+# stays valid in a clean/CI checkout without local-tmp.
+function Assert-RefExists([string]$CaseId, [string]$RefPath, [int]$Line, [bool]$SnapshotAvailable, [switch]$IsAssertion) {
+    $resolved = Resolve-RefFile $RefPath
+    $label = if ($IsAssertion) { 'unsupported assertion sourceRef' } else { 'sourceRef' }
+    if ($resolved.SnapshotBacked -and -not $SnapshotAvailable) {
+        $script:SkippedChecks++
+        Write-Host "SKIPPED(snapshot absent): case $CaseId $label $RefPath`:$Line" -ForegroundColor DarkYellow
+        return
+    }
+    Assert-True (Test-Path -LiteralPath $resolved.FullPath -PathType Leaf) "case $CaseId $label path does not exist: $RefPath"
+    $lineCount = [IO.File]::ReadAllLines($resolved.FullPath).Count
+    Assert-True ($Line -le $lineCount) "case $CaseId $label line $Line exceeds $RefPath line count $lineCount"
 }
 
 # -- 1. Fixture hashes -------------------------------------------------------
@@ -272,6 +316,61 @@ function Test-DependencyReview {
     }
 }
 
+# -- 8. Reference source traceability ----------------------------------------
+# Any case (or per-assertion entry) that claims UPSTREAM_UNSUPPORTED /
+# NOT_INVENTORIED must point at real frozen source with an in-range line. This
+# is what prevents a blanket "no approval semantics" claim that cites nothing.
+function Test-ReferenceSourceTraceability {
+    param([string]$Path)
+    $oracle = Read-Json $Path
+    $snapshotAvailable = Test-Path -LiteralPath $SnapshotRoot -PathType Container
+
+    foreach ($case in $oracle.cases) {
+        $refs = @($case.reference.sourceRefs)
+        $unsupportedAssertions = @((Get-Prop $case.reference 'unsupportedAssertions') | Where-Object { $null -ne $_ })
+        $isUnsupportedSupport = @('UPSTREAM_UNSUPPORTED', 'NOT_INVENTORIED') -contains $case.reference.support
+
+        if ($isUnsupportedSupport) {
+            Assert-True ($refs.Count -ge 1) "case $($case.id) reference.support=$($case.reference.support) requires at least one sourceRef"
+        }
+
+        foreach ($ua in $unsupportedAssertions) {
+            Assert-True (-not [string]::IsNullOrWhiteSpace($ua.assertion)) "case $($case.id) unsupportedAssertion missing assertion text"
+            Assert-True (-not [string]::IsNullOrWhiteSpace($ua.reason)) "case $($case.id) unsupportedAssertion '$($ua.assertion)' missing reason"
+            Assert-True (@($ua.sourceRefs).Count -ge 1) "case $($case.id) unsupportedAssertion '$($ua.assertion)' requires at least one sourceRef"
+        }
+        if ($unsupportedAssertions.Count -gt 0) {
+            Assert-True (@('PARTIAL', 'UPSTREAM_UNSUPPORTED', 'NOT_INVENTORIED') -contains $case.reference.support) "case $($case.id) has unsupportedAssertions but support=$($case.reference.support)"
+        }
+
+        # Existence + line range for every unsupported case ref and assertion ref.
+        foreach ($r in $refs) {
+            Assert-True (-not [string]::IsNullOrWhiteSpace($r.path)) "case $($case.id) sourceRef path missing"
+            Assert-True ([int]$r.line -ge 1) "case $($case.id) sourceRef line must be >= 1"
+            if ($isUnsupportedSupport) { Assert-RefExists -CaseId $case.id -RefPath $r.path -Line ([int]$r.line) -SnapshotAvailable $snapshotAvailable }
+        }
+        foreach ($ua in $unsupportedAssertions) {
+            foreach ($r in @($ua.sourceRefs)) {
+                Assert-True (-not [string]::IsNullOrWhiteSpace($r.path)) "case $($case.id) unsupportedAssertion '$($ua.assertion)' sourceRef path missing"
+                Assert-True ([int]$r.line -ge 1) "case $($case.id) unsupportedAssertion '$($ua.assertion)' sourceRef line must be >= 1"
+                Assert-RefExists -CaseId $case.id -RefPath $r.path -Line ([int]$r.line) -SnapshotAvailable $snapshotAvailable -IsAssertion
+            }
+        }
+
+        if ($isUnsupportedSupport -and ($ApprovalCaseIds -contains $case.id)) {
+            $allRefs = @($refs)
+            foreach ($ua in $unsupportedAssertions) { $allRefs += @($ua.sourceRefs) }
+            $citesImpl = @($allRefs | Where-Object { $_.path -match 'clarification_middleware\.py$' -or $_.path -match 'interaction_policy\.py$' }).Count
+            $pathsSeen = (@($allRefs | ForEach-Object { $_.path }) -join ', ')
+            Assert-True ($citesImpl -ge 1) "case $($case.id) is an approval-class UPSTREAM_UNSUPPORTED case and must cite clarification_middleware.py or interaction_policy.py (cites: $pathsSeen)"
+        }
+    }
+
+    if (-not $snapshotAvailable) {
+        Write-Warning "upstream-snapshot absent; snapshot-backed sourceRef existence/line checks reported SKIPPED(snapshot absent) and were not counted as PASS."
+    }
+}
+
 # -- Negative self-tests -----------------------------------------------------
 function Assert-Throws([scriptblock]$Action, [string]$Name) {
     $script:Assertions++
@@ -324,6 +423,47 @@ function Invoke-SelfTests {
     ($skill2.skills | Where-Object { $_.name -eq 'v2-format-control' }).goldenScenario = $true
     [IO.File]::WriteAllText($badSkill2, (($skill2 | ConvertTo-Json -Depth 32) + "`n"))
     Assert-Throws { Test-SkillContract -Path $badSkill2 } 'skill-negative-promoted'
+
+    # Reference traceability: UPSTREAM_UNSUPPORTED case with empty sourceRefs.
+    $badRef1 = Join-Path $TempRoot 'oracle-ref-empty.json'
+    $o1 = Read-Json $OraclePath
+    ($o1.cases | Where-Object { $_.id -eq 'V2-M3-07' }).reference.sourceRefs = @()
+    [IO.File]::WriteAllText($badRef1, (($o1 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-ReferenceSourceTraceability -Path $badRef1 } 'ref-unsupported-empty-sourcerefs'
+
+    # Reference traceability: sourceRef points at a file that does not exist.
+    $badRef2 = Join-Path $TempRoot 'oracle-ref-missing.json'
+    $o2 = Read-Json $OraclePath
+    ($o2.cases | Where-Object { $_.id -eq 'V2-M3-07' }).reference.sourceRefs[0].path = 'frontend/src/does-not-exist-w00.ts'
+    [IO.File]::WriteAllText($badRef2, (($o2 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-ReferenceSourceTraceability -Path $badRef2 } 'ref-missing-file'
+
+    # Reference traceability: sourceRef line beyond the file's line count.
+    $badRef3 = Join-Path $TempRoot 'oracle-ref-line.json'
+    $o3 = Read-Json $OraclePath
+    $c3 = $o3.cases | Where-Object { $_.id -eq 'V2-M3-07' }
+    $c3.reference.sourceRefs[0].path = 'frontend/src/components/workspace/chats/chat-page.tsx'
+    $c3.reference.sourceRefs[0].line = 999999
+    [IO.File]::WriteAllText($badRef3, (($o3 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-ReferenceSourceTraceability -Path $badRef3 } 'ref-line-out-of-range'
+
+    # R1 regression guard: V2-M3-01 back to a blanket UPSTREAM_UNSUPPORTED citing
+    # only thread_runs.py:945 (the create_run decorator) must FAIL.
+    $badRef4 = Join-Path $TempRoot 'oracle-approval-regressed.json'
+    $o4 = Read-Json $OraclePath
+    $c4 = $o4.cases | Where-Object { $_.id -eq 'V2-M3-01' }
+    $c4.reference.support = 'UPSTREAM_UNSUPPORTED'
+    $c4.reference.sourceRefs = @([pscustomobject]@{ path = 'deer-flow/backend/app/gateway/routers/thread_runs.py'; line = 945; note = 'reference run router exposes no interaction/approval semantics' })
+    $c4.reference.PSObject.Properties.Remove('unsupportedAssertions')
+    [IO.File]::WriteAllText($badRef4, (($o4 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-ReferenceSourceTraceability -Path $badRef4 } 'approval-class-citation-regressed'
+
+    # Reference traceability: an unsupported assertion whose sourceRefs were stripped.
+    $badRef5 = Join-Path $TempRoot 'oracle-assertion-empty.json'
+    $o5 = Read-Json $OraclePath
+    ($o5.cases | Where-Object { $_.id -eq 'V2-M3-01' }).reference.unsupportedAssertions[0].sourceRefs = @()
+    [IO.File]::WriteAllText($badRef5, (($o5 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-ReferenceSourceTraceability -Path $badRef5 } 'assertion-unsupported-empty-sourcerefs'
 }
 
 try {
@@ -333,6 +473,7 @@ try {
     Test-FixtureHashes
     Test-CsvOracle -Path $CsvPath
     Test-CaseOracle -Path $OraclePath
+    Test-ReferenceSourceTraceability -Path $OraclePath
     Test-SourceIndex -Path $IndexPath
     Test-McpContract -Path $McpPath
     Test-SkillContract -Path $SkillPath
@@ -341,7 +482,7 @@ try {
     # Negative self-tests.
     Invoke-SelfTests
 
-    Write-Host "V2 contract/oracle verifier passed: $Assertions assertions."
+    Write-Host "V2 contract/oracle verifier passed: $Assertions assertions ($SkippedChecks skipped: snapshot absent)."
 }
 finally {
     if (Test-Path -LiteralPath $TempRoot) { Remove-Item -LiteralPath $TempRoot -Recurse -Force }
