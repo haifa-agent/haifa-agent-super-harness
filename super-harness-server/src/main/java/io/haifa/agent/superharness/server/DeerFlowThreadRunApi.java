@@ -680,6 +680,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             try {
                 started = selectedBridge.start(threadId, modelInput, Optional.ofNullable(thread.session));
             } catch (RuntimeException failure) {
+                // A newly attached bridge uses the requested binding, so createdBridge and
+                // switchingModel cannot both be true. On a failed switch the old bridge stays
+                // attached for durable history and a subsequent Turn; only the rejected new
+                // bridge is closed here.
                 if (switchingModel || createdBridge) {
                     if (createdBridge) thread.bridge = null;
                     ownedBridges.remove(selectedBridge);

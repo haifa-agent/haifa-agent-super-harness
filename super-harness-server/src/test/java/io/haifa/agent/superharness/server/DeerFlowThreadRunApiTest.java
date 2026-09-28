@@ -75,10 +75,15 @@ class DeerFlowThreadRunApiTest {
     }
 
     private void startApi(HaifaRunBridge.ModelBinding binding) throws Exception {
+        startApi(ignored -> binding);
+    }
+
+    private void startApi(java.util.function.Function<JsonNode, HaifaRunBridge.ModelBinding> resolver)
+            throws Exception {
         api = DeerFlowBootstrapApi.createForTests(
                 new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
                 dataDirectory,
-                ignored -> binding,
+                resolver,
                 continuationKey);
         api.start();
         baseUri = URI.create("http://127.0.0.1:" + api.address().getPort());
@@ -364,6 +369,54 @@ class DeerFlowThreadRunApiTest {
         assertThat(driftedRun.body()).contains("after provider revision change");
         assertThat(get("/api/threads/thread-historical-binding/messages/page").body())
                 .contains("before provider restart", "after provider revision change", runId, nextRunId);
+    }
+
+    @Test
+    void failedCrossModelAdmissionAfterRestartKeepsOnlyTheRestoredBridge() throws Exception {
+        HaifaRunBridge.ModelBinding original = LocalProbeModelTestSupport.binding();
+        HaifaRunBridge.ModelBinding alternate = new HaifaRunBridge.ModelBinding(
+                original.name(), "2.0.0", original.model(), original.snapshot());
+        java.util.function.Function<JsonNode, HaifaRunBridge.ModelBinding> resolver = body ->
+                "alternate-model".equals(body.path("context").path("model_name").asText())
+                        ? alternate
+                        : original;
+        api.close();
+        api = null;
+        startApi(resolver);
+        createThread("thread-failed-cross-model");
+        assertThat(client.send(
+                                runRequest("thread-failed-cross-model", "first model turn"),
+                                HttpResponse.BodyHandlers.ofString())
+                        .statusCode())
+                .isEqualTo(200);
+
+        api.close();
+        api = null;
+        startApi(resolver);
+        assertThat(get("/api/threads/thread-failed-cross-model/messages/page").statusCode())
+                .isEqualTo(200);
+        assertThat(ownedBridgeCount()).isEqualTo(1);
+
+        String failedBody = """
+                {"input":{"messages":[{"type":"human","content":"%s"}]},
+                "context":{"model_name":"alternate-model"}}
+                """.formatted("x".repeat(32_001));
+        HttpResponse<String> failed = postJson(
+                "/api/threads/thread-failed-cross-model/runs/stream", failedBody);
+        assertThat(failed.statusCode()).as(failed.body()).isEqualTo(500);
+        assertThat(api.hasAttachedBridge("thread-failed-cross-model")).isTrue();
+        assertThat(ownedBridgeCount()).isEqualTo(1);
+        assertThat(client.send(
+                                runRequest("thread-failed-cross-model", "retry on original model"),
+                                HttpResponse.BodyHandlers.ofString())
+                        .statusCode())
+                .isEqualTo(200);
+    }
+
+    private int ownedBridgeCount() throws ReflectiveOperationException {
+        var field = DeerFlowThreadRunApi.class.getDeclaredField("ownedBridges");
+        field.setAccessible(true);
+        return ((java.util.Set<?>) field.get(api.threadRunApi())).size();
     }
 
     @Test
