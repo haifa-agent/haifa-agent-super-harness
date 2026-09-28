@@ -411,6 +411,23 @@ class DeerFlowThreadRunApiTest {
                                 HttpResponse.BodyHandlers.ofString())
                         .statusCode())
                 .isEqualTo(200);
+
+        // The admission fence restores the latest durable Run even without an explicit
+        // historical read. That original bridge must remain attached after B is rejected.
+        api.close();
+        api = null;
+        startApi(resolver);
+        assertThat(ownedBridgeCount()).isZero();
+        assertThat(postJson("/api/threads/thread-failed-cross-model/runs/stream", failedBody)
+                        .statusCode())
+                .isEqualTo(500);
+        assertThat(api.hasAttachedBridge("thread-failed-cross-model")).isTrue();
+        assertThat(ownedBridgeCount()).isEqualTo(1);
+        assertThat(client.send(
+                                runRequest("thread-failed-cross-model", "second retry on original model"),
+                                HttpResponse.BodyHandlers.ofString())
+                        .statusCode())
+                .isEqualTo(200);
     }
 
     private int ownedBridgeCount() throws ReflectiveOperationException {

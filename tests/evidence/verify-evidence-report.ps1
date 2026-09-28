@@ -97,6 +97,19 @@ function Add-Relation([object]$Snapshot, [string]$SourceType, [string]$SourceId,
 
 function Set-DevelopingTask([object]$Snapshot, [string]$TaskId, [string]$AssignmentId, [int]$Slot, [string]$Ports,
         [string]$DataRoot, [string]$Last = '2026-09-28T12:00:00+08:00', [string]$Next = '2026-09-28T12:15:00+08:00') {
+    # Slot-negative fixtures must be independent of the live export's unrelated
+    # running lanes. Otherwise two synthetic assignments can hit the global
+    # three-slot limit before the intended shared-port/data-root assertion.
+    $liveRunning = @($Snapshot.tables.assignment | Where-Object {
+        $_.state -eq 'running' -and $_.id -notlike 'asg-test-*'
+    })
+    $Snapshot.tables.assignment = @($Snapshot.tables.assignment | Where-Object {
+        $_.state -ne 'running' -or $_.id -like 'asg-test-*'
+    })
+    foreach ($live in $liveRunning) {
+        $liveTask = Get-Row $Snapshot 'task' ([string]$live.task_id)
+        if ($liveTask.state -eq 'developing') { $liveTask.state = 'blocked' }
+    }
     $task = Get-Row $Snapshot 'task' $TaskId
     $task.state = 'developing'
     if ([string]::IsNullOrWhiteSpace([string]$task.prompt_path)) { $task.prompt_path = 'private-docs/prompts/test-prompt.md' }
