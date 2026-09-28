@@ -182,7 +182,10 @@ function Test-ShpmGovernance {
         Assert-ShpmCondition ($script:ShpmTaskStates -contains [string]$task.state) "$id has an invalid state"
         Assert-ShpmCondition (-not [string]::IsNullOrWhiteSpace([string]$task.title)) "$id is missing a title"
         $prompt = [string]$task.prompt_path
-        if ([string]$task.state -ne 'pending') {
+        # A task blocked before it ever started (for example superseded while pending) needs no
+        # prompt; any task that has started must carry the prompt it was dispatched with.
+        $neverStarted = [string]$task.state -eq 'blocked' -and $null -eq $task.started_at
+        if ([string]$task.state -ne 'pending' -and -not $neverStarted) {
             Assert-ShpmCondition (-not [string]::IsNullOrWhiteSpace($prompt)) "$id left pending without a prompt_path"
         }
         if ($promptCheck -eq 'PASS' -and -not [string]::IsNullOrWhiteSpace($prompt)) {

@@ -246,7 +246,7 @@ try {
         'cycle' = @({ param($s) Add-Relation $s 'work_package' 'W00' 'work_package' 'W01' 'requires' }, 'prerequisite cycle detected')
         'too-many-tasks' = @({ param($s) $base = Get-Row $s 'task' 'W05-task-1'; $existing = @($s.tables.task | Where-Object work_package_id -eq 'W05').Count; $extras = @(($existing + 1)..9 | ForEach-Object { $t = $base.PSObject.Copy(); $t.id = "W05-task-$_"; $t }); $s.tables.task = @($s.tables.task) + $extras }, 'must have at most 8 tasks')
         'developing-without-assignment' = @({ param($s) $t = Get-Row $s 'task' 'W04-task-2'; $t.state = 'developing'; $t.prompt_path = 'private-docs/prompts/test.md' }, 'developing without exactly one running assignment')
-        'started-without-prompt' = @({ param($s) (Get-Row $s 'task' 'W04-task-2').state = 'blocked' }, 'left pending without a prompt_path')
+        'started-without-prompt' = @({ param($s) $t = Get-Row $s 'task' 'W04-task-2'; $t.state = 'blocked'; $t.started_at = '2026-09-28T10:00:00+08:00' }, 'left pending without a prompt_path')
         'old-slot-ports' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '38018/53018' 'D:/workspace/test/a' }, 'slot and child port group do not match')
         'late-checkpoint' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '30618/35618' 'D:/workspace/test/a' '2026-09-28T12:00:00+08:00' '2026-09-28T12:30:00+08:00' }, 'next checkpoint must be within 15 minutes')
         'shared-port-group' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '30618/35618' 'D:/workspace/test/a'; Set-DevelopingTask $s 'W04-task-3' 'asg-test-2' 2 '30618/35618' 'D:/workspace/test/b' }, 'cannot share a port group')
