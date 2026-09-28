@@ -119,8 +119,12 @@ class DeerFlowWorkspaceApiTest {
     @Test
     void rejectsMissingThreadsUnexpectedFieldsTraversalAndUnsatisfiedRanges() throws Exception {
         byte[] value = "safe".getBytes(StandardCharsets.UTF_8);
+        // Frozen uploads.py: require_existing=False. The frozen UI uploads a new conversation's first
+        // files before the Thread row exists; artifact reads below still require the Thread.
         assertThat(upload("missing", "missing-boundary", List.of(
-                new TestFile("safe.txt", "text/plain", value)), false).statusCode()).isEqualTo(404);
+                new TestFile("safe.txt", "text/plain", value)), false).statusCode()).isEqualTo(200);
+        assertThat(upload("bad.thread", "bad-thread-boundary", List.of(
+                new TestFile("safe.txt", "text/plain", value)), false).statusCode()).isEqualTo(422);
 
         createThread("thread-negative");
         HttpResponse<String> tokenDisposition = multipart(

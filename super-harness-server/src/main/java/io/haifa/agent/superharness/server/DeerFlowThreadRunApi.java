@@ -117,6 +117,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private final Predicate<String> projectExists;
     private final PersistentProjectWorkspaceService workspaceChanges;
     private final Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread;
+    private final DeerFlowUploadContext uploadContext;
     private final PersistentThreadCatalog threadCatalog;
     private final DurableHaifaFoundation foundation;
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
@@ -133,13 +134,15 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             PersistentProjectWorkspaceService workspaceChanges,
             Path dataDirectory,
             SecretKey continuationKey,
-            Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread)
+            Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread,
+            DeerFlowUploadContext uploadContext)
             throws IOException {
         this.json = json;
         this.runModelResolver = runModelResolver;
         this.projectExists = projectExists;
         this.workspaceChanges = workspaceChanges;
         this.runToolsForThread = runToolsForThread;
+        this.uploadContext = java.util.Objects.requireNonNull(uploadContext, "uploadContext");
         this.threadCatalog = new PersistentThreadCatalog(json, dataDirectory);
         this.foundation = new DurableHaifaFoundation(dataDirectory, continuationKey);
         for (PersistentThreadCatalog.Entry entry : threadCatalog.list()) {
@@ -579,6 +582,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             sendJson(exchange, 422, Map.of("detail", exception.getMessage()));
             return;
         }
+        // Frozen UploadsMiddleware: the files of this message reach the model as verified references
+        // (read with read_file); title and optimistic display keep the user's own text.
+        String modelInput = runInput == null
+                ? uploadContext.modelInput(threadId, body.path("input").path("messages"), message)
+                : message;
 
         RunRecord run = null;
         RunRecord steerRun = null;
@@ -675,7 +683,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
             HaifaRunBridge.StartedRun started;
             try {
-                started = thread.bridge.start(threadId, message, Optional.ofNullable(thread.session));
+                started = thread.bridge.start(threadId, modelInput, Optional.ofNullable(thread.session));
             } catch (RuntimeException failure) {
                 workspaceChanges.discardRunChanges(staged);
                 sendJson(exchange, 500, Map.of("detail", "Run could not start"));
