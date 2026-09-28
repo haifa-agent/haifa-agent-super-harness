@@ -10,6 +10,7 @@ import io.haifa.agent.superharness.workspace.ProjectDocument;
 import io.haifa.agent.superharness.workspace.ProjectDocumentContent;
 import io.haifa.agent.superharness.workspace.ProjectDocumentReceipt;
 import io.haifa.agent.superharness.workspace.ProjectProfile;
+import io.haifa.agent.superharness.workspace.WorkspaceError;
 import io.haifa.agent.superharness.workspace.WorkspaceException;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -258,8 +259,20 @@ final class DeerFlowProjectApi implements HttpHandler {
         }
         try {
             DeerFlowWorkspaceApi.MultipartFile file = workspace.parseSingleFile(exchange, "file");
-            ProjectDocumentReceipt receipt =
-                    projects.uploadProjectDocument(OWNER_ID, projectId, file.filename(), file.content());
+            ProjectDocumentReceipt receipt;
+            try {
+                receipt = projects.uploadProjectDocument(OWNER_ID, projectId, file.filename(), file.content());
+            } catch (WorkspaceException failure) {
+                // Frozen shelf rejects an unusable upload/display name with 400 at the HTTP boundary.
+                // Every other Workspace failure keeps its existing status and authority mapping.
+                if (failure.error() == WorkspaceError.INVALID_PATH) {
+                    throw new HttpFailure(400, failure.getMessage());
+                }
+                throw failure;
+            } catch (IllegalArgumentException failure) {
+                // Frozen shelf reports a zero-byte document as 400 Empty file.
+                throw new HttpFailure(400, failure.getMessage());
+            }
             sendJson(exchange, receipt.deduplicated() ? 200 : 201, Map.of(
                     "document", documentResponse(receipt.document()),
                     "deduplicated", receipt.deduplicated()));

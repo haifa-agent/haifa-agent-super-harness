@@ -205,9 +205,24 @@ class DeerFlowProjectApiTest {
         assertThat(request("POST", "/api/projects/" + projectId + "/documents/" + documentId
                 + "/attach-to-thread/other-project-thread", null).statusCode()).isEqualTo(404);
 
+        // Frozen project shelf: a zero-byte upload is 400, not the generic 422.
         HttpResponse<String> emptyUpload = multipart(projectId, "file", "empty.txt", new byte[0]);
-        assertThat(emptyUpload.statusCode()).isEqualTo(422);
+        assertThat(emptyUpload.statusCode()).isEqualTo(400);
         assertThat(emptyUpload.body()).contains("must not be empty");
+
+        // Frozen project shelf: an unusable display/upload name is 400, not the generic 422.
+        HttpResponse<String> unsafeName = multipart(projectId, "file", "../escape.txt", bytes);
+        assertThat(unsafeName.statusCode()).isEqualTo(400);
+        assertThat(unsafeName.body()).contains("plain filename");
+        assertThat(multipart(projectId, "file", "", bytes).statusCode()).isEqualTo(400);
+
+        // Frozen project shelf: an over-limit upload is 413, not the generic 422.
+        assertThat(multipart(projectId, "file", "big.txt", new byte[25 * 1024 * 1024 + 1]).statusCode())
+                .isEqualTo(413);
+
+        // A missing project stays 404 and no failed upload is visible on the shelf.
+        assertThat(multipart("missing", "file", "safe.txt", bytes).statusCode()).isEqualTo(404);
+        assertThat(body(get("/api/projects/" + projectId + "/documents")).path("total").asInt()).isEqualTo(1);
     }
 
     @Test
