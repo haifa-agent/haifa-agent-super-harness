@@ -465,7 +465,10 @@ const server = http.createServer((request, response) => {
     // with read_file and derive every value from the Tool result. The provider
     // never holds the CSV values; a missing reference or unreadable file yields
     // an explicit NO_FILE_CONTEXT / FILE_UNREADABLE answer instead.
-    const v2FilePrompt = /v2-file-context-[a-z]+-\d+/.exec(rawPrompt)?.[0];
+    // W04's `v2-file-context-<word>-<n>` and V2-M1's `v2-m1-file-<n>` share one
+    // bounded read_file -> answer path; every value still comes from the Tool
+    // result, never from a provider-side copy of the fixture.
+    const v2FilePrompt = /(?:v2-file-context-[a-z]+|v2-m1-file)-\d+/.exec(rawPrompt)?.[0];
     if (v2FilePrompt && offeredTools.includes("read_file")) {
       const id = `v2-file-context-${Date.now()}`;
       const last = Array.isArray(body.messages) ? body.messages.at(-1) : null;
@@ -486,6 +489,7 @@ const server = http.createServer((request, response) => {
             path: target,
           });
         } else {
+          console.log(JSON.stringify({ type: "v2_file_context", marker: v2FilePrompt, action: "no_file_context" }));
           finishWithText(response, id, `${v2FilePrompt} NO_FILE_CONTEXT`);
         }
       }

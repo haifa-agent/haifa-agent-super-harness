@@ -10,7 +10,13 @@ param(
     [int]$ProviderPort = 46618,
     [ValidateRange(1, 2)]
     [int]$Round = 1,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    # Bounded diagnosis aid: run a subset of case titles by Playwright grep.
+    # Never used to hide a failing case; a filtered run is not a round result.
+    [string]$Grep,
+    # Bounded diagnosis aid only: register model A without the V2-M1 model B to
+    # A/B an existing-case timing question. Not a V2-M1 round configuration.
+    [switch]$DiagnosticSingleModel
 )
 
 $ErrorActionPreference = 'Stop'
@@ -163,20 +169,34 @@ try {
             -RedirectStandardOutput (Join-Path $evidenceRoot 'gateway.stdout.log') `
             -RedirectStandardError (Join-Path $evidenceRoot 'gateway.stderr.log')
         Wait-Endpoint "http://127.0.0.1:$GatewayPort/health" 'ok' $gatewayProcess 45
-        $models = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/managed-models" -TimeoutSec 5
-        $existing = @($models.models) | Where-Object { $_.name -eq 'w18-controlled' } | Select-Object -First 1
-        $body = @{
-            config = @{
-                name = 'w18-controlled'; display_name = 'W18 Controlled Loopback'
-                provider = 'openai-compatible'; model = 'w18-controlled-model'
-                base_url = "http://127.0.0.1:$ProviderPort/v1"; enabled = $true
-                supports_vision = $false; context_window = 8192; max_tokens = 1024
-                api_key = 'w18-loopback-only'
-            }
-            expected_revision = $(if ($existing) { $existing.revision } else { $null })
-        } | ConvertTo-Json -Depth 6 -Compress
-        $saved = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/managed-models" -Method Put -ContentType 'application/json' -Body $body -TimeoutSec 5
-        if (-not $saved.enabled -or -not $saved.has_api_key) { throw 'Controlled model profile did not save correctly.' }
+        # V2-M1 needs two enabled models with distinct provider ids so the same
+        # Thread can switch A -> B on the next Turn and the provider request log
+        # proves which model actually served each Run.
+        $controlledProfiles = @(
+            @{ name = 'w18-controlled'; display = 'W18 Controlled Loopback'; model = 'w18-controlled-model' },
+            @{ name = 'w18-controlled-b'; display = 'W18 Controlled Loopback B'; model = 'w18-controlled-model-b' }
+        )
+        if ($DiagnosticSingleModel) { $controlledProfiles = @($controlledProfiles[0]) }
+        foreach ($controlled in $controlledProfiles) {
+            $models = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/managed-models" -TimeoutSec 5
+            $existing = @($models.models) | Where-Object { $_.name -eq $controlled.name } | Select-Object -First 1
+            $body = @{
+                config = @{
+                    name = $controlled.name; display_name = $controlled.display
+                    provider = 'openai-compatible'; model = $controlled.model
+                    base_url = "http://127.0.0.1:$ProviderPort/v1"; enabled = $true
+                    supports_vision = $false; context_window = 8192; max_tokens = 1024
+                    api_key = 'w18-loopback-only'
+                }
+                expected_revision = $(if ($existing) { $existing.revision } else { $null })
+            } | ConvertTo-Json -Depth 6 -Compress
+            $saved = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/managed-models" -Method Put -ContentType 'application/json' -Body $body -TimeoutSec 5
+            if (-not $saved.enabled -or -not $saved.has_api_key) { throw "Controlled model profile $($controlled.name) did not save correctly." }
+        }
+        $visible = @((Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/models" -TimeoutSec 5).models.name)
+        foreach ($expectedName in @($controlledProfiles | ForEach-Object { $_.name })) {
+            if ($visible -cnotcontains $expectedName) { throw "Controlled model $expectedName is not visible from /api/models." }
+        }
     }
     $gatewayReadyAt = Get-Date
 
@@ -238,6 +258,7 @@ try {
         referenceConfigSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/w18-dual-backend/reference-config.yaml')).Hash.ToLowerInvariant()
         runnerSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $PSCommandPath).Hash.ToLowerInvariant()
         specSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/w18-dual-backend/differential.spec.cjs')).Hash.ToLowerInvariant()
+        v2m1SpecSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/w18-dual-backend/v2-m1-model-file.spec.cjs')).Hash.ToLowerInvariant()
         providerSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/w18-ui-smoke/loopback-openai-provider.cjs')).Hash.ToLowerInvariant()
         startedAt = $started.ToString('o')
         readinessSeconds = [ordered]@{
@@ -254,7 +275,13 @@ try {
     $testStartedAt = Get-Date
     Push-Location $root
     try {
-        & $node 'frontend/node_modules/@playwright/test/cli.js' test --config 'tests/w18-dual-backend/playwright.config.cjs'
+        $playwrightArgs = @(
+            'frontend/node_modules/@playwright/test/cli.js',
+            'test',
+            '--config', 'tests/w18-dual-backend/playwright.config.cjs'
+        )
+        if (-not [string]::IsNullOrWhiteSpace($Grep)) { $playwrightArgs += @('--grep', $Grep) }
+        & $node @playwrightArgs
         $testExitCode = $LASTEXITCODE
     }
     finally { Pop-Location }
@@ -299,6 +326,7 @@ finally {
                         -Annotations @(& $prop $t 'annotations')
                     [ordered]@{
                         title = $spec.title
+                        oracleCaseId = Get-W18OracleCaseId -Title $spec.title
                         status = $classification.status
                         seconds = [math]::Round($last.duration / 1000, 1)
                         retry = $last.retry
@@ -316,6 +344,18 @@ finally {
     $summary = [ordered]@{
         backend = $Backend; testExitCode = $testExitCode
         cases = $cases
+        # Per Oracle case id: the case status for this backend/round. Legacy W18
+        # differential cases without an Oracle id are omitted here (still in
+        # `cases`); this never promotes another backend's result.
+        oracleCases = @($cases | Where-Object { $_['oracleCaseId'] } | ForEach-Object {
+                [ordered]@{
+                    id = $_['oracleCaseId']
+                    status = $_['status']
+                    seconds = $_['seconds']
+                    retry = $_['retry']
+                    classificationReason = $_['classificationReason']
+                }
+            })
         casesError = $casesError
         frontendProxyFailureTargets = @($proxyTargets | Sort-Object -Unique)
         elapsedSeconds = [int]((Get-Date) - $started).TotalSeconds

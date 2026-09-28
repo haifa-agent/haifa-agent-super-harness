@@ -8,6 +8,15 @@ models:
     model: w18-controlled-model
     api_key: w18-loopback-only
     base_url: $W18_PROVIDER_BASE_URL
+  # V2-M1: a second distinct provider model id on the same controlled loopback
+  # Provider, so a same-Thread Turn can switch A -> B and the provider request
+  # log proves which model served. Test profile only.
+  - name: w18-controlled-b
+    display_name: W18 Controlled Loopback B
+    use: langchain_openai:ChatOpenAI
+    model: w18-controlled-model-b
+    api_key: w18-loopback-only
+    base_url: $W18_PROVIDER_BASE_URL
 sandbox:
   use: deerflow.sandbox.local:LocalSandboxProvider
 skills:

@@ -38,7 +38,7 @@ Assert-Classification 'annotation-cannot-hide-failure' 'failed' @(
 ) 'FAIL(failed)'
 
 $branchAssertions = 0
-foreach ($allowedBranch in @('codex/w18-demo-l2-differential', 'main')) {
+foreach ($allowedBranch in @('codex/w18-demo-l2-differential', 'codex/w18-v2-m1-differential', 'main')) {
     Assert-W18DifferentialBranch -Branch $allowedBranch
     $branchAssertions++
 }
@@ -51,4 +51,21 @@ catch {
     $branchAssertions++
 }
 
-Write-Output "W18_RESULT_CLASSIFICATION PASS assertions=7 branch_assertions=$branchAssertions"
+$oracleAssertions = 0
+function Assert-OracleCaseId([string]$Title, [string]$Expected) {
+    $actual = Get-W18OracleCaseId -Title $Title
+    if ([string]::IsNullOrEmpty($Expected)) {
+        if ($null -ne $actual) { throw "title '$Title' expected no Oracle id but got '$actual'" }
+    }
+    elseif ($actual -cne $Expected) {
+        throw "title '$Title' expected Oracle id '$Expected' but got '$actual'"
+    }
+    $script:oracleAssertions++
+}
+Assert-OracleCaseId 'haifa: V2-M1-01 same-conversation model switch' 'V2-M1-01'
+Assert-OracleCaseId 'reference: V2-M1-05 model reads the saved original' 'V2-M1-05'
+Assert-OracleCaseId 'haifa: V2-M1-03-N1 unsafe filename is rejected' 'V2-M1-03-N1'
+Assert-OracleCaseId 'haifa: V2-M6-02-L3 evidence' 'V2-M6-02'
+Assert-OracleCaseId 'haifa: no-cookie startup and same-origin API' $null
+
+Write-Output "W18_RESULT_CLASSIFICATION PASS assertions=7 branch_assertions=$branchAssertions oracle_assertions=$oracleAssertions"

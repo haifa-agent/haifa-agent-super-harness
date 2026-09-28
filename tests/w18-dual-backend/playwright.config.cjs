@@ -10,7 +10,7 @@ if (!evidenceRoot) throw new Error("W18_DIFFERENTIAL_EVIDENCE is required");
 
 module.exports = defineConfig({
   testDir: __dirname,
-  testMatch: "differential.spec.cjs",
+  testMatch: ["differential.spec.cjs", "v2-m1-model-file.spec.cjs"],
   fullyParallel: false,
   workers: 1,
   retries: 0,
