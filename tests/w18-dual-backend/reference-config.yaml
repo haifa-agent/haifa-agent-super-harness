@@ -22,11 +22,16 @@ sandbox:
 skills:
   path: $W18_REFERENCE_SKILLS_ROOT
   container_path: /mnt/skills
-# Only the production file-writer the file Tool case needs; built-in
-# present_files/ask_clarification come from DeerFlow itself.
+# Local differential profile: enable only the frozen production file tools
+# exercised by these cases; built-in present_files/ask_clarification come
+# from DeerFlow itself.
 tool_groups:
+  - name: file:read
   - name: file:write
 tools:
+  - name: read_file
+    group: file:read
+    use: deerflow.sandbox.tools:read_file_tool
   - name: write_file
     group: file:write
     use: deerflow.sandbox.tools:write_file_tool

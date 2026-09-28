@@ -1,5 +1,6 @@
 const http = require("node:http");
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 
 const port = Number.parseInt(process.argv[2] ?? "0", 10);
 const readyFile = process.argv[3];
@@ -225,6 +226,18 @@ function v2CsvAnswer(toolText) {
   }
   const row17 = rows.length >= 17 ? rows[16][0] : "missing";
   return `row17=${row17} east=${totals.East ?? 0} west=${totals.West ?? 0} total=${total} high=${high} rows=${rows.length}`;
+}
+
+// Both backends return the CSV bytes through the production read_file Tool,
+// but only Haifa's Tool envelope advertises a sha256= field. Derive the same
+// digest from the CSV lines actually seen by the Provider on either backend;
+// never open the fixture or an upload path in this test Provider.
+function v2CsvToolResultSha256(toolText) {
+  const lines = toolText.split(/\r?\n/);
+  const header = lines.findIndex((line) => line.trim() === "customer_id,region,amount_cny");
+  if (header < 0) return null;
+  const csvLines = lines.slice(header).filter((line) => line.trim() !== "").map((line) => line.trim());
+  return crypto.createHash("sha256").update(`${csvLines.join("\n")}\n`, "utf8").digest("hex");
 }
 
 function firstUserMatch(body, pattern) {
@@ -477,7 +490,7 @@ const server = http.createServer((request, response) => {
         const answer = `${v2FilePrompt} ${v2CsvAnswer(toolText)}`;
         console.log(JSON.stringify({
           type: "v2_file_context", marker: v2FilePrompt, action: "answer", answer,
-          toolResultSha256: /sha256=([0-9a-f]{64})/.exec(toolText)?.[1] ?? null,
+          toolResultSha256: v2CsvToolResultSha256(toolText),
         }));
         finishWithText(response, id, answer);
       } else {

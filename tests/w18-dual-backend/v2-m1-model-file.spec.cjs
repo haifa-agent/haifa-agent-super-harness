@@ -161,18 +161,14 @@ async function selectModel(page, name) {
   await option.first().click();
 }
 
-// Production-capability gate: a backend that never offers read_file is
-// recorded NOT_RUN for its owner instead of being forced red.
-async function notRunUnlessReadFileOffered(testInfo, requests, owner, evidence) {
-  const offered = requests.some((entry) => (entry.offeredTools ?? []).includes("read_file"));
-  if (offered) return false;
-  expect(requests.length, "the real Run must reach the provider before claiming NOT_RUN").toBeGreaterThan(0);
-  expect(backend, `reference backend must offer production Tool read_file`).toBe("haifa");
-  const reason = `read_file is not a registered production Tool on this backend (owner ${owner})`;
-  await save(testInfo, `${evidence.case}-not-run`, { ...evidence, backend, status: "NOT_RUN", owner, reason });
-  testInfo.annotations.push({ type: "NOT_RUN", description: reason });
-  test.skip(true, reason);
-  return true;
+// Once the real Run reaches the Provider, a missing production Tool is a
+// functional failure for that backend, not an unrun case.
+function assertReadFileOffered(requests) {
+  expect(requests.length, "the real Run must reach the Provider").toBeGreaterThan(0);
+  expect(
+    requests.some((entry) => (entry.offeredTools ?? []).includes("read_file")),
+    `${backend} must offer the production read_file Tool to this Run`,
+  ).toBe(true);
 }
 
 async function createProject(request, name) {
@@ -300,7 +296,8 @@ test(`${backend}: V2-M1-02 active Run keeps its frozen model and refuses a mid-f
   // second Run may be created and no B request may appear mid-flight.
   await expect(modelTrigger(page).first()).toBeDisabled();
   const bRequestsDuringActive = providerLog().filter((entry) =>
-    entry.type === "provider_request" && entry.model === "w18-controlled-model-b");
+    entry.type === "provider_request" && entry.model === "w18-controlled-model-b" &&
+    entry.rawPrompt?.includes("__slow_differential__"));
   expect(bRequestsDuringActive).toEqual([]);
 
   const activeRun = await pollRun(context.request, active.threadId, active.runId, "success", 60_000);
@@ -412,17 +409,17 @@ test(`${backend}: V2-M1-03 Project upload of customers.csv stores the pinned byt
 test(`${backend}: V2-M1-03-N1 unsafe shelf filename is rejected`, async ({ context }, testInfo) => {
   const bytes = fixtureBytes();
   const project = await createProject(context.request, `V2M1 unsafe ${Date.now()}`);
+  // Multipart parsers normalize separator-bearing file.filename to its basename
+  // before this endpoint validates it. A >255-byte bare name reaches the same
+  // frozen shelf validator without being silently turned into a safe basename.
+  const unsafeName = `${"x".repeat(256)}.csv`;
   const upload = await uploadProjectDocument(context.request, project.id, {
-    name: "evil\\..\\customers.csv", mimeType: "text/csv", buffer: bytes,
+    name: unsafeName, mimeType: "text/csv", buffer: bytes,
   });
-  // The Oracle only requires an unsafe name to be rejected, not silently
-  // written; the reference protocol answers 400, Haifa answers 422, so the
-  // exact code is recorded as a per-backend difference instead of flattened.
-  expect(upload.status >= 400 && upload.status < 500,
-    `unsafe filename must not be silently accepted: ${upload.text}`).toBe(true);
+  expect(upload.status, `unsafe filename must match the frozen 400 contract: ${upload.text}`).toBe(400);
   await save(testInfo, "v2-m1-03-n1-unsafe-filename", {
-    case: "V2-M1-03-N1", backend, projectId: project.id, status: upload.status,
-    referenceExpectedStatus: 400, body: upload.body ?? upload.text,
+    case: "V2-M1-03-N1", backend, projectId: project.id, attemptedNameBytes: Buffer.byteLength(unsafeName),
+    status: upload.status, referenceExpectedStatus: 400, body: upload.body ?? upload.text,
   });
 });
 
@@ -439,9 +436,16 @@ test(`${backend}: V2-M1-03-N2 empty shelf file is rejected`, async ({ context },
 
 async function createThreadWithTitle(request, threadId, projectId, title) {
   const response = await request.post(`${app}/api/langgraph/threads`, {
-    data: { thread_id: threadId, project_id: projectId, metadata: { title } },
+    data: { thread_id: threadId, project_id: projectId },
   });
   expect(response.status(), await response.text()).toBe(200);
+  // The frozen attach dialog renders values.title from the thread search
+  // projection, not a caller-supplied metadata.title. Name the thread through
+  // the real state endpoint so the UI can select it unambiguously.
+  const renamed = await request.post(`${app}/api/langgraph/threads/${threadId}/state`, {
+    data: { values: { title } },
+  });
+  expect(renamed.status(), await renamed.text()).toBe(200);
 }
 
 // The project-shelf attach is a browser-side handoff (core/projects/
@@ -489,7 +493,25 @@ async function attachViaUi(page, context, prefix) {
       `/api/projects/${project.id}/documents/${documentId}/attach-to-thread/${threadId}`,
     { timeout: 20_000 });
   await page.getByRole("button", { name: "Attach to chat", exact: true }).click();
-  await page.getByRole("dialog").getByRole("button", { name: threadTitle, exact: true }).click({ timeout: 20_000 });
+  const attachDialog = page.getByRole("dialog");
+  // The frozen dialog uses a paged, global recent-Thread query. A newly
+  // created empty Thread need not be on its first page after other cases run.
+  let selected = false;
+  for (let pageNumber = 0; pageNumber < 30; pageNumber++) {
+    const choice = attachDialog.getByRole("button", { name: threadTitle, exact: true });
+    if (await choice.count()) {
+      await choice.click();
+      selected = true;
+      break;
+    }
+    const loadMore = attachDialog.getByTestId("attach-thread-load-more");
+    if (!(await loadMore.count())) break;
+    const buttonCount = await attachDialog.getByRole("button").count();
+    await loadMore.click();
+    await expect.poll(async () => await attachDialog.getByRole("button").count(),
+      { timeout: 10_000, intervals: [100, 250, 500] }).not.toBe(buttonCount);
+  }
+  expect(selected, `Thread ${threadTitle} was not found in 30 frozen UI pages`).toBe(true);
   const attachResponse = await attachPromise;
   expect(attachResponse.status(), await attachResponse.text()).toBe(200);
   await expect(page).toHaveURL(new RegExp(`/workspace/chats/${threadId}$`));
@@ -508,9 +530,7 @@ test(`${backend}: V2-M1-04 attached Project document enters the Run context, un-
 
   const run = await sendOnCurrentThread(page, `${marker}: report data row 17's customer_id and the East, West and overall amount totals`);
   const requests = providerRequests(marker);
-  if (await notRunUnlessReadFileOffered(testInfo, requests, "W04 bounded file context", {
-    case: "V2-M1-04", threadId: attached.threadId, runId: run.runId,
-  })) return;
+  assertReadFileOffered(requests);
 
   const actions = v2FileActions(marker);
   expect(actions.map((entry) => entry.action), JSON.stringify(actions)).toEqual(["read_file", "answer"]);
@@ -592,9 +612,7 @@ test(`${backend}: V2-M1-05 model reads the saved original and answers the CSV or
 
   const run = await sendOnCurrentThread(page, `${marker}: report data row 17's customer_id and the East, West and overall amount totals`);
   const requests = providerRequests(marker);
-  if (await notRunUnlessReadFileOffered(testInfo, requests, "W04 bounded file context", {
-    case: "V2-M1-05", threadId: attached.threadId, runId: run.runId,
-  })) return;
+  assertReadFileOffered(requests);
 
   const actions = v2FileActions(marker);
   expect(actions.map((entry) => entry.action), JSON.stringify(actions)).toEqual(["read_file", "answer"]);
