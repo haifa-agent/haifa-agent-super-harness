@@ -42,6 +42,12 @@ summarization:
   enabled: false
 agents_api:
   enabled: true
+# Test-only bound so the V2-M1-03-N3 oversized-upload negative can use a small
+# controlled fixture instead of a >50 MiB payload. The spec still reads the
+# backend's advertised /uploads/limits, so the case stays correct even if this
+# key is ignored (it would then use the frozen 50 MiB default).
+uploads:
+  max_file_size: 1048576
 database:
   backend: sqlite
   sqlite_dir: $W18_REFERENCE_DB_ROOT

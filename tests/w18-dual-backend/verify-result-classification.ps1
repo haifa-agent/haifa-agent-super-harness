@@ -65,7 +65,29 @@ function Assert-OracleCaseId([string]$Title, [string]$Expected) {
 Assert-OracleCaseId 'haifa: V2-M1-01 same-conversation model switch' 'V2-M1-01'
 Assert-OracleCaseId 'reference: V2-M1-05 model reads the saved original' 'V2-M1-05'
 Assert-OracleCaseId 'haifa: V2-M1-03-N1 unsafe filename is rejected' 'V2-M1-03-N1'
+Assert-OracleCaseId 'haifa: V2-M1-01-N2 unknown B is refused and never silently served by A' 'V2-M1-01-N2'
+Assert-OracleCaseId 'haifa: V2-M1-05-N3 recomputed region and grand totals' 'V2-M1-05-N3'
 Assert-OracleCaseId 'haifa: V2-M6-02-L3 evidence' 'V2-M6-02'
 Assert-OracleCaseId 'haifa: no-cookie startup and same-origin API' $null
 
-Write-Output "W18_RESULT_CLASSIFICATION PASS assertions=7 branch_assertions=$branchAssertions oracle_assertions=$oracleAssertions"
+# Static Oracle case-list check: every V2-M1 case and negative this task must
+# report on has to appear as its own test title so the runner emits an
+# independent oracleCases row. This is a source-level guard, not a substitute
+# for the executed round evidence.
+$specText = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'v2-m1-model-file.spec.cjs')
+$requiredCaseIds = @(
+    'V2-M1-01', 'V2-M1-01-N2', 'V2-M1-01-N3',
+    'V2-M1-02',
+    'V2-M1-03', 'V2-M1-03-N1', 'V2-M1-03-N2', 'V2-M1-03-N3',
+    'V2-M1-04', 'V2-M1-04-N1', 'V2-M1-04-N2',
+    'V2-M1-05', 'V2-M1-05-N1', 'V2-M1-05-N2', 'V2-M1-05-N3'
+)
+$caseListAssertions = 0
+foreach ($caseId in $requiredCaseIds) {
+    if ($specText -notmatch [regex]::Escape(": $caseId ")) {
+        throw "v2-m1 spec is missing an independent test title for Oracle case $caseId"
+    }
+    $caseListAssertions++
+}
+
+Write-Output "W18_RESULT_CLASSIFICATION PASS assertions=7 branch_assertions=$branchAssertions oracle_assertions=$oracleAssertions case_list_assertions=$caseListAssertions"

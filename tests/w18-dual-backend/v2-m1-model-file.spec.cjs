@@ -47,10 +47,14 @@ function sha256(buffer) {
 }
 
 // Independent oracle recomputed from the LF fixture bytes, never from a Run.
-function csvOracle(bytes) {
+function csvDataRows(bytes) {
   const lines = bytes.toString("utf8").split("\n").filter((line) => line !== "");
   expect(lines[0]).toBe(CSV_HEADER);
-  const rows = lines.slice(1).map((line) => line.split(","));
+  return lines.slice(1).map((line) => line.split(","));
+}
+
+function csvOracle(bytes) {
+  const rows = csvDataRows(bytes);
   const sum = (region) => rows.filter((row) => row[1] === region).reduce((acc, row) => acc + Number(row[2]), 0);
   const east = sum("East");
   const west = sum("West");
@@ -177,9 +181,10 @@ async function createProject(request, name) {
   return await response.json();
 }
 
-async function uploadProjectDocument(request, projectId, { name, buffer, mimeType }) {
-  const response = await request.post(`${app}/api/projects/${projectId}/documents`, {
+async function uploadProjectDocument(request, projectId, { name, buffer, mimeType, timeout, origin }) {
+  const response = await request.post(`${origin || app}/api/projects/${projectId}/documents`, {
     multipart: { file: { name, mimeType, buffer } },
+    ...(timeout ? { timeout } : {}),
   });
   const text = await response.text();
   let body = null;
@@ -215,6 +220,114 @@ async function sendOnCurrentThread(page, text) {
   const run = await sendRun(page, input, text);
   await pollRun(page.context().request, run.threadId, run.runId, "success");
   return run;
+}
+
+// HTTP-direct run admission for the unavailable-model negatives: the frozen
+// model picker only lists usable models, so an unknown/disabled model cannot be
+// selected there. The request still targets the exact same frozen gateway
+// protocol the UI uses; it is not a mock or a page.route() fulfill.
+async function postRunStream(request, threadId, modelName, text, timeout = 30_000) {
+  const response = await request.post(
+    `${app}/api/langgraph/threads/${threadId}/runs/stream`,
+    {
+      data: {
+        assistant_id: "lead_agent",
+        input: { messages: [{ id: `${text}-human`, type: "human", content: text }] },
+        context: { model_name: modelName },
+        on_disconnect: "continue",
+      },
+      timeout,
+    },
+  );
+  const body = await response.text();
+  const location = response.headers()["content-location"];
+  const match = location?.match(/\/api\/threads\/([^/]+)\/runs\/([^/]+)$/);
+  return { status: response.status(), body, runId: match?.[2] ?? null };
+}
+
+// The no-silent-fallback judgement for the two V2-M1-01 negatives: turn A must
+// be a real Run that binds the Thread to A; a same-Thread request for the
+// unavailable model must be refused explicitly and must never be served by A.
+// The raw request body, response status/body and provider slice are recorded.
+async function assertUnavailableModelRefused(context, page, testInfo, { caseId, artifactName, unavailableModel }) {
+  const suffix = Date.now();
+  const markerA = `v2-m1-avail-a-${suffix}`;
+  const markerB = `v2-m1-unavail-b-${suffix}`;
+  const input = await openChat(page);
+  const first = await sendRun(page, input, markerA);
+  expect(first.modelName).toBe("w18-controlled");
+  await pollRun(context.request, first.threadId, first.runId, "success");
+  const aRequests = providerRequests(markerA);
+  expect(
+    aRequests.some((entry) => entry.model === "w18-controlled-model"),
+    `turn A must reach the provider as model A: ${JSON.stringify(aRequests.map((entry) => entry.model))}`,
+  ).toBe(true);
+
+  const requestBody = {
+    assistant_id: "lead_agent",
+    input: { messages: [{ id: `${markerB}-human`, type: "human", content: markerB }] },
+    context: { model_name: unavailableModel },
+    on_disconnect: "continue",
+  };
+  const second = await postRunStream(context.request, first.threadId, unavailableModel, markerB);
+  const bProviderRequests = providerLog().filter((entry) =>
+    entry?.type === "provider_request" &&
+    (entry.rawPrompt?.includes(markerB) || entry.prompt?.includes(markerB)));
+  const servedByA = bProviderRequests.filter((entry) => entry.model === "w18-controlled-model");
+  const visibleModels = (await (await context.request.get(`${app}/api/models`)).json())
+    .models.map((model) => model.name);
+
+  expect(visibleModels, `${unavailableModel} must not be a selectable model`).not.toContain(unavailableModel);
+  expect(servedByA, "an unavailable model must never silently fall back to A").toEqual([]);
+  expect(
+    second.status,
+    `an unavailable model must be refused explicitly, got ${second.status}: ${second.body}`,
+  ).toBeGreaterThanOrEqual(400);
+
+  await save(testInfo, artifactName, {
+    case: caseId,
+    backend,
+    unavailableModel,
+    disabledModelConfigured: process.env.W18_DISABLED_MODEL_CONFIGURED === "1",
+    threadId: first.threadId,
+    turnA: { runId: first.runId, requestedModel: "w18-controlled", providerModels: aRequests.map((entry) => entry.model) },
+    turnB: {
+      requestBody,
+      status: second.status,
+      responseBody: second.body.slice(0, 2000),
+      providerRequestCount: bProviderRequests.length,
+      servedByA: servedByA.map((entry) => entry.model),
+    },
+    visibleModels,
+    noSilentFallbackToA: servedByA.length === 0,
+  });
+}
+
+async function readUploadLimits(request, threadId) {
+  const response = await request.get(`${app}/api/threads/${threadId}/uploads/limits`);
+  expect(response.status(), await response.text()).toBe(200);
+  return await response.json();
+}
+
+// Shared capture of the V2-M1-05 attached-file Run. The positive case and each
+// V2-M1-05 negative assert a distinct property of the same captured flow, so
+// every negative gets an independent result row without re-running the UI.
+async function captureOracleRun(page, context, prefix) {
+  const bytes = fixtureBytes();
+  const expected = csvOracle(bytes);
+  const attached = await attachViaUi(page, context, prefix);
+  const marker = `v2-m1-file-${Date.now()}`;
+  const run = await sendOnCurrentThread(page, `${marker}: report data row 17's customer_id and the East, West and overall amount totals`);
+  const requests = providerRequests(marker);
+  assertReadFileOffered(requests);
+  const actions = v2FileActions(marker);
+  const state = await (await context.request.get(`${app}/api/langgraph/threads/${attached.threadId}/state`)).json();
+  const runMessages = (state.values?.messages ?? []).filter((message) => !message.run_id || message.run_id === run.runId);
+  const call = runMessages.flatMap((message) => message.tool_calls ?? []).find((entry) => entry.name === "read_file");
+  const contentResponse = await context.request.get(
+    `${app}/api/projects/${attached.projectId}/documents/${attached.documentId}/content?download=true`);
+  const downloaded = await contentResponse.body();
+  return { bytes, expected, attached, marker, run, requests, actions, state, call, contentStatus: contentResponse.status(), downloaded };
 }
 
 test(`${backend}: V2-M1-01 same conversation Turn A then Turn B keeps Thread and run model`, async ({ context, page }, testInfo) => {
@@ -280,6 +393,27 @@ test(`${backend}: V2-M1-01 same conversation Turn A then Turn B keeps Thread and
     historyHasBothTurnsAndAnswers: true,
     browserApiTargets: targets.requests,
     forbiddenBrowserTargets: targets.forbidden,
+  });
+});
+
+test(`${backend}: V2-M1-01-N2 unknown B is refused and never silently served by A`, async ({ context, page }, testInfo) => {
+  await assertUnavailableModelRefused(context, page, testInfo, {
+    caseId: "V2-M1-01-N2",
+    artifactName: "v2-m1-01-n2-unknown-model",
+    unavailableModel: `w18-unknown-model-${Date.now()}`,
+  });
+});
+
+test(`${backend}: V2-M1-01-N3 disabled B is refused and never silently served by A`, async ({ context, page }, testInfo) => {
+  const disabledModel = process.env.W18_DISABLED_MODEL || "w18-controlled-b-disabled";
+  test.skip(
+    backend === "reference" && process.env.W18_DISABLED_MODEL_CONFIGURED !== "1",
+    "this reference test profile could not configure a disabled model; the disabled precondition was not established",
+  );
+  await assertUnavailableModelRefused(context, page, testInfo, {
+    caseId: "V2-M1-01-N3",
+    artifactName: "v2-m1-01-n3-disabled-model",
+    unavailableModel: disabledModel,
   });
 });
 
@@ -423,14 +557,44 @@ test(`${backend}: V2-M1-03-N1 unsafe shelf filename is rejected`, async ({ conte
   });
 });
 
-test(`${backend}: V2-M1-03-N2 empty shelf file is rejected`, async ({ context }, testInfo) => {
+test(`${backend}: V2-M1-03-N2 zero-byte shelf file is rejected with 400`, async ({ context }, testInfo) => {
   const project = await createProject(context.request, `V2M1 empty ${Date.now()}`);
   const upload = await uploadProjectDocument(context.request, project.id, {
     name: "empty.csv", mimeType: "text/csv", buffer: Buffer.alloc(0),
   });
-  expect([400, 413], `empty file must be rejected with 400/413: ${upload.text}`).toContain(upload.status);
+  // Frozen project_documents.py rejects an empty staged file with 400 ("Empty
+  // file"); it is not the oversized 413 path, so accept only 400.
+  expect(upload.status, `zero-byte file must match the frozen 400 contract: ${upload.text}`).toBe(400);
   await save(testInfo, "v2-m1-03-n2-empty-file", {
-    case: "V2-M1-03-N2", backend, projectId: project.id, status: upload.status, body: upload.body ?? upload.text,
+    case: "V2-M1-03-N2", backend, projectId: project.id, status: upload.status,
+    frozenEmptyStatus: 400, body: upload.body ?? upload.text,
+  });
+});
+
+test(`${backend}: V2-M1-03-N3 oversized shelf file is rejected with 413`, async ({ context }, testInfo) => {
+  const threadId = `v2m1-limits-${Date.now()}`;
+  await createThread(context.request, threadId, null);
+  const limits = await readUploadLimits(context.request, threadId);
+  const maxFileSize = Number(limits.max_file_size);
+  expect(maxFileSize, `backend must advertise a positive per-file upload limit: ${JSON.stringify(limits)}`).toBeGreaterThan(0);
+  // Bounded, controlled oversize derived from the backend's own advertised
+  // limit (never a fixed >50 MiB blob). The extra 512 KiB also exceeds the
+  // bounded multipart body envelope, so a backend that checks the declared
+  // length rejects it without buffering the whole payload.
+  const oversizeBytes = maxFileSize + 512 * 1024;
+  const gateway = process.env.W18_DIFFERENTIAL_GATEWAY || app;
+  const project = await createProject(context.request, `V2M1 oversized ${Date.now()}`);
+  const upload = await uploadProjectDocument(context.request, project.id, {
+    name: "oversized.csv", mimeType: "text/csv", buffer: Buffer.alloc(oversizeBytes, 0x78),
+    // Post straight to the gateway (the backend multipart endpoint the frozen
+    // UI proxy forwards to) with an explicit bounded client timeout.
+    origin: gateway,
+    timeout: 120_000,
+  });
+  expect(upload.status, `oversized file must match the frozen 413 contract: ${upload.text}`).toBe(413);
+  await save(testInfo, "v2-m1-03-n3-oversized-file", {
+    case: "V2-M1-03-N3", backend, projectId: project.id, maxFileSize, oversizeBytes,
+    uploadOrigin: gateway, status: upload.status, body: upload.body ?? upload.text,
   });
 });
 
@@ -519,7 +683,7 @@ async function attachViaUi(page, context, prefix) {
   return { threadId, projectId: project.id, documentId };
 }
 
-test(`${backend}: V2-M1-04 attached Project document enters the Run context, un-attached does not`, async ({ context, page }, testInfo) => {
+test(`${backend}: V2-M1-04 attached Project document enters the Run context`, async ({ context, page }, testInfo) => {
   const targets = observeSameOrigin(page);
   const attached = await attachViaUi(page, context, "attached");
   const marker = `v2-m1-file-${Date.now()}`;
@@ -546,8 +710,23 @@ test(`${backend}: V2-M1-04 attached Project document enters the Run context, un-
   expect(humans).toContain(`Path: ${UPLOAD_PATH}`);
   expect(humans).not.toContain("C017");
 
-  // Negative V2-M1-04-N1: a Project document that was never attached must not
-  // reach the Run context (no prompt stuffing).
+  expect(targets.forbidden).toEqual([]);
+  await save(testInfo, "v2-m1-04-attach-context", {
+    case: "V2-M1-04",
+    backend,
+    threadId: attached.threadId,
+    runId: run.runId,
+    listedNames,
+    providerActions: actions,
+    firstRequestUploadPaths: first.uploadPaths,
+    humanReferencesPathNotValue: true,
+    browserApiTargets: targets.requests,
+    forbiddenBrowserTargets: targets.forbidden,
+  });
+});
+
+test(`${backend}: V2-M1-04-N1 un-attached Project document does not enter the Run context`, async ({ context, page }, testInfo) => {
+  const targets = observeSameOrigin(page);
   const orphanProject = await createProject(context.request, `v2m1 orphan ${Date.now()}`);
   const orphanUpload = await uploadProjectDocument(context.request, orphanProject.id, {
     name: "customers.csv", mimeType: "text/csv", buffer: fixtureBytes(),
@@ -566,24 +745,15 @@ test(`${backend}: V2-M1-04 attached Project document enters the Run context, un-
   const orphanText = (orphanState.values?.messages ?? []).filter((message) => message.type === "ai")
     .map((message) => (typeof message.content === "string" ? message.content : "")).join("\n");
   expect(orphanText).toContain(`${orphanMarker} NO_FILE_CONTEXT`);
-
   expect(targets.forbidden).toEqual([]);
-  await save(testInfo, "v2-m1-04-attach-context", {
-    case: "V2-M1-04",
+  await save(testInfo, "v2-m1-04-n1-unattached", {
+    case: "V2-M1-04-N1",
     backend,
-    threadId: attached.threadId,
-    runId: run.runId,
-    listedNames,
-    providerActions: actions,
-    firstRequestUploadPaths: first.uploadPaths,
-    humanReferencesPathNotValue: true,
-    unattached: {
-      case: "V2-M1-04-N1",
-      threadId: orphanThread,
-      providerUploadPaths: orphanPaths,
-      providerActions: orphanActions,
-      runAnswer: orphanText,
-    },
+    threadId: orphanThread,
+    projectId: orphanProject.id,
+    runAnswer: orphanText,
+    providerUploadPaths: orphanPaths,
+    providerActions: orphanActions,
     browserApiTargets: targets.requests,
     forbiddenBrowserTargets: targets.forbidden,
   });
@@ -605,36 +775,20 @@ test(`${backend}: V2-M1-04-N2 attaching to an unknown Thread fails closed`, asyn
 
 test(`${backend}: V2-M1-05 model reads the saved original and answers the CSV oracle`, async ({ context, page }, testInfo) => {
   const targets = observeSameOrigin(page);
-  const bytes = fixtureBytes();
-  const expected = csvOracle(bytes);
-  const attached = await attachViaUi(page, context, "oracle");
-  const marker = `v2-m1-file-${Date.now()}`;
+  const captured = await captureOracleRun(page, context, "oracle");
+  const { expected, attached, marker, run, actions, call } = captured;
 
-  const run = await sendOnCurrentThread(page, `${marker}: report data row 17's customer_id and the East, West and overall amount totals`);
-  const requests = providerRequests(marker);
-  assertReadFileOffered(requests);
-
-  const actions = v2FileActions(marker);
   expect(actions.map((entry) => entry.action), JSON.stringify(actions)).toEqual(["read_file", "answer"]);
   expect(actions[0].path).toBe(UPLOAD_PATH);
   expect(actions[1].answer).toBe(`${marker} ${expected}`);
   expect(actions[1].toolResultSha256).toBe(FIXTURE_SHA256);
-
   await expect(page.locator("#chat").getByText(`${marker} ${expected}`, { exact: true })).toBeVisible();
-
-  const state = await (await context.request.get(`${app}/api/langgraph/threads/${attached.threadId}/state`)).json();
-  const runMessages = (state.values?.messages ?? []).filter((message) => !message.run_id || message.run_id === run.runId);
-  const call = runMessages.flatMap((message) => message.tool_calls ?? []).find((entry) => entry.name === "read_file");
   expect(call, "the Run must call read_file").toBeTruthy();
   expect(call.args.path).toBe(UPLOAD_PATH);
-
-  const contentResponse = await context.request.get(
-    `${app}/api/projects/${attached.projectId}/documents/${attached.documentId}/content?download=true`);
-  expect(contentResponse.status(), await contentResponse.text()).toBe(200);
-  const downloaded = await contentResponse.body();
-  expect(sha256(downloaded)).toBe(FIXTURE_SHA256);
-
+  expect(captured.contentStatus, "the saved original must download").toBe(200);
+  expect(sha256(captured.downloaded)).toBe(FIXTURE_SHA256);
   expect(targets.forbidden).toEqual([]);
+
   await save(testInfo, "v2-m1-05-csv-oracle", {
     case: "V2-M1-05",
     backend,
@@ -643,14 +797,63 @@ test(`${backend}: V2-M1-05 model reads the saved original and answers the CSV or
     answer: actions[1].answer,
     expectedOracle: expected,
     readFile: { toolCallId: call.id, path: call.args.path, resultSha256: actions[1].toolResultSha256 },
-    downloadedSha256: sha256(downloaded),
+    downloadedSha256: sha256(captured.downloaded),
     fixtureSha256: FIXTURE_SHA256,
-    negatives: {
-      "V2-M1-05-N1": "row offset is asserted by the exact C017 answer",
-      "V2-M1-05-N2": "byte/share mismatch would break the pinned read_file/download hashes",
-      "V2-M1-05-N3": "East/West/total are recomputed independently by this spec",
-    },
     browserApiTargets: targets.requests,
     forbiddenBrowserTargets: targets.forbidden,
+  });
+});
+
+test(`${backend}: V2-M1-05-N1 row offset answers the 1-based row 17, not an off-by-one row`, async ({ context, page }, testInfo) => {
+  const captured = await captureOracleRun(page, context, "oracle-n1");
+  const rows = csvDataRows(captured.bytes);
+  const correctRowId = rows[16][0];
+  const nextRowId = rows[17]?.[0];
+  const previousRowId = rows[15]?.[0];
+  expect(correctRowId, "the independent 1-based row 17 is C017").toBe("C017");
+  const answer = captured.actions[1].answer;
+  expect(answer, "the answer must resolve row 17 with 1-based indexing").toContain(`row17=${correctRowId}`);
+  expect(answer, "a 0-based/off-by-one row offset must not pass").not.toContain(`row17=${nextRowId}`);
+  expect(answer, "a shifted-up row offset must not pass").not.toContain(`row17=${previousRowId}`);
+  await save(testInfo, "v2-m1-05-n1-row-offset", {
+    case: "V2-M1-05-N1", backend, threadId: captured.attached.threadId, runId: captured.run.runId,
+    correctRowId, nextRowId, previousRowId, answer,
+  });
+});
+
+test(`${backend}: V2-M1-05-N2 a BOM or mojibake Tool result would break the pinned bytes`, async ({ context, page }, testInfo) => {
+  const captured = await captureOracleRun(page, context, "oracle-n2");
+  // The provider hashes the CSV lines it actually saw through the production
+  // read_file Tool; a BOM or mojibake would break header detection or the digest.
+  expect(captured.actions[1].toolResultSha256, "the read_file Tool result must still hash to the pinned LF fixture").toBe(FIXTURE_SHA256);
+  expect(sha256(captured.downloaded)).toBe(FIXTURE_SHA256);
+  expect(captured.bytes.toString("utf8").charCodeAt(0), "the committed fixture is UTF-8 without BOM").not.toBe(0xfeff);
+  expect(captured.actions[1].answer).toContain("rows=20");
+  await save(testInfo, "v2-m1-05-n2-encoding", {
+    case: "V2-M1-05-N2", backend, threadId: captured.attached.threadId, runId: captured.run.runId,
+    toolResultSha256: captured.actions[1].toolResultSha256, fixtureSha256: FIXTURE_SHA256,
+    answer: captured.actions[1].answer,
+  });
+});
+
+test(`${backend}: V2-M1-05-N3 recomputed region and grand totals match the independent oracle`, async ({ context, page }, testInfo) => {
+  const captured = await captureOracleRun(page, context, "oracle-n3");
+  const rows = csvDataRows(captured.bytes);
+  const sum = (region) => rows.filter((row) => row[1] === region).reduce((acc, row) => acc + Number(row[2]), 0);
+  const east = sum("East");
+  const west = sum("West");
+  const total = east + west;
+  const high = rows.filter((row) => Number(row[2]) >= 1500).length;
+  expect({ east, west, total, high, rows: rows.length }).toEqual({ east: 10000, west: 11000, total: 21000, high: 6, rows: 20 });
+  const answer = captured.actions[1].answer;
+  expect(answer).toContain(`east=${east}`);
+  expect(answer).toContain(`west=${west}`);
+  expect(answer).toContain(`total=${total}`);
+  expect(answer).toContain(`high=${high}`);
+  expect(answer, "a drifted grand total must not pass").not.toContain(`total=${total + 1}`);
+  expect(answer, "a wrong high-amount threshold must not pass").not.toContain(`high=${high + 1}`);
+  await save(testInfo, "v2-m1-05-n3-totals", {
+    case: "V2-M1-05-N3", backend, threadId: captured.attached.threadId, runId: captured.run.runId,
+    recomputed: { east, west, total, high, rows: rows.length }, answer,
   });
 });

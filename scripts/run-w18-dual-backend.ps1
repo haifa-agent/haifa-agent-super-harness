@@ -58,6 +58,22 @@ function Stop-OwnedTree([System.Diagnostics.Process]$Process) {
     $null = $Process.WaitForExit(10000)
 }
 
+function Set-W18ManagedModel([int]$Port, [string]$Name, [string]$Display, [string]$Model, [bool]$Enabled) {
+    $models = Invoke-RestMethod "http://127.0.0.1:$Port/api/managed-models" -TimeoutSec 5
+    $existing = @($models.models) | Where-Object { $_.name -eq $Name } | Select-Object -First 1
+    $body = @{
+        config = @{
+            name = $Name; display_name = $Display
+            provider = 'openai-compatible'; model = $Model
+            base_url = "http://127.0.0.1:$ProviderPort/v1"; enabled = $Enabled
+            supports_vision = $false; context_window = 8192; max_tokens = 1024
+            api_key = 'w18-loopback-only'
+        }
+        expected_revision = $(if ($existing) { $existing.revision } else { $null })
+    } | ConvertTo-Json -Depth 6 -Compress
+    return Invoke-RestMethod "http://127.0.0.1:$Port/api/managed-models" -Method Put -ContentType 'application/json' -Body $body -TimeoutSec 5
+}
+
 if ([string]::IsNullOrWhiteSpace($Backend)) { throw '-Backend reference|haifa is required.' }
 if ($GatewayPort -ne 40618 -or $FrontendPort -ne 45618 -or $ProviderPort -ne 46618) {
     throw 'W18 slot 3 requires Gateway=40618, Frontend=45618 and the main-controller-assigned test-only Provider=46618.'
@@ -107,6 +123,13 @@ $gatewayReadyAt = $null
 $frontendReadyAt = $null
 $testStartedAt = $null
 $testFinishedAt = $null
+# V2-M1 "disabled B" negative: a configured-but-disabled profile name. Haifa's
+# managed catalog always supports it; the frozen reference uses the same
+# managed-models API, so the runner attempts it there too and records the
+# outcome (a profile that cannot express a disabled model leaves the case
+# NOT_RUN on that side rather than silently claiming coverage).
+$disabledModelName = 'w18-controlled-b-disabled'
+$disabledModelConfigured = $false
 try {
     $providerProcess = Start-Process -FilePath $node `
         -ArgumentList @((Join-Path $root 'tests/w18-ui-smoke/loopback-openai-provider.cjs'), [string]$ProviderPort, $providerReady) `
@@ -148,6 +171,18 @@ try {
             -RedirectStandardOutput (Join-Path $evidenceRoot 'gateway.stdout.log') `
             -RedirectStandardError (Join-Path $evidenceRoot 'gateway.stderr.log')
         Wait-Endpoint "http://127.0.0.1:$GatewayPort/health" 'healthy' $gatewayProcess 60
+        # Best-effort "disabled B": the frozen reference exposes the same
+        # managed-models API. If the managed store is unavailable in this local
+        # profile the case is left NOT_RUN on the reference side, recorded in
+        # topology, instead of pretending a disabled model was exercised.
+        try {
+            $disabledSaved = Set-W18ManagedModel -Port $GatewayPort -Name $disabledModelName `
+                -Display 'W18 Controlled Loopback B (disabled)' -Model 'w18-controlled-model-b' -Enabled $false
+            $disabledModelConfigured = -not $disabledSaved.enabled
+        }
+        catch {
+            Write-Warning "Reference disabled-model profile could not be configured: $($_.Exception.Message)"
+        }
     }
     else {
         $env:SUPER_HARNESS_GATEWAY_KIND = 'haifa'
@@ -178,25 +213,21 @@ try {
         )
         if ($DiagnosticSingleModel) { $controlledProfiles = @($controlledProfiles[0]) }
         foreach ($controlled in $controlledProfiles) {
-            $models = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/managed-models" -TimeoutSec 5
-            $existing = @($models.models) | Where-Object { $_.name -eq $controlled.name } | Select-Object -First 1
-            $body = @{
-                config = @{
-                    name = $controlled.name; display_name = $controlled.display
-                    provider = 'openai-compatible'; model = $controlled.model
-                    base_url = "http://127.0.0.1:$ProviderPort/v1"; enabled = $true
-                    supports_vision = $false; context_window = 8192; max_tokens = 1024
-                    api_key = 'w18-loopback-only'
-                }
-                expected_revision = $(if ($existing) { $existing.revision } else { $null })
-            } | ConvertTo-Json -Depth 6 -Compress
-            $saved = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/managed-models" -Method Put -ContentType 'application/json' -Body $body -TimeoutSec 5
+            $saved = Set-W18ManagedModel -Port $GatewayPort -Name $controlled.name `
+                -Display $controlled.display -Model $controlled.model -Enabled $true
             if (-not $saved.enabled -or -not $saved.has_api_key) { throw "Controlled model profile $($controlled.name) did not save correctly." }
+        }
+        if (-not $DiagnosticSingleModel) {
+            $disabledSaved = Set-W18ManagedModel -Port $GatewayPort -Name $disabledModelName `
+                -Display 'W18 Controlled Loopback B (disabled)' -Model 'w18-controlled-model-b' -Enabled $false
+            if ($disabledSaved.enabled) { throw "Disabled model profile $disabledModelName saved as enabled." }
+            $disabledModelConfigured = $true
         }
         $visible = @((Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/models" -TimeoutSec 5).models.name)
         foreach ($expectedName in @($controlledProfiles | ForEach-Object { $_.name })) {
             if ($visible -cnotcontains $expectedName) { throw "Controlled model $expectedName is not visible from /api/models." }
         }
+        if ($visible -ccontains $disabledModelName) { throw "Disabled model $disabledModelName must not be visible from /api/models." }
     }
     $gatewayReadyAt = Get-Date
 
@@ -260,6 +291,8 @@ try {
         specSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/w18-dual-backend/differential.spec.cjs')).Hash.ToLowerInvariant()
         v2m1SpecSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/w18-dual-backend/v2-m1-model-file.spec.cjs')).Hash.ToLowerInvariant()
         providerSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/w18-ui-smoke/loopback-openai-provider.cjs')).Hash.ToLowerInvariant()
+        disabledModelName = $disabledModelName
+        disabledModelConfigured = $disabledModelConfigured
         startedAt = $started.ToString('o')
         readinessSeconds = [ordered]@{
             provider = [math]::Round(($providerReadyAt - $started).TotalSeconds, 1)
@@ -272,6 +305,9 @@ try {
     $env:W18_DIFFERENTIAL_BACKEND = $Backend
     $env:W18_DIFFERENTIAL_EVIDENCE = $evidenceRoot
     $env:W18_DIFFERENTIAL_ROUND = [string]$Round
+    $env:W18_DISABLED_MODEL = $disabledModelName
+    $env:W18_DISABLED_MODEL_CONFIGURED = $(if ($disabledModelConfigured) { '1' } else { '0' })
+    $env:W18_DIFFERENTIAL_GATEWAY = "http://127.0.0.1:$GatewayPort"
     $testStartedAt = Get-Date
     Push-Location $root
     try {
