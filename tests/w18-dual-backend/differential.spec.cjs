@@ -6,11 +6,13 @@ const { expect, test } = require(path.resolve(
   __dirname,
   "../../frontend/node_modules/@playwright/test",
 ));
+const { verifySteerExchange, verifySteerTerminal } = require("./demo-l2-steer-contract.cjs");
 
 const app = process.env.E2E_APP_URL;
 const backend = process.env.W18_DIFFERENTIAL_BACKEND;
 const evidenceRoot = process.env.W18_DIFFERENTIAL_EVIDENCE;
-if (!app || !["reference", "haifa"].includes(backend) || !evidenceRoot) {
+const demoRound = Number.parseInt(process.env.W18_DIFFERENTIAL_ROUND ?? "", 10);
+if (!app || !["reference", "haifa"].includes(backend) || !evidenceRoot || ![1, 2].includes(demoRound)) {
   throw new Error("Explicit W18 differential app/backend/evidence is required");
 }
 
@@ -86,6 +88,55 @@ async function save(testInfo, name, value) {
     path: file,
     contentType: "application/json",
   });
+}
+
+function runIdentity(response) {
+  const location = response.headers()["content-location"];
+  expect(location, "run stream must expose Content-Location").toBeTruthy();
+  const match = location.match(/\/api\/threads\/([^/]+)\/runs\/([^/]+)$/);
+  expect(match, `unexpected Run Content-Location: ${location}`).toBeTruthy();
+  return { location, threadId: match[1], runId: match[2] };
+}
+
+function humanInputProjection(state) {
+  const messages = state?.values?.messages ?? [];
+  const card = messages.find((message) => message?.artifact?.human_input);
+  expect(card, "authoritative state must contain the pending human-input card").toBeTruthy();
+  const request = card.artifact.human_input;
+  return {
+    messageId: card.id ?? null,
+    toolCallId: request.tool_call_id ?? card.tool_call_id ?? null,
+    requestId: request.request_id ?? null,
+  };
+}
+
+function authoritativeWriteProjection(state, expectedPath) {
+  const messages = state?.values?.messages ?? [];
+  const request = messages.find((message) =>
+    message?.tool_calls?.some((call) => call.name === "write_file"),
+  );
+  expect(request, "state must contain the authoritative write_file request").toBeTruthy();
+  const call = request.tool_calls.find((candidate) => candidate.name === "write_file");
+  expect(call.args.path).toBe(expectedPath);
+  const results = messages.filter(
+    (message) =>
+      message?.type === "tool" &&
+      message?.name === "write_file" &&
+      message?.tool_call_id === call.id,
+  );
+  expect(results, "write_file must have exactly one matching result").toHaveLength(1);
+  return {
+    call,
+    result: results[0],
+    structured: results[0].additional_kwargs?.haifa_tool_result,
+  };
+}
+
+async function classifyAndSkip(testInfo, type, reason, evidence) {
+  expect(["NOT_RUN", "BLOCKED_EXTERNAL", "UPSTREAM_UNSUPPORTED"]).toContain(type);
+  await save(testInfo, "demo-l2-classification", { backend, round: demoRound, type, reason, ...evidence });
+  testInfo.annotations.push({ type, description: reason });
+  test.skip(true, reason);
 }
 
 function observeBrowserTargets(page) {
@@ -455,17 +506,40 @@ test(`${backend}: production file Tool output downloads with matching hash`, asy
   const expected = Buffer.from(`W18 ${prompt} produced by write_file 数据 ✓`, "utf8");
   const input = await openChat(page);
   const { stream, threadId, runId } = await sendAndCaptureRun(page, input, prompt);
-  const run = await pollRunStatus(context, threadId, runId, "success");
+  let resumedStream = null;
+  await expect.poll(() => providerRequests(prompt).length, { timeout: 20_000 }).toBeGreaterThan(0);
   const requests = providerRequests(prompt);
   if (await notRunUnlessOffered(testInfo, requests, "write_file", "W05 production Tool", {
-    case: "production-file-tool", threadId, runId, terminalStatus: run.status,
+    case: "production-file-tool", threadId, runId,
   })) {
     expect(targets.forbidden).toEqual([]);
     test.skip(true, "write_file production Tool absent (W05)");
   }
-  const streamText = await stream.text();
+  if (backend === "haifa") {
+    const approval = page.getByTestId("human-input-card");
+    await expect(approval).toHaveCount(1);
+    const resumedPromise = page.waitForResponse((response) => {
+      const request = response.request();
+      if (request.method() !== "POST" ||
+          !/\/api\/langgraph\/threads\/[^/]+\/runs\/stream$/.test(new URL(response.url()).pathname)) return false;
+      try {
+        return Boolean(request.postDataJSON()?.input?.messages?.at(-1)?.additional_kwargs?.human_input_response);
+      } catch { return false; }
+    }, { timeout: 20_000 });
+    await approval.getByRole("button", { name: "Approve", exact: true }).click();
+    const resumed = await resumedPromise;
+    if (resumed.status() !== 200) throw new Error(`Approval resume returned ${resumed.status()}: ${await resumed.text()}`);
+    expect(resumed.status()).toBe(200);
+    expect(runIdentity(resumed)).toEqual({ location: stream.headers()["content-location"], threadId, runId });
+    resumedStream = resumed;
+  }
+  const run = await pollRunStatus(context, threadId, runId, "success");
+  const streamText = `${await stream.text()}\n${resumedStream ? await resumedStream.text() : ""}`;
   const toolCallIds = [...new Set(streamText.match(/w18-(?:write|present)-call/g) ?? [])];
-  expect(toolCallIds).toEqual(expect.arrayContaining(["w18-write-call", "w18-present-call"]));
+  if (backend === "reference") {
+    expect(toolCallIds).toContain("w18-write-call");
+    expect(toolCallIds).toContain("w18-present-call");
+  }
   await expect(page.locator("#chat").getByText(`File tool done: ${prompt}`, { exact: true })).toBeVisible();
   const state = await context.request.get(`${app}/api/langgraph/threads/${threadId}/state`);
   expect(state.status(), await state.text()).toBe(200);
@@ -577,6 +651,296 @@ test(`${backend}: production Interaction request and hidden response`, async ({ 
     browserApiTargets: targets.requests,
     forbiddenBrowserTargets: targets.forbidden,
   });
+});
+
+test(`${backend}: customer demo L2 approval, Artifact, reconnect, and active Steer`, async ({ context, page }, testInfo) => {
+  const targets = observeBrowserTargets(page);
+  const marker = `w18-demo-l2-r${demoRound}-${Date.now()}`;
+  const artifactPath = `/mnt/user-data/outputs/${marker}.txt`;
+  const expectedBytes = Buffer.from(`haifa-customer-demo-round-${demoRound}`, "utf8");
+  const expectedSha256 = sha256(expectedBytes);
+  const steerAck = `DEMO-STEER-ACK-${demoRound}`;
+  const steerInstruction = `Please acknowledge DEMO-STEER-ACK-${demoRound} in this same Run without calling write_file again.`;
+
+  const input = await openChat(page);
+  const started = await sendAndCaptureRun(page, input, marker);
+  const initialIdentity = runIdentity(started.stream);
+  expect(initialIdentity.threadId).toBe(started.threadId);
+  expect(initialIdentity.runId).toBe(started.runId);
+
+  const card = page.getByTestId("human-input-card");
+  await expect(card).toHaveCount(1);
+  await expect(card).toBeVisible();
+  await expect(page.getByTestId("artifact-trigger")).toHaveCount(0);
+
+  const preStateResponse = await context.request.get(`${app}/api/langgraph/threads/${started.threadId}/state`);
+  expect(preStateResponse.status(), await preStateResponse.text()).toBe(200);
+  const preState = await preStateResponse.json();
+  const preInteraction = humanInputProjection(preState);
+  expect(preState.values?.artifacts ?? []).not.toContain(artifactPath);
+  const absent = await context.request.get(`${app}/api/threads/${started.threadId}/artifacts${artifactPath}`);
+  expect(absent.status()).toBe(404);
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  const restoredCard = page.getByTestId("human-input-card");
+  await expect(restoredCard).toHaveCount(1);
+  await expect(restoredCard).toBeVisible();
+  const restoredStateResponse = await context.request.get(`${app}/api/langgraph/threads/${started.threadId}/state`);
+  expect(restoredStateResponse.status(), await restoredStateResponse.text()).toBe(200);
+  const restoredInteraction = humanInputProjection(await restoredStateResponse.json());
+  expect(restoredInteraction).toEqual(preInteraction);
+  await expect(page.getByTestId("artifact-trigger")).toHaveCount(0);
+
+  let hiddenResponse;
+  const resumedPromise = page.waitForResponse((response) => {
+    const request = response.request();
+    if (request.method() !== "POST" ||
+        !/\/api\/langgraph\/threads\/[^/]+\/runs\/stream$/.test(new URL(response.url()).pathname)) {
+      return false;
+    }
+    try {
+      const message = request.postDataJSON()?.input?.messages?.at(-1);
+      if (message?.additional_kwargs?.human_input_response) {
+        hiddenResponse = message.additional_kwargs.human_input_response;
+        return true;
+      }
+    } catch { return false; }
+    return false;
+  }, { timeout: 20_000 });
+  const approve = restoredCard.getByRole("button", { name: "Approve", exact: true });
+  await expect(approve).toBeEnabled();
+  await approve.click();
+  const resumed = await resumedPromise;
+  if (resumed.status() !== 200) throw new Error(`Approval resume returned ${resumed.status()}: ${await resumed.text()}`);
+  expect(resumed.status()).toBe(200);
+  const resumedIdentity = runIdentity(resumed);
+  expect(resumedIdentity.threadId).toBe(started.threadId);
+
+  if (resumedIdentity.runId !== started.runId) {
+    await classifyAndSkip(
+      testInfo,
+      "UPSTREAM_UNSUPPORTED",
+      "frozen reference Interaction approval resumes in a distinct Run; the M3 same-Run chain requires main-controller/human scope arbitration",
+      {
+        marker,
+        artifactPath,
+        initialRunId: started.runId,
+        resumedRunId: resumedIdentity.runId,
+        interaction: preInteraction,
+        hiddenResponse,
+        fileAbsentBeforeApproval: true,
+        artifactAbsentBeforeApproval: true,
+        browserApiTargets: targets.requests,
+        forbiddenBrowserTargets: targets.forbidden,
+      },
+    );
+  }
+
+  expect(resumedIdentity.runId).toBe(started.runId);
+  let postState;
+  await expect.poll(async () => {
+    const response = await context.request.get(`${app}/api/langgraph/threads/${started.threadId}/state`);
+    expect(response.status(), await response.text()).toBe(200);
+    postState = await response.json();
+    return postState.values?.artifacts ?? [];
+  }, { timeout: 10_000, intervals: [100, 250, 500] }).toEqual([artifactPath]);
+  const projection = authoritativeWriteProjection(postState, artifactPath);
+  expect(projection.structured).toMatchObject({
+    path: artifactPath,
+    sha256: expectedSha256,
+    artifactSha256: `sha256:${expectedSha256}`,
+    artifactByteCount: expectedBytes.length,
+    runId: started.runId,
+    threadId: started.threadId,
+  });
+  expect(projection.structured.artifactId).toBeTruthy();
+  expect(projection.structured.artifactExecutionRef).toBe(projection.call.id);
+  const existingMessageIdsBeforeSteer = (postState.values?.messages ?? [])
+    .map((message) => message?.id)
+    .filter((id) => typeof id === "string" && id.length > 0);
+
+  const artifactUrl = `${app}/api/threads/${started.threadId}/artifacts${artifactPath}`;
+  const full = await context.request.get(artifactUrl);
+  expect(full.status(), await full.text()).toBe(200);
+  const range = await context.request.get(artifactUrl, { headers: { Range: "bytes=0-7" } });
+  expect(range.status()).toBe(206);
+  expect(range.headers()["content-range"]).toBe(`bytes 0-7/${expectedBytes.length}`);
+  const downloaded = await context.request.get(`${artifactUrl}?download=true`);
+  expect(downloaded.status()).toBe(200);
+  const downloadedBytes = await downloaded.body();
+  expect(sha256(downloadedBytes)).toBe(expectedSha256);
+
+  const liveArtifactVisible = await page.getByTestId("artifact-trigger").isVisible().catch(() => false);
+  const reconnect = await context.newPage();
+  await reconnect.goto(page.url(), { waitUntil: "domcontentloaded" });
+  await expect(reconnect.getByTestId("artifact-trigger")).toBeVisible({ timeout: 10_000 });
+  await expect(reconnect.locator("#chat").getByText(artifactPath, { exact: true })).toBeVisible();
+  await expect(reconnect.getByTestId("human-input-card")).toHaveCount(1);
+  await expect(
+    reconnect.getByTestId("human-input-card").getByRole("button", { name: "Approve", exact: true }),
+  ).toBeDisabled();
+  await reconnect.getByTestId("artifact-trigger").click();
+  await expect(reconnect.getByText(`${marker}.txt`, { exact: true })).toBeVisible();
+  const uiDownloadPromise = reconnect.waitForEvent("download");
+  await reconnect.getByRole("link", { name: "Download", exact: true }).click();
+  const uiDownload = await uiDownloadPromise;
+  const uiDownloadPath = await uiDownload.path();
+  expect(uiDownloadPath).toBeTruthy();
+  const uiDownloadBytes = fs.readFileSync(uiDownloadPath);
+  expect(sha256(uiDownloadBytes)).toBe(expectedSha256);
+
+  // Negative protocol probes execute in the frozen browser origin and do not
+  // mutate the active Run: missing mode and invalid cursor must fail closed.
+  const negative = await reconnect.evaluate(async ({ threadId, marker }) => {
+    const url = `/api/threads/${threadId}/runs/stream`;
+    const body = JSON.stringify({
+      input: { messages: [{ id: `${marker}-negative`, type: "human", content: "must-not-apply" }] },
+      on_disconnect: "continue",
+    });
+    const unmarked = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body });
+    const invalidCursor = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-haifa-run-input": "steer",
+        "last-event-id": "not-a-valid-cursor",
+      },
+      body,
+    });
+    return {
+      unmarked: { status: unmarked.status, body: await unmarked.text() },
+      invalidCursor: { status: invalidCursor.status, body: await invalidCursor.text() },
+    };
+  }, { threadId: started.threadId, marker });
+  expect(negative.unmarked.status).toBe(409);
+  expect(negative.invalidCursor.status).toBe(409);
+
+  const activeBeforeSteer = await context.request.get(`${app}${started.location}`);
+  expect(activeBeforeSteer.status(), await activeBeforeSteer.text()).toBe(200);
+  const activeSnapshot = await activeBeforeSteer.json();
+  expect(activeSnapshot.status).toBe("running");
+
+  // Exercise the actual frozen composer. Both same-origin paths are visible
+  // to the frozen UI, but the captured exchange must prove explicit Steer
+  // semantics; merely observing a POST is never sufficient for PASS.
+  const steerResponsePromise = reconnect.waitForResponse((response) => {
+    const request = response.request();
+    const pathname = new URL(response.url()).pathname;
+    return request.method() === "POST" &&
+      pathname.endsWith(`/threads/${started.threadId}/runs/stream`);
+  }, { timeout: 10_000 }).catch(() => null);
+  const steerInput = reconnect.locator('textarea[name="message"]');
+  await expect(steerInput).toBeVisible();
+  await steerInput.fill(steerInstruction);
+  await steerInput.press("Enter");
+  const steerResponse = await steerResponsePromise;
+  const toastTexts = await reconnect.locator("[data-sonner-toast]").allTextContents();
+  const screenshot = testInfo.outputPath("demo-l2-steer-window.png");
+  await reconnect.screenshot({ path: screenshot, fullPage: true });
+  await testInfo.attach("demo-l2-steer-window.png", { path: screenshot, contentType: "image/png" });
+
+  if (steerResponse === null) {
+    await save(testInfo, "demo-l2-chain", {
+      backend,
+      round: demoRound,
+      marker,
+      artifactPath,
+      threadId: started.threadId,
+      runId: started.runId,
+      toolCallId: projection.call.id,
+      artifactId: projection.structured.artifactId,
+      activeStatusBeforeSteer: activeSnapshot.status,
+      steerInstruction,
+      steerRequestObserved: false,
+      toastTexts,
+      negative,
+      browserApiTargets: targets.requests,
+      forbiddenBrowserTargets: targets.forbidden,
+    });
+    expect(
+      steerResponse,
+      "the frozen UI must emit an explicit same-Run Steer request while the Run is active",
+    ).not.toBeNull();
+  }
+
+  const steerRequest = steerResponse.request();
+  const steerExchange = verifySteerExchange({
+    requestUrl: steerResponse.url(),
+    requestMethod: steerRequest.method(),
+    requestHeaders: steerRequest.headers(),
+    requestBody: steerRequest.postData(),
+    responseStatus: steerResponse.status(),
+    responseHeaders: steerResponse.headers(),
+    expectedThreadId: started.threadId,
+    expectedRunId: started.runId,
+    expectedInstruction: steerInstruction,
+    existingMessageIds: existingMessageIdsBeforeSteer,
+  });
+
+  const terminalRun = await pollRunStatus(context, started.threadId, started.runId, "success", 40_000);
+  const terminalStateResponse = await context.request.get(`${app}/api/langgraph/threads/${started.threadId}/state`);
+  expect(terminalStateResponse.status(), await terminalStateResponse.text()).toBe(200);
+  const terminalState = await terminalStateResponse.json();
+  const terminalContract = verifySteerTerminal({
+    runStatus: terminalRun.status,
+    state: terminalState,
+    expectedSteerMessageId: steerExchange.messageId,
+    expectedInstruction: steerInstruction,
+    expectedAck: steerAck,
+    expectedArtifactPath: artifactPath,
+    expectedArtifactId: projection.structured.artifactId,
+    expectedToolCallId: projection.call.id,
+  });
+  const terminalProjection = authoritativeWriteProjection(terminalState, artifactPath);
+  expect(terminalProjection.call.id).toBe(projection.call.id);
+  expect(terminalProjection.result.id).toBe(projection.result.id);
+  expect(terminalProjection.structured.artifactId).toBe(projection.structured.artifactId);
+  const terminalArtifact = await context.request.get(artifactUrl);
+  expect(terminalArtifact.status(), await terminalArtifact.text()).toBe(200);
+  const terminalArtifactBytes = await terminalArtifact.body();
+  expect(sha256(terminalArtifactBytes)).toBe(expectedSha256);
+
+  await save(testInfo, "demo-l2-chain", {
+    backend,
+    round: demoRound,
+    marker,
+    artifactPath,
+    threadId: started.threadId,
+    runId: started.runId,
+    runLocation: started.location,
+    interaction: preInteraction,
+    resumedRunId: resumedIdentity.runId,
+    sameRunApprovalResume: resumedIdentity.runId === started.runId,
+    hiddenResponse,
+    fileAbsentBeforeApproval: true,
+    artifactAbsentBeforeApproval: true,
+    toolCallId: projection.call.id,
+    toolResultMessageId: projection.result.id,
+    artifactId: projection.structured.artifactId,
+    artifactExecutionRef: projection.structured.artifactExecutionRef,
+    liveArtifactVisibleBeforeReconnect: liveArtifactVisible,
+    artifactVisibleAfterReconnect: true,
+    expectedSha256,
+    downloadSha256: sha256(downloadedBytes),
+    uiDownloadSha256: sha256(uiDownloadBytes),
+    range: { status: range.status(), contentRange: range.headers()["content-range"] },
+    activeStatusBeforeSteer: activeSnapshot.status,
+    steerInstruction,
+    steerRequestObserved: true,
+    steerEndpoint: steerExchange.endpointPath,
+    steerMessageId: steerExchange.messageId,
+    steerStatus: steerResponse.status(),
+    steerContentLocation: steerExchange.location,
+    terminalStatus: terminalRun.status,
+    terminalSteerMessageId: terminalContract.steerMessage.id,
+    terminalAckMessageId: terminalContract.acknowledgement.id,
+    terminalArtifactSha256: sha256(terminalArtifactBytes),
+    toastTexts,
+    negative,
+    browserApiTargets: targets.requests,
+    forbiddenBrowserTargets: targets.forbidden,
+  });
+  expect(targets.forbidden).toEqual([]);
 });
 
 test(`${backend}: browser WebSocket with browser automation disabled`, async ({ context, page }, testInfo) => {

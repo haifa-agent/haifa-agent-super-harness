@@ -467,6 +467,72 @@ const server = http.createServer((request, response) => {
       return;
     }
 
+    // W18 customer-demo L2 chain. The same controlled Provider and browser
+    // spec drive both backends. The reference backend exposes present_files
+    // and uses its built-in ask_clarification interruption before write_file;
+    // Haifa exposes the policy-guarded production write_file directly. This
+    // branch only chooses among Tools actually offered by the backend and
+    // never manufactures Tool/Interaction/Artifact responses.
+    const demoPrompt = firstUserMatch(body, /w18-demo-l2-r\d+-\d+/);
+    if (demoPrompt && offeredTools.includes("write_file")) {
+      const round = /w18-demo-l2-r(\d+)-/.exec(demoPrompt)?.[1] ?? "0";
+      const id = `w18-demo-l2-${Date.now()}`;
+      const target = `/mnt/user-data/outputs/${demoPrompt}.txt`;
+      const results = toolResultCount(body);
+      const reference = offeredTools.includes("present_files");
+      const steerAck = firstUserMatch(body, /DEMO-STEER-ACK-\d+/);
+      if (steerAck) {
+        finishWithText(response, id, steerAck);
+      } else if (reference && results === 0 && offeredTools.includes("ask_clarification")) {
+        finishWithToolCall(response, id, `w18-demo-approval-${round}`, "ask_clarification", {
+          question: `Approve production write_file for ${demoPrompt}?`,
+          clarification_type: "confirmation",
+          options: ["Approve", "Reject"],
+        });
+      } else if ((!reference && results === 0) || (reference && results === 1)) {
+        finishWithToolCall(response, id, `w18-demo-write-${round}`, "write_file", {
+          description: "W18 customer demo L2 output",
+          path: target,
+          content: `haifa-customer-demo-round-${round}`,
+        });
+      } else if (reference && results === 2) {
+        finishWithToolCall(response, id, `w18-demo-present-${round}`, "present_files", {
+          filepaths: [target],
+        });
+      } else {
+        // A bounded streamed answer leaves a deterministic L2 active-input
+        // window after the real Tool result. It is not a PASS oracle by
+        // itself: the browser case must prove that the frozen UI emitted the
+        // Steer request and that the same Run consumed it.
+        let emitted = 0;
+        const timer = setInterval(() => {
+          if (response.destroyed || response.writableEnded) {
+            clearInterval(timer);
+            return;
+          }
+          emitted += 1;
+          frame(response, completionChunk(
+            id,
+            emitted === 1 ? `Artifact ready for ${demoPrompt}. ` : ".",
+            emitted === 300 ? "stop" : null,
+          ));
+          if (emitted === 300) {
+            clearInterval(timer);
+            frame(response, {
+              id,
+              model: "w18-controlled-model",
+              choices: [],
+              usage: { prompt_tokens: 12, completion_tokens: 24 },
+            });
+            frame(response, "[DONE]");
+            response.end();
+          }
+        }, 100);
+        response.on("close", () => clearInterval(timer));
+      }
+      return;
+    }
+
     const id = `w18-run-${Date.now()}`;
     if (prompt === "__slow__" || prompt === "__slow_differential__") {
       let emitted = 0;

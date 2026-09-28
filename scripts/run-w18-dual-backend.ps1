@@ -8,11 +8,14 @@ param(
     [int]$GatewayPort = 40618,
     [int]$FrontendPort = 45618,
     [int]$ProviderPort = 46618,
+    [ValidateRange(1, 2)]
+    [int]$Round = 1,
     [switch]$SkipBuild
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'lib/w18-differential-results.ps1')
 
 function Wait-Endpoint([string]$Url, [string]$ExpectedStatus, [System.Diagnostics.Process]$Process, [int]$Seconds) {
     $deadline = (Get-Date).AddSeconds($Seconds)
@@ -58,11 +61,10 @@ $source = (Resolve-Path -LiteralPath $SourceRepository).Path
 if ((& git -C $source rev-parse HEAD).Trim() -cne 'e545c28ac301e6f9feae247c513d8ea8f83df294') {
     throw 'Frozen DeerFlow source SHA drifted.'
 }
-if ((& git -C $root branch --show-current).Trim() -cne 'codex/w18-dual-backend-differential') {
-    throw 'This runner is restricted to the W18 differential worktree.'
-}
+$currentBranch = (& git -C $root branch --show-current).Trim()
+Assert-W18DifferentialBranch -Branch $currentBranch
 if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
-    $DataDirectory = Join-Path $root 'local-tmp/slot-3-differential'
+    $DataDirectory = Join-Path $root 'local-tmp/slot-3-demo-l2-differential'
 }
 $dataRoot = [IO.Path]::GetFullPath($DataDirectory).TrimEnd('\', '/')
 if (-not $dataRoot.StartsWith($root.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
@@ -85,7 +87,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $frontendRoot 'node_modules/.bin/pla
 }
 
 $phaseRoot = Join-Path $dataRoot $Backend
-$evidenceRoot = Join-Path $phaseRoot ('evidence-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$evidenceRoot = Join-Path $phaseRoot ("evidence-r$Round-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 $null = New-Item -ItemType Directory -Force -Path $evidenceRoot
 $providerReady = Join-Path $evidenceRoot 'provider.ready.json'
 $node = (Get-Command node.exe).Source
@@ -219,6 +221,7 @@ try {
 
     [ordered]@{
         backend = $Backend
+        round = $Round
         sourceSha = (& git -C $source rev-parse HEAD).Trim()
         harnessSha = (& git -C $root rev-parse HEAD).Trim()
         gatewayUrl = "http://127.0.0.1:$GatewayPort"
@@ -247,6 +250,7 @@ try {
     $env:E2E_APP_URL = "http://127.0.0.1:$FrontendPort"
     $env:W18_DIFFERENTIAL_BACKEND = $Backend
     $env:W18_DIFFERENTIAL_EVIDENCE = $evidenceRoot
+    $env:W18_DIFFERENTIAL_ROUND = [string]$Round
     $testStartedAt = Get-Date
     Push-Location $root
     try {
@@ -290,14 +294,15 @@ finally {
             foreach ($spec in (& $prop $suite 'specs')) {
                 foreach ($t in (& $prop $spec 'tests')) {
                     $last = @(& $prop $t 'results')[-1]
-                    $notRun = @((& $prop $t 'annotations') | Where-Object { $_.type -eq 'NOT_RUN' } | ForEach-Object { $_.description })
+                    $classification = Get-W18DifferentialClassification `
+                        -PlaywrightStatus ([string]$last.status) `
+                        -Annotations @(& $prop $t 'annotations')
                     [ordered]@{
                         title = $spec.title
-                        status = $(if ($notRun.Count -gt 0 -and $last.status -eq 'skipped') { 'NOT_RUN' }
-                            elseif ($last.status -eq 'passed') { 'PASS' } else { "FAIL($($last.status))" })
+                        status = $classification.status
                         seconds = [math]::Round($last.duration / 1000, 1)
                         retry = $last.retry
-                        notRunReason = $(if ($notRun.Count -gt 0) { $notRun[0] } else { $null })
+                        classificationReason = $classification.reason
                     }
                 }
             }
