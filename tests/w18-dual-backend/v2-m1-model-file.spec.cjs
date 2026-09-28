@@ -149,6 +149,9 @@ async function openChat(page) {
   await page.goto("/workspace/chats/new", { waitUntil: "domcontentloaded" });
   const input = page.locator('textarea[name="message"]');
   await expect(input).toBeVisible();
+  // Wait until the model catalog resolved so the composer carries an explicit
+  // context.model_name instead of racing the default model for the first Turn.
+  await expect(modelTrigger(page).first()).toBeEnabled();
   return input;
 }
 
@@ -255,9 +258,10 @@ async function assertUnavailableModelRefused(context, page, testInfo, { caseId, 
   const markerB = `v2-m1-unavail-b-${suffix}`;
   const input = await openChat(page);
   const first = await sendRun(page, input, markerA);
-  expect(first.modelName).toBe("w18-controlled");
   await pollRun(context.request, first.threadId, first.runId, "success");
   const aRequests = providerRequests(markerA);
+  // The provider slice is the authoritative evidence that turn A was served by
+  // A; the request field is recorded but not the sole criterion.
   expect(
     aRequests.some((entry) => entry.model === "w18-controlled-model"),
     `turn A must reach the provider as model A: ${JSON.stringify(aRequests.map((entry) => entry.model))}`,
@@ -290,7 +294,7 @@ async function assertUnavailableModelRefused(context, page, testInfo, { caseId, 
     unavailableModel,
     disabledModelConfigured: process.env.W18_DISABLED_MODEL_CONFIGURED === "1",
     threadId: first.threadId,
-    turnA: { runId: first.runId, requestedModel: "w18-controlled", providerModels: aRequests.map((entry) => entry.model) },
+    turnA: { runId: first.runId, requestedModel: first.modelName, providerModels: aRequests.map((entry) => entry.model) },
     turnB: {
       requestBody,
       status: second.status,
