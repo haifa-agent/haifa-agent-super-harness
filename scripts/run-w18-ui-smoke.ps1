@@ -13,6 +13,7 @@ param(
     [switch]$DemoArtifact,
     [switch]$TitleSuggestions,
     [switch]$InputPolish,
+    [switch]$V2FileContext,
     [switch]$LiveDeepSeek,
     [switch]$SkipBuild
 )
@@ -25,8 +26,8 @@ $expectedFrontendPort = 15618 + (10000 * $AgentSlot)
 if ($GatewayPort -ne $expectedGatewayPort -or $FrontendPort -ne $expectedFrontendPort -or $ProviderPort -ne 0) {
     throw "W18 slot $AgentSlot requires Gateway=$expectedGatewayPort and Frontend=$expectedFrontendPort; controlled Provider must use OS-assigned port 0."
 }
-if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $LiveDeepSeek).Where({ $_ }).Count -gt 1) {
-    throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, and live DeepSeek profiles are mutually exclusive.'
+if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2FileContext, $LiveDeepSeek).Where({ $_ }).Count -gt 1) {
+    throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, V2 file-context, and live DeepSeek profiles are mutually exclusive.'
 }
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
@@ -41,6 +42,8 @@ if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
         "target/agent-slot-$AgentSlot-title-suggestions-data"
     } elseif ($InputPolish) {
         "target/agent-slot-$AgentSlot-input-polish-data"
+    } elseif ($V2FileContext) {
+        "local-tmp/slot-$AgentSlot-w04-v2-file-context/ui-data"
     } else {
         "target/agent-slot-$AgentSlot-data"
     })
@@ -75,11 +78,13 @@ $evidenceRootBase = Join-Path $root $(if ($LiveDeepSeek) {
     'target/w03-title-suggestions-evidence/playwright'
 } elseif ($InputPolish) {
     "local-tmp/slot-$AgentSlot-w03-input-polish-ui/evidence"
+} elseif ($V2FileContext) {
+    "local-tmp/slot-$AgentSlot-w04-v2-file-context/evidence/ui"
 } else {
     'target/w18-ui-smoke-evidence/playwright'
 })
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$evidenceRoot = if ($DemoArtifact) { Join-Path $evidenceRootBase "run-$stamp" } else { $evidenceRootBase }
+$evidenceRoot = if ($DemoArtifact -or $V2FileContext) { Join-Path $evidenceRootBase "run-$stamp" } else { $evidenceRootBase }
 $null = New-Item -ItemType Directory -Force -Path $evidenceRoot
 $serverOut = Join-Path $evidenceRoot "server-$stamp.stdout.log"
 $serverErr = Join-Path $evidenceRoot "server-$stamp.stderr.log"
@@ -123,11 +128,13 @@ $managedEnvironment = @{
         'w03-title-suggestions.spec.cjs'
     } elseif ($InputPolish) {
         'w03-input-polish.spec.cjs'
+    } elseif ($V2FileContext) {
+        'w04-v2-file-context.spec.cjs'
     } else {
         'w18-ui-smoke.spec.cjs'
     })
-    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish) { '120000' } else { '60000' })
-    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish) { 'on' } else { 'retain-on-failure' })
+    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2FileContext) { '120000' } else { '60000' })
+    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2FileContext) { 'on' } else { 'retain-on-failure' })
     # Kept disabled through the ordinary build/test gate. The runner enables it
     # only immediately before launching the dedicated guarded test process.
     W05_INTERACTION_ACCEPTANCE = $null
