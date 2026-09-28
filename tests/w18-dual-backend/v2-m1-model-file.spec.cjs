@@ -459,7 +459,7 @@ test(`${backend}: V2-M1-02 active Run keeps its frozen model and refuses a mid-f
       activeRunModel: active.modelName,
       nextRequestedModel: "w18-controlled-b",
       error: String(error.message),
-      note: "the follow-up Run after the active one failed; owner W03 (per-Run model freeze) is not merged at this base SHA",
+      note: "the follow-up after terminal A did not produce a new Run stream; inspect the captured UI request path and response before assigning ownership",
     });
     throw error;
   }
@@ -780,19 +780,64 @@ test(`${backend}: V2-M1-04-N1 un-attached Project document does not enter the Ru
   expect(targets.forbidden).toEqual([]);
 });
 
-test(`${backend}: V2-M1-04-N2 attaching to an unknown Thread fails closed`, async ({ context }, testInfo) => {
+// Diagnostic only, deliberately with NO Oracle case id in its title: attaching
+// a shelf document to a Thread id that does not exist returns 404. That is the
+// "missing resource" path, NOT the V2-M1-04-N2 cross-owner (越权) Oracle, which
+// requires a caller who is a *different identity* from the Thread's owner. The
+// runner's Get-W18OracleCaseId returns $null for this title, so this row can
+// never be reported as satisfying V2-M1-04-N2. The 404 assertion is unchanged.
+test(`${backend}: unknown Thread attach to a shelf document returns 404 (diagnostic, no Oracle id)`, async ({ context }, testInfo) => {
   const suffix = Date.now();
-  const project = await createProject(context.request, `V2M1 foreign ${suffix}`);
+  const project = await createProject(context.request, `V2M1 unknown-thread ${suffix}`);
   const upload = await uploadProjectDocument(context.request, project.id, {
     name: "customers.csv", mimeType: "text/csv", buffer: fixtureBytes(),
   });
   expect(upload.status, await upload.text).toBe(201);
-  const attach = await attachDocument(context.request, project.id, upload.body.document.id, `v2m1-missing-${suffix}`);
-  await save(testInfo, "v2-m1-04-n2-foreign-thread", {
-    case: "V2-M1-04-N2", backend, projectId: project.id, documentId: upload.body.document.id,
-    targetThreadId: `v2m1-missing-${suffix}`, status: attach.status, body: attach.text,
+  const targetThreadId = `v2m1-missing-${suffix}`;
+  const attach = await attachDocument(context.request, project.id, upload.body.document.id, targetThreadId);
+  await save(testInfo, "v2-m1-04-unknown-thread-diagnostic", {
+    case: "diagnostic-unknown-thread-attach",
+    oracleCaseId: null,
+    oracleClaim: null,
+    note: "missing-resource 404; not the V2-M1-04-N2 caller-cannot-write Oracle",
+    backend, projectId: project.id, documentId: upload.body.document.id,
+    targetThreadId, status: attach.status, body: attach.text,
   });
   expect(attach.status, `attach to an unknown Thread must be 404, got ${attach.status}: ${attach.text}`).toBe(404);
+});
+
+// V2-M1-04-N2 Oracle: "attaching to a thread the caller cannot write returns
+// 404". Exercising it needs two isolated identities: an owner who created the
+// Thread and a different caller who must be refused (frozen
+// backend/app/gateway/routers/project_documents.py:336-338 attach-to-thread uses
+// owner_check=True, require_existing=True; :352-356 document that a caller who
+// cannot write the target Thread gets 404). This differential profile forces
+// DEER_FLOW_AUTH_DISABLED=1 with the single synthetic admin on both backs
+// (scripts/run-w18-dual-backend.ps1:114), so no second isolated identity can own
+// a Thread. The precondition is not established, so the case is NOT_RUN on both
+// sides and no missing-Thread 404 is claimed as this Oracle.
+test(`${backend}: V2-M1-04-N2 attaching to a Thread the caller cannot write`, async ({ context }, testInfo) => {
+  const reason = "dual-identity precondition not established: the differential profile forces DEER_FLOW_AUTH_DISABLED=1 with one synthetic admin, so no second isolated user can own a Thread and a foreign-owner attach cannot be exercised";
+  let observedPrincipalId = null;
+  try {
+    const me = await context.request.get(`${app}/api/v1/auth/me`);
+    if (me.status() === 200) observedPrincipalId = (await me.json()).id ?? null;
+  } catch {
+    observedPrincipalId = null;
+  }
+  await save(testInfo, "v2-m1-04-n2-dual-identity", {
+    case: "V2-M1-04-N2",
+    backend,
+    status: "NOT_RUN",
+    reason,
+    precondition: "two isolated identities (Thread owner plus a different caller)",
+    observedPrincipalId,
+    authDisabledForced: process.env.DEER_FLOW_AUTH_DISABLED === "1",
+    referenceFact: "frozen project_documents.py:336-338 attach-to-thread owner_check=True, require_existing=True; :352-356 a caller who cannot write the target Thread gets 404",
+    nonOracleDiagnostic: "the unknown-Thread 404 case is reported separately without a V2-M1-04-N2 Oracle mapping",
+  });
+  testInfo.annotations.push({ type: "NOT_RUN", description: reason });
+  test.skip(true, reason);
 });
 
 test(`${backend}: V2-M1-05 model reads the saved original and answers the CSV oracle`, async ({ context, page }, testInfo) => {

@@ -3,6 +3,7 @@ Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot '../../scripts/lib/w18-differential-results.ps1')
 
+$script:classificationAssertions = 0
 function Assert-Classification(
     [string]$Name,
     [string]$PlaywrightStatus,
@@ -15,11 +16,19 @@ function Assert-Classification(
     if ($actual.status -cne $Expected) {
         throw "$Name expected $Expected but got $($actual.status)"
     }
+    $script:classificationAssertions++
 }
 
 Assert-Classification 'pass' 'passed' @() 'PASS'
 Assert-Classification 'explicit-not-run' 'skipped' @(
     [pscustomobject]@{ type = 'NOT_RUN'; description = 'not configured' }
+) 'NOT_RUN'
+# Models the real classifyAndSkip output used by the V2-M1-04-N2 case: an
+# in-body test.skip() also records a 'skip' annotation next to the explicit
+# NOT_RUN claim; the classification must still be NOT_RUN, not FAIL(skipped).
+Assert-Classification 'real-skip-with-explicit-not-run' 'skipped' @(
+    [pscustomobject]@{ type = 'NOT_RUN'; description = 'dual-identity precondition not established' },
+    [pscustomobject]@{ type = 'skip'; description = 'dual-identity precondition not established' }
 ) 'NOT_RUN'
 Assert-Classification 'explicit-upstream-unsupported' 'skipped' @(
     [pscustomobject]@{ type = 'skip'; description = 'ordinary Playwright annotation' },
@@ -69,6 +78,12 @@ Assert-OracleCaseId 'haifa: V2-M1-01-N2 unknown B is refused and never silently 
 Assert-OracleCaseId 'haifa: V2-M1-05-N3 recomputed region and grand totals' 'V2-M1-05-N3'
 Assert-OracleCaseId 'haifa: V2-M6-02-L3 evidence' 'V2-M6-02'
 Assert-OracleCaseId 'haifa: no-cookie startup and same-origin API' $null
+# V2-M1-04-N2 is a two-identity (owner vs. different caller) Oracle. The
+# unknown-Thread 404 diagnostic must NOT be extracted as that Oracle id, while
+# the dedicated NOT_RUN case must still map to V2-M1-04-N2.
+Assert-OracleCaseId 'haifa: unknown Thread attach to a shelf document returns 404 (diagnostic, no Oracle id)' $null
+Assert-OracleCaseId 'reference: unknown Thread attach to a shelf document returns 404 (diagnostic, no Oracle id)' $null
+Assert-OracleCaseId 'haifa: V2-M1-04-N2 attaching to a Thread the caller cannot write' 'V2-M1-04-N2'
 
 # Static Oracle case-list check: every V2-M1 case and negative this task must
 # report on has to appear as its own test title so the runner emits an
@@ -90,4 +105,27 @@ foreach ($caseId in $requiredCaseIds) {
     $caseListAssertions++
 }
 
-Write-Output "W18_RESULT_CLASSIFICATION PASS assertions=7 branch_assertions=$branchAssertions oracle_assertions=$oracleAssertions case_list_assertions=$caseListAssertions"
+# V2-M1-04-N2 must be reported as a deliberate NOT_RUN on both sides because the
+# dual-identity (owner vs. a different caller) precondition is not established
+# under the forced auth-disabled profile. These source-level guards keep the
+# dedicated NOT_RUN title, its annotation and its reason from silently drifting
+# back to a missing-Thread 404 being claimed as the cross-owner Oracle.
+$n2DiagnosticTitle = 'unknown Thread attach to a shelf document returns 404 (diagnostic, no Oracle id)'
+if (-not $specText.Contains($n2DiagnosticTitle)) {
+    throw "v2-m1 spec is missing the no-Oracle-id unknown-Thread diagnostic title"
+}
+$caseListAssertions++
+if ($specText.Contains('V2-M1-04-N2 attaching to an unknown Thread')) {
+    throw "the unknown-Thread 404 diagnostic must not carry the V2-M1-04-N2 Oracle id"
+}
+$caseListAssertions++
+if (-not $specText.Contains('dual-identity precondition not established')) {
+    throw "V2-M1-04-N2 must record the missing dual-identity precondition"
+}
+$caseListAssertions++
+if (-not $specText.Contains('testInfo.annotations.push({ type: "NOT_RUN"')) {
+    throw "V2-M1-04-N2 must push an explicit NOT_RUN annotation"
+}
+$caseListAssertions++
+
+Write-Output "W18_RESULT_CLASSIFICATION PASS assertions=$script:classificationAssertions branch_assertions=$branchAssertions oracle_assertions=$oracleAssertions case_list_assertions=$caseListAssertions"
