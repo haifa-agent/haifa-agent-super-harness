@@ -5,7 +5,7 @@
     "path": "contracts/customer-demo/customer-demo-v0-oracle.json",
     "sha256": "b202987fd602b8341020ada6f3b809cdc2d3b9d673472255da9b994623404a38"
   },
-  "mainSha": "23271ee6c5aeebdf4a9a7fabd4c8528c868f1bce",
+  "mainSha": "c112012e147cc11daec891af3d602aeefcdff1de",
   "frozenFrontendSha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
   "sdkVersion": "0.1.2-SNAPSHOT",
   "model": {
@@ -21,59 +21,102 @@
     "maxModelCallsPerRound": 3,
     "authorizationRef": "operator-standing-authorization-2026-09-27"
   },
-  "dataRoot": null,
+  "dataRoot": "D:\\workspace\\haifa-agent-super-harness\\local-tmp\\m4-main-c112012-20260928-data",
   "dataRootPolicy": "preserve-between-rounds",
   "roundResetBetweenRounds": false,
-  "configSha256": null,
+  "configSha256": "fa705fc7aa84fd4f185e1ebeb004949c57b98af294eccd504366245389d6dd9a",
   "inputSha256": null,
   "referenceFallbackEvidence": {
     "fallbackAllowed": false,
     "fallbackUsed": false,
-    "evidencePath": null,
-    "evidenceSha256": null
+    "evidencePath": "local-tmp/m4-main-c112012-20260928-evidence/test-results/m4-live-M4-real-DeepSeek-f-f0a83-ecutive-rounds-zero-retries/m4-two-round-results.json",
+    "evidenceSha256": "360fb656906bdead4294924cc14b48e8ec894ad08968004462d28513e6bc7ec1"
   },
   "rounds": [
     {
       "index": 1,
       "sequence": 1,
-      "status": "NOT_RUN",
-      "modelId": null,
-      "mainSha": null,
-      "frozenFrontendSha": null,
-      "sdkVersion": null,
-      "configSha256": null,
-      "inputSha256": null,
-      "dataRoot": null,
-      "threadId": null,
-      "runId": null,
-      "toolCallId": null,
-      "interactionId": null,
-      "artifactId": null,
-      "fileName": null,
-      "fileSha256": null,
-      "artifactProvenance": null,
-      "artifactProvenanceEvidence": null,
-      "downloadSha256": null,
-      "downloadByteCount": null,
-      "downloadEvidence": null,
-      "approvalBefore": "none",
-      "approvalAfter": "none",
-      "steer": {
-        "targetRunId": null,
-        "request": null,
-        "response": null,
-        "ackText": null,
-        "sameRun": false
+      "status": "PASS",
+      "modelId": "main-deepseek",
+      "mainSha": "c112012e147cc11daec891af3d602aeefcdff1de",
+      "frozenFrontendSha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+      "sdkVersion": "0.1.2-SNAPSHOT",
+      "configSha256": "fa705fc7aa84fd4f185e1ebeb004949c57b98af294eccd504366245389d6dd9a",
+      "inputSha256": "40beb10a108cac09bee86458d411688dab3ab7f562b154f7a3fad01f0826db21",
+      "dataRoot": "D:\\workspace\\haifa-agent-super-harness\\local-tmp\\m4-main-c112012-20260928-data",
+      "threadId": "d0356e49-52ee-4a69-b92d-9153c7a4df29",
+      "runId": "01a0e5d2-29cb-7bab-be9d-d17819ef450e",
+      "toolCallId": "01a0e5d2-382e-74b3-8ccd-69b76f660b24",
+      "interactionId": "01a0e5d2-3b8f-7280-941a-d6780690d17f",
+      "artifactId": "d72077c7-2067-4bea-be3e-0b954d5ac6db",
+      "fileName": "customer-demo-round-1.txt",
+      "fileSha256": "aee4acb8f114a98feb2ce8a193e3dc07bc75d79ee43c4c8ef525f5fff0127935",
+      "artifactProvenance": "sdk-owned-real-artifact",
+      "artifactProvenanceEvidence": {
+        "path": "contracts/customer-demo/evidence/m4-round-1-provenance.json",
+        "sha256": "0aebc513dcae25bdee22abfa7e1ec88e338a3fd03d28c1a4afed14e7fea4a289"
       },
-      "networkTargets": [],
-      "usage": null,
-      "timeline": [],
-      "playwrightPath": null,
-      "playwrightSha256": null,
-      "logPaths": [],
+      "downloadSha256": "aee4acb8f114a98feb2ce8a193e3dc07bc75d79ee43c4c8ef525f5fff0127935",
+      "downloadByteCount": 27,
+      "downloadEvidence": {
+        "path": "contracts/customer-demo/evidence/m4-round-1-downloaded.txt",
+        "sha256": "aee4acb8f114a98feb2ce8a193e3dc07bc75d79ee43c4c8ef525f5fff0127935"
+      },
+      "approvalBefore": "pending",
+      "approvalAfter": "approved",
+      "steer": {
+        "targetRunId": "01a0e5d2-29cb-7bab-be9d-d17819ef450e",
+        "request": "请在同一 Run 中把最终回答补充为：DEMO-STEER-ACK-1，不要再次调用 write_file。",
+        "response": "HTTP 200; same Run 01a0e5d2-29cb-7bab-be9d-d17819ef450e",
+        "ackText": "DEMO-STEER-ACK-1",
+        "sameRun": true
+      },
+      "networkTargets": [
+        "http://127.0.0.1:33018",
+        "https://api.deepseek.com"
+      ],
+      "usage": {
+        "status": "success",
+        "inputTokens": 2670,
+        "outputTokens": 224,
+        "totalTokens": 2894,
+        "modelCalls": 3
+      },
+      "timeline": [
+        {
+          "at": "2026-09-28T02:22:24.755Z",
+          "event": "frozen UI new Thread / real DeepSeek Run started"
+        },
+        {
+          "at": "2026-09-28T02:22:40.957Z",
+          "event": "pending Approval survived reload; approved same Run; preapproval Artifact HTTP 404"
+        },
+        {
+          "at": "2026-09-28T02:22:54.461Z",
+          "event": "single production write_file and Artifact; active same-Run Steer acknowledged; UI download SHA matched; Run success"
+        }
+      ],
+      "playwrightPath": "local-tmp/m4-main-c112012-20260928-evidence/test-results/m4-live-M4-real-DeepSeek-f-f0a83-ecutive-rounds-zero-retries/trace.zip",
+      "playwrightSha256": "f029ba287eaa789e4bc807f52429f09c993d4729822a598ad19840c8be59d9ab",
+      "logPaths": [
+        {
+          "path": "local-tmp/m4-main-c112012-20260928-evidence/test-results/m4-live-M4-real-DeepSeek-f-f0a83-ecutive-rounds-zero-retries/round-1-result.json",
+          "sha256": "bffc2c4e7c22ffcfb760a743c9dd50c7cee72959b979dd7e6a8e15c35a778af7"
+        },
+        {
+          "path": "local-tmp/m4-main-c112012-20260928-evidence/m4-playwright-first-attempt.log",
+          "sha256": "f86d79fe3f60f986611e16bd68980c1fce470bb8152c4f5690dcbd076d5bfca0"
+        },
+        {
+          "path": "local-tmp/m4-main-c112012-20260928-evidence/service-logs-snapshot/frontend-20260928-101039.err.log",
+          "sha256": "6f3cd54a429f0e8a2e0f1fc48e76366bb99b7f09e071a2d841d7511bf2b3a713"
+        }
+      ],
       "processCleanup": {
-        "portsReleased": false,
-        "processes": []
+        "portsReleased": true,
+        "processes": [
+          "Playwright-owned worker exited and no child-slot listeners remained; main Gateway 18018 / Frontend 33018 deliberately retained for human acceptance"
+        ]
       },
       "attempts": 1,
       "hiddenRetry": false,
@@ -82,44 +125,87 @@
     {
       "index": 2,
       "sequence": 2,
-      "status": "NOT_RUN",
-      "modelId": null,
-      "mainSha": null,
-      "frozenFrontendSha": null,
-      "sdkVersion": null,
-      "configSha256": null,
-      "inputSha256": null,
-      "dataRoot": null,
-      "threadId": null,
-      "runId": null,
-      "toolCallId": null,
-      "interactionId": null,
-      "artifactId": null,
-      "fileName": null,
-      "fileSha256": null,
-      "artifactProvenance": null,
-      "artifactProvenanceEvidence": null,
-      "downloadSha256": null,
-      "downloadByteCount": null,
-      "downloadEvidence": null,
-      "approvalBefore": "none",
-      "approvalAfter": "none",
-      "steer": {
-        "targetRunId": null,
-        "request": null,
-        "response": null,
-        "ackText": null,
-        "sameRun": false
+      "status": "PASS",
+      "modelId": "main-deepseek",
+      "mainSha": "c112012e147cc11daec891af3d602aeefcdff1de",
+      "frozenFrontendSha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+      "sdkVersion": "0.1.2-SNAPSHOT",
+      "configSha256": "fa705fc7aa84fd4f185e1ebeb004949c57b98af294eccd504366245389d6dd9a",
+      "inputSha256": "cd76e3f38534a7bd632e9fb61783045c6ea98674f242c8d5145307d19032f27e",
+      "dataRoot": "D:\\workspace\\haifa-agent-super-harness\\local-tmp\\m4-main-c112012-20260928-data",
+      "threadId": "953196e2-91d6-4939-a371-cb02c034f02b",
+      "runId": "01a0e5d2-979e-7a78-9b61-0e22cae15d91",
+      "toolCallId": "01a0e5d2-a0b3-7b3b-bb5b-bc693853875a",
+      "interactionId": "01a0e5d2-a2a8-7fd6-a69e-d55bb84cfc39",
+      "artifactId": "40ec1c85-e058-41df-96eb-69836d357d28",
+      "fileName": "customer-demo-round-2.txt",
+      "fileSha256": "e6d897a0d0297e1f32a78eb1abeec1ed0192b01b9a01642d0f6ef42e4059bf5d",
+      "artifactProvenance": "sdk-owned-real-artifact",
+      "artifactProvenanceEvidence": {
+        "path": "contracts/customer-demo/evidence/m4-round-2-provenance.json",
+        "sha256": "43965c26be8cc9b5b9b850205abbc3d9eba1992b855648d1ddca00a252b2931a"
       },
-      "networkTargets": [],
-      "usage": null,
-      "timeline": [],
-      "playwrightPath": null,
-      "playwrightSha256": null,
-      "logPaths": [],
+      "downloadSha256": "e6d897a0d0297e1f32a78eb1abeec1ed0192b01b9a01642d0f6ef42e4059bf5d",
+      "downloadByteCount": 27,
+      "downloadEvidence": {
+        "path": "contracts/customer-demo/evidence/m4-round-2-downloaded.txt",
+        "sha256": "e6d897a0d0297e1f32a78eb1abeec1ed0192b01b9a01642d0f6ef42e4059bf5d"
+      },
+      "approvalBefore": "pending",
+      "approvalAfter": "approved",
+      "steer": {
+        "targetRunId": "01a0e5d2-979e-7a78-9b61-0e22cae15d91",
+        "request": "请在同一 Run 中把最终回答补充为：DEMO-STEER-ACK-2，不要再次调用 write_file。",
+        "response": "HTTP 200; same Run 01a0e5d2-979e-7a78-9b61-0e22cae15d91",
+        "ackText": "DEMO-STEER-ACK-2",
+        "sameRun": true
+      },
+      "networkTargets": [
+        "http://127.0.0.1:33018",
+        "https://api.deepseek.com"
+      ],
+      "usage": {
+        "status": "success",
+        "inputTokens": 2689,
+        "outputTokens": 212,
+        "totalTokens": 2901,
+        "modelCalls": 3
+      },
+      "timeline": [
+        {
+          "at": "2026-09-28T02:22:54.568Z",
+          "event": "frozen UI new Thread / real DeepSeek Run started"
+        },
+        {
+          "at": "2026-09-28T02:23:08.117Z",
+          "event": "pending Approval survived reload; approved same Run; preapproval Artifact HTTP 404"
+        },
+        {
+          "at": "2026-09-28T02:23:22.353Z",
+          "event": "single production write_file and Artifact; active same-Run Steer acknowledged; UI download SHA matched; Run success"
+        }
+      ],
+      "playwrightPath": "local-tmp/m4-main-c112012-20260928-evidence/test-results/m4-live-M4-real-DeepSeek-f-f0a83-ecutive-rounds-zero-retries/trace.zip",
+      "playwrightSha256": "f029ba287eaa789e4bc807f52429f09c993d4729822a598ad19840c8be59d9ab",
+      "logPaths": [
+        {
+          "path": "local-tmp/m4-main-c112012-20260928-evidence/test-results/m4-live-M4-real-DeepSeek-f-f0a83-ecutive-rounds-zero-retries/round-2-result.json",
+          "sha256": "8e1a330710b21b6f885d1edc9cb9524043ffdb4f1e45dfa3f47ec6362a73a021"
+        },
+        {
+          "path": "local-tmp/m4-main-c112012-20260928-evidence/m4-playwright-first-attempt.log",
+          "sha256": "f86d79fe3f60f986611e16bd68980c1fce470bb8152c4f5690dcbd076d5bfca0"
+        },
+        {
+          "path": "local-tmp/m4-main-c112012-20260928-evidence/service-logs-snapshot/frontend-20260928-101039.err.log",
+          "sha256": "6f3cd54a429f0e8a2e0f1fc48e76366bb99b7f09e071a2d841d7511bf2b3a713"
+        }
+      ],
       "processCleanup": {
-        "portsReleased": false,
-        "processes": []
+        "portsReleased": true,
+        "processes": [
+          "Playwright-owned worker exited and no child-slot listeners remained; main Gateway 18018 / Frontend 33018 deliberately retained for human acceptance"
+        ]
       },
       "attempts": 1,
       "hiddenRetry": false,
@@ -162,6 +248,15 @@
       "evidencePath": null,
       "evidenceSha256": null,
       "note": "人工裁决与看板摘要，非原件。"
+    },
+    {
+      "id": "m4-cold-frontend-doctor-timeout",
+      "stage": "M4",
+      "summary": "First read-only live doctor timed out waiting for cold Next compilation at 15 seconds; no model call or demo round occurred. Same doctor passed after cold compilation without code/config change.",
+      "originalAvailable": true,
+      "evidencePath": "local-tmp/m4-main-c112012-20260928-evidence/preflight.md",
+      "evidenceSha256": "c5dafdf4bdfa5593261600743cc3c6ee00c6937fd66851b2ee3a1e58d05e0565",
+      "note": "Read-only preflight failure retained; not a model-chain retry."
     }
   ],
   "stages": [
@@ -170,96 +265,193 @@
       "title": "冻结故事与 doctor",
       "workStatus": "complete",
       "result": "PASS",
-      "workPackages": ["W24", "W00", "W03"],
+      "workPackages": [
+        "W24",
+        "W00",
+        "W03"
+      ],
       "dependsOn": [],
-      "proof": "固定 Oracle、授权版 live doctor、冻结前端/SDK/主端口/模型/OS 凭据检查全部通过；M0 不调用付费模型。",
-      "mainCommit": "23271ee6c5aeebdf4a9a7fabd4c8528c868f1bce",
-      "acceptedAt": "2026-09-27T21:45:44+08:00",
+      "proof": "在 c112012 主线重新执行授权版 live doctor PASS，冻结 UI/SDK/模型/凭据引用和主端口绑定；冷编译首次只读超时原件保留",
+      "mainCommit": "c112012e147cc11daec891af3d602aeefcdff1de",
+      "acceptedAt": "2026-09-28T10:43:13+08:00",
       "evidence": [
         {
-          "path": "contracts/customer-demo/evidence/m0-doctor-authorized.json",
-          "sha256": "9d12485b93a7b7d30873f5f9aedccd3df574d411141f2a711528ce8b4f0d2e0d"
+          "path": "local-tmp/m4-main-c112012-20260928-evidence/m4-live-doctor-after-cold-compile.json",
+          "sha256": "0614a0c75080e49b8f25e9bb409679d3cf476dbdcbde473cf0c1bc512fe154d2"
+        },
+        {
+          "path": "local-tmp/m4-main-c112012-20260928-evidence/preflight.md",
+          "sha256": "c5dafdf4bdfa5593261600743cc3c6ee00c6937fd66851b2ee3a1e58d05e0565"
         }
       ],
-      "blocker": "无 M0 阶段阻断；M3/M4 真实 Steer 和整链仍由后续阶段验收。",
-      "nextAction": "M0 已结算；后续最终 GO 前仍须在最终主线 SHA 重验证。"
+      "blocker": "无本阶段纵向演示阻断；W04/W05/W12 等范围外风险继续披露",
+      "nextAction": "客户演示 v0 阶段已验收；长期工作包按原退出条件继续"
     },
     {
       "id": "M1",
       "title": "生产 Tool 与 Approval",
       "workStatus": "complete",
       "result": "PASS",
-      "workPackages": ["W05"],
-      "dependsOn": ["M0"],
-      "proof": "真实 main-deepseek 在冻结 UI 发起生产 write_file，reload 后同一审批卡恢复，批准后同一 Run success 且只创建一个精确 27 字节文件；53 项负例门禁通过。",
-      "mainCommit": "23271ee6c5aeebdf4a9a7fabd4c8528c868f1bce",
-      "acceptedAt": "2026-09-27T21:49:05+08:00",
+      "workPackages": [
+        "W05"
+      ],
+      "dependsOn": [
+        "M0"
+      ],
+      "proof": "c112012 的 M4 两轮真实模型均经持久 Approval 执行单次生产 write_file，审批前 404，后续 Run success；既有 53 项负例与本次六模块 clean verify 复核",
+      "mainCommit": "c112012e147cc11daec891af3d602aeefcdff1de",
+      "acceptedAt": "2026-09-28T10:43:13+08:00",
       "evidence": [
         {
-          "path": "contracts/customer-demo/evidence/m1-real-model-production-tool.json",
-          "sha256": "3f655b0523f59971d15abc27897a651bdd3f4bac1f6d31a19421e21b9fc20a2a"
+          "path": "local-tmp/m4-main-c112012-20260928-evidence/test-results/m4-live-M4-real-DeepSeek-f-f0a83-ecutive-rounds-zero-retries/round-1-result.json",
+          "sha256": "bffc2c4e7c22ffcfb760a743c9dd50c7cee72959b979dd7e6a8e15c35a778af7"
         },
         {
-          "path": "contracts/customer-demo/evidence/m1-real-model-approval-final.png",
-          "sha256": "d8c687ac57a4dd5f105b008c70d1628a09e61d7a59f8d4c293bdf136158b4b14"
+          "path": "local-tmp/m4-main-c112012-20260928-evidence/test-results/m4-live-M4-real-DeepSeek-f-f0a83-ecutive-rounds-zero-retries/round-2-result.json",
+          "sha256": "8e1a330710b21b6f885d1edc9cb9524043ffdb4f1e45dfa3f47ec6362a73a021"
         },
         {
-          "path": "contracts/customer-demo/evidence/m1-real-model-approval-final.txt",
-          "sha256": "7f9c1ba68d646668c7e641c28e0b0d0896ef6f76becec9e5bc2e3ce4161d810c"
+          "path": "contracts/customer-demo/evidence/m4-round-1-downloaded.txt",
+          "sha256": "aee4acb8f114a98feb2ce8a193e3dc07bc75d79ee43c4c8ef525f5fff0127935"
+        },
+        {
+          "path": "contracts/customer-demo/evidence/m4-round-2-downloaded.txt",
+          "sha256": "e6d897a0d0297e1f32a78eb1abeec1ed0192b01b9a01642d0f6ef42e4059bf5d"
         }
       ],
-      "blocker": "无 M1 阶段阻断；Windows symlink 负例因宿主权限为 NOT_RUN，旧 Steer gap 归 M3，均继续披露且不冒充 PASS。",
-      "nextAction": "M1 已结算；进入已获批准的 M2 SDK Tool transcript 与真实 Artifact/UI 实现。"
+      "blocker": "无本阶段纵向演示阻断；W04/W05/W12 等范围外风险继续披露",
+      "nextAction": "客户演示 v0 阶段已验收；长期工作包按原退出条件继续"
     },
     {
       "id": "M2",
       "title": "真实 Artifact 与冻结 UI 卡片",
-      "workStatus": "in_progress",
-      "result": "NOT_RUN",
-      "workPackages": ["W05", "W18", "W04"],
-      "dependsOn": ["M1"],
-      "proof": null,
-      "mainCommit": null,
-      "acceptedAt": null,
-      "evidence": [],
-      "blocker": "HA feat-012-tool-context-transcript-projection 正在开发；PR、发布、SH 消费回归及 Artifact/UI 产品实现尚未完成。",
-      "nextAction": "在独立 HA worktree实现可信 sessionId/toolCallId 传递和授权脱敏 ToolCall 投影，再发布 0.1.2-SNAPSHOT 并回归 SH。"
+      "workStatus": "complete",
+      "result": "PASS",
+      "workPackages": [
+        "W05",
+        "W18",
+        "W04"
+      ],
+      "dependsOn": [
+        "M1"
+      ],
+      "proof": "c112012 双轮生产 SDK Artifact ID/Run/Tool provenance、27 字节文件/API/UI 下载 SHA 一致，冻结 UI 刷新及重连单卡",
+      "mainCommit": "c112012e147cc11daec891af3d602aeefcdff1de",
+      "acceptedAt": "2026-09-28T10:43:13+08:00",
+      "evidence": [
+        {
+          "path": "contracts/customer-demo/evidence/m4-round-1-provenance.json",
+          "sha256": "0aebc513dcae25bdee22abfa7e1ec88e338a3fd03d28c1a4afed14e7fea4a289"
+        },
+        {
+          "path": "contracts/customer-demo/evidence/m4-round-2-provenance.json",
+          "sha256": "43965c26be8cc9b5b9b850205abbc3d9eba1992b855648d1ddca00a252b2931a"
+        },
+        {
+          "path": "contracts/customer-demo/evidence/m4-round-1-downloaded.txt",
+          "sha256": "aee4acb8f114a98feb2ce8a193e3dc07bc75d79ee43c4c8ef525f5fff0127935"
+        },
+        {
+          "path": "contracts/customer-demo/evidence/m4-round-2-downloaded.txt",
+          "sha256": "e6d897a0d0297e1f32a78eb1abeec1ed0192b01b9a01642d0f6ef42e4059bf5d"
+        },
+        {
+          "path": "local-tmp/m4-main-c112012-20260928-evidence/test-results/m4-live-M4-real-DeepSeek-f-f0a83-ecutive-rounds-zero-retries/m4-two-round-results.json",
+          "sha256": "360fb656906bdead4294924cc14b48e8ec894ad08968004462d28513e6bc7ec1"
+        }
+      ],
+      "blocker": "无本阶段纵向演示阻断；W04/W05/W12 等范围外风险继续披露",
+      "nextAction": "客户演示 v0 阶段已验收；长期工作包按原退出条件继续"
     },
     {
       "id": "M3",
       "title": "恢复、Steer 与 L2 双后端差分",
-      "workStatus": "pending",
-      "result": "NOT_RUN",
-      "workPackages": ["W05", "W18", "W24"],
-      "dependsOn": ["M2"],
-      "proof": null,
-      "mainCommit": null,
-      "acceptedAt": null,
-      "evidence": [],
-      "blocker": "M2 未闭环；不能拿 fixture 或分项 PASS 充当生产能力。",
-      "nextAction": "M2 合入并主线 smoke 后派 W18 DemoL2Differential；W24 只聚合真实证据。"
+      "workStatus": "complete",
+      "result": "PASS",
+      "workPackages": [
+        "W05",
+        "W18",
+        "W24"
+      ],
+      "dependsOn": [
+        "M2"
+      ],
+      "proof": "M3 原 6cfd9a4 的 reference/Haifa 各两轮差分原件保留，产品/runner/Oracle 与 c112012 文件等价；在 c112012 的 M4 两轮重新验证 Haifa 同 Run Approval/Tool/Artifact/Steer 正向链。reference distinct Run 仍 UPSTREAM_UNSUPPORTED，W04 上传 FAIL 等长期缺口不改写；未冒充 reference 在 c112012 重新运行",
+      "mainCommit": "c112012e147cc11daec891af3d602aeefcdff1de",
+      "acceptedAt": "2026-09-28T10:43:13+08:00",
+      "evidence": [
+        {
+          "path": "contracts/customer-demo/evidence/m4-source-equivalence.md",
+          "sha256": "123eb4d13012fb79299a4283ec0d0a95fb33444602730e288ed3b6ff50907fcd"
+        },
+        {
+          "path": "local-tmp/slot-3-demo-l2-differential-main-6cfd9a4/reference/evidence-r1-20260928-031721/results.json",
+          "sha256": "7720dccb1bbb3d4757fa2f323f5a873064b748bd1764b7ae486c2ff0d07385ee"
+        },
+        {
+          "path": "local-tmp/slot-3-demo-l2-differential-main-6cfd9a4/reference/evidence-r2-20260928-031940/results.json",
+          "sha256": "607835be22f493fb2c4238eb5e1e51037085aa1af27262108a4d8797f76a45dd"
+        },
+        {
+          "path": "local-tmp/slot-3-demo-l2-differential-main-6cfd9a4/haifa/evidence-r1-20260928-032110/results.json",
+          "sha256": "b6186580e5c7c5973866932b62d8e0d9a4364d47b12512404984d5bef2b3da58"
+        },
+        {
+          "path": "local-tmp/slot-3-demo-l2-differential-main-6cfd9a4/haifa/evidence-r2-20260928-032353/results.json",
+          "sha256": "118823098b71ae83e5fc780edbc96a212c0fb925a6c9ef681e77a8dedb454ac1"
+        },
+        {
+          "path": "local-tmp/m4-main-c112012-20260928-evidence/test-results/m4-live-M4-real-DeepSeek-f-f0a83-ecutive-rounds-zero-retries/m4-two-round-results.json",
+          "sha256": "360fb656906bdead4294924cc14b48e8ec894ad08968004462d28513e6bc7ec1"
+        }
+      ],
+      "blocker": "无本阶段纵向演示阻断；W04/W05/W12 等范围外风险继续披露",
+      "nextAction": "客户演示 v0 阶段已验收；长期工作包按原退出条件继续"
     },
     {
       "id": "M4",
       "title": "主线真实模型两轮与人工体验",
-      "workStatus": "pending",
-      "result": "NOT_RUN",
-      "workPackages": ["W05", "W18", "W24"],
-      "dependsOn": ["M3"],
-      "proof": null,
-      "mainCommit": null,
-      "acceptedAt": null,
-      "evidence": [],
-      "blocker": "真实模型调用已获持续授权；M2–M3 尚未通过，完整两轮整链仍 NOT_RUN。",
-      "nextAction": "M2/M3 通过后无需再次申请预算，在 18018/33018 执行两轮并请人工验收，未通过仍为 NO_GO。"
+      "workStatus": "complete",
+      "result": "PASS",
+      "workPackages": [
+        "W05",
+        "W18",
+        "W24"
+      ],
+      "dependsOn": [
+        "M3"
+      ],
+      "proof": "c112012 上真实 DeepSeek 冻结 UI 连续两轮 PASS、零隐藏重试；同 Run Approval/Tool/Artifact/Reload/Steer/ACK、真实下载字节与 SHA、Usage、主端口 smoke 齐全；人工声明通过",
+      "mainCommit": "c112012e147cc11daec891af3d602aeefcdff1de",
+      "acceptedAt": "2026-09-28T10:43:13+08:00",
+      "evidence": [
+        {
+          "path": "local-tmp/m4-main-c112012-20260928-evidence/test-results/m4-live-M4-real-DeepSeek-f-f0a83-ecutive-rounds-zero-retries/m4-two-round-results.json",
+          "sha256": "360fb656906bdead4294924cc14b48e8ec894ad08968004462d28513e6bc7ec1"
+        },
+        {
+          "path": "local-tmp/m4-main-c112012-20260928-evidence/test-results/m4-live-M4-real-DeepSeek-f-f0a83-ecutive-rounds-zero-retries/trace.zip",
+          "sha256": "f029ba287eaa789e4bc807f52429f09c993d4729822a598ad19840c8be59d9ab"
+        },
+        {
+          "path": "local-tmp/m4-main-c112012-20260928-evidence/m4-playwright-first-attempt.log",
+          "sha256": "f86d79fe3f60f986611e16bd68980c1fce470bb8152c4f5690dcbd076d5bfca0"
+        },
+        {
+          "path": "contracts/customer-demo/evidence/m4-human-acceptance.md",
+          "sha256": "4acf0909250715facad71451422291e65afecfb2db55d59c04c3b6d1e1cc202b"
+        }
+      ],
+      "blocker": "无本阶段纵向演示阻断；W04/W05/W12 等范围外风险继续披露",
+      "nextAction": "客户演示 v0 阶段已验收；长期工作包按原退出条件继续"
     }
   ],
   "humanAcceptance": {
-    "present": false,
-    "path": null,
-    "sha256": null,
-    "acceptedBy": null,
-    "acceptedAt": null
+    "present": true,
+    "path": "contracts/customer-demo/evidence/m4-human-acceptance.md",
+    "sha256": "4acf0909250715facad71451422291e65afecfb2db55d59c04c3b6d1e1cc202b",
+    "acceptedBy": "项目人工维护者（本对话用户）",
+    "acceptedAt": "2026-09-28T10:43:13+08:00"
   },
-  "decision": "NO_GO"
+  "decision": "GO"
 }

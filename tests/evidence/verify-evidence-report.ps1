@@ -99,6 +99,30 @@ function New-DemoEvidenceFixture([string]$Name) {
         'contracts/customer-demo/evidence/m1-real-model-approval-final.png',
         'contracts/customer-demo/evidence/m1-real-model-approval-final.txt'
     )) { Copy-FixtureFile $root $relative }
+    # Classification negatives use a self-contained pre-M2 fixture, not the
+    # current GO bundle whose raw M3/M4 evidence intentionally lives outside Git.
+    $bundle = Read-DemoBundle $root
+    $bundle.decision = 'NO_GO'
+    $bundle.referenceFallbackEvidence.evidencePath = $null
+    $bundle.referenceFallbackEvidence.evidenceSha256 = $null
+    $bundle.humanAcceptance.present = $false
+    $bundle.humanAcceptance.path = $null
+    $bundle.humanAcceptance.sha256 = $null
+    $bundle.humanAcceptance.acceptedBy = $null
+    $bundle.humanAcceptance.acceptedAt = $null
+    $bundle.firstFailureHistory = @($bundle.firstFailureHistory | Where-Object id -ne 'm4-cold-frontend-doctor-timeout')
+    $bundle.stages[0].evidence = @(@{ path = 'contracts/customer-demo/evidence/m0-doctor-authorized.json'; sha256 = '9d12485b93a7b7d30873f5f9aedccd3df574d411141f2a711528ce8b4f0d2e0d' })
+    $bundle.stages[1].evidence = @(@{ path = 'contracts/customer-demo/evidence/m1-real-model-production-tool.json'; sha256 = '3f655b0523f59971d15abc27897a651bdd3f4bac1f6d31a19421e21b9fc20a2a' })
+    foreach ($index in 2..4) {
+        $bundle.stages[$index].workStatus = 'pending'
+        $bundle.stages[$index].result = 'NOT_RUN'
+        $bundle.stages[$index].proof = $null
+        $bundle.stages[$index].mainCommit = $null
+        $bundle.stages[$index].acceptedAt = $null
+        $bundle.stages[$index].evidence = @()
+    }
+    foreach ($round in $bundle.rounds) { $round.status = 'NOT_RUN' }
+    Write-DemoBundle $root $bundle
     return $root
 }
 
@@ -262,6 +286,12 @@ try {
 
     $selfCertifiedDemo = New-Fixture 'self-certified-demo-go'
     $data = Read-WorkData $selfCertifiedDemo
+    $data.customerDemo.stages[4].workStatus = 'pending'
+    $data.customerDemo.stages[4].result = 'NOT_RUN'
+    $data.customerDemo.stages[4].proof = $null
+    $data.customerDemo.stages[4].mainCommit = $null
+    $data.customerDemo.stages[4].acceptedAt = $null
+    $data.customerDemo.humanAcceptance = $null
     $data.customerDemo.decision = 'GO'
     Write-WorkData $selfCertifiedDemo $data
     Assert-Fails $selfCertifiedDemo 'customer demo GO requires all M0-M4 gates PASS'

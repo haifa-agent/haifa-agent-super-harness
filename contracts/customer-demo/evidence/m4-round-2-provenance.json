@@ -1,0 +1,25 @@
+{
+  "source": "GET http://127.0.0.1:33018/api/langgraph/threads/953196e2-91d6-4939-a371-cb02c034f02b/state, tool message additional_kwargs.haifa_tool_result; normalized with tool name and oracle artifact kind",
+  "artifactId": "40ec1c85-e058-41df-96eb-69836d357d28",
+  "runId": "01a0e5d2-979e-7a78-9b61-0e22cae15d91",
+  "toolCallId": "01a0e5d2-a0b3-7b3b-bb5b-bc693853875a",
+  "tool": "write_file",
+  "artifact": "sdk-owned-real-artifact",
+  "downloadSha256": "e6d897a0d0297e1f32a78eb1abeec1ed0192b01b9a01642d0f6ef42e4059bf5d",
+  "downloadByteCount": 27,
+  "rawToolResult": {
+    "artifactType": "workspace-file",
+    "artifactWorkspaceRef": "ws-51aa480c06b8862f4aeadc983314e864",
+    "artifactVersion": 1,
+    "artifactSessionId": "01a0e5d2-9797-79bf-8d9a-f804ebff0511",
+    "artifactByteCount": 27,
+    "artifactExecutionRef": "01a0e5d2-a0b3-7b3b-bb5b-bc693853875a",
+    "artifactMediaType": "text/plain; charset=utf-8",
+    "artifactId": "40ec1c85-e058-41df-96eb-69836d357d28",
+    "runId": "01a0e5d2-979e-7a78-9b61-0e22cae15d91",
+    "artifactSha256": "sha256:e6d897a0d0297e1f32a78eb1abeec1ed0192b01b9a01642d0f6ef42e4059bf5d",
+    "sha256": "e6d897a0d0297e1f32a78eb1abeec1ed0192b01b9a01642d0f6ef42e4059bf5d",
+    "path": "/mnt/user-data/outputs/customer-demo-round-2.txt",
+    "threadId": "953196e2-91d6-4939-a371-cb02c034f02b"
+  }
+}
