@@ -88,11 +88,15 @@ final class DeerFlowInteractionHttpProjection {
         payload.put("options", options);
 
         Map<String, Object> message = new LinkedHashMap<>();
-        message.put("id", "interaction-" + interaction.requestId().value());
+        String interactionMessageId = "interaction-" + interaction.requestId().value();
+        message.put("id", interactionMessageId);
         message.put("type", "tool");
         message.put("name", TOOL_NAME);
         message.put("content", interaction.safePrompt());
-        message.put("tool_call_id", interaction.target().reference());
+        // The top-level key is only the frozen UI grouping identity. It must not collide
+        // with the authoritative Runtime ToolCall result; the nested payload retains the
+        // real ToolCall target that this Interaction approves.
+        message.put("tool_call_id", interactionMessageId);
         message.put("artifact", Map.of("human_input", payload));
         message.put("additional_kwargs", Map.of());
         message.put("run_id", runId);

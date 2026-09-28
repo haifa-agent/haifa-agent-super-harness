@@ -19,7 +19,8 @@ test("本地 Dashboard 以客户演示为首页，三页签与工作包跳转可
 
   await page.getByRole("tab", { name: "最近工作安排" }).click();
   await expect(page.locator("#planView")).toBeVisible();
-  await expect(page.locator("#planItems")).toContainText("W05 真实 Artifact 与冻结 UI 卡片");
+  await expect(page.locator("#planItems")).toContainText("W18 冻结 UI 整链 L2 双后端差分");
+  await expect(page.locator("#planItems")).not.toContainText("W05 真实 Artifact 与冻结 UI 卡片");
   await expect(page.locator("#planItems")).not.toContainText("M0 冻结客户演示脚本与 doctor");
 
   await page.getByRole("tab", { name: "工作包总览" }).click();

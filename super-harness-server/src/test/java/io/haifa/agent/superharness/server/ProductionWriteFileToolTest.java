@@ -37,6 +37,12 @@ class ProductionWriteFileToolTest {
         assertThat(saved).isEqualTo("中文\n".getBytes(StandardCharsets.UTF_8));
         assertThat(output.size()).isEqualTo(saved.length);
         assertThat(output.sha256()).hasSize(64);
+        assertThat(output.artifactId()).isNotBlank();
+        assertThat(output.artifactSha256()).isEqualTo("sha256:" + output.sha256());
+        assertThat(output.artifactByteCount()).isEqualTo(saved.length);
+        assertThat(output.artifactSessionId()).isEqualTo("session-1");
+        assertThat(output.artifactExecutionRef()).isEqualTo("tool-call-1");
+        assertThat(output.artifactProjectRef()).isEqualTo("thread:thread-1");
         assertThat(fixture.tool.summarize(output)).contains(path, "sha256:" + output.sha256());
     }
 
@@ -86,11 +92,30 @@ class ProductionWriteFileToolTest {
         var bindings = new PersistentProjectWorkspaceService(root,
                 WorkspaceLimits.defaults(), WorkspaceChangeLimits.defaults());
         var workspace = new RestrictedWorkspaceService(root, WorkspaceLimits.defaults());
-        var tool = new ProductionWriteFileTool("unknown-thread", bindings, workspace);
+        var tool = new ProductionWriteFileTool("unknown-thread", "thread:unknown-thread", bindings, workspace);
         assertThatThrownBy(() -> tool.invoke(
                 input("/mnt/user-data/workspace/no.txt", "no"), context("default-public-user", false, false)))
                 .isInstanceOf(RuntimeException.class);
         assertThat(Files.exists(root.resolve("workspaces"))).isTrue();
+    }
+
+    @Test
+    void artifactPublishFailureRemovesOnlyTheMatchingNewWorkingFile() throws Exception {
+        Fixture fixture = fixture("thread-publish-failure");
+        Path metadata = fixture.root.resolve("artifacts/metadata");
+        Files.delete(metadata);
+        Files.writeString(metadata, "force metadata persistence failure", StandardCharsets.UTF_8);
+        String path = "/mnt/user-data/outputs/not-published.txt";
+
+        assertThatThrownBy(() -> fixture.tool.invoke(
+                input(path, "must not survive"), context("default-public-user", false, false)))
+                .hasMessageContaining("artifact");
+        assertThatThrownBy(() -> fixture.workspace.readVerifiedBytes(
+                "default", fixture.binding.workspaceId(), path))
+                .isInstanceOf(RuntimeException.class);
+        try (var payloads = Files.list(fixture.root.resolve("artifacts/payloads"))) {
+            assertThat(payloads).isEmpty();
+        }
     }
 
     private Fixture fixture(String threadId) {
@@ -99,7 +124,11 @@ class ProductionWriteFileToolTest {
                 WorkspaceLimits.defaults(), WorkspaceChangeLimits.defaults());
         var workspace = new RestrictedWorkspaceService(root, WorkspaceLimits.defaults());
         var binding = bindings.bindThreadWorkspace("default", threadId);
-        return new Fixture(workspace, binding, new ProductionWriteFileTool(threadId, bindings, workspace));
+        return new Fixture(
+                root,
+                workspace,
+                binding,
+                new ProductionWriteFileTool(threadId, "thread:" + threadId, bindings, workspace));
     }
 
     private static ProductionWriteFileTool.Input input(String path, String content) {
@@ -115,6 +144,7 @@ class ProductionWriteFileToolTest {
     }
 
     private record Fixture(
+            Path root,
             RestrictedWorkspaceService workspace,
             io.haifa.agent.superharness.workspace.WorkspaceBinding binding,
             ProductionWriteFileTool tool) {}

@@ -10,6 +10,7 @@ param(
     [string]$DataDirectory,
     [switch]$ActiveReconnect,
     [switch]$Interaction,
+    [switch]$DemoArtifact,
     [switch]$TitleSuggestions,
     [switch]$InputPolish,
     [switch]$LiveDeepSeek,
@@ -24,8 +25,8 @@ $expectedFrontendPort = 15618 + (10000 * $AgentSlot)
 if ($GatewayPort -ne $expectedGatewayPort -or $FrontendPort -ne $expectedFrontendPort -or $ProviderPort -ne 0) {
     throw "W18 slot $AgentSlot requires Gateway=$expectedGatewayPort and Frontend=$expectedFrontendPort; controlled Provider must use OS-assigned port 0."
 }
-if (@($ActiveReconnect, $Interaction, $TitleSuggestions, $InputPolish, $LiveDeepSeek).Where({ $_ }).Count -gt 1) {
-    throw 'Active reconnect, Interaction, title/suggestions, input-polish, and live DeepSeek profiles are mutually exclusive.'
+if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $LiveDeepSeek).Where({ $_ }).Count -gt 1) {
+    throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, and live DeepSeek profiles are mutually exclusive.'
 }
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
@@ -34,6 +35,8 @@ if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
         "target/agent-slot-$AgentSlot-deepseek-data"
     } elseif ($Interaction) {
         "target/agent-slot-$AgentSlot-interaction-data"
+    } elseif ($DemoArtifact) {
+        "local-tmp/slot-$AgentSlot-w05-m2"
     } elseif ($TitleSuggestions) {
         "target/agent-slot-$AgentSlot-title-suggestions-data"
     } elseif ($InputPolish) {
@@ -60,12 +63,14 @@ foreach ($port in @($GatewayPort, $FrontendPort)) {
 }
 
 $null = New-Item -ItemType Directory -Force -Path $dataRoot
-$evidenceRoot = Join-Path $root $(if ($LiveDeepSeek) {
+$evidenceRootBase = Join-Path $root $(if ($LiveDeepSeek) {
     'target/w18-deepseek-web-l3/playwright'
 } elseif ($ActiveReconnect) {
     'target/w05-active-reconnect-evidence/playwright'
 } elseif ($Interaction) {
     'target/w05-interaction-evidence/playwright'
+} elseif ($DemoArtifact) {
+    "local-tmp/slot-$AgentSlot-w05-m2-evidence/playwright"
 } elseif ($TitleSuggestions) {
     'target/w03-title-suggestions-evidence/playwright'
 } elseif ($InputPolish) {
@@ -73,8 +78,9 @@ $evidenceRoot = Join-Path $root $(if ($LiveDeepSeek) {
 } else {
     'target/w18-ui-smoke-evidence/playwright'
 })
-$null = New-Item -ItemType Directory -Force -Path $evidenceRoot
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$evidenceRoot = if ($DemoArtifact) { Join-Path $evidenceRootBase "run-$stamp" } else { $evidenceRootBase }
+$null = New-Item -ItemType Directory -Force -Path $evidenceRoot
 $serverOut = Join-Path $evidenceRoot "server-$stamp.stdout.log"
 $serverErr = Join-Path $evidenceRoot "server-$stamp.stderr.log"
 $frontendOut = Join-Path $evidenceRoot "frontend-$stamp.stdout.log"
@@ -111,6 +117,8 @@ $managedEnvironment = @{
         'w05-active-reconnect.spec.cjs'
     } elseif ($Interaction) {
         'w05-interaction.spec.cjs'
+    } elseif ($DemoArtifact) {
+        'w05-demo-artifact.spec.cjs'
     } elseif ($TitleSuggestions) {
         'w03-title-suggestions.spec.cjs'
     } elseif ($InputPolish) {
@@ -118,8 +126,8 @@ $managedEnvironment = @{
     } else {
         'w18-ui-smoke.spec.cjs'
     })
-    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $TitleSuggestions -or $InputPolish) { '120000' } else { '60000' })
-    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $TitleSuggestions -or $InputPolish) { 'on' } else { 'retain-on-failure' })
+    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish) { '120000' } else { '60000' })
+    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish) { 'on' } else { 'retain-on-failure' })
     # Kept disabled through the ordinary build/test gate. The runner enables it
     # only immediately before launching the dedicated guarded test process.
     W05_INTERACTION_ACCEPTANCE = $null

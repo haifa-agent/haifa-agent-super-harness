@@ -128,6 +128,36 @@ class RestrictedWorkspaceServiceTest {
     }
 
     @Test
+    void createAndPublishCompensatesItsOwnNewFileWhenArtifactPersistenceFails() throws Exception {
+        RestrictedWorkspaceService workspace = service();
+        WorkspaceBinding binding = workspace.bind("owner-a", "thread-compensation");
+        Path metadata = storageRoot.resolve("artifacts/metadata");
+        Files.delete(metadata);
+        Files.writeString(metadata, "force metadata persistence failure", StandardCharsets.UTF_8);
+        String path = "outputs/not-published.txt";
+
+        assertThatThrownBy(() -> workspace.createAndPublishWorkingFile(
+                "owner-a",
+                binding.workspaceId(),
+                path,
+                bytes("matching"),
+                "not-published.txt",
+                "workspace-file",
+                "text/plain",
+                new ArtifactPublishContext(
+                        "project-1", "run-1", "session-1", "tool-call-1", "local-owner-download")))
+                .hasMessageContaining("artifact");
+        assertThatThrownBy(() -> workspace.readVerifiedBytes(
+                "owner-a", binding.workspaceId(), path))
+                .isInstanceOf(WorkspaceException.class)
+                .extracting(exception -> ((WorkspaceException) exception).error())
+                .isEqualTo(WorkspaceError.FILE_NOT_FOUND);
+        try (var payloads = Files.list(storageRoot.resolve("artifacts/payloads"))) {
+            assertThat(payloads).isEmpty();
+        }
+    }
+
+    @Test
     void exposesPublishedWorkspaceReadApiAndEnforcesMissingRangeAndSizeFailures() {
         RestrictedWorkspaceService workspace = service();
         WorkspaceBinding binding = workspace.bind("owner-a", "thread-1");

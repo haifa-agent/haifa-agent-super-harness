@@ -47,6 +47,24 @@ pwsh -NoProfile -File tests/frontend/verify-haifa-frontend-profile.ps1
 
 受保护的主工作树拓扑与正式启动流程见下文“启动主工作树供人工验收”；历史 W18 配置设计与验收记录已归档至 `private-docs/prompts/39-deerflow-parity-delivery/W18-Developing/references/`。仅通过上述配置检查，不代表聊天功能或双后端差分验收通过。
 
+## W05 客户演示 M2 Artifact UI 验收
+
+W05 的受控 L2 验收使用子槽位 1（Gateway `20618`、Frontend `25618`）、生产 Super Harness JAR、冻结 DeerFlow UI 和本地受控 Provider，验证 `write_file → Approval → Artifact → Reload/Reconnect → UI 下载`。它不会调用真实模型；真实模型整链属于后续 M4。
+
+首次运行会执行 Maven package 和按槽位代理地址构建冻结前端：
+
+```powershell
+pwsh -NoProfile -File scripts/run-w05-demo-artifact-ui.ps1
+```
+
+仅当 Java exec JAR 已在本次源码变更后重新生成、且 `.next` 已用同一槽位 Gateway 地址构建时，才可复用构建产物：
+
+```powershell
+pwsh -NoProfile -File scripts/run-w05-demo-artifact-ui.ps1 -SkipBuild
+```
+
+脚本固定 `retries=0`，每次生成独立 Thread 和文件，并把 trace、截图、前后端/Provider 日志及 Artifact 字节/SHA 证据写入 `local-tmp/slot-1-w05-m2-evidence/playwright/run-<时间戳>/`。正式验收须连续运行两次且都通过；第一次数据不得清理，结束后还须确认 `20618`、`25618` 和子进程均已释放。
+
 ## W03 后续建议配置
 
 Gateway 通过 `GET /api/suggestions/config` 暴露冻结前端的后续建议全局配置。以下两个环境变量在进程启动时读取一次，均为可选：

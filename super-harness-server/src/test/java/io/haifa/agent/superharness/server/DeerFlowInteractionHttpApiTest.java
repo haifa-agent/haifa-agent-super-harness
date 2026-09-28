@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -85,12 +86,24 @@ class DeerFlowInteractionHttpApiTest {
         assertThat(requested.statusCode()).isEqualTo(200);
         String location = requested.headers().firstValue("content-location").orElseThrow();
         String runId = location.replaceFirst(".*/", "");
-        JsonNode cardTuple = firstEventData(requested.body(), "messages");
-        JsonNode request = cardTuple.get(0).path("artifact").path("human_input");
+        List<JsonNode> messageEvents = messageEvents(requested.body());
+        JsonNode toolCallMessage = messageEvents.stream()
+                .filter(message -> !message.path("tool_calls").isEmpty())
+                .findFirst()
+                .orElseThrow();
+        JsonNode card = humanInputCard(requested.body());
+        JsonNode request = card.path("artifact").path("human_input");
         String requestId = request.path("request_id").asText();
+        String toolCallId = toolCallMessage.path("tool_calls").get(0).path("id").asText();
 
-        assertThat(cardTuple.get(0).path("type").asText()).isEqualTo("tool");
-        assertThat(cardTuple.get(0).path("name").asText()).isEqualTo("ask_clarification");
+        assertThat(card.path("type").asText()).isEqualTo("tool");
+        assertThat(card.path("name").asText()).isEqualTo("ask_clarification");
+        assertThat(card.path("tool_call_id").asText()).isEqualTo(card.path("id").asText());
+        assertThat(card.path("tool_call_id").asText()).isNotEqualTo(toolCallId);
+        assertThat(request.path("tool_call_id").asText()).isEqualTo(toolCallId);
+        assertThat(messageEvents.indexOf(toolCallMessage)).isLessThan(messageEvents.indexOf(card));
+        assertThat(messageEvents.stream().map(message -> message.path("id").asText()).toList())
+                .doesNotHaveDuplicates();
         assertThat(request.path("version").asInt()).isEqualTo(1);
         assertThat(request.path("source").asText()).isEqualTo("haifa_interaction");
         assertThat(request.path("input_mode").asText()).isEqualTo("single_choice");
@@ -107,11 +120,21 @@ class DeerFlowInteractionHttpApiTest {
         assertThat(pendingHistory.statusCode()).isEqualTo(200);
         JsonNode pendingMessages = json.readTree(pendingHistory.body())
                 .get(0).path("values").path("messages");
-        assertThat(pendingMessages).hasSize(2);
+        assertThat(pendingMessages).hasSize(3);
+        JsonNode pendingToolCall = messageWithToolCalls(pendingMessages);
+        JsonNode pendingCard = messageWithHumanInput(pendingMessages);
         assertThat(pendingMessages.get(0).path("type").asText()).isEqualTo("human");
-        assertThat(pendingMessages.get(1).path("type").asText()).isEqualTo("tool");
+        assertThat(pendingToolCall.path("type").asText()).isEqualTo("ai");
+        assertThat(pendingToolCall.path("tool_calls").get(0).path("name").asText())
+                .isEqualTo("mutating_probe");
+        assertThat(pendingCard.path("type").asText()).isEqualTo("tool");
+        assertThat(pendingCard.path("tool_call_id").asText()).isEqualTo(pendingCard.path("id").asText());
+        assertThat(pendingCard.path("artifact").path("human_input").path("tool_call_id").asText())
+                .isEqualTo(pendingToolCall.path("tool_calls").get(0).path("id").asText());
+        assertThat(indexOfMessage(pendingMessages, pendingToolCall))
+                .isLessThan(indexOfMessage(pendingMessages, pendingCard));
         assertThat(pendingMessages.get(0).path("content").asText()).isEqualTo("request approval");
-        assertThat(pendingMessages.get(1).path("artifact").path("human_input").path("request_id").asText())
+        assertThat(pendingCard.path("artifact").path("human_input").path("request_id").asText())
                 .isEqualTo(requestId);
 
         String responseBody = hiddenResponseBody(requestId, "approve", "approve");
@@ -160,8 +183,7 @@ class DeerFlowInteractionHttpApiTest {
         createThread("owner-thread");
         HttpResponse<String> requested =
                 postJson("/api/threads/owner-thread/runs/stream", ordinaryRunBody("request approval"));
-        String requestId = firstEventData(requested.body(), "messages")
-                .get(0)
+        String requestId = humanInputCard(requested.body())
                 .path("artifact")
                 .path("human_input")
                 .path("request_id")
@@ -194,8 +216,7 @@ class DeerFlowInteractionHttpApiTest {
         HttpResponse<String> requested = postJson(
                 "/api/threads/rejected-thread/runs/stream", ordinaryRunBody("request approval"));
         String location = requested.headers().firstValue("content-location").orElseThrow();
-        String requestId = firstEventData(requested.body(), "messages")
-                .get(0)
+        String requestId = humanInputCard(requested.body())
                 .path("artifact")
                 .path("human_input")
                 .path("request_id")
@@ -217,21 +238,28 @@ class DeerFlowInteractionHttpApiTest {
                 "/api/threads/restart-interaction-thread/runs/stream", ordinaryRunBody("request approval"));
         assertThat(requested.statusCode()).isEqualTo(200);
         String location = requested.headers().firstValue("content-location").orElseThrow();
-        String requestId = firstEventData(requested.body(), "messages")
-                .get(0).path("artifact").path("human_input").path("request_id").asText();
+        String requestId = humanInputCard(requested.body())
+                .path("artifact").path("human_input").path("request_id").asText();
         assertThat(toolInvocations).hasValue(0);
 
         api.close();
         startServer();
         JsonNode reloadedMessages = getJson("/api/threads/restart-interaction-thread/state")
                 .path("values").path("messages");
-        assertThat(reloadedMessages).hasSize(2);
-        assertThat(reloadedMessages.get(1).path("artifact").path("human_input")
+        assertThat(reloadedMessages).hasSize(3);
+        JsonNode reloadedToolCall = messageWithToolCalls(reloadedMessages);
+        JsonNode reloadedCard = messageWithHumanInput(reloadedMessages);
+        assertThat(reloadedToolCall.path("tool_calls").get(0).path("name").asText())
+                .isEqualTo("mutating_probe");
+        assertThat(reloadedCard.path("tool_call_id").asText()).isEqualTo(reloadedCard.path("id").asText());
+        assertThat(reloadedCard.path("artifact").path("human_input").path("tool_call_id").asText())
+                .isEqualTo(reloadedToolCall.path("tool_calls").get(0).path("id").asText());
+        assertThat(reloadedCard.path("artifact").path("human_input")
                 .path("request_id").asText()).isEqualTo(requestId);
         JsonNode reloadedPage = getJson("/api/threads/restart-interaction-thread/messages/page?limit=20")
                 .path("data");
         assertThat(reloadedPage).hasSize(2);
-        assertThat(reloadedPage.get(1).path("content").path("artifact").path("human_input")
+        assertThat(pageContentWithHumanInput(reloadedPage).path("artifact").path("human_input")
                 .path("request_id").asText()).isEqualTo(requestId);
         assertThat(toolInvocations).hasValue(0);
         HttpResponse<String> competingRun = postJson(
@@ -369,11 +397,51 @@ class DeerFlowInteractionHttpApiTest {
         return json.readTree(response.body());
     }
 
-    private JsonNode firstEventData(String transcript, String event) throws Exception {
-        Matcher matcher = Pattern.compile(
-                        "event: " + Pattern.quote(event) + "\\ndata: ([^\\n]+)\\n")
+    private List<JsonNode> messageEvents(String transcript) throws Exception {
+        Matcher matcher = Pattern.compile("event: messages\\ndata: ([^\\n]+)\\n")
                 .matcher(transcript);
-        assertThat(matcher.find()).as("SSE transcript: %s", transcript).isTrue();
-        return json.readTree(matcher.group(1));
+        List<JsonNode> messages = new ArrayList<>();
+        while (matcher.find()) {
+            JsonNode tuple = json.readTree(matcher.group(1));
+            if (tuple.isArray() && !tuple.isEmpty()) messages.add(tuple.get(0));
+        }
+        assertThat(messages).as("SSE transcript: %s", transcript).isNotEmpty();
+        return List.copyOf(messages);
+    }
+
+    private JsonNode humanInputCard(String transcript) throws Exception {
+        return messageEvents(transcript).stream()
+                .filter(message -> message.path("artifact").path("human_input").hasNonNull("request_id"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("missing human input card: " + transcript));
+    }
+
+    private static JsonNode messageWithToolCalls(JsonNode messages) {
+        for (JsonNode message : messages) {
+            if (!message.path("tool_calls").isEmpty()) return message;
+        }
+        throw new AssertionError("missing tool call message: " + messages);
+    }
+
+    private static JsonNode messageWithHumanInput(JsonNode messages) {
+        for (JsonNode message : messages) {
+            if (message.path("artifact").path("human_input").hasNonNull("request_id")) return message;
+        }
+        throw new AssertionError("missing human input message: " + messages);
+    }
+
+    private static JsonNode pageContentWithHumanInput(JsonNode page) {
+        for (JsonNode item : page) {
+            JsonNode content = item.path("content");
+            if (content.path("artifact").path("human_input").hasNonNull("request_id")) return content;
+        }
+        throw new AssertionError("missing human input page item: " + page);
+    }
+
+    private static int indexOfMessage(JsonNode messages, JsonNode selected) {
+        for (int index = 0; index < messages.size(); index++) {
+            if (messages.get(index).equals(selected)) return index;
+        }
+        throw new AssertionError("message not present: " + selected);
     }
 }

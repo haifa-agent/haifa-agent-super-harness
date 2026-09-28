@@ -16,6 +16,7 @@ import io.haifa.agent.runtime.api.InteractionState;
 import io.haifa.agent.runtime.api.InteractionView;
 import io.haifa.agent.runtime.api.RunEventPayloads;
 import io.haifa.agent.runtime.api.RuntimeContractException;
+import io.haifa.agent.runtime.api.ToolCallView;
 import io.haifa.agent.store.sqlite.SqliteStoreException;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.project.changeset.FileChange;
@@ -115,7 +116,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private final Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver;
     private final Predicate<String> projectExists;
     private final PersistentProjectWorkspaceService workspaceChanges;
-    private final Function<String, List<? extends JavaTool<?, ?>>> runToolsForThread;
+    private final Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread;
     private final PersistentThreadCatalog threadCatalog;
     private final DurableHaifaFoundation foundation;
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
@@ -132,7 +133,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             PersistentProjectWorkspaceService workspaceChanges,
             Path dataDirectory,
             SecretKey continuationKey,
-            Function<String, List<? extends JavaTool<?, ?>>> runToolsForThread)
+            Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread)
             throws IOException {
         this.json = json;
         this.runModelResolver = runModelResolver;
@@ -419,7 +420,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         Map<Long, Integer> ordinals = computeTurnOrdinals(thread);
         List<Map<String, Object>> response = new ArrayList<>(
                 historyProjections(thread, limit, beforeSequence).stream()
-                        .map(projection -> threadHistoryResponse(projection, ordinals))
+                        .map(projection -> threadHistoryResponse(thread, projection, ordinals))
                         .toList());
         if (beforeSequence == null) overlayHistoryHead(thread, response, limit, ordinals);
         sendJson(exchange, 200, response);
@@ -636,7 +637,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
             if (steerRun == null) {
             if (thread.bridge == null) {
-                HaifaRunBridge bridge = new HaifaRunBridge(binding, runToolsForThread.apply(threadId), foundation);
+                HaifaRunBridge bridge = new HaifaRunBridge(binding, toolsForThread(thread), foundation);
                 if (thread.modelBindingIdentity != null
                         && !thread.modelBindingIdentity.equals(bridge.bindingIdentity())) {
                     bridge.close();
@@ -932,7 +933,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             // an approved Interaction after a process restart. The SDK still owns the
             // pending request and its side-effect admission; this bridge only restores it.
             HaifaRunBridge bridge = new HaifaRunBridge(
-                    binding, runToolsForThread.apply(thread.threadId), foundation);
+                    binding, toolsForThread(thread), foundation);
             boolean claimBinding = thread.modelBindingIdentity == null
                     || thread.modelBindingIdentity.equals(bridge.bindingIdentity());
             // Conversation and run reads are backed by the shared SQLite authority and do not
@@ -946,6 +947,14 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private void attachBridge(ThreadRecord thread, HaifaRunBridge bridge) {
         attachBridge(thread, bridge, true);
+    }
+
+    private List<? extends JavaTool<?, ?>> toolsForThread(ThreadRecord thread) {
+        Object projectId = thread.metadata.get("deerflow_project_id");
+        Optional<String> project = projectId instanceof String value && !value.isBlank()
+                ? Optional.of(value)
+                : Optional.empty();
+        return runToolsForThread.apply(new ThreadToolScope(thread.threadId, project));
     }
 
     private void attachBridge(ThreadRecord thread, HaifaRunBridge bridge, boolean claimBinding) {
@@ -1328,6 +1337,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     requestMessage = run.interactionRequestMessage;
                 }
             }
+            writeToolRequestIfAvailable(output, run, null);
             writeSse(
                     output,
                     "messages",
@@ -1364,14 +1374,18 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         if (event.source().payload() instanceof RunEventPayloads.ToolLifecycle
                 || event.source().payload() instanceof RunEventPayloads.ResourceAvailable
                 || event.source().payload() instanceof RunEventPayloads.DeliveryLifecycle) {
-            if ((event.source().payload() instanceof RunEventPayloads.ToolLifecycle
-                            || event.source().payload() instanceof RunEventPayloads.ResourceAvailable)
+            if (event.source().payload() instanceof RunEventPayloads.ToolLifecycle lifecycle
+                    && run.bridge.hasTools()) {
+                writeToolLifecycle(output, run, lifecycle.toolCallId(), cursor);
+                return false;
+            }
+            if (event.source().payload() instanceof RunEventPayloads.ResourceAvailable
                     && (run.bridge.hasTools()
                             || run.interactionRequestId != null
                             || run.bridge.pendingInteraction(run.runId).isPresent())) {
-                // Approval runs publish tool/checkpoint lifecycle records around the richer
-                // Interaction record. The card and authoritative SDK view are the frozen UI
-                // surface; these supporting records carry no additional card state.
+                // The SDK Tool result is the authoritative Artifact projection. The supporting
+                // resource event does not carry full arguments/result and must not create a
+                // second card.
                 return false;
             }
             writeSse(
@@ -1388,6 +1402,14 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return false;
         }
         AgentRunSnapshot terminalSnapshot = run.bridge.snapshot(run.runId);
+        if (run.bridge.hasTools() && run.streamModes.contains("messages-tuple")) {
+            writeAllToolMessages(output, run);
+            List<String> artifacts = DeerFlowToolTranscriptProjection.artifactPaths(
+                    run.bridge.toolCalls(run.runId));
+            if (!artifacts.isEmpty() && run.streamModes.contains("updates")) {
+                writeSse(output, "updates", Map.of("__artifacts__", Map.of("artifacts", artifacts)), null);
+            }
+        }
         if (event.terminalKind() == RunTerminalKind.COMPLETED
                 && terminalSnapshot.output().isPresent()
                 && run.streamModes.contains("messages-tuple")) {
@@ -1419,6 +1441,68 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
         writeSse(output, "end", null, cursor);
         return true;
+    }
+
+    private void writeToolLifecycle(OutputStream output, RunRecord run, String toolCallId, String cursor)
+            throws IOException {
+        Optional<ToolCallView> selected = run.bridge.toolCalls(run.runId).stream()
+                .filter(call -> call.id().value().equals(toolCallId))
+                .findFirst();
+        if (selected.isEmpty()) {
+            writeSse(
+                    output,
+                    "error",
+                    Map.of(
+                            "code", "tool_call_view_unavailable",
+                            "tool_call_id", toolCallId,
+                            "message", "Authoritative Tool call view is unavailable"),
+                    cursor);
+            return;
+        }
+        ToolCallView call = selected.orElseThrow();
+        writeToolMessage(output, run, DeerFlowToolTranscriptProjection.requestMessage(call), null);
+        Optional<Map<String, Object>> result = DeerFlowToolTranscriptProjection.resultMessage(call);
+        if (result.isPresent()) {
+            writeToolMessage(output, run, result.orElseThrow(), cursor);
+        }
+    }
+
+    private void writeToolRequestIfAvailable(OutputStream output, RunRecord run, String cursor) throws IOException {
+        List<ToolCallView> calls = run.bridge.toolCalls(run.runId);
+        String targetReference = interactionTargetReference(run);
+        Optional<ToolCallView> selected = calls.stream()
+                .filter(call -> call.id().value().equals(targetReference))
+                .findFirst();
+        if (selected.isEmpty() && calls.size() == 1) {
+            selected = Optional.of(calls.getFirst());
+        }
+        if (selected.isPresent()) {
+            writeToolMessage(
+                    output,
+                    run,
+                    DeerFlowToolTranscriptProjection.requestMessage(selected.orElseThrow()),
+                    cursor);
+        }
+    }
+
+    private String interactionTargetReference(RunRecord run) {
+        return run.bridge.pendingInteraction(run.runId)
+                .map(interaction -> interaction.target().reference())
+                .orElse("");
+    }
+
+    private void writeAllToolMessages(OutputStream output, RunRecord run) throws IOException {
+        for (Map<String, Object> message : DeerFlowToolTranscriptProjection.messages(
+                run.bridge.toolCalls(run.runId))) {
+            writeToolMessage(output, run, message, null);
+        }
+    }
+
+    private void writeToolMessage(
+            OutputStream output, RunRecord run, Map<String, Object> message, String cursor) throws IOException {
+        String messageId = (String) message.get("id");
+        if (!run.projectedToolMessageIds.add(messageId)) return;
+        writeSse(output, "messages", List.of(message, Map.of("langgraph_node", "tools")), cursor);
     }
 
     private void maybePublishTitle(OutputStream output, ThreadRecord thread, RunRecord run)
@@ -1671,7 +1755,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 .orElse(null);
         Map<String, Object> response = checkpoint == null
                 ? emptyThreadHistoryResponse(thread, turns, ordinals)
-                : threadHistoryResponse(new HistoryProjection(
+                : threadHistoryResponse(thread, new HistoryProjection(
                         checkpoint,
                         List.copyOf(turns),
                         turns.stream()
@@ -1682,7 +1766,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                                 .max(Long::compareTo)
                                 .orElse(null)), ordinals);
         Map<String, Object> values = new LinkedHashMap<>();
-        values.put("messages", overlaidMessages(thread, turns, ordinals));
+        values.put("messages", overlaidMessages(thread, turns, ordinals, true));
+        values.put("artifacts", artifactPaths(thread, turns, true));
         if (thread.title() != null) {
             values.put("title", thread.title());
         }
@@ -1761,13 +1846,9 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private Map<String, Object> emptyThreadHistoryResponse(
             ThreadRecord thread, List<ConversationTurn> turns, Map<Long, Integer> ordinals) {
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put(
-                "values",
-                Map.of(
-                        "messages",
-                        turns.stream()
-                                .map(turn -> messageForTurn(turn, ordinals.getOrDefault(turn.sequence(), 0)))
-                                .toList()));
+        response.put("values", Map.of(
+                "messages", overlaidMessages(thread, turns, ordinals, true),
+                "artifacts", artifactPaths(thread, turns, true)));
         response.put("next", List.of());
         response.put("metadata", Map.of());
         response.put("checkpoint_id", null);
@@ -1776,16 +1857,13 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         return response;
     }
 
-    private Map<String, Object> threadHistoryResponse(HistoryProjection projection, Map<Long, Integer> ordinals) {
+    private Map<String, Object> threadHistoryResponse(
+            ThreadRecord thread, HistoryProjection projection, Map<Long, Integer> ordinals) {
         ConversationTurn checkpoint = projection.checkpoint();
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put(
-                "values",
-                Map.of(
-                        "messages",
-                        projection.messages().stream()
-                                .map(turn -> messageForTurn(turn, ordinals.getOrDefault(turn.sequence(), 0)))
-                                .toList()));
+        response.put("values", Map.of(
+                "messages", overlaidMessages(thread, projection.messages(), ordinals, false),
+                "artifacts", artifactPaths(thread, projection.messages(), false)));
         response.put("next", List.of());
         response.put("metadata", Map.of());
         response.put("checkpoint_id", historyCursor(checkpoint.sequence()));
@@ -1859,7 +1937,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
      * which belong directly after that Run's human message.
      */
     private List<Map<String, Object>> overlaidMessages(
-            ThreadRecord thread, List<ConversationTurn> turns, Map<Long, Integer> ordinals) {
+            ThreadRecord thread,
+            List<ConversationTurn> turns,
+            Map<Long, Integer> ordinals,
+            boolean includeInFlight) {
         restorePendingInteractionRuns(thread, turns);
         Map<String, RunRecord> cached = new LinkedHashMap<>();
         runs.values().stream()
@@ -1873,21 +1954,58 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             messages.add(messageForTurn(turn, ordinal));
             if (turn.role() == io.haifa.agent.core.message.MessageRole.USER && turn.runId().isPresent()) {
                 RunRecord run = cached.get(turn.runId().orElseThrow().value());
-                if (run != null) addInteractionMessages(run, messages);
+                addRunSupportMessages(thread, turn.runId().orElseThrow(), run, messages);
             }
         }
-        for (RunRecord run : cached.values()) {
-            if (!isInFlightWithoutDurableHuman(run, durableHumanRuns)) continue;
-            messages.add(pendingHumanMessage(run));
-            addInteractionMessages(run, messages);
+        if (includeInFlight) {
+            for (RunRecord run : cached.values()) {
+                if (!isInFlightWithoutDurableHuman(run, durableHumanRuns)) continue;
+                messages.add(pendingHumanMessage(run));
+                addRunSupportMessages(thread, run.runId, run, messages);
+            }
         }
         return messages;
+    }
+
+    private void addRunSupportMessages(
+            ThreadRecord thread,
+            AgentRunId runId,
+            RunRecord cached,
+            List<Map<String, Object>> messages) {
+        List<ToolCallView> calls = cached == null
+                ? bridgeForPersistedThread(thread).toolCalls(runId)
+                : cached.bridge.toolCalls(runId);
+        calls.stream().map(DeerFlowToolTranscriptProjection::requestMessage).forEach(messages::add);
+        if (cached != null) addInteractionMessages(cached, messages);
+        calls.stream()
+                .map(DeerFlowToolTranscriptProjection::resultMessage)
+                .flatMap(Optional::stream)
+                .forEach(messages::add);
+    }
+
+    private List<String> artifactPaths(
+            ThreadRecord thread, List<ConversationTurn> turns, boolean includeInFlight) {
+        LinkedHashMap<String, AgentRunId> runIds = new LinkedHashMap<>();
+        for (ConversationTurn turn : turns) {
+            turn.runId().ifPresent(runId -> runIds.putIfAbsent(runId.value(), runId));
+        }
+        if (includeInFlight) {
+            runs.values().stream()
+                    .filter(run -> run.threadId.equals(thread.threadId))
+                    .forEach(run -> runIds.putIfAbsent(run.runId.value(), run.runId));
+        }
+        if (runIds.isEmpty()) return List.of();
+        HaifaRunBridge bridge = bridgeForPersistedThread(thread);
+        return runIds.values().stream()
+                .flatMap(runId -> DeerFlowToolTranscriptProjection.artifactPaths(bridge.toolCalls(runId)).stream())
+                .distinct()
+                .toList();
     }
 
     private void overlayHistoryHead(
             ThreadRecord thread, List<Map<String, Object>> response, int limit, Map<Long, Integer> ordinals) {
         List<ConversationTurn> turns = scanTurns(thread, HISTORY_MESSAGE_RETENTION);
-        List<Map<String, Object>> messages = overlaidMessages(thread, turns, ordinals);
+        List<Map<String, Object>> messages = overlaidMessages(thread, turns, ordinals, true);
         Set<String> answeredRuns = new HashSet<>();
         for (ConversationTurn turn : turns) {
             if (turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT) {
@@ -1908,12 +2026,16 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             List<ConversationTurn> headTurns = turns.stream()
                     .filter(turn -> turn.sequence() <= headSequence)
                     .toList();
-            response.getFirst().put("values", Map.of("messages", overlaidMessages(thread, headTurns, ordinals)));
+            response.getFirst().put("values", Map.of(
+                    "messages", overlaidMessages(thread, headTurns, ordinals, false),
+                    "artifacts", artifactPaths(thread, headTurns, false)));
             return;
         }
         RunRecord run = inFlight.orElseThrow();
         Map<String, Object> head = new LinkedHashMap<>();
-        head.put("values", Map.of("messages", messages));
+        head.put("values", Map.of(
+                "messages", messages,
+                "artifacts", artifactPaths(thread, turns, true)));
         head.put("next", List.of());
         head.put("metadata", Map.of());
         head.put("checkpoint_id", historyCursor(run.humanSequence));
@@ -2925,6 +3047,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private final boolean titleCandidate;
         private io.haifa.agent.runtime.api.RunEventCursor sdkCursor;
         private final Set<Long> deferredEventSequences = ConcurrentHashMap.newKeySet();
+        private final Set<String> projectedToolMessageIds = ConcurrentHashMap.newKeySet();
 
         private RunRecord(
                 AgentRunId runId,
@@ -2960,6 +3083,17 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             DeerFlowInteractionHttpProjection.FrozenResponse response,
             InteractionResponseSubmission submission,
             Map<String, Object> message) {}
+
+    record ThreadToolScope(String threadId, Optional<String> projectId) {
+        ThreadToolScope {
+            java.util.Objects.requireNonNull(threadId, "threadId");
+            java.util.Objects.requireNonNull(projectId, "projectId");
+        }
+
+        String artifactProjectRef() {
+            return projectId.orElse("thread:" + threadId);
+        }
+    }
 
     private static final class MalformedRequestException extends RuntimeException {}
 

@@ -122,6 +122,42 @@ public final class RestrictedWorkspaceService {
         return snapshot(normalized, copy, 0, false);
     }
 
+    /**
+     * Create one new working file and publish its immutable Artifact as a single bounded operation.
+     *
+     * <p>The create receipt never leaves this service. If publishing fails, only the exact bytes
+     * created by this invocation are eligible for compensation; a pre-existing or subsequently
+     * changed file is never deleted.
+     */
+    public Artifact createAndPublishWorkingFile(
+            String ownerId,
+            WorkspaceId workspaceId,
+            String logicalPath,
+            byte[] content,
+            String title,
+            String artifactType,
+            String mediaType,
+            ArtifactPublishContext context) {
+        WorkspaceFileSnapshot created = createWorkingFile(ownerId, workspaceId, logicalPath, content);
+        try {
+            return publish(
+                    ownerId,
+                    workspaceId,
+                    created.logicalPath(),
+                    title,
+                    artifactType,
+                    mediaType,
+                    context);
+        } catch (RuntimeException publishFailure) {
+            try {
+                rollbackCreatedWorkingFile(ownerId, workspaceId, created);
+            } catch (RuntimeException compensationFailure) {
+                publishFailure.addSuppressed(compensationFailure);
+            }
+            throw publishFailure;
+        }
+    }
+
     public WorkspaceFileSnapshot read(String ownerId, WorkspaceId workspaceId, String logicalPath,
                                       long offset, int maxBytes) {
         WorkspaceBinding binding = registry.requireOwner(ownerId, workspaceId);
@@ -219,6 +255,24 @@ public final class RestrictedWorkspaceService {
             throw new IllegalStateException("published artifact does not match workspace source");
         }
         return artifact;
+    }
+
+    private void rollbackCreatedWorkingFile(
+            String ownerId, WorkspaceId workspaceId, WorkspaceFileSnapshot created) {
+        WorkspaceBinding binding = registry.requireOwner(ownerId, workspaceId);
+        String normalized = LogicalWorkspacePath.normalize(created.logicalPath());
+        Path root = registry.userDataRoot(binding.workspaceId());
+        Path target = LogicalWorkspacePath.resolve(root, normalized);
+        byte[] current = readAllVerified(root, target, limits.maxWorkingFileBytes());
+        if (current.length != created.totalByteCount() || !Hashing.sha256(current).equals(created.sha256())) {
+            throw new WorkspaceException(
+                    WorkspaceError.CONTENT_INTEGRITY, "working file changed before failure compensation");
+        }
+        try {
+            Files.delete(target);
+        } catch (IOException exception) {
+            throw WorkspaceRegistry.ioFailure("failed to compensate working file", exception);
+        }
     }
 
     public byte[] loadArtifact(String ownerId, Artifact artifact) {

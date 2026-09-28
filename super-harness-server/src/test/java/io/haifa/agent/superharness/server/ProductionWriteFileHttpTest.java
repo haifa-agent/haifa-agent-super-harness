@@ -22,6 +22,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
+import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
+import io.haifa.agent.superharness.workspace.RestrictedWorkspaceService;
+import io.haifa.agent.superharness.workspace.WorkspaceChangeLimits;
+import io.haifa.agent.superharness.workspace.WorkspaceLimits;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -76,8 +80,10 @@ class ProductionWriteFileHttpTest {
             exchange.close();
         });
         provider.start();
-        String key = Base64.getEncoder().encodeToString(new byte[32]);
-        try (var api = DeerFlowBootstrapApi.create(
+        try {
+            String key = Base64.getEncoder().encodeToString(new byte[32]);
+            String[] persistedProjection = new String[3];
+            try (var api = DeerFlowBootstrapApi.create(
                 new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
                 dataRoot,
                 Map.of("HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF", "env://W05_TEST_KEY",
@@ -109,12 +115,29 @@ class ProductionWriteFileHttpTest {
             var requestIdMatch = Pattern.compile("\\\"request_id\\\":\\\"([^\\\"]+)\\\"").matcher(pending.body());
             assertThat(requestIdMatch.find()).as(pending.body()).isTrue();
             String requestId = requestIdMatch.group(1);
+            var toolCallIdMatch = Pattern.compile("\\\"id\\\":\\\"tool-call-([^\\\"]+)-request\\\"")
+                    .matcher(pending.body());
+            assertThat(toolCallIdMatch.find()).as(pending.body()).isTrue();
+            String pendingToolCallId = toolCallIdMatch.group(1);
+            assertThat(pending.body()).contains("tool-call-" + pendingToolCallId + "-request");
             assertThat(providerRequests).hasSize(1);
             assertThat(providerRequests.getFirst().path("tools").findValuesAsText("name"))
                     .contains("write_file").doesNotContain("ask_clarification");
             URI artifact = base.resolve("/api/threads/production-file/artifacts" + path);
             assertThat(client.send(HttpRequest.newBuilder(artifact).GET().build(),
                     HttpResponse.BodyHandlers.ofByteArray()).statusCode()).isEqualTo(404);
+            JsonNode pendingState = json.readTree(
+                    request(base, "GET", "/api/threads/production-file/state", null).body());
+            JsonNode pendingToolCall = firstMessageWith(pendingState, "tool_calls");
+            assertThat(pendingToolCall.path("tool_calls").get(0).path("name").asText()).isEqualTo("write_file");
+            assertThat(pendingToolCall.path("tool_calls").get(0).path("args").path("path").asText())
+                    .isEqualTo(path);
+            JsonNode pendingCard = firstHumanInputCard(pendingState);
+            assertThat(pendingCard.path("tool_call_id").asText()).isEqualTo(pendingCard.path("id").asText());
+            assertThat(pendingCard.path("tool_call_id").asText()).isNotEqualTo(pendingToolCallId);
+            assertThat(pendingCard.path("artifact").path("human_input").path("tool_call_id").asText())
+                    .isEqualTo(pendingToolCallId);
+            assertThat(pendingState.path("values").path("artifacts")).isEmpty();
 
             String wrongRequest = interactionResponse("another-request", "approve");
             assertThat(request(base, "POST", "/api/threads/production-file/runs/stream", wrongRequest)
@@ -131,6 +154,7 @@ class ProductionWriteFileHttpTest {
             HttpResponse<String> resumed = request(base, "POST", "/api/threads/production-file/runs/stream", approval);
             assertThat(resumed.statusCode()).as(resumed.body()).isEqualTo(200);
             assertThat(resumed.body()).contains("Created the file.");
+            assertThat(resumed.body()).contains("tool-call-" + pendingToolCallId + "-result", "artifactId");
             assertThat(json.readTree(request(base, "GET", location, null).body()).path("status").asText())
                     .isEqualTo("success");
             assertThat(providerRequests).hasSize(2);
@@ -151,6 +175,55 @@ class ProductionWriteFileHttpTest {
             assertThat(downloaded.statusCode()).isEqualTo(200);
             assertThat(downloaded.body()).isEqualTo(expected);
             assertThat(downloaded.headers().firstValue("etag")).contains("\"" + sha + "\"");
+
+            JsonNode completedState = json.readTree(
+                    request(base, "GET", "/api/threads/production-file/state", null).body());
+            JsonNode projectedCall = firstMessageWith(completedState, "tool_calls");
+            String projectedCallId = projectedCall.path("tool_calls").get(0).path("id").asText();
+            assertThat(projectedCallId).isEqualTo(pendingToolCallId);
+            JsonNode projectedResult = firstToolResult(completedState, projectedCallId);
+            assertThat(projectedResult.path("name").asText()).isEqualTo("write_file");
+            assertThat(projectedResult.path("content").asText()).contains("artifact:");
+            JsonNode structured = projectedResult.path("additional_kwargs").path("haifa_tool_result");
+            assertThat(structured.path("path").asText()).isEqualTo(path);
+            assertThat(structured.path("artifactExecutionRef").asText()).isEqualTo(projectedCallId);
+            assertThat(structured.path("artifactSha256").asText()).isEqualTo("sha256:" + sha);
+            assertThat(completedState.path("values").path("artifacts").toString()).contains(path);
+            assertThat(messagesNamed(completedState, "ask_clarification")).hasSize(1);
+            assertThat(messagesNamed(completedState, "write_file")).hasSize(1);
+            JsonNode repeatedState = json.readTree(
+                    request(base, "GET", "/api/threads/production-file/state", null).body());
+            assertThat(repeatedState.path("values").path("messages")).isEqualTo(
+                    completedState.path("values").path("messages"));
+            JsonNode history = json.readTree(
+                    request(base, "POST", "/api/threads/production-file/history", "{\"limit\":10}").body());
+            JsonNode page = json.readTree(request(
+                    base, "GET", "/api/threads/production-file/messages/page?limit=50", null).body());
+            assertThat(page.path("data")).isNotEmpty();
+            assertThat(page.path("data").findValuesAsText("seq")).doesNotHaveDuplicates();
+            assertThat(history.get(0).path("values").path("artifacts").toString()).contains(path);
+            assertThat(firstToolResult(history.get(0), projectedCallId)
+                            .path("additional_kwargs").path("haifa_tool_result").path("artifactId").asText())
+                    .isEqualTo(structured.path("artifactId").asText());
+            persistedProjection[0] = projectedCallId;
+            persistedProjection[1] = structured.path("artifactId").asText();
+            persistedProjection[2] = sha;
+
+            Path workspaceRoot = dataRoot.resolve("workspace");
+            var bindings = new PersistentProjectWorkspaceService(
+                    workspaceRoot, WorkspaceLimits.defaults(), WorkspaceChangeLimits.defaults());
+            var artifacts = new RestrictedWorkspaceService(workspaceRoot, WorkspaceLimits.defaults());
+            var workspaceBinding = bindings.requireThreadWorkspace("default", "production-file");
+            var published = artifacts.findArtifacts(
+                    "default", workspaceBinding.workspaceId(), "thread:production-file");
+            assertThat(published).singleElement().satisfies(value -> {
+                assertThat(value.id().value()).isEqualTo(structured.path("artifactId").asText());
+                assertThat(value.provenance().runId().value()).isEqualTo(runId);
+                assertThat(value.provenance().executionRef()).isEqualTo(projectedCallId);
+                assertThat(value.provenance().sourceHash()).isEqualTo("sha256:" + sha);
+                assertThat(value.payload().sha256()).isEqualTo("sha256:" + sha);
+                assertThat(artifacts.loadArtifact("default", value)).isEqualTo(expected);
+            });
 
             JsonNode changes = json.readTree(request(base, "GET",
                     location + "/workspace-changes?include_files=true", null).body());
@@ -188,9 +261,67 @@ class ProductionWriteFileHttpTest {
                     + " toolCall=call-production-write-1 size=" + expected.length + " sha256=" + sha
                     + " wrong_request=409 cross_thread=409 duplicate=409 rejected_file=404"
                     + " toolSummary=" + toolSummary);
+            }
+            try (var restarted = DeerFlowBootstrapApi.create(
+                new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
+                dataRoot,
+                Map.of(
+                        "HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF",
+                        "env://W05_TEST_KEY",
+                        "W05_TEST_KEY",
+                        key))) {
+            restarted.start();
+            URI restartedBase = URI.create("http://127.0.0.1:" + restarted.address().getPort());
+            JsonNode reloaded = json.readTree(
+                    request(restartedBase, "GET", "/api/threads/production-file/state", null).body());
+            JsonNode reloadedCall = firstMessageWith(reloaded, "tool_calls");
+            assertThat(reloadedCall.path("tool_calls").get(0).path("id").asText())
+                    .isEqualTo(persistedProjection[0]);
+            JsonNode reloadedResult = firstToolResult(reloaded, persistedProjection[0]);
+            assertThat(reloadedResult.path("additional_kwargs").path("haifa_tool_result").path("artifactId")
+                            .asText())
+                    .isEqualTo(persistedProjection[1]);
+            assertThat(reloadedResult.path("additional_kwargs").path("haifa_tool_result").path("artifactSha256")
+                            .asText())
+                    .isEqualTo("sha256:" + persistedProjection[2]);
+            assertThat(reloaded.path("values").path("artifacts").toString()).contains(path);
+            }
         } finally {
             provider.stop(0);
         }
+    }
+
+    private static JsonNode firstMessageWith(JsonNode state, String field) {
+        for (JsonNode message : state.path("values").path("messages")) {
+            if (message.has(field) && !message.path(field).isEmpty()) return message;
+        }
+        throw new AssertionError("missing message field " + field + ": " + state);
+    }
+
+    private static JsonNode firstToolResult(JsonNode state, String toolCallId) {
+        for (JsonNode message : state.path("values").path("messages")) {
+            if ("tool".equals(message.path("type").asText())
+                    && toolCallId.equals(message.path("tool_call_id").asText())
+                    && "write_file".equals(message.path("name").asText())) {
+                return message;
+            }
+        }
+        throw new AssertionError("missing Tool result " + toolCallId + ": " + state);
+    }
+
+    private static JsonNode firstHumanInputCard(JsonNode state) {
+        for (JsonNode message : state.path("values").path("messages")) {
+            if (message.path("artifact").path("human_input").hasNonNull("request_id")) return message;
+        }
+        throw new AssertionError("missing HumanInput card: " + state);
+    }
+
+    private static List<JsonNode> messagesNamed(JsonNode state, String name) {
+        List<JsonNode> messages = new ArrayList<>();
+        for (JsonNode message : state.path("values").path("messages")) {
+            if (name.equals(message.path("name").asText())) messages.add(message);
+        }
+        return List.copyOf(messages);
     }
 
     private static String interactionResponse(String requestId, String option) {

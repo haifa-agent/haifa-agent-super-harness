@@ -1,12 +1,13 @@
 package io.haifa.agent.superharness.server;
 
+import io.haifa.agent.artifact.Artifact;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
+import io.haifa.agent.superharness.workspace.ArtifactPublishContext;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
 import io.haifa.agent.superharness.workspace.RestrictedWorkspaceService;
 import io.haifa.agent.superharness.workspace.WorkspaceBinding;
-import io.haifa.agent.superharness.workspace.WorkspaceFileSnapshot;
 import io.haifa.agent.tool.api.ToolSideEffect;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -25,12 +26,17 @@ public final class ProductionWriteFileTool implements JavaTool<ProductionWriteFi
             .build();
 
     private final String threadId;
+    private final String artifactProjectRef;
     private final PersistentProjectWorkspaceService bindings;
     private final RestrictedWorkspaceService workspace;
 
     ProductionWriteFileTool(
-            String threadId, PersistentProjectWorkspaceService bindings, RestrictedWorkspaceService workspace) {
+            String threadId,
+            String artifactProjectRef,
+            PersistentProjectWorkspaceService bindings,
+            RestrictedWorkspaceService workspace) {
         this.threadId = Objects.requireNonNull(threadId, "threadId");
+        this.artifactProjectRef = Objects.requireNonNull(artifactProjectRef, "artifactProjectRef");
         this.bindings = Objects.requireNonNull(bindings, "bindings");
         this.workspace = Objects.requireNonNull(workspace, "workspace");
     }
@@ -62,17 +68,56 @@ public final class ProductionWriteFileTool implements JavaTool<ProductionWriteFi
         if (!Instant.now().isBefore(context.deadline())) {
             throw new IllegalStateException("write_file deadline has expired");
         }
+        var sessionId = context.sessionId()
+                .orElseThrow(() -> new IllegalStateException("write_file requires a trusted Session identity"));
+        String toolCallId = context.toolCallId().value();
         WorkspaceBinding binding = bindings.requireThreadWorkspace(DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId);
         // The SDK owns Run admission and invokes this Tool from this Thread's frozen catalog.
         String runId = context.runId().value();
-        WorkspaceFileSnapshot created = workspace.createWorkingFile(
-                binding.ownerId(), binding.workspaceId(), input.path(), bytes);
-        return new Output("/mnt/user-data/" + created.logicalPath(), created.totalByteCount(), created.sha256(), runId);
+        Artifact artifact = workspace.createAndPublishWorkingFile(
+                binding.ownerId(),
+                binding.workspaceId(),
+                input.path(),
+                bytes,
+                artifactTitle(input.path()),
+                "workspace-file",
+                "text/plain; charset=utf-8",
+                new ArtifactPublishContext(
+                        artifactProjectRef,
+                        runId,
+                        sessionId.value(),
+                        toolCallId,
+                        "local-owner-download"));
+        String sourcePath = artifact.provenance().sourceLogicalPath();
+        String artifactSha256 = artifact.payload().sha256();
+        String sha256 = artifactSha256.substring("sha256:".length());
+        return new Output(
+                sourcePath,
+                artifact.payload().byteCount(),
+                sha256,
+                runId,
+                threadId,
+                artifact.id().value(),
+                artifact.version().value(),
+                artifact.type().value(),
+                artifactSha256,
+                artifact.payload().byteCount(),
+                artifact.payload().mediaType(),
+                artifact.provenance().project().projectId(),
+                artifact.provenance().workspaceRef(),
+                artifact.provenance().sessionId().value(),
+                artifact.provenance().executionRef());
     }
 
     @Override
     public String summarize(Output output) {
-        return "Created " + output.path() + " (" + output.size() + " bytes, sha256:" + output.sha256() + ")";
+        return "Created " + output.path() + " (" + output.size() + " bytes, sha256:" + output.sha256()
+                + ", artifact:" + output.artifactId() + ")";
+    }
+
+    private static String artifactTitle(String logicalPath) {
+        int separator = logicalPath.lastIndexOf('/');
+        return separator < 0 ? logicalPath : logicalPath.substring(separator + 1);
     }
 
     public record Input(String path, String content, Optional<String> description, Optional<Boolean> append) {
@@ -84,5 +129,20 @@ public final class ProductionWriteFileTool implements JavaTool<ProductionWriteFi
         }
     }
 
-    public record Output(String path, long size, String sha256, String runId) {}
+    public record Output(
+            String path,
+            long size,
+            String sha256,
+            String runId,
+            String threadId,
+            String artifactId,
+            long artifactVersion,
+            String artifactType,
+            String artifactSha256,
+            long artifactByteCount,
+            String artifactMediaType,
+            String artifactProjectRef,
+            String artifactWorkspaceRef,
+            String artifactSessionId,
+            String artifactExecutionRef) {}
 }
