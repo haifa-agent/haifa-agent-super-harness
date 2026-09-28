@@ -67,7 +67,7 @@ function verifySteerExchange({
 function verifySteerTerminal({
   runStatus,
   state,
-  expectedSteerMessageId,
+  expectedRunId,
   expectedInstruction,
   expectedAck,
   expectedArtifactPath,
@@ -78,10 +78,15 @@ function verifySteerTerminal({
   const messages = state?.values?.messages;
   requireCondition(Array.isArray(messages), "Authoritative state messages are unavailable");
 
-  const steerMessages = messages.filter((message) => message?.id === expectedSteerMessageId);
+  const steerMessages = messages.filter(
+    (message) => message?.type === "human" && contentText(message.content) === expectedInstruction,
+  );
   requireCondition(steerMessages.length === 1, `Expected exactly one persisted Steer message, got ${steerMessages.length}`);
   requireCondition(steerMessages[0].type === "human", "Persisted Steer message is not human");
-  requireCondition(contentText(steerMessages[0].content) === expectedInstruction, "Persisted Steer content drifted");
+  requireCondition(
+    steerMessages[0].id === `${expectedRunId}-human-1`,
+    `Persisted Steer identity must be the authoritative Run projection, got ${steerMessages[0].id}`,
+  );
   const acknowledgements = messages.filter(
     (message) => message?.type === "ai" && contentText(message.content).includes(expectedAck),
   );

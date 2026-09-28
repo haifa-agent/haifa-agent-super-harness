@@ -52,12 +52,12 @@ const terminal = {
       messages: [
         { id: "tool-request", type: "ai", tool_calls: [{ id: "write-1", name: "write_file", args: { path: "/mnt/user-data/outputs/demo.txt" } }] },
         { id: "tool-result", type: "tool", name: "write_file", tool_call_id: "write-1", additional_kwargs: { haifa_tool_result: { artifactId: "artifact-1" } } },
-        { id: "steer-1", type: "human", content: "change direction" },
+        { id: "run-1-human-1", type: "human", content: "change direction" },
         { id: "ack-1", type: "ai", content: "DEMO-STEER-ACK-1" },
       ],
     },
   },
-  expectedSteerMessageId: "steer-1",
+  expectedRunId: "run-1",
   expectedInstruction: "change direction",
   expectedAck: "DEMO-STEER-ACK-1",
   expectedArtifactPath: "/mnt/user-data/outputs/demo.txt",
@@ -70,9 +70,19 @@ pass("missing terminal cannot pass", () => assert.throws(
   () => verifySteerTerminal({ ...terminal, runStatus: "running" }), /terminal success/,
 ));
 pass("missing persisted steer cannot pass", () => assert.throws(
-  () => verifySteerTerminal({ ...terminal, state: structuredClone({ values: { ...terminal.state.values, messages: terminal.state.values.messages.filter((message) => message.id !== "steer-1") } }) }),
+  () => verifySteerTerminal({ ...terminal, state: structuredClone({ values: { ...terminal.state.values, messages: terminal.state.values.messages.filter((message) => message.id !== "run-1-human-1") } }) }),
   /persisted Steer message/,
 ));
+pass("wrong projected steer identity cannot pass", () => {
+  const wrongIdentity = structuredClone(terminal);
+  wrongIdentity.state.values.messages.find((message) => message.id === "run-1-human-1").id = "client-steer-1";
+  assert.throws(() => verifySteerTerminal(wrongIdentity), /authoritative Run projection/);
+});
+pass("duplicate persisted steer content cannot pass", () => {
+  const duplicate = structuredClone(terminal);
+  duplicate.state.values.messages.push({ id: "run-1-human-2", type: "human", content: "change direction" });
+  assert.throws(() => verifySteerTerminal(duplicate), /exactly one persisted Steer message/);
+});
 pass("missing acknowledgement cannot pass", () => assert.throws(
   () => verifySteerTerminal({ ...terminal, expectedAck: "DEMO-STEER-ACK-2" }), /acknowledgement/,
 ));

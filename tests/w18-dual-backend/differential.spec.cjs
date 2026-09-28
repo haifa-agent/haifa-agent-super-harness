@@ -884,7 +884,7 @@ test(`${backend}: customer demo L2 approval, Artifact, reconnect, and active Ste
   const terminalContract = verifySteerTerminal({
     runStatus: terminalRun.status,
     state: terminalState,
-    expectedSteerMessageId: steerExchange.messageId,
+    expectedRunId: started.runId,
     expectedInstruction: steerInstruction,
     expectedAck: steerAck,
     expectedArtifactPath: artifactPath,
