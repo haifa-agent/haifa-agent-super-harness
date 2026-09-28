@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "haifa.customer-demo-v2.m0-decisions/v1",
+  "demoId": "DEMO-V2",
+  "recordedAt": "2026-09-28",
+  "source": "private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-2/README.md",
+  "decisions": {
+    "w04RecoveryAuthorization": {
+      "decision": "NOT_AUTHORIZED",
+      "authority": "human",
+      "recordedOn": "2026-09-28",
+      "detail": "Human decision 2026-09-28: the bounded W04 file-context slice is temporarily NOT authorized; W04 V2FileContext stays Pending and must not be assigned. Every V2-M1+ stage that depends on real file context is BLOCKED until a new human record authorizes it. This is a recorded authorization gate, not a doctor failure.",
+      "dependentStages": ["V2-M1", "V2-M2", "V2-M3", "V2-M4", "V2-M5", "V2-M6"]
+    },
+    "w03W05Ordering": {
+      "decision": "W05_TASK_3_FIRST_THEN_W03",
+      "parallel": false,
+      "authority": "main",
+      "recordedOn": "2026-09-28",
+      "reviewedMainSha": "52ad9a7",
+      "detail": "Read-only source review found W03 and W05 task-3 overlap in DeerFlowThreadRunApi.java (single ThreadRecord.bridge / model_binding and admission branch). W05 task-3 restart slice must land first with current single-bridge semantics; W03 then freezes the model per Run. W04 may develop in parallel only after human authorization; merge conflicts rebased by the main controller in order.",
+      "historicalNote": "The first restart 409 has no original cause and must not be retroactively marked fixed by a new V2 PASS."
+    },
+    "consultingAnalysisDependency": {
+      "verdict": "NO_HARD_DEPENDENCY_ON_DEFERRED_CAPABILITIES",
+      "reviewRef": "contracts/customer-demo-v2/consulting-analysis-dependency-review.json",
+      "authority": "static-review",
+      "detail": "The V2 Phase 2 selection of consulting-analysis has no hard dependency on W07/W11/W14. This is a static review, not a runtime PASS."
+    }
+  }
+}

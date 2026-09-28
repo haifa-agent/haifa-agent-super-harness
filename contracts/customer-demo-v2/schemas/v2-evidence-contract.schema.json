@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "haifa://customer-demo-v2/v2-evidence-contract",
+  "title": "V2 per-case evidence contract",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "contractId",
+    "demoId",
+    "generatedFrom",
+    "resultVocabulary",
+    "decisionVocabulary",
+    "sourceVocabulary",
+    "backendVocabulary",
+    "pinnedHashes",
+    "caseDenominator",
+    "evidenceRules",
+    "caseResultRules",
+    "aggregation",
+    "noGoConditions",
+    "cases"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": {"const": "haifa.customer-demo-v2.evidence-contract/v1"},
+    "contractId": {"const": "v2-evidence-contract-m0"},
+    "demoId": {"const": "DEMO-V2"},
+    "status": {"type": "string"},
+    "generatedFrom": {
+      "type": "object",
+      "required": ["caseOracle", "caseOracleSha256", "sourceIndex", "sourceIndexSha256"],
+      "properties": {
+        "caseOracle": {"const": "contracts/customer-demo-v2/v2-case-oracle.json"},
+        "caseOracleSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "sourceIndex": {"const": "contracts/customer-demo-v2/source-index.json"},
+        "sourceIndexSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "resultVocabulary": {
+      "type": "array",
+      "minItems": 6,
+      "uniqueItems": true,
+      "items": {"enum": ["PASS", "FAIL", "NOT_RUN", "BLOCKED_EXTERNAL", "UPSTREAM_UNSUPPORTED", "NOT_APPLICABLE"]}
+    },
+    "decisionVocabulary": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {"enum": ["GO", "NO_GO"]}
+    },
+    "sourceVocabulary": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {"const": "v2"}
+    },
+    "backendVocabulary": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {"enum": ["haifa", "reference"]}
+    },
+    "pinnedHashes": {
+      "type": "object",
+      "required": ["customersCsvSha256", "reportingPolicySha256", "caseOracleSha256", "sourceIndexSha256"],
+      "properties": {
+        "customersCsvSha256": {"const": "ec326b7d0cf68f660ed769f8eecf9b71b43137af4e9aa83de75aa75bc5302f00"},
+        "reportingPolicySha256": {"const": "563e216fc77f87d968b3c34994746fa1f3368380ede30c97e03782c3895a9e9a"},
+        "caseOracleSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "sourceIndexSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "caseDenominator": {
+      "type": "object",
+      "required": ["source", "count", "stageDistribution", "rule"],
+      "properties": {
+        "source": {"const": "contracts/customer-demo-v2/v2-case-oracle.json"},
+        "count": {"const": 48},
+        "stageDistribution": {
+          "type": "object",
+          "required": ["V2-M1", "V2-M2", "V2-M3", "V2-M4", "V2-M5", "V2-M6"],
+          "properties": {
+            "V2-M1": {"const": 6},
+            "V2-M2": {"const": 17},
+            "V2-M3": {"const": 10},
+            "V2-M4": {"const": 7},
+            "V2-M5": {"const": 4},
+            "V2-M6": {"const": 4}
+          }
+        }
+      }
+    },
+    "evidenceRules": {
+      "type": "object",
+      "required": ["commonRequiredEvidence", "conditionalRequiredEvidence"],
+      "properties": {
+        "commonRequiredEvidence": {"type": "array", "minItems": 20, "items": {"type": "string"}},
+        "conditionalRequiredEvidence": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "object",
+            "required": ["when", "require"],
+            "properties": {
+              "when": {"type": "string"},
+              "require": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+            }
+          }
+        }
+      }
+    },
+    "caseResultRules": {
+      "type": "object",
+      "required": ["PASS", "FAIL", "NOT_RUN", "BLOCKED_EXTERNAL", "UPSTREAM_UNSUPPORTED", "NOT_APPLICABLE"],
+      "properties": {
+        "PASS": {"type": "string", "minLength": 1},
+        "FAIL": {"type": "string", "minLength": 1},
+        "NOT_RUN": {"type": "string", "minLength": 1},
+        "BLOCKED_EXTERNAL": {"type": "string", "minLength": 1},
+        "UPSTREAM_UNSUPPORTED": {"type": "string", "minLength": 1},
+        "NOT_APPLICABLE": {"type": "string", "minLength": 1}
+      }
+    },
+    "aggregation": {
+      "type": "object",
+      "required": ["mutualExclusion", "reportingPrecedence", "stagePassRule", "stageResultVocabulary", "goRule", "forbiddenEvidence"],
+      "properties": {
+        "mutualExclusion": {"type": "string", "minLength": 1},
+        "reportingPrecedence": {
+          "type": "array",
+          "minItems": 5,
+          "items": {"enum": ["FAIL", "BLOCKED_EXTERNAL", "UPSTREAM_UNSUPPORTED", "NOT_RUN", "PASS"]}
+        },
+        "stagePassRule": {"type": "string", "minLength": 1},
+        "stageResultVocabulary": {"type": "array", "minItems": 4, "items": {"enum": ["PASS", "FAIL", "NOT_RUN", "BLOCKED_EXTERNAL"]}},
+        "goRule": {"type": "string", "minLength": 1},
+        "forbiddenEvidence": {"type": "array", "minItems": 4, "items": {"type": "string"}}
+      }
+    },
+    "noGoConditions": {
+      "type": "array",
+      "minItems": 21,
+      "items": {
+        "type": "object",
+        "required": ["id", "rule"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "rule": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 48,
+      "items": {
+        "type": "object",
+        "required": ["id", "stage", "workPackage", "level", "referenceSupport", "defaultResult", "requiredForStagePass"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^V2-M[1-6]-[0-9]{2}$"},
+          "stage": {"enum": ["V2-M1", "V2-M2", "V2-M3", "V2-M4", "V2-M5", "V2-M6"]},
+          "workPackage": {"type": "string", "pattern": "^W[0-9]{2}$"},
+          "level": {"enum": ["L1", "L2", "L3"]},
+          "referenceSupport": {"enum": ["SUPPORTED", "PARTIAL", "UPSTREAM_UNSUPPORTED", "NOT_INVENTORIED", "NOT_APPLICABLE"]},
+          "defaultResult": {"const": "NOT_RUN"},
+          "requiredForStagePass": {"const": true}
+        }
+      }
+    }
+  }
+}
