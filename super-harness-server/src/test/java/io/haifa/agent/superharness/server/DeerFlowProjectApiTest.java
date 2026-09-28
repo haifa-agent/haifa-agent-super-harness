@@ -4,14 +4,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Properties;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -223,6 +228,33 @@ class DeerFlowProjectApiTest {
         // A missing project stays 404 and no failed upload is visible on the shelf.
         assertThat(multipart("missing", "file", "safe.txt", bytes).statusCode()).isEqualTo(404);
         assertThat(body(get("/api/projects/" + projectId + "/documents")).path("total").asInt()).isEqualTo(1);
+    }
+
+    @Test
+    void corruptProjectDocumentMetadataStaysAWorkspaceIntegrityFailure() throws Exception {
+        String projectId = body(request("POST", "/api/projects", "{\"name\":\"CorruptMetadata\"}"))
+                .path("id").asText();
+        String documentId = body(multipart(projectId, "file", "first.txt", bytes("first document\n")))
+                .path("document").path("id").asText();
+
+        Path metadata;
+        try (Stream<Path> paths = Files.walk(dataDirectory)) {
+            metadata = paths.filter(path -> path.getFileName().toString().equals(documentId + ".properties"))
+                    .findFirst().orElseThrow();
+        }
+        Properties properties = new Properties();
+        try (InputStream input = Files.newInputStream(metadata)) {
+            properties.load(input);
+        }
+        properties.setProperty("id", "doc-00000000000000000000000000000000");
+        try (OutputStream output = Files.newOutputStream(metadata)) {
+            properties.store(output, null);
+        }
+
+        // Shelf metadata corruption is a workspace integrity failure (409), never a user-input 400.
+        HttpResponse<String> upload = multipart(projectId, "file", "second.txt", bytes("second document\n"));
+        assertThat(upload.statusCode()).isEqualTo(409);
+        assertThat(upload.body()).doesNotContain("must not be empty");
     }
 
     @Test

@@ -270,8 +270,12 @@ final class DeerFlowProjectApi implements HttpHandler {
                 }
                 throw failure;
             } catch (IllegalArgumentException failure) {
-                // Frozen shelf reports a zero-byte document as 400 Empty file.
-                throw new HttpFailure(400, failure.getMessage());
+                // Only the frozen zero-byte rejection is a 400; every other
+                // IllegalArgumentException keeps the pre-existing global mapping.
+                if ("project document content must not be empty".equals(failure.getMessage())) {
+                    throw new HttpFailure(400, failure.getMessage());
+                }
+                throw failure;
             }
             sendJson(exchange, receipt.deduplicated() ? 200 : 201, Map.of(
                     "document", documentResponse(receipt.document()),
