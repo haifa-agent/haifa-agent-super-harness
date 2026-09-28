@@ -1,0 +1,2 @@
+{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"time_now","title":"Current time","description":"Return the current instant and local time in a validated IANA timezone. Defaults to UTC.","annotations":{"readOnlyHint":true,"destructiveHint":false}}]}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"time_now","arguments":{"timezone":"UTC"}}}

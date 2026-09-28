@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "haifa://customer-demo-v2/v2-evidence-instance",
+  "title": "V2 evidence instance",
+  "type": "object",
+  "required": ["schemaVersion", "demoId", "contractRef", "contractSha256", "pins", "stageResults", "caseResults", "decision"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": {"const": "haifa.customer-demo-v2.evidence-instance/v1"},
+    "demoId": {"const": "DEMO-V2"},
+    "contractRef": {"const": "contracts/customer-demo-v2/v2-evidence-contract.json"},
+    "contractSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "generatedAt": {"type": "string"},
+    "pins": {
+      "type": "object",
+      "required": ["customersCsvSha256", "reportingPolicySha256", "caseOracleSha256", "sourceIndexSha256", "contractSha256"],
+      "properties": {
+        "mainSha": {"type": ["string", "null"]},
+        "sdkCommit": {"type": ["string", "null"]},
+        "sdkBomSha256": {"type": ["string", "null"]},
+        "customersCsvSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "reportingPolicySha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "caseOracleSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "sourceIndexSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "contractSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "humanPilotDeclaration": {
+      "type": ["object", "null"],
+      "required": ["signedBy", "signedAt", "scope", "result"],
+      "properties": {
+        "signedBy": {"type": "string", "minLength": 1},
+        "signedAt": {"type": "string", "minLength": 1},
+        "scope": {"type": "string", "minLength": 1},
+        "result": {"type": "string", "minLength": 1}
+      }
+    },
+    "stageResults": {
+      "type": "array",
+      "minItems": 6,
+      "items": {
+        "type": "object",
+        "required": ["stage", "result"],
+        "properties": {
+          "stage": {"enum": ["V2-M1", "V2-M2", "V2-M3", "V2-M4", "V2-M5", "V2-M6"]},
+          "result": {"enum": ["PASS", "FAIL", "NOT_RUN", "BLOCKED_EXTERNAL"]}
+        }
+      }
+    },
+    "caseResults": {
+      "type": "array",
+      "minItems": 48,
+      "items": {
+        "type": "object",
+        "required": ["id", "stage", "workPackage", "level", "backend", "result"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^V2-M[1-6]-[0-9]{2}$"},
+          "stage": {"enum": ["V2-M1", "V2-M2", "V2-M3", "V2-M4", "V2-M5", "V2-M6"]},
+          "workPackage": {"type": "string", "pattern": "^W[0-9]{2}$"},
+          "level": {"enum": ["L1", "L2", "L3"]},
+          "backend": {"enum": ["haifa", "reference"]},
+          "result": {"enum": ["PASS", "FAIL", "NOT_RUN", "BLOCKED_EXTERNAL", "UPSTREAM_UNSUPPORTED", "NOT_APPLICABLE"]},
+          "source": {"enum": ["v2", "v1"]},
+          "profile": {"type": "string"},
+          "scenario": {"type": "string"},
+          "fixturePath": {"type": "string"},
+          "fixtureSha256": {"type": "string"},
+          "configPath": {"type": "string"},
+          "configSha256": {"type": "string"},
+          "runId": {"type": ["string", "null"]},
+          "runAttempt": {"type": ["integer", "null"]},
+          "startedAt": {"type": ["string", "null"]},
+          "endedAt": {"type": ["string", "null"]},
+          "coldMs": {"type": ["integer", "null"]},
+          "warmMs": {"type": ["integer", "null"]},
+          "totalMs": {"type": ["integer", "null"]},
+          "retryCount": {"type": ["integer", "null"]},
+          "hiddenRetry": {"type": ["boolean", "null"]},
+          "retryFirstCause": {"type": ["string", "null"]},
+          "rawEvidenceRoot": {"type": ["string", "null"]},
+          "rawFiles": {
+            "type": ["array", "null"],
+            "items": {
+              "type": "object",
+              "required": ["path", "sha256"],
+              "properties": {"path": {"type": "string"}, "sha256": {"type": "string"}}
+            }
+          },
+          "externalEvidenceCopy": {"type": ["string", "null"]},
+          "modelId": {"type": ["string", "null"]},
+          "modelProvider": {"type": ["string", "null"]},
+          "usageKnown": {"type": ["boolean", "null"]},
+          "usageTotalTokens": {"type": ["integer", "null"]},
+          "toolCallId": {"type": ["string", "null"]},
+          "interactionId": {"type": ["string", "null"]},
+          "artifactId": {"type": ["string", "null"]},
+          "provenanceArtifactId": {"type": ["string", "null"]},
+          "toolCallIdInProvenance": {"type": ["string", "null"]},
+          "downloadPath": {"type": ["string", "null"]},
+          "downloadSha256": {"type": ["string", "null"]},
+          "downloadByteCount": {"type": ["integer", "null"]},
+          "downloadProvenancePath": {"type": ["string", "null"]},
+          "downloadProvenanceSha256": {"type": ["string", "null"]},
+          "fileSha256": {"type": ["string", "null"]},
+          "mcpServerId": {"type": ["string", "null"]},
+          "mcpTool": {"type": ["string", "null"]},
+          "mcpCalls": {"type": ["array", "null"], "items": {"type": "string"}},
+          "l3StubSubstitution": {"type": ["boolean", "null"]},
+          "referenceResult": {"type": ["string", "null"]},
+          "portsReleased": {"type": ["boolean", "null"]},
+          "subprocessExitStatus": {"type": ["integer", "null"]}
+        }
+      }
+    },
+    "decision": {"enum": ["GO", "NO_GO"]},
+    "reason": {"type": ["string", "null"]}
+  }
+}

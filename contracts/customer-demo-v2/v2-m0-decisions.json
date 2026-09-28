@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "haifa.customer-demo-v2.m0-decisions/v1",
+  "demoId": "DEMO-V2",
+  "recordedAt": "2026-09-28",
+  "source": "private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-2/README.md",
+  "decisions": {
+    "w04RecoveryAuthorization": {
+      "decision": "AUTHORIZED",
+      "authority": "human",
+      "recordedOn": "2026-09-28",
+      "detail": "Human decision 2026-09-28 (later record, supersedes the earlier NOT_AUTHORIZED record): the bounded W04 file-context slice is AUTHORIZED to resume. Scope stays exactly as README section 4.1: only the two proven upload FAILs (first-message upload 404 and existing-Thread upload not entering model context) may be fixed; the W04 Project Delete/Trash P0 is untouched; a V2 file-context slice PASS must not be reported as W04 whole-package PASS. This is a recorded authorization gate; the authorization itself is not a runtime PASS.",
+      "dependentStages": ["V2-M1", "V2-M2", "V2-M3", "V2-M4", "V2-M5", "V2-M6"],
+      "supersedes": {
+        "decision": "NOT_AUTHORIZED",
+        "authority": "human",
+        "recordedOn": "2026-09-28",
+        "detail": "Human decision 2026-09-28: the bounded W04 file-context slice is temporarily NOT authorized; W04 V2FileContext stays Pending and must not be assigned. Every V2-M1+ stage that depends on real file context is BLOCKED until a new human record authorizes it. This is a recorded authorization gate, not a doctor failure."
+      }
+    },
+    "w03W05Ordering": {
+      "decision": "W05_TASK_3_FIRST_THEN_W03",
+      "parallel": false,
+      "authority": "main",
+      "recordedOn": "2026-09-28",
+      "reviewedMainSha": "52ad9a7",
+      "detail": "Read-only source review found W03 and W05 task-3 overlap in DeerFlowThreadRunApi.java (single ThreadRecord.bridge / model_binding and admission branch). W05 task-3 restart slice must land first with current single-bridge semantics; W03 then freezes the model per Run. W04 may develop in parallel only after human authorization; merge conflicts rebased by the main controller in order.",
+      "historicalNote": "The first restart 409 has no original cause and must not be retroactively marked fixed by a new V2 PASS."
+    },
+    "l3McpSelection": {
+      "decision": "SELECTED",
+      "authority": "human",
+      "recordedOn": "2026-09-28",
+      "serverId": "haifa-utility",
+      "serverSource": "D:\\workspace\\haifa-ai-deerflow\\utility-mcp-server",
+      "endpoint": "http://127.0.0.1:8091/mcp",
+      "transport": "streamable-http",
+      "protocolVersion": "2025-06-18",
+      "authentication": "none",
+      "credentialRef": "none-local-profile",
+      "tool": "calculate",
+      "factSpec": "east-amount-share",
+      "factDetail": {
+        "referenceFact": "East 区金额占全表比例",
+        "expression": "10000 / 21000",
+        "expectedRounded4": "0.4762",
+        "csvIndependentOracle": "Oracle 独立读取已核验 customers.csv 复算 East 汇总（10000）与全表合计（21000），再与本地 calculate(expression=\"10000 / 21000\") 的结果按 4 位小数比对；并核对 Tool 输入来自已核验 CSV 汇总而非预置常量。该事实只在 L3 使用，不替代 L2 v2-reporting/get_reporting_policy。"
+      },
+      "detail": "Human decision 2026-09-28: the authorized read-only L3 Pilot MCP is Server 'haifa-utility' at loopback http://127.0.0.1:8091/mcp (Streamable HTTP, MCP 2025-06-18, no auth, credentialRef none-local-profile, all 19 tools readOnlyHint=true). The selected tool is the deterministic local 'calculate'; the fixed reference fact is the East-region amount share 10000 / 21000 (4-decimal 0.4762). Doctor may only run initialize + tools/list; tools/call remains forbidden in M0."
+    },
+    "consultingAnalysisDependency": {
+      "verdict": "NO_HARD_DEPENDENCY_ON_DEFERRED_CAPABILITIES",
+      "reviewRef": "contracts/customer-demo-v2/consulting-analysis-dependency-review.json",
+      "authority": "static-review",
+      "detail": "The V2 Phase 2 selection of consulting-analysis has no hard dependency on W07/W11/W14. This is a static review, not a runtime PASS."
+    }
+  }
+}

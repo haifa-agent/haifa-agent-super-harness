@@ -1,0 +1,678 @@
+{
+  "schemaVersion": "haifa.customer-demo-v2.evidence-contract/v1",
+  "contractId": "v2-evidence-contract-m0",
+  "demoId": "DEMO-V2",
+  "status": "static-spec-not-run",
+  "generatedFrom": {
+    "caseOracle": "contracts/customer-demo-v2/v2-case-oracle.json",
+    "caseOracleSha256": "7dcfcb08806ed465e7475bb42ce824a58934d1234eb23f5d0e5816a8920e1191",
+    "sourceIndex": "contracts/customer-demo-v2/source-index.json",
+    "sourceIndexSha256": "49cd4020e6e8bab989438fb82451ea4dba08db89eb9c274642992aa2b0c3a3f0"
+  },
+  "resultVocabulary": [
+    "PASS",
+    "FAIL",
+    "NOT_RUN",
+    "BLOCKED_EXTERNAL",
+    "UPSTREAM_UNSUPPORTED",
+    "NOT_APPLICABLE"
+  ],
+  "decisionVocabulary": [
+    "GO",
+    "NO_GO"
+  ],
+  "sourceVocabulary": [
+    "v2",
+    "v1"
+  ],
+  "backendVocabulary": [
+    "haifa",
+    "reference"
+  ],
+  "pinnedHashes": {
+    "customersCsvSha256": "ec326b7d0cf68f660ed769f8eecf9b71b43137af4e9aa83de75aa75bc5302f00",
+    "reportingPolicySha256": "563e216fc77f87d968b3c34994746fa1f3368380ede30c97e03782c3895a9e9a",
+    "caseOracleSha256": "7dcfcb08806ed465e7475bb42ce824a58934d1234eb23f5d0e5816a8920e1191",
+    "sourceIndexSha256": "49cd4020e6e8bab989438fb82451ea4dba08db89eb9c274642992aa2b0c3a3f0",
+    "note": "The contract hash of this file is recorded in the M0 baseline instance and recomputed by the verifier; it is not embedded here to avoid a self-reference."
+  },
+  "caseDenominator": {
+    "source": "contracts/customer-demo-v2/v2-case-oracle.json",
+    "count": 48,
+    "stageDistribution": {
+      "V2-M1": 6,
+      "V2-M2": 17,
+      "V2-M3": 10,
+      "V2-M4": 7,
+      "V2-M5": 4,
+      "V2-M6": 4
+    },
+    "rule": "The 48 oracle case ids are the denominator. No case may be added, removed, renamed, or re-staged by the evidence contract or by any runner."
+  },
+  "evidenceRules": {
+    "commonRequiredEvidence": [
+      "result",
+      "source",
+      "backend",
+      "profile",
+      "scenario",
+      "fixturePath",
+      "fixtureSha256",
+      "configPath",
+      "configSha256",
+      "runId",
+      "runAttempt",
+      "startedAt",
+      "endedAt",
+      "coldMs",
+      "warmMs",
+      "totalMs",
+      "retryCount",
+      "hiddenRetry",
+      "retryFirstCause",
+      "rawEvidenceRoot",
+      "rawFiles",
+      "externalEvidenceCopy",
+      "modelId",
+      "modelProvider",
+      "usageKnown",
+      "usageTotalTokens",
+      "portsReleased",
+      "subprocessExitStatus"
+    ],
+    "conditionalRequiredEvidence": [
+      {
+        "when": "stage in ['V2-M3','V2-M4']",
+        "require": [
+          "artifactId",
+          "toolCallId",
+          "provenanceArtifactId",
+          "toolCallIdInProvenance",
+          "downloadPath",
+          "downloadSha256",
+          "downloadByteCount",
+          "downloadProvenancePath",
+          "downloadProvenanceSha256",
+          "fileSha256"
+        ]
+      },
+      {
+        "when": "stage == 'V2-M5'",
+        "require": [
+          "artifactId",
+          "toolCallId",
+          "downloadPath",
+          "downloadSha256",
+          "downloadByteCount",
+          "downloadProvenancePath",
+          "downloadProvenanceSha256",
+          "fileSha256",
+          "referenceResult"
+        ]
+      },
+      {
+        "when": "level == 'L3'",
+        "require": [
+          "interactionId",
+          "mcpServerId",
+          "mcpTool",
+          "mcpCalls"
+        ]
+      }
+    ]
+  },
+  "caseResultRules": {
+    "PASS": "All common and conditional required evidence is present, every pinned hash and stable id is consistent, raw originals and external copies exist, no hidden retry, ports released, subprocess exit 0, usage is truthful (unknown is not forged to 0), and the L3 path did not substitute an L2 stub.",
+    "FAIL": "A documented hard assertion was executed and did not hold, or required evidence exists but contradicts another field. A FAIL in any required case forces NO_GO.",
+    "NOT_RUN": "The case was never executed on this attempt. NOT_RUN is never aggregated into PASS.",
+    "BLOCKED_EXTERNAL": "An external dependency or a required human authorization is unavailable (for example an unauthorized or unreachable L3 MCP, or a withheld W04 recovery authorization). Never converted to NOT_RUN or PASS.",
+    "UPSTREAM_UNSUPPORTED": "The frozen reference DeerFlow backend has no corresponding semantics for a specific assertion. Recorded only for the reference side; never counted as a Haifa PASS.",
+    "NOT_APPLICABLE": "The case does not apply to the backend under test (for example the reference side of the Haifa-only V2-M6 stages)."
+  },
+  "aggregation": {
+    "mutualExclusion": "Every case result is exactly one of the result vocabulary values; a case cannot be recorded as both a run and NOT_RUN, or both PASS and FAIL.",
+    "reportingPrecedence": [
+      "FAIL",
+      "BLOCKED_EXTERNAL",
+      "UPSTREAM_UNSUPPORTED",
+      "NOT_RUN",
+      "PASS"
+    ],
+    "stagePassRule": "A stage is PASS only if every required case for that stage is PASS on the Haifa backend. NOT_RUN, BLOCKED_EXTERNAL, UPSTREAM_UNSUPPORTED, NOT_APPLICABLE, V1 evidence, static contract checks, or a single component/work-package PASS never aggregate into a V2 stage PASS.",
+    "stageResultVocabulary": [
+      "PASS",
+      "FAIL",
+      "NOT_RUN",
+      "BLOCKED_EXTERNAL"
+    ],
+    "goRule": "GO requires every V2-M1..V2-M6 stage PASS on the same main SHA, every required case PASS with raw originals and external copies present, zero hidden retries, and a signed human/客户 Pilot declaration for V2-M6. Any missing required evidence, inconsistent field, uncleaned port/process, wrong SHA or hash, mock/substitution, hidden retry, expired credential reference, or missing human declaration forces NO_GO.",
+    "forbiddenEvidence": [
+      "v1-evidence-as-v2",
+      "component-pass-as-stage-pass",
+      "static-contract-as-runtime",
+      "fixture-json-as-mcp-call",
+      "terminal-summary-as-raw-original",
+      "reference-fallback-hidden"
+    ]
+  },
+  "noGoConditions": [
+    {
+      "id": "missing-case",
+      "rule": "The instance does not contain every one of the 48 oracle case ids."
+    },
+    {
+      "id": "missing-required-evidence",
+      "rule": "A PASS case omits a common or conditional required evidence field."
+    },
+    {
+      "id": "field-inconsistency",
+      "rule": "Two evidence fields contradict each other (for example a declared duration or status that does not match its raw original)."
+    },
+    {
+      "id": "wrong-main-sha",
+      "rule": "pins.mainSha differs from the expected main SHA, or cases across stages/kinds do not share one main SHA."
+    },
+    {
+      "id": "wrong-sdk-sha",
+      "rule": "The recorded Haifa SDK BOM/JAR SHA-256 or SDK commit does not match the published artifact actually consumed."
+    },
+    {
+      "id": "wrong-fixture-hash",
+      "rule": "A fixture SHA-256 does not match the frozen fixture or the actual bytes."
+    },
+    {
+      "id": "wrong-config-hash",
+      "rule": "A config SHA-256 does not match the frozen config or the actual bytes."
+    },
+    {
+      "id": "forged-zero-usage",
+      "rule": "Usage is recorded as 0 when it is actually unknown; unknown must be null/unknown, never a forged 0."
+    },
+    {
+      "id": "id-mismatch",
+      "rule": "Run/ToolCall/Interaction/Artifact stable ids disagree between the case record and the provenance original."
+    },
+    {
+      "id": "missing-raw-evidence",
+      "rule": "A referenced raw HTTP/SSE/WS/Tool original file is absent or its SHA-256 does not match."
+    },
+    {
+      "id": "missing-external-copy",
+      "rule": "The raw evidence was not copied to the external evidence directory, so a later clean would destroy it."
+    },
+    {
+      "id": "l3-l2-stub",
+      "rule": "An L3 case substitutes the deterministic L2 fixture/stub for a real authorized read-only MCP call."
+    },
+    {
+      "id": "l3-undeclared-tool",
+      "rule": "An L3 case uses a tool/fact that was not declared and authorized by the human decision."
+    },
+    {
+      "id": "tools-call-trace",
+      "rule": "A tools/call trace appears where only discovery (initialize/tools/list) is authorized, or the doctor probes tools/call."
+    },
+    {
+      "id": "hidden-retry",
+      "rule": "A retry or best-round selection occurred without recording the first failure, the retry count, and the retry cause."
+    },
+    {
+      "id": "v1-evidence-as-v2",
+      "rule": "A case is marked PASS using V1 (DEMO-V0) evidence instead of a fresh V2 run."
+    },
+    {
+      "id": "not-run-as-pass",
+      "rule": "A NOT_RUN case or stage is reported as PASS."
+    },
+    {
+      "id": "upstream-unsupported-as-pass",
+      "rule": "An UPSTREAM_UNSUPPORTED reference result is counted as a Haifa PASS."
+    },
+    {
+      "id": "uncleaned",
+      "rule": "A port or child process launched for the case was not released after the run."
+    },
+    {
+      "id": "nonzero-subprocess-exit",
+      "rule": "A required child process exited non-zero without being recorded."
+    },
+    {
+      "id": "missing-human-declaration",
+      "rule": "The V2-M6 human/客户 Pilot declaration is absent, unsigned, or not bound to the run."
+    }
+  ],
+  "cases": [
+    {
+      "id": "V2-M1-01",
+      "stage": "V2-M1",
+      "workPackage": "W03",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M1-02",
+      "stage": "V2-M1",
+      "workPackage": "W03",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M1-03",
+      "stage": "V2-M1",
+      "workPackage": "W04",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M1-04",
+      "stage": "V2-M1",
+      "workPackage": "W04",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M1-05",
+      "stage": "V2-M1",
+      "workPackage": "W04",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M1-06",
+      "stage": "V2-M1",
+      "workPackage": "W04",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-01",
+      "stage": "V2-M2",
+      "workPackage": "W10",
+      "level": "L1",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-02",
+      "stage": "V2-M2",
+      "workPackage": "W10",
+      "level": "L1",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-03",
+      "stage": "V2-M2",
+      "workPackage": "W10",
+      "level": "L1",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-04",
+      "stage": "V2-M2",
+      "workPackage": "W10",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-05",
+      "stage": "V2-M2",
+      "workPackage": "W10",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-06",
+      "stage": "V2-M2",
+      "workPackage": "W10",
+      "level": "L1",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-07",
+      "stage": "V2-M2",
+      "workPackage": "W10",
+      "level": "L1",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-08",
+      "stage": "V2-M2",
+      "workPackage": "W10",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-09",
+      "stage": "V2-M2",
+      "workPackage": "W10",
+      "level": "L1",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-10",
+      "stage": "V2-M2",
+      "workPackage": "W10",
+      "level": "L1",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-11",
+      "stage": "V2-M2",
+      "workPackage": "W10",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-12",
+      "stage": "V2-M2",
+      "workPackage": "W15",
+      "level": "L1",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-13",
+      "stage": "V2-M2",
+      "workPackage": "W15",
+      "level": "L1",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-14",
+      "stage": "V2-M2",
+      "workPackage": "W15",
+      "level": "L1",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-15",
+      "stage": "V2-M2",
+      "workPackage": "W15",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-16",
+      "stage": "V2-M2",
+      "workPackage": "W15",
+      "level": "L1",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M2-17",
+      "stage": "V2-M2",
+      "workPackage": "W15",
+      "level": "L1",
+      "referenceSupport": "PARTIAL",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M3-01",
+      "stage": "V2-M3",
+      "workPackage": "W05",
+      "level": "L2",
+      "referenceSupport": "PARTIAL",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M3-02",
+      "stage": "V2-M3",
+      "workPackage": "W05",
+      "level": "L2",
+      "referenceSupport": "PARTIAL",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M3-03",
+      "stage": "V2-M3",
+      "workPackage": "W05",
+      "level": "L2",
+      "referenceSupport": "UPSTREAM_UNSUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M3-04",
+      "stage": "V2-M3",
+      "workPackage": "W16",
+      "level": "L2",
+      "referenceSupport": "PARTIAL",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M3-05",
+      "stage": "V2-M3",
+      "workPackage": "W05",
+      "level": "L2",
+      "referenceSupport": "PARTIAL",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M3-06",
+      "stage": "V2-M3",
+      "workPackage": "W05",
+      "level": "L2",
+      "referenceSupport": "PARTIAL",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M3-07",
+      "stage": "V2-M3",
+      "workPackage": "W05",
+      "level": "L2",
+      "referenceSupport": "UPSTREAM_UNSUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M3-08",
+      "stage": "V2-M3",
+      "workPackage": "W05",
+      "level": "L2",
+      "referenceSupport": "UPSTREAM_UNSUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M3-09",
+      "stage": "V2-M3",
+      "workPackage": "W05",
+      "level": "L2",
+      "referenceSupport": "PARTIAL",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M3-10",
+      "stage": "V2-M3",
+      "workPackage": "W05",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M4-01",
+      "stage": "V2-M4",
+      "workPackage": "W05",
+      "level": "L2",
+      "referenceSupport": "PARTIAL",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M4-02",
+      "stage": "V2-M4",
+      "workPackage": "W05",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M4-03",
+      "stage": "V2-M4",
+      "workPackage": "W05",
+      "level": "L2",
+      "referenceSupport": "PARTIAL",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M4-04",
+      "stage": "V2-M4",
+      "workPackage": "W05",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M4-05",
+      "stage": "V2-M4",
+      "workPackage": "W05",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M4-06",
+      "stage": "V2-M4",
+      "workPackage": "W21",
+      "level": "L2",
+      "referenceSupport": "PARTIAL",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M4-07",
+      "stage": "V2-M4",
+      "workPackage": "W21",
+      "level": "L2",
+      "referenceSupport": "PARTIAL",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M5-01",
+      "stage": "V2-M5",
+      "workPackage": "W18",
+      "level": "L2",
+      "referenceSupport": "PARTIAL",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M5-02",
+      "stage": "V2-M5",
+      "workPackage": "W18",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M5-03",
+      "stage": "V2-M5",
+      "workPackage": "W18",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M5-04",
+      "stage": "V2-M5",
+      "workPackage": "W18",
+      "level": "L2",
+      "referenceSupport": "SUPPORTED",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M6-01",
+      "stage": "V2-M6",
+      "workPackage": "W24",
+      "level": "L3",
+      "referenceSupport": "NOT_APPLICABLE",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M6-02",
+      "stage": "V2-M6",
+      "workPackage": "W24",
+      "level": "L3",
+      "referenceSupport": "NOT_APPLICABLE",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M6-03",
+      "stage": "V2-M6",
+      "workPackage": "W24",
+      "level": "L3",
+      "referenceSupport": "NOT_APPLICABLE",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    },
+    {
+      "id": "V2-M6-04",
+      "stage": "V2-M6",
+      "workPackage": "W24",
+      "level": "L3",
+      "referenceSupport": "NOT_APPLICABLE",
+      "defaultResult": "NOT_RUN",
+      "requiredForStagePass": true
+    }
+  ]
+}
