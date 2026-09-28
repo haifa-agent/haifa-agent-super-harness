@@ -278,7 +278,19 @@ try {
         'skipped-demo-gate' = @({ param($s) $m0 = Get-Row $s 'sprint_stage' 'DEMO-V0/M0'; $m0.result = 'NOT_RUN'; $m0.work_status = 'in_progress'; (Get-Row $s 'sprint' 'DEMO-V0').decision = 'NO_GO' }, 'DEMO-V0/M1 cannot PASS before DEMO-V0/M0 PASS')
         'invalid-demo-mapping' = @({ param($s) Add-Relation $s 'sprint_stage' 'DEMO-V0/M1' 'work_package' 'W99' 'evidence_source' }, 'DEMO-V0/M1 maps to missing work package W99')
         'stage-pass-without-proof' = @({ param($s) Set-Details (Get-Row $s 'sprint_stage' 'DEMO-V0/M0') { param($d) $d.proof = $null } }, 'DEMO-V0/M0 PASS requires independent gate evidence')
-        'stage-pass-unfinished-task' = @({ param($s) Add-Relation $s 'sprint_stage' 'DEMO-V0/M0' 'task' 'W03-task-1' 'delivers' 1 }, 'DEMO-V0/M0 PASS requires task W03-task-1 finished')
+        'stage-pass-unfinished-task' = @({
+            param($s)
+            # Keep this negative independent of live W03 acceptance: its task-1
+            # can legitimately move from developing to finished between runs.
+            $task = (Get-Row $s 'task' 'W03-task-1').PSObject.Copy()
+            $task.id = 'W03-task-8'
+            $task.number = 'task-8'
+            $task.state = 'pending'
+            $task.started_at = $null
+            $task.completed_at = $null
+            $s.tables.task = @($s.tables.task) + $task
+            Add-Relation $s 'sprint_stage' 'DEMO-V0/M0' 'task' $task.id 'delivers' 1
+        }, 'DEMO-V0/M0 PASS requires task W03-task-8 finished')
         'self-certified-go' = @({ param($s) (Get-Row $s 'sprint' 'DEMO-V2').decision = 'GO' }, 'DEMO-V2 GO requires all stage gates PASS')
         'go-without-human' = @({ param($s) Set-Details (Get-Row $s 'sprint' 'DEMO-V0') { param($d) $d.humanAcceptance = $null } }, 'DEMO-V0 GO requires explicit human acceptance')
         'go-stale-stage-sha' = @({ param($s) Set-Details (Get-Row $s 'sprint_stage' 'DEMO-V0/M2') { param($d) $d.mainCommit = '1234567' } }, 'DEMO-V0 GO requires DEMO-V0/M2 to be revalidated')
