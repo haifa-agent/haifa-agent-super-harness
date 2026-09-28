@@ -11,6 +11,30 @@
     "runtimeFunction": "get_mcp_tools",
     "apiModule": "deer-flow/backend/app/gateway/routers/mcp.py"
   },
+  "frozenConfigKeys": {
+    "note": "Maps this declarative fixture's field names to the frozen extensions_config.example.json mcpServers keys. The frozen config uses 'type' (not the MCP-spec 'transport') and 'url' for loopback HTTP; the fixture keeps runtime ports dynamic and never hardcodes them.",
+    "sourceFile": "deer-flow/extensions_config.example.json",
+    "sourceKey": "mcpServers",
+    "sourceLines": {
+      "mcpServers": 6,
+      "enabled": 8,
+      "type": 9,
+      "tool_name_prefix": 18,
+      "session_init_timeout": 19,
+      "tool_call_timeout": 20,
+      "url": 26,
+      "headers": 27
+    },
+    "mappings": [
+      {"fixtureField": "servers[].transport", "frozenKey": "mcpServers.<id>.type", "frozenLine": 9, "note": "the fixture transport is the frozen config key 'type'; the MCP-spec 'transport' spelling is normalized to 'type'"},
+      {"fixtureField": "servers[].endpointRef", "frozenKey": "mcpServers.<id>.url", "frozenLine": 26, "note": "the loopback HTTP endpoint maps to the frozen 'url' key"},
+      {"fixtureField": "servers[].enabledInGoldenScenario / enabledInContractScenario", "frozenKey": "mcpServers.<id>.enabled", "frozenLine": 8, "note": "fixture enable state maps to the frozen boolean 'enabled'"},
+      {"fixtureField": "collectionSemantics.tools.prefix.configKey", "frozenKey": "mcpServers.<id>.tool_name_prefix", "frozenLine": 18, "note": "the <server>_ prefix is controlled by the frozen 'tool_name_prefix' key (default true)"},
+      {"fixtureField": "collectionSemantics.credentials.fields.headers", "frozenKey": "mcpServers.<id>.headers", "frozenLine": 27, "note": "header CredentialRefs map to the frozen 'headers' map"},
+      {"fixtureField": "collectionSemantics.timeouts.sessionInit", "frozenKey": "mcpServers.<id>.session_init_timeout", "frozenLine": 19, "note": "per-server session init timeout"},
+      {"fixtureField": "collectionSemantics.timeouts.toolCall", "frozenKey": "mcpServers.<id>.tool_call_timeout", "frozenLine": 20, "note": "per-server tool call timeout"}
+    ]
+  },
   "collectionSemantics": {
     "servers": {
       "cardinality": "0..N",

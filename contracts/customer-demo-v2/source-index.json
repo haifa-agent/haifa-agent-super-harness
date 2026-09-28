@@ -239,7 +239,7 @@
     {
       "kind": "contracts",
       "path": "contracts/customer-demo-v2/fixtures/mcp-servers.contract.json",
-      "sha256": "f7c8aba0f6a78a82862729253abeec9700a1f5f195d517633d56ad3bc8bdd5d4"
+      "sha256": "90a6909b76f223a625007b635ca64ed727d2ef0f7b8364193caf3dc63441cde9"
     },
     {
       "kind": "contracts",

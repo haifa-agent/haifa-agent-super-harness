@@ -40,7 +40,7 @@
     "numericSourceIdStatusSideEffectComparedDeterministically": true
   },
   "resultVocabulary": ["PASS", "FAIL", "NOT_RUN", "BLOCKED_EXTERNAL", "UPSTREAM_UNSUPPORTED"],
-  "referenceSupportVocabulary": ["SUPPORTED", "PARTIAL", "UPSTREAM_UNSUPPORTED", "NOT_INVENTORIED"],
+  "referenceSupportVocabulary": ["SUPPORTED", "PARTIAL", "UPSTREAM_UNSUPPORTED", "NOT_INVENTORIED", "NOT_APPLICABLE"],
   "sourceIndexRef": "contracts/customer-demo-v2/source-index.json",
   "consultingAnalysisDependencyReviewRef": "contracts/customer-demo-v2/consulting-analysis-dependency-review.json",
   "stages": [
@@ -61,7 +61,7 @@
       "prerequisites": ["two distinct enabled models A and B exist", "one conversation/thread with at least one completed turn under A"],
       "input": "turn 1 uses model A; turn 2 on the same conversation selects model B",
       "reference": {
-        "support": "PARTIAL",
+        "support": "SUPPORTED",
         "sourceRefs": [
           {"path": "deer-flow/backend/app/gateway/routers/models.py", "line": 44, "note": "GET /api/models list"},
           {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 945, "note": "POST /{thread_id}/runs accepts RunCreateRequest"}
@@ -93,7 +93,7 @@
       "prerequisites": ["model A active on a running run"],
       "input": "attempt to switch the conversation model to B while A's run is still running",
       "reference": {
-        "support": "PARTIAL",
+        "support": "SUPPORTED",
         "sourceRefs": [
           {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 945, "note": "run record is created per request; no in-place model mutation endpoint"}
         ],
@@ -658,6 +658,16 @@
           {"path": "deer-flow/backend/app/gateway/routers/skills.py", "line": 83, "note": "SkillResponse exposes name/description/license/category/enabled"},
           {"path": "deer-flow/backend/packages/harness/deerflow/skills/types.py", "line": 40, "note": "Skill dataclass fields"}
         ],
+        "unsupportedAssertions": [
+          {
+            "assertion": "the reference skill API returns a version or content-hash field for a skill package",
+            "reason": "the reference SkillResponse and Skill dataclass carry name/description/license/category/enabled (and file paths) but no version or content-hash field; the runner must record the package hash out-of-band, so the version/hash assertion is not reference-supported",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/app/gateway/routers/skills.py", "line": 83, "note": "SkillResponse fields: name, description, license, category, enabled, editable - no hash/version"},
+              {"path": "deer-flow/backend/packages/harness/deerflow/skills/types.py", "line": 40, "note": "Skill dataclass: name/description/license/skill_dir/skill_file/relative_path/category/allowed_tools/enabled - no hash/version"}
+            ]
+          }
+        ],
         "frontendConsumers": [],
         "haifaTarget": "record source path + license + content hash; upstream response has no hash field, so the runner must record it out-of-band"
       },
@@ -797,6 +807,16 @@
         "sourceRefs": [
           {"path": "deer-flow/skills/public/consulting-analysis/SKILL.md", "line": 590, "note": "Phase 2 report structure and no-hallucination policy"}
         ],
+        "unsupportedAssertions": [
+          {
+            "assertion": "the artifact contains the steer-added 风险与数据缺口 section",
+            "reason": "the steer that adds this section is Haifa-only (case V2-M3-03 is UPSTREAM_UNSUPPORTED): the reference run stream exposes no steer channel, so the reference cannot produce this section to diff against",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 963, "note": "reference run stream has no steer channel"},
+              {"path": "frontend/src/core/threads/active-steer.ts", "line": 86, "note": "same-run steer is a documented Haifa frontend patch (X-Haifa-Run-Input: steer), not a reference backend capability"}
+            ]
+          }
+        ],
         "frontendConsumers": [
           {"path": "frontend/src/core/artifacts/utils.ts", "line": 54, "note": "resolve artifact file URL"}
         ],
@@ -830,6 +850,15 @@
         "sourceRefs": [
           {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1724, "note": "artifact archive manifest"},
           {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1740, "note": "artifact archive download"}
+        ],
+        "unsupportedAssertions": [
+          {
+            "assertion": "provenance links the downloaded bytes to the specific producing tool call with a recorded artifact SHA-256",
+            "reason": "the reference archive manifest returns only a verified terminal delivery file count (not per-artifact provenance or a recorded content hash), so the run/tool-call provenance-hash assertion has no reference counterpart; reference supports the byte-exact download itself",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1737, "note": "manifest returns file_count=len(presented_paths) only - no per-artifact tool-call provenance or hash"}
+            ]
+          }
         ],
         "frontendConsumers": [
           {"path": "frontend/src/core/artifacts/api.ts", "line": 74, "note": "downloadArtifactArchive"}
@@ -933,10 +962,20 @@
       "prerequisites": ["V2-M3-01", "two isolated users"],
       "input": "a different user attempts to approve the interaction",
       "reference": {
-        "support": "UPSTREAM_UNSUPPORTED",
+        "support": "PARTIAL",
         "sourceRefs": [
-          {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1238, "note": "runs are owner-checked, but there is no approval route to protect"},
-          {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 518, "note": "the pause is a ToolMessage/Command, not a foreign-approvable interaction"}
+          {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 946, "note": "create_run: @require_permission('runs','create', owner_check=True, require_existing=True) - a foreign user cannot create/answer a run on my thread"},
+          {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1238, "note": "cancel_run: @require_permission('runs','cancel', owner_check=True, require_existing=True) - a foreign user cannot cancel my run"}
+        ],
+        "unsupportedAssertions": [
+          {
+            "assertion": "a foreign user's approve of a Haifa-authoritative Interaction is rejected by an approval route",
+            "reason": "reference has no approval/interaction route to protect; it owner-checks only the run/thread routes, so the foreign-approve-of-an-interaction assertion has no reference counterpart. The owner check itself (a foreign user cannot answer/approve/cancel on my thread) is differentiable and stays a PARTIAL assertion.",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1238, "note": "the only owner-checked cancellation route; no approval route exists in the Thread Runs table"},
+              {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 99, "note": "the clarification id is derived from the provider tool_call_id; there is no interaction registry to authorize against"}
+            ]
+          }
         ],
         "frontendConsumers": [],
         "haifaTarget": "fail closed (reference enforces owner checks on runs/threads; the foreign approve of a Haifa interaction has no reference counterpart)"
@@ -1032,14 +1071,39 @@
       "prerequisites": ["V2-M3-01 pending", "known data-root + continuation key"],
       "input": "stop and restart the exact Gateway process, then resume",
       "reference": {
-        "support": "UPSTREAM_UNSUPPORTED",
+        "support": "PARTIAL",
         "sourceRefs": [
-          {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 518, "note": "the pending decision is a Command(goto=END) + ToolMessage, not an authoritative interaction id that survives restart"},
-          {"path": "deer-flow/backend/packages/harness/deerflow/agents/interaction_policy.py", "line": 64, "note": "ask_clarification interrupts the run; resume is a new user turn"},
-          {"path": "deer-flow/backend/packages/harness/deerflow/AGENTS.md", "line": 99, "note": "\"Approvals never replay tools\"; no approve-executes-once primitive exists across restart"}
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 505, "note": "the pending question is persisted as a ToolMessage with artifact.human_input in thread history, so it survives a gateway restart and is reconstructed"},
+          {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/AGENTS.md", "line": 128, "note": "RunJournal reconciles ask_clarification ToolMessages into durable history so the card survives reload/restart"},
+          {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1173, "note": "GET runs list - durable run history is readable after restart"}
+        ],
+        "unsupportedAssertions": [
+          {
+            "assertion": "the same Haifa-authoritative interaction id is present after restart",
+            "reason": "reference has no interaction registry; the clarification message id is derived from the provider tool_call_id, so there is no authoritative interaction id to preserve",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 99, "note": "_stable_message_id = clarification:{tool_call_id}; no server-side interaction id"},
+              {"path": "deer-flow/backend/app/gateway/AGENTS.md", "line": 110, "note": "no approval/interaction route exists in the Thread Runs table"}
+            ]
+          },
+          {
+            "assertion": "approving the resumed interaction executes the paused tool exactly once",
+            "reason": "reference never replays the paused tool; the answer is a new user turn, so there is no same-run approve-exactly-once primitive across restart",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/packages/harness/deerflow/AGENTS.md", "line": 99, "note": "\"Approvals never replay tools\""},
+              {"path": "frontend/src/components/workspace/chats/chat-page.tsx", "line": 332, "note": "the clarification reply is submitted via sendMessage, i.e. a new run"}
+            ]
+          },
+          {
+            "assertion": "the run completes in the same run id after the answer",
+            "reason": "the reference pause ends via Command(goto=END); answering starts a new run instead of resuming the original run id",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 520, "note": "goto=END terminates the run rather than holding it open for a same-run resume"}
+            ]
+          }
         ],
         "frontendConsumers": [],
-        "haifaTarget": "authoritative interaction state survives restart; approve executes once (reference has durable run/checkpoint history but no authoritative interaction id, no same-run approve, and no continuation key)"
+        "haifaTarget": "authoritative interaction state survives restart; approve executes once (reference has durable run/checkpoint history and the paused question survives restart, but no authoritative interaction id, no same-run approve, and no continuation key)"
       },
       "positiveOracle": ["the same interaction id is present after restart", "approving it executes the tool exactly once", "the run completes in the same run id"],
       "negativeCases": [
@@ -1081,7 +1145,16 @@
       "level": "L2",
       "prerequisites": ["V2-M4-04"],
       "input": "download the artifact again after restart",
-      "reference": {"support": "PARTIAL", "sourceRefs": [], "frontendConsumers": [], "haifaTarget": "byte-exact after restart"},
+      "reference": {
+        "support": "SUPPORTED",
+        "sourceRefs": [
+          {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1724, "note": "artifact archive manifest is served from durable terminal delivery state"},
+          {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1740, "note": "artifact archive download reads the persisted workspace/output files, so bytes are identical after a Gateway restart"},
+          {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1446, "note": "thread messages remain readable after restart"}
+        ],
+        "frontendConsumers": [],
+        "haifaTarget": "byte-exact after restart"
+      },
       "positiveOracle": ["download SHA-256 after restart equals the pre-restart SHA-256"],
       "negativeCases": [{"id": "V2-M4-05-N1", "assertion": "byte drift after restart FAILs"}],
       "runner": "W18 runner",
@@ -1102,6 +1175,16 @@
           {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1858, "note": "GET token-usage"},
           {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1799, "note": "GET events"},
           {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 1225, "note": "GET run detail"}
+        ],
+        "unsupportedAssertions": [
+          {
+            "assertion": "the diagnostics projection links interactions by a stable Interaction id",
+            "reason": "reference projects run/model/tool-call/artifact/usage facts but has no first-class Interaction entity or id; the clarification card id is derived from the provider tool_call_id, so there is no Interaction id to link",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 99, "note": "the only interaction identity is clarification:{tool_call_id}, not a stable Interaction id"},
+              {"path": "deer-flow/backend/app/gateway/AGENTS.md", "line": 110, "note": "no interaction/approval projection exists in the Thread Runs route table"}
+            ]
+          }
         ],
         "frontendConsumers": [
           {"path": "frontend/src/core/threads/api.ts", "line": 65, "note": "useThreadTokenUsage"}
@@ -1127,6 +1210,15 @@
       "reference": {
         "support": "PARTIAL",
         "sourceRefs": [{"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 282, "note": "token usage breakdown model"}],
+        "unsupportedAssertions": [
+          {
+            "assertion": "unavailable usage is reported as unknown/null, distinct from 0",
+            "reason": "the reference ThreadTokenUsageResponse models token totals as ints defaulting to 0, so an omitted provider usage is folded into 0 rather than a distinct unknown/null sentinel; the unknown-vs-0 distinction has no reference counterpart",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 278, "note": "total_tokens: int = 0 - reference aggregates default to 0, not unknown/null"}
+            ]
+          }
+        ],
         "frontendConsumers": [],
         "haifaTarget": "unknown is distinct from 0"
       },
@@ -1147,6 +1239,29 @@
       "reference": {
         "support": "PARTIAL",
         "sourceRefs": [],
+        "unsupportedAssertions": [
+          {
+            "assertion": "case V2-M3-03 (same-run Active Steer) is reported UPSTREAM_UNSUPPORTED in the reference round",
+            "reason": "the reference run stream exposes no steer channel, so the same-run steer assertion has no reference counterpart and must be reported UPSTREAM_UNSUPPORTED rather than PASS/FAIL",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/app/gateway/routers/thread_runs.py", "line": 963, "note": "reference run stream has no steer channel"}
+            ]
+          },
+          {
+            "assertion": "case V2-M3-07 (duplicate approve) is reported UPSTREAM_UNSUPPORTED in the reference round",
+            "reason": "reference has no approval primitive or idempotency key that could be submitted twice, so the duplicate-approve assertion cannot be evaluated on the reference",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/packages/harness/deerflow/agents/interaction_policy.py", "line": 64, "note": "ask_clarification interrupts; no approval primitive exists"}
+            ]
+          },
+          {
+            "assertion": "case V2-M3-08 (stale interaction) is reported UPSTREAM_UNSUPPORTED in the reference round",
+            "reason": "reference has no interaction token/version that can become stale",
+            "sourceRefs": [
+              {"path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py", "line": 518, "note": "the pause is a terminal Command(goto=END); there is no stale approvable interaction"}
+            ]
+          }
+        ],
         "frontendConsumers": [],
         "haifaTarget": "reference runs with isolated data-root; the ask_clarification pause/reject/answer cases are differentiable (NOT_RUN pending the round), while only the Haifa-only assertions (same-run approve, authoritative interaction id, production write_file approval card, same-run steer) report UPSTREAM_UNSUPPORTED"
       },
@@ -1209,7 +1324,13 @@
       "level": "L3",
       "prerequisites": ["all M1-M5 product commits merged to one main SHA", "live model + credentials authorized"],
       "input": "run the full Golden Scenario twice with a real model",
-      "reference": {"support": "PARTIAL", "sourceRefs": [], "frontendConsumers": [], "haifaTarget": "same model/config/data-root for both rounds"},
+      "reference": {
+        "support": "NOT_APPLICABLE",
+        "reason": "L3 real-model execution is a Haifa-only stage per private-context/show-roadmap-2/README.md §5 (V2-M6 exit condition: two consecutive real-model rounds on the final main SHA) and §9 Gate D; the frozen reference backend is not run or diffed in M6, so there is no reference support to assess",
+        "sourceRefs": [],
+        "frontendConsumers": [],
+        "haifaTarget": "same model/config/data-root for both rounds"
+      },
       "positiveOracle": ["two consecutive L3 rounds on the same main SHA", "each round records model, provider, usage, start/end, failures and retries"],
       "negativeCases": [{"id": "V2-M6-01-N1", "assertion": "hiding a failed round or picking the best result FAILs"}],
       "runner": "W24/W18 L3 runner",
@@ -1224,7 +1345,13 @@
       "level": "L3",
       "prerequisites": ["V2-M6-01"],
       "input": "collect end-to-end evidence",
-      "reference": {"support": "PARTIAL", "sourceRefs": [], "frontendConsumers": [], "haifaTarget": "real external MCP on L3; BLOCKED_EXTERNAL if unavailable"},
+      "reference": {
+        "support": "NOT_APPLICABLE",
+        "reason": "the L3 end-to-end evidence bundle is Haifa-only per private-context/show-roadmap-2/README.md §5 (V2-M6) and §9 Gate D; the reference backend does not participate in the L3 real-model, real external MCP or restart chain, so there is no reference support to assess",
+        "sourceRefs": [],
+        "frontendConsumers": [],
+        "haifaTarget": "real external MCP on L3; BLOCKED_EXTERNAL if unavailable"
+      },
       "positiveOracle": ["real MCP call, production tool, approval, same-run steer, artifact download, restart and usage all present", "artifact download bytes verifiable"],
       "negativeCases": [
         {"id": "V2-M6-02-N1", "assertion": "using the L2 policy JSON as an L3 external fact FAILs"},
@@ -1242,7 +1369,13 @@
       "level": "L3",
       "prerequisites": ["V2-M6-01/02"],
       "input": "a human/customer performs Upload→Skill→MCP→Approval→Steer→Artifact→Restart",
-      "reference": {"support": "PARTIAL", "sourceRefs": [], "frontendConsumers": [], "haifaTarget": "not developer-operated"},
+      "reference": {
+        "support": "NOT_APPLICABLE",
+        "reason": "the human/customer Pilot is Haifa-only per private-context/show-roadmap-2/README.md §5 (V2-M6) and §9 Gate D (a human/customer completes one Upload→Skill→MCP→Approval→Steer→Artifact→Restart round); the reference backend is not part of the pilot, so there is no reference support to assess",
+        "sourceRefs": [],
+        "frontendConsumers": [],
+        "haifaTarget": "not developer-operated"
+      },
       "positiveOracle": ["a signed human acceptance record exists", "the human completed the chain without developer substitution"],
       "negativeCases": [{"id": "V2-M6-03-N1", "assertion": "a developer-operated run passed off as customer FAILs"}],
       "runner": "W24 human acceptance",
@@ -1257,7 +1390,13 @@
       "level": "L3",
       "prerequisites": ["all of M0-M6"],
       "input": "aggregate the evidence bundle",
-      "reference": {"support": "PARTIAL", "sourceRefs": [], "frontendConsumers": [], "haifaTarget": "GO/NO_GO fail closed; every stage PASS + human acceptance required"},
+      "reference": {
+        "support": "NOT_APPLICABLE",
+        "reason": "the W24 fail-closed GO/NO_GO evidence bundle is Haifa-only per private-context/show-roadmap-2/README.md §5 (V2-M6) and §9 Gate E; it aggregates Haifa stage evidence and does not run the reference backend, so there is no reference support to assess",
+        "sourceRefs": [],
+        "frontendConsumers": [],
+        "haifaTarget": "GO/NO_GO fail closed; every stage PASS + human acceptance required"
+      },
       "positiveOracle": ["the bundle binds SH SHA, SDK commit/BOM, frontend SHA, skill/MCP manifest, config hash, model, usage, ids, file hashes, failures and retries", "missing any item yields NO_GO"],
       "negativeCases": [{"id": "V2-M6-04-N1", "assertion": "GO with a NOT_RUN or missing stage FAILs"}],
       "runner": "tests/customer-demo/verify-customer-demo-evidence.ps1 + W24 schema",

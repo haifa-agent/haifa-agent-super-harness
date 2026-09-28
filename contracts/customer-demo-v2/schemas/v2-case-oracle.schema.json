@@ -78,8 +78,18 @@
           "reference": {
             "type": "object",
             "required": ["support", "sourceRefs", "frontendConsumers", "haifaTarget"],
+            "allOf": [
+              {
+                "if": {"properties": {"support": {"const": "NOT_APPLICABLE"}}, "required": ["support"]},
+                "then": {
+                  "required": ["reason"],
+                  "properties": {"reason": {"type": "string", "minLength": 1}}
+                }
+              }
+            ],
             "properties": {
-              "support": {"enum": ["SUPPORTED", "PARTIAL", "UPSTREAM_UNSUPPORTED", "NOT_INVENTORIED"]},
+              "support": {"enum": ["SUPPORTED", "PARTIAL", "UPSTREAM_UNSUPPORTED", "NOT_INVENTORIED", "NOT_APPLICABLE"]},
+              "reason": {"type": "string", "minLength": 1},
               "sourceRefs": {
                 "type": "array",
                 "items": {

@@ -156,7 +156,7 @@ function Test-CaseOracle {
         Assert-True (@($case.negativeCases).Count -ge 1) "case $($case.id) needs at least one negative case"
         Assert-True (@($case.evidencePaths).Count -ge 1) "case $($case.id) needs an evidence path"
         Assert-True (-not [string]::IsNullOrWhiteSpace($case.runner)) "case $($case.id) needs a runner"
-        Assert-True (@('SUPPORTED', 'PARTIAL', 'UPSTREAM_UNSUPPORTED', 'NOT_INVENTORIED') -contains $case.reference.support) "case $($case.id) reference support invalid"
+        Assert-True (@('SUPPORTED', 'PARTIAL', 'UPSTREAM_UNSUPPORTED', 'NOT_INVENTORIED', 'NOT_APPLICABLE') -contains $case.reference.support) "case $($case.id) reference support invalid"
         foreach ($ref in $case.reference.sourceRefs) {
             Assert-True (-not [string]::IsNullOrWhiteSpace($ref.path)) "case $($case.id) sourceRef path missing"
             Assert-True ([int]$ref.line -ge 1) "case $($case.id) sourceRef line must be >= 1"
@@ -235,6 +235,7 @@ function Test-SourceIndex {
 function Test-McpContract {
     param([string]$Path)
     $mcp = Read-Json $Path
+    $snapshotAvailable = Test-Path -LiteralPath $SnapshotRoot -PathType Container
     Assert-True ($mcp.schemaVersion -eq 'haifa.customer-demo-v2.mcp-contract/v1') "mcp contract schemaVersion"
     Assert-True ($mcp.frozenUpstream.commit -eq $FrozenCommit) "mcp contract frozen commit"
     Assert-True ($mcp.collectionSemantics.servers.cardinality -eq '0..N') "mcp servers must be 0..N"
@@ -247,6 +248,36 @@ function Test-McpContract {
     Assert-True ($mcp.representativeCall.serverId -eq 'v2-reporting') "representative MCP server must be v2-reporting"
     Assert-True ($mcp.representativeCall.tool -eq 'get_reporting_policy') "representative MCP tool must be get_reporting_policy"
     Assert-True ($mcp.representativeCall.stubAllowed -eq $false) "representative MCP call must not allow a stub"
+
+    # Every frozen config key the fixture maps must really exist in the frozen
+    # extensions_config.example.json (key name and cited line).
+    $frozenKeys = Get-Prop $mcp 'frozenConfigKeys'
+    Assert-True ($null -ne $frozenKeys) "mcp contract must map fixture fields to the frozen extensions_config keys"
+    Assert-True ($frozenKeys.sourceFile -eq 'deer-flow/extensions_config.example.json') "mcp frozenConfigKeys.sourceFile must be the frozen extensions config"
+    Assert-True (@($frozenKeys.mappings).Count -ge 7) "mcp frozenConfigKeys must map at least 7 frozen keys (got $(@($frozenKeys.mappings).Count))"
+    if ($snapshotAvailable) {
+        $frozenConfigPath = Join-Path $SnapshotRoot 'extensions_config.example.json'
+        Assert-True (Test-Path -LiteralPath $frozenConfigPath -PathType Leaf) "frozen extensions_config.example.json must exist in the snapshot"
+        $frozenConfig = Read-Json $frozenConfigPath
+        $frozenLines = [IO.File]::ReadAllLines($frozenConfigPath)
+        foreach ($mapping in $frozenKeys.mappings) {
+            Assert-True (-not [string]::IsNullOrWhiteSpace($mapping.frozenKey)) "frozenConfigKey mapping needs a frozenKey"
+            Assert-True ([int]$mapping.frozenLine -ge 1) "frozenConfigKey mapping '$($mapping.frozenKey)' needs a frozenLine"
+            $leaf = ($mapping.frozenKey -split '\.')[-1]
+            if ($mapping.frozenKey -like 'mcpServers.*') {
+                $present = @($frozenConfig.mcpServers.PSObject.Properties.Value | Where-Object { $null -ne $_.PSObject.Properties[$leaf] }).Count -ge 1
+            } else {
+                $present = $null -ne $frozenConfig.PSObject.Properties[$leaf]
+            }
+            Assert-True $present "frozenConfigKey '$($mapping.frozenKey)' leaf '$leaf' must exist in extensions_config.example.json"
+            Assert-True ([int]$mapping.frozenLine -le $frozenLines.Count) "frozenConfigKey '$($mapping.frozenKey)' line $($mapping.frozenLine) exceeds extensions_config.example.json line count"
+            Assert-True ($frozenLines[[int]$mapping.frozenLine - 1] -match [regex]::Escape($leaf)) "frozenConfigKey '$($mapping.frozenKey)' line $($mapping.frozenLine) must contain '$leaf'"
+        }
+    }
+    else {
+        $script:SkippedChecks += @($frozenKeys.mappings).Count
+        Write-Host "SKIPPED(snapshot absent): frozenConfigKeys existence checks for $(@($frozenKeys.mappings).Count) frozen keys" -ForegroundColor DarkYellow
+    }
 
     $serverIds = @($mcp.servers | ForEach-Object { $_.serverId })
     Assert-True (@($serverIds | Select-Object -Unique).Count -eq 2) "mcp server ids must be unique"
@@ -329,9 +360,28 @@ function Test-ReferenceSourceTraceability {
         $refs = @($case.reference.sourceRefs)
         $unsupportedAssertions = @((Get-Prop $case.reference 'unsupportedAssertions') | Where-Object { $null -ne $_ })
         $isUnsupportedSupport = @('UPSTREAM_UNSUPPORTED', 'NOT_INVENTORIED') -contains $case.reference.support
+        $isPartial = $case.reference.support -eq 'PARTIAL'
+        $isNotApplicable = $case.reference.support -eq 'NOT_APPLICABLE'
 
         if ($isUnsupportedSupport) {
             Assert-True ($refs.Count -ge 1) "case $($case.id) reference.support=$($case.reference.support) requires at least one sourceRef"
+        }
+
+        # PARTIAL must state exactly which observable assertion the reference
+        # cannot support; a bare PARTIAL with no unsupportedAssertions is the
+        # same defect class as R1/R2 (an unexplained reference judgment).
+        if ($isPartial) {
+            Assert-True ($unsupportedAssertions.Count -ge 1) "case $($case.id) reference.support=PARTIAL requires at least one unsupportedAssertion naming the unsupported part"
+        }
+
+        # NOT_APPLICABLE is reserved for the Haifa-only V2-M6 stages; the
+        # reference backend does not participate there and the reason must say
+        # so with a pointer to the roadmap README.
+        if ($isNotApplicable) {
+            Assert-True (@('V2-M6') -contains $case.stage) "case $($case.id) NOT_APPLICABLE is only allowed on V2-M6 (got $($case.stage))"
+            $naReason = [string](Get-Prop $case.reference 'reason')
+            Assert-True (-not [string]::IsNullOrWhiteSpace($naReason)) "case $($case.id) NOT_APPLICABLE requires a non-empty reason"
+            Assert-True ($naReason -match 'show-roadmap-2/README\.md') "case $($case.id) NOT_APPLICABLE reason must cite private-context/show-roadmap-2/README.md"
         }
 
         foreach ($ua in $unsupportedAssertions) {
@@ -354,6 +404,17 @@ function Test-ReferenceSourceTraceability {
                 Assert-True (-not [string]::IsNullOrWhiteSpace($r.path)) "case $($case.id) unsupportedAssertion '$($ua.assertion)' sourceRef path missing"
                 Assert-True ([int]$r.line -ge 1) "case $($case.id) unsupportedAssertion '$($ua.assertion)' sourceRef line must be >= 1"
                 Assert-RefExists -CaseId $case.id -RefPath $r.path -Line ([int]$r.line) -SnapshotAvailable $snapshotAvailable -IsAssertion
+            }
+        }
+
+        # A case cannot claim UPSTREAM_UNSUPPORTED while citing the reference's
+        # own require_permission/owner_check decorator lines (create_run 945-946,
+        # cancel_run 1238-1239): that would reject a capability the reference
+        # already implements (the R2 V2-M3-09 defect).
+        if ($case.reference.support -eq 'UPSTREAM_UNSUPPORTED') {
+            foreach ($r in $refs) {
+                $isOwnerCheckRef = ($r.path -match 'routers/thread_runs\.py$') -and (([int]$r.line -in @(945, 946, 1238, 1239)) -or ([string]$r.note -match 'require_permission|owner_check'))
+                Assert-True (-not $isOwnerCheckRef) "case $($case.id) is UPSTREAM_UNSUPPORTED but cites the reference owner-check decorator $($r.path):$($r.line); a reference-implemented check cannot be claimed unsupported"
             }
         }
 
@@ -464,6 +525,65 @@ function Invoke-SelfTests {
     ($o5.cases | Where-Object { $_.id -eq 'V2-M3-01' }).reference.unsupportedAssertions[0].sourceRefs = @()
     [IO.File]::WriteAllText($badRef5, (($o5 | ConvertTo-Json -Depth 64) + "`n"))
     Assert-Throws { Test-ReferenceSourceTraceability -Path $badRef5 } 'assertion-unsupported-empty-sourcerefs'
+
+    # R2 rule: a PARTIAL case must name what the reference cannot support.
+    $badPartial1 = Join-Path $TempRoot 'oracle-partial-empty.json'
+    $p1 = Read-Json $OraclePath
+    ($p1.cases | Where-Object { $_.id -eq 'V2-M2-17' }).reference.PSObject.Properties.Remove('unsupportedAssertions')
+    [IO.File]::WriteAllText($badPartial1, (($p1 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-ReferenceSourceTraceability -Path $badPartial1 } 'partial-missing-unsupported-assertions'
+
+    # R2 rule: a PARTIAL unsupportedAssertion needs a non-empty reason.
+    $badPartial2 = Join-Path $TempRoot 'oracle-partial-noreason.json'
+    $p2 = Read-Json $OraclePath
+    ($p2.cases | Where-Object { $_.id -eq 'V2-M2-17' }).reference.unsupportedAssertions[0].reason = ''
+    [IO.File]::WriteAllText($badPartial2, (($p2 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-ReferenceSourceTraceability -Path $badPartial2 } 'partial-assertion-missing-reason'
+
+    # R2 rule: a PARTIAL unsupportedAssertion needs at least one sourceRef.
+    $badPartial3 = Join-Path $TempRoot 'oracle-partial-nosource.json'
+    $p3 = Read-Json $OraclePath
+    ($p3.cases | Where-Object { $_.id -eq 'V2-M2-17' }).reference.unsupportedAssertions[0].sourceRefs = @()
+    [IO.File]::WriteAllText($badPartial3, (($p3 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-ReferenceSourceTraceability -Path $badPartial3 } 'partial-assertion-missing-source'
+
+    # R2 rule: NOT_APPLICABLE requires a non-empty reason.
+    $badNa1 = Join-Path $TempRoot 'oracle-na-noreason.json'
+    $n1 = Read-Json $OraclePath
+    ($n1.cases | Where-Object { $_.id -eq 'V2-M6-01' }).reference.reason = ''
+    [IO.File]::WriteAllText($badNa1, (($n1 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-ReferenceSourceTraceability -Path $badNa1 } 'not-applicable-missing-reason'
+
+    # R2 rule: NOT_APPLICABLE is only allowed on V2-M6.
+    $badNa2 = Join-Path $TempRoot 'oracle-na-wrong-stage.json'
+    $n2 = Read-Json $OraclePath
+    $n2c = $n2.cases | Where-Object { $_.id -eq 'V2-M3-10' }
+    $n2c.reference.support = 'NOT_APPLICABLE'
+    $n2c.reference | Add-Member -NotePropertyName reason -NotePropertyValue 'wrong stage per show-roadmap-2/README.md' -Force
+    [IO.File]::WriteAllText($badNa2, (($n2 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-ReferenceSourceTraceability -Path $badNa2 } 'not-applicable-wrong-stage'
+
+    # R2 rule: V2-M3-09 regressed to a blanket UPSTREAM_UNSUPPORTED while citing
+    # the reference's own owner_check/require_permission decorator must FAIL
+    # (the reference already implements the owner check, so its foreign-approve
+    # denial is differentiable and must stay PARTIAL).
+    $badOwner = Join-Path $TempRoot 'oracle-uu-ownercheck.json'
+    $u1 = Read-Json $OraclePath
+    $u1c = $u1.cases | Where-Object { $_.id -eq 'V2-M3-09' }
+    $u1c.reference.support = 'UPSTREAM_UNSUPPORTED'
+    $u1c.reference.sourceRefs = @([pscustomobject]@{ path = 'deer-flow/backend/app/gateway/routers/thread_runs.py'; line = 946; note = 'require_permission owner_check' })
+    [IO.File]::WriteAllText($badOwner, (($u1 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-ReferenceSourceTraceability -Path $badOwner } 'uu-cites-owner-check'
+
+    # R2 rule: a frozenConfigKeys mapping naming a key absent from the frozen
+    # extensions_config.example.json must fail (only checkable with the snapshot).
+    if (Test-Path -LiteralPath $SnapshotRoot -PathType Container) {
+        $badMcp3 = Join-Path $TempRoot 'mcp-frozen-key.json'
+        $mcp3 = Read-Json $McpPath
+        $mcp3.frozenConfigKeys.mappings[0].frozenKey = 'mcpServers.<id>.does_not_exist_w00'
+        [IO.File]::WriteAllText($badMcp3, (($mcp3 | ConvertTo-Json -Depth 32) + "`n"))
+        Assert-Throws { Test-McpContract -Path $badMcp3 } 'mcp-frozen-config-key-missing'
+    }
 }
 
 try {
