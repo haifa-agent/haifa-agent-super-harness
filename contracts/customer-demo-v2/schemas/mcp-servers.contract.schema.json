@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "haifa://customer-demo-v2/mcp-servers-contract",
+  "title": "V2 MCP collection contract",
+  "type": "object",
+  "required": ["schemaVersion", "contractId", "frozenUpstream", "collectionSemantics", "servers", "requiredContractCases", "representativeCall", "resultVocabulary"],
+  "properties": {
+    "schemaVersion": {"const": "haifa.customer-demo-v2.mcp-contract/v1"},
+    "frozenConfigKeys": {
+      "type": "object",
+      "required": ["sourceFile", "mappings"],
+      "properties": {
+        "sourceFile": {"const": "deer-flow/extensions_config.example.json"},
+        "mappings": {
+          "type": "array",
+          "minItems": 7,
+          "items": {"type": "object", "required": ["fixtureField", "frozenKey", "frozenLine"]}
+        }
+      }
+    },
+    "collectionSemantics": {
+      "type": "object",
+      "required": ["servers", "tools", "agentSelection", "enableDisable", "transport", "credentials", "timeouts", "allowlist", "revocation", "disconnect"],
+      "properties": {
+        "servers": {"type": "object", "required": ["cardinality", "forbiddenDesigns"], "properties": {"cardinality": {"const": "0..N"}}},
+        "tools": {"type": "object", "required": ["cardinalityPerServer", "perServerIsolation", "sourceIdentity", "crossServerDuplicateName"]},
+        "agentSelection": {"type": "object", "required": ["field", "noneMeaning", "emptyListMeaning"], "properties": {"noneMeaning": {"const": "all enabled MCP installations are selectable"}, "emptyListMeaning": {"const": "no MCP installation is selectable"}}}
+      }
+    },
+    "servers": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["serverId", "transport", "tools"],
+        "properties": {
+          "serverId": {"enum": ["v2-reporting", "v2-region"]},
+          "transport": {"const": "http"},
+          "tools": {"type": "array", "minItems": 2, "items": {"type": "object", "required": ["rawName", "readOnly"]}}
+        }
+      }
+    },
+    "representativeCall": {
+      "type": "object",
+      "required": ["serverId", "tool", "level", "transport", "stubAllowed"],
+      "properties": {"serverId": {"const": "v2-reporting"}, "tool": {"const": "get_reporting_policy"}, "stubAllowed": {"const": false}}
+    }
+  }
+}

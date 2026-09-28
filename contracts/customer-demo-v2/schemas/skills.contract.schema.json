@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "haifa://customer-demo-v2/skills-contract",
+  "title": "V2 Skill collection contract",
+  "type": "object",
+  "required": ["schemaVersion", "contractId", "frozenUpstream", "collectionSemantics", "skills", "requiredContractCases", "representativeSkill", "resultVocabulary"],
+  "properties": {
+    "schemaVersion": {"const": "haifa.customer-demo-v2.skill-contract/v1"},
+    "collectionSemantics": {
+      "type": "object",
+      "required": ["skills", "package", "agentSelection", "enableDisable", "reload", "contextIsolation"],
+      "properties": {
+        "skills": {"type": "object", "required": ["cardinality", "forbiddenDesigns"], "properties": {"cardinality": {"const": "0..N"}}},
+        "agentSelection": {"type": "object", "required": ["field", "noneMeaning", "emptyListMeaning"], "properties": {"noneMeaning": {"const": "all enabled skills are selectable"}, "emptyListMeaning": {"const": "no skill is selectable"}}}
+      }
+    },
+    "skills": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["name", "category", "goldenScenario", "isUpstreamResource"],
+        "properties": {"name": {"enum": ["consulting-analysis", "v2-format-control"]}}
+      }
+    },
+    "representativeSkill": {
+      "type": "object",
+      "required": ["name", "level", "stubAllowed", "negativeControl"],
+      "properties": {"name": {"const": "consulting-analysis"}, "stubAllowed": {"const": false}, "negativeControl": {"const": "v2-format-control"}}
+    }
+  }
+}

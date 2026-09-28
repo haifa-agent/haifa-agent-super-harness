@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "haifa://customer-demo-v2/v2-case-oracle",
+  "title": "V2 case oracle",
+  "type": "object",
+  "required": ["schemaVersion", "demoId", "frozenUpstream", "fixtures", "csvOracle", "resultVocabulary", "stages", "cases"],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": {"const": "haifa.customer-demo-v2.case-oracle/v1"},
+    "demoId": {"const": "DEMO-V2"},
+    "frozenUpstream": {
+      "type": "object",
+      "required": ["repository", "commit", "driftAllowed"],
+      "properties": {
+        "repository": {"const": "bytedance/deer-flow"},
+        "commit": {"const": "e545c28ac301e6f9feae247c513d8ea8f83df294"},
+        "driftAllowed": {"const": false}
+      }
+    },
+    "fixtures": {
+      "type": "object",
+      "required": ["customers.csv", "reporting-policy.json"],
+      "properties": {
+        "customers.csv": {
+          "type": "object",
+          "required": ["path", "sha256", "encoding", "dataRows", "headerCountsAsRow1"],
+          "properties": {
+            "sha256": {"const": "ec326b7d0cf68f660ed769f8eecf9b71b43137af4e9aa83de75aa75bc5302f00"},
+            "dataRows": {"const": 20},
+            "headerCountsAsRow1": {"const": false}
+          }
+        },
+        "reporting-policy.json": {
+          "type": "object",
+          "required": ["path", "sha256"],
+          "properties": {"sha256": {"const": "563e216fc77f87d968b3c34994746fa1f3368380ede30c97e03782c3895a9e9a"}}
+        }
+      }
+    },
+    "csvOracle": {
+      "type": "object",
+      "required": ["row17", "regionTotals", "grandTotalCny", "highAmountThresholdCny", "highAmountComparison", "highAmountRowCount"],
+      "properties": {
+        "headerExcluded": {"const": true},
+        "row17": {"type": "object", "required": ["customer_id", "region", "amount_cny"]},
+        "regionTotals": {"type": "object", "required": ["East", "West"], "properties": {"East": {"const": 10000}, "West": {"const": 11000}}},
+        "grandTotalCny": {"const": 21000},
+        "highAmountThresholdCny": {"const": 1500},
+        "highAmountComparison": {"const": ">="},
+        "highAmountRowCount": {"const": 6}
+      }
+    },
+    "resultVocabulary": {
+      "type": "array",
+      "items": {"enum": ["PASS", "FAIL", "NOT_RUN", "BLOCKED_EXTERNAL", "UPSTREAM_UNSUPPORTED"]},
+      "minItems": 5
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 6,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "workPackages"],
+        "properties": {"id": {"enum": ["V2-M1", "V2-M2", "V2-M3", "V2-M4", "V2-M5", "V2-M6"]}}
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 40,
+      "items": {
+        "type": "object",
+        "required": ["id", "stage", "workPackage", "title", "level", "reference", "positiveOracle", "negativeCases", "runner", "evidencePaths", "defaultResult"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^V2-M[1-6]-[0-9]{2}$"},
+          "stage": {"enum": ["V2-M1", "V2-M2", "V2-M3", "V2-M4", "V2-M5", "V2-M6"]},
+          "workPackage": {"type": "string", "pattern": "^W[0-9]{2}$"},
+          "level": {"enum": ["L1", "L2", "L3"]},
+          "reference": {
+            "type": "object",
+            "required": ["support", "sourceRefs", "frontendConsumers", "haifaTarget"],
+            "allOf": [
+              {
+                "if": {"properties": {"support": {"const": "NOT_APPLICABLE"}}, "required": ["support"]},
+                "then": {
+                  "required": ["reason"],
+                  "properties": {"reason": {"type": "string", "minLength": 1}}
+                }
+              }
+            ],
+            "properties": {
+              "support": {"enum": ["SUPPORTED", "PARTIAL", "UPSTREAM_UNSUPPORTED", "NOT_INVENTORIED", "NOT_APPLICABLE"]},
+              "reason": {"type": "string", "minLength": 1},
+              "sourceRefs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["path", "line", "note"],
+                  "properties": {"path": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "note": {"type": "string"}}
+                }
+              },
+              "unsupportedAssertions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["assertion", "reason", "sourceRefs"],
+                  "properties": {
+                    "assertion": {"type": "string", "minLength": 1},
+                    "reason": {"type": "string", "minLength": 1},
+                    "sourceRefs": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "object",
+                        "required": ["path", "line", "note"],
+                        "properties": {"path": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "note": {"type": "string"}}
+                      }
+                    }
+                  }
+                }
+              },
+              "frontendConsumers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["path", "line", "note"],
+                  "properties": {"path": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "note": {"type": "string"}}
+                }
+              },
+              "haifaTarget": {"type": "string"}
+            }
+          },
+          "positiveOracle": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "negativeCases": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["id", "assertion"]}},
+          "runner": {"type": "string"},
+          "evidencePaths": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "defaultResult": {"const": "NOT_RUN"}
+        }
+      }
+    }
+  }
+}

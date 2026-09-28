@@ -1,0 +1,181 @@
+{
+  "schemaVersion": "haifa.customer-demo-v2.mcp-contract/v1",
+  "contractId": "v2-mcp-collection-semantics",
+  "purpose": "Declarative contract for the V2 minimum MCP collection. It fixes 0..N server / 0..N tool semantics, source identity, cross-server duplicate names, independent enable/disable, local failure isolation, revocation and disconnect handling. It contains no secrets and no fixed runtime port; ports are allocated at run time after a loopback bind precheck and recorded in the run manifest.",
+  "frozenUpstream": {
+    "repository": "bytedance/deer-flow",
+    "commit": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+    "configFile": "deer-flow/extensions_config.example.json",
+    "configKey": "mcpServers",
+    "runtimeModule": "deer-flow/backend/packages/harness/deerflow/mcp/tools.py",
+    "runtimeFunction": "get_mcp_tools",
+    "apiModule": "deer-flow/backend/app/gateway/routers/mcp.py"
+  },
+  "frozenConfigKeys": {
+    "note": "Maps this declarative fixture's field names to the frozen extensions_config.example.json mcpServers keys. The frozen config uses 'type' (not the MCP-spec 'transport') and 'url' for loopback HTTP; the fixture keeps runtime ports dynamic and never hardcodes them.",
+    "sourceFile": "deer-flow/extensions_config.example.json",
+    "sourceKey": "mcpServers",
+    "sourceLines": {
+      "mcpServers": 6,
+      "enabled": 8,
+      "type": 9,
+      "tool_name_prefix": 18,
+      "session_init_timeout": 19,
+      "tool_call_timeout": 20,
+      "url": 26,
+      "headers": 27
+    },
+    "mappings": [
+      {"fixtureField": "servers[].transport", "frozenKey": "mcpServers.<id>.type", "frozenLine": 9, "note": "the fixture transport is the frozen config key 'type'; the MCP-spec 'transport' spelling is normalized to 'type'"},
+      {"fixtureField": "servers[].endpointRef", "frozenKey": "mcpServers.<id>.url", "frozenLine": 26, "note": "the loopback HTTP endpoint maps to the frozen 'url' key"},
+      {"fixtureField": "servers[].enabledInGoldenScenario / enabledInContractScenario", "frozenKey": "mcpServers.<id>.enabled", "frozenLine": 8, "note": "fixture enable state maps to the frozen boolean 'enabled'"},
+      {"fixtureField": "collectionSemantics.tools.prefix.configKey", "frozenKey": "mcpServers.<id>.tool_name_prefix", "frozenLine": 18, "note": "the <server>_ prefix is controlled by the frozen 'tool_name_prefix' key (default true)"},
+      {"fixtureField": "collectionSemantics.credentials.fields.headers", "frozenKey": "mcpServers.<id>.headers", "frozenLine": 27, "note": "header CredentialRefs map to the frozen 'headers' map"},
+      {"fixtureField": "collectionSemantics.timeouts.sessionInit", "frozenKey": "mcpServers.<id>.session_init_timeout", "frozenLine": 19, "note": "per-server session init timeout"},
+      {"fixtureField": "collectionSemantics.timeouts.toolCall", "frozenKey": "mcpServers.<id>.tool_call_timeout", "frozenLine": 20, "note": "per-server tool call timeout"}
+    ]
+  },
+  "collectionSemantics": {
+    "servers": {
+      "cardinality": "0..N",
+      "emptySetMeaning": "no servers configured -> no MCP tools contributed; the run still proceeds",
+      "source": "extensions_config.json:mcpServers object keyed by server id",
+      "forbiddenDesigns": [
+        "database constrained to a single MCP row",
+        "a single mcpClient field that can hold only one server",
+        "per-tool Controller/DTO branches keyed on a fixed tool name"
+      ]
+    },
+    "tools": {
+      "cardinalityPerServer": "0..N",
+      "discovery": "each enabled server is discovered independently",
+      "perServerIsolation": "one server failing discovery or a call must not remove or block tools from other servers",
+      "sourceIdentity": "every tool carries its producing server name via adapter tagging plus the <server>_ prefix when tool_name_prefix=true",
+      "prefix": {
+        "configKey": "mcpServers.<server>.tool_name_prefix",
+        "default": true,
+        "prefixedForm": "<server_name>_<raw_tool_name>",
+        "unprefixedNote": "servers whose tools already carry a stable namespace may set false; source routing must not infer the server from the visible name prefix"
+      },
+      "crossServerDuplicateName": {
+        "example": "get_status",
+        "requirement": "two servers may both expose get_status; they remain distinct tools because identity includes the server source",
+        "negativeIf": "a single global tool registry collapses the two into one entry, or calling one server's get_status resolves the other server"
+      }
+    },
+    "agentSelection": {
+      "field": "Agent.mcp_plugins",
+      "source": "deer-flow/backend/app/gateway/routers/agents.py:49",
+      "noneMeaning": "all enabled MCP installations are selectable",
+      "emptyListMeaning": "no MCP installation is selectable",
+      "listMeaning": "only the listed installation ids are selectable",
+      "negativeIf": "null is treated as none, or [] is treated as all"
+    },
+    "enableDisable": {
+      "serverField": "mcpServers.<server>.enabled",
+      "api": "PATCH /api/mcp/config {server_name, enabled}",
+      "isolation": "disabling one server leaves sibling servers enabled and callable",
+      "hook": "config change plus MCP tools cache reset so next discovery sees the new state"
+    },
+    "transport": {
+      "allowed": ["stdio", "sse", "http"],
+      "configField": "mcpServers.<server>.type",
+      "alias": "MCP-spec 'transport' is normalized to 'type'",
+      "v2L2": "loopback HTTP transport between the runner and an independent local test MCP process"
+    },
+    "credentials": {
+      "referenceOnly": true,
+      "fields": ["oauth", "user_auth", "headers_from_context", "headers"],
+      "rule": "records only existence or a CredentialRef; secret values are never stored in this fixture or emitted in evidence",
+      "masking": "GET /api/mcp/config masks env/header/oauth/user_auth values with ***"
+    },
+    "timeouts": {
+      "sessionInit": "mcpServers.<server>.session_init_timeout",
+      "toolCall": "mcpServers.<server>.tool_call_timeout",
+      "scope": "per server; a slow or hung server must not block the others"
+    },
+    "allowlist": {
+      "field": "mcpServers.<server>.tools",
+      "nature": "soft routing preference overrides per original tool name; not a hard capability boundary",
+      "note": "stdio API registration additionally enforces a command allowlist (npx/uvx) at the HTTP boundary"
+    },
+    "revocation": {
+      "trigger": "server disabled or credential missing",
+      "expected": "subsequent call is refused; no fallback to a synthetic or cached result"
+    },
+    "disconnect": {
+      "trigger": "explicit MCP 'Connection closed' or AnyIO closed-stream error",
+      "expected": "the failing call surfaces its original error and is not replayed automatically; a later explicit retry may establish a fresh session; unknown result must not be reported as success"
+    }
+  },
+  "servers": [
+    {
+      "serverId": "v2-reporting",
+      "transport": "http",
+      "endpointKind": "loopback",
+      "endpointRef": "runtime-allocated; recorded in run manifest; never hardcoded in this fixture",
+      "enabledInGoldenScenario": true,
+      "tools": [
+        {
+          "rawName": "get_reporting_policy",
+          "prefixedName": "v2-reporting_get_reporting_policy",
+          "readOnly": true,
+          "returns": {
+            "source": "reporting-policy.json",
+            "policy_id": "v2-pilot-reporting-001",
+            "high_amount_threshold_cny": 1500,
+            "comparison": ">="
+          }
+        },
+        {
+          "rawName": "get_status",
+          "prefixedName": "v2-reporting_get_status",
+          "readOnly": true,
+          "returns": {"server": "v2-reporting", "state": "ready"}
+        }
+      ]
+    },
+    {
+      "serverId": "v2-region",
+      "transport": "http",
+      "endpointKind": "loopback",
+      "endpointRef": "runtime-allocated; recorded in run manifest; never hardcoded in this fixture",
+      "enabledInGoldenScenario": false,
+      "enabledInContractScenario": true,
+      "tools": [
+        {
+          "rawName": "get_region_label",
+          "prefixedName": "v2-region_get_region_label",
+          "readOnly": true,
+          "returns": {"East": "East", "West": "West"}
+        },
+        {
+          "rawName": "get_status",
+          "prefixedName": "v2-region_get_status",
+          "readOnly": true,
+          "returns": {"server": "v2-region", "state": "ready"}
+        }
+      ]
+    }
+  ],
+  "requiredContractCases": [
+    {"id": "servers-n", "assertion": "at least 2 servers are configured and both are discovered"},
+    {"id": "tools-per-server", "assertion": "each server exposes at least 2 tools; a 0-tool server is allowed and must not fail discovery of siblings"},
+    {"id": "cross-server-duplicate", "assertion": "v2-reporting.get_status and v2-region.get_status remain distinct and resolve to their own server"},
+    {"id": "independent-toggle", "assertion": "disabling v2-region does not affect v2-reporting calls"},
+    {"id": "partial-failure", "assertion": "a failed v2-region leaves v2-reporting fully callable"},
+    {"id": "call-each", "assertion": "at least one tool from each server is actually invoked over the real transport"},
+    {"id": "identity", "assertion": "each call records the producing server id and the transport"},
+    {"id": "revocation", "assertion": "a disabled or uncredentialed server refuses the call without fallback"}
+  ],
+  "representativeCall": {
+    "serverId": "v2-reporting",
+    "tool": "get_reporting_policy",
+    "level": "L2",
+    "transport": "http",
+    "stubAllowed": false,
+    "fakeResultAllowed": false,
+    "routeFulfillAllowed": false
+  },
+  "resultVocabulary": ["PASS", "FAIL", "NOT_RUN", "BLOCKED_EXTERNAL", "UPSTREAM_UNSUPPORTED"]
+}

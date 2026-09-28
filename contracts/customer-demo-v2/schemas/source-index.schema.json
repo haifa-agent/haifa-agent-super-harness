@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "haifa://customer-demo-v2/source-index",
+  "title": "V2 source index",
+  "type": "object",
+  "required": ["schemaVersion", "frozenUpstreamCommit", "entries"],
+  "properties": {
+    "schemaVersion": {"const": "haifa.customer-demo-v2.source-index/v1"},
+    "frozenUpstreamCommit": {"const": "e545c28ac301e6f9feae247c513d8ea8f83df294"},
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["kind", "path", "sha256"],
+        "properties": {
+          "kind": {"enum": ["upstream-snapshot", "frontend", "contracts"]},
+          "path": {"type": "string"},
+          "sourcePath": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,255 @@
+{
+  "schemaVersion": "haifa.customer-demo-v2.source-index/v1",
+  "frozenUpstreamCommit": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+  "note": "upstream-snapshot entries live under local-tmp (gitignored, read-only); contracts and frontend entries are committed. The verifier recomputes every SHA and reports drift.",
+  "entries": [
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/app/gateway/routers/agents.py",
+      "path": "deer-flow/backend/app/gateway/routers/agents.py",
+      "sha256": "6d8346d8d86bc83125ca40b3a5f3d31e168f6bebe412174d7caad5b253a4ab2c"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/app/gateway/routers/models.py",
+      "path": "deer-flow/backend/app/gateway/routers/models.py",
+      "sha256": "451e656d4aa42b0c2dcdd79dd4cb531003e265aaa24b1f59b16b6ad0c3ec9d8d"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/app/gateway/routers/managed_models.py",
+      "path": "deer-flow/backend/app/gateway/routers/managed_models.py",
+      "sha256": "9121e8e0bace62a482fc0548e684e276d7e77ddef6ae280df244db81193217dc"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/app/gateway/routers/mcp.py",
+      "path": "deer-flow/backend/app/gateway/routers/mcp.py",
+      "sha256": "b98671d7fc78a43cc1b82449e7ab8147b8453d7487c58c5b5ee33a6254cebf2c"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/app/gateway/routers/skills.py",
+      "path": "deer-flow/backend/app/gateway/routers/skills.py",
+      "sha256": "040291fcd8249204114fd373fe43127908cbab93cdfb0ea95a3298a379c764da"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/app/gateway/routers/projects.py",
+      "path": "deer-flow/backend/app/gateway/routers/projects.py",
+      "sha256": "419f832b98e52f0dac36d12dba67e2481d8bb792184bdbfe6ce76f5bf9941008"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/app/gateway/routers/uploads.py",
+      "path": "deer-flow/backend/app/gateway/routers/uploads.py",
+      "sha256": "66b62f203bf82b1abdbd4eca3879168c4bfeb37b381ff1342727abbe44e520a9"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/app/gateway/routers/project_documents.py",
+      "path": "deer-flow/backend/app/gateway/routers/project_documents.py",
+      "sha256": "8c67b3f4e7e00c4749361bd927032551c8b5aa97c970e6a65151ba7a291974b8"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/app/gateway/routers/project_thread_files.py",
+      "path": "deer-flow/backend/app/gateway/routers/project_thread_files.py",
+      "sha256": "e7a2cb450a829c7f0b203dd12a3510fba15fc8ee73c58157353697253f08292e"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/app/gateway/routers/thread_runs.py",
+      "path": "deer-flow/backend/app/gateway/routers/thread_runs.py",
+      "sha256": "73138fa3aeee3062ade8b77f1d56b84dc7e7e809b9e3948095a9e38f7dd3d62c"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/packages/harness/deerflow/mcp/tools.py",
+      "path": "deer-flow/backend/packages/harness/deerflow/mcp/tools.py",
+      "sha256": "7497bc0b4733843b23ed637d1068edeac8e22899024bc71ab5e24518f6372f29"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/packages/harness/deerflow/mcp/client.py",
+      "path": "deer-flow/backend/packages/harness/deerflow/mcp/client.py",
+      "sha256": "cf269604dc9a78f936adb79ab58ec08712636e23b867f4476e28bd1fece42c94"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/packages/harness/deerflow/mcp/cache.py",
+      "path": "deer-flow/backend/packages/harness/deerflow/mcp/cache.py",
+      "sha256": "104563c8b3fd01c067b79e1e0bfc776823d9b194c363fd78e964c20dd9e9f241"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/packages/harness/deerflow/skills/types.py",
+      "path": "deer-flow/backend/packages/harness/deerflow/skills/types.py",
+      "sha256": "38dead0c6bf2145c80ff65313cf96fe8c982f0602143b7fe1d2e4ee394d190dd"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/packages/harness/deerflow/skills/catalog.py",
+      "path": "deer-flow/backend/packages/harness/deerflow/skills/catalog.py",
+      "sha256": "f3ba87c760120562a1e2e43bf5ff016bfd25fcb752e05f34df80203dd02cf458"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/packages/harness/deerflow/skills/projection.py",
+      "path": "deer-flow/backend/packages/harness/deerflow/skills/projection.py",
+      "sha256": "bd92a874b2305cc961e49d70a91f85045049add4ea38066085bcfcb8f2eecd5a"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/extensions_config.example.json",
+      "path": "deer-flow/extensions_config.example.json",
+      "sha256": "63637086518ec550355f4a0fb67754645b53e51df0bed88eb2f3de446ceb2285"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/skills/public/consulting-analysis/SKILL.md",
+      "path": "deer-flow/skills/public/consulting-analysis/SKILL.md",
+      "sha256": "5bc99df7e5f8af5471eaa5d20b85fc46e99895cf3f2642fa9da94108d03ca13e"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/packages/harness/deerflow/agents/interaction_policy.py",
+      "path": "deer-flow/backend/packages/harness/deerflow/agents/interaction_policy.py",
+      "sha256": "a4d861afd13c39dbfbc7b81deaecaacad9148d36bcd11cd928214381467b040b"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py",
+      "path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/clarification_middleware.py",
+      "sha256": "2650ebedbff0ac5535838a608ba811ac14b29b66587d5f876c54517c2d3dee36"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/packages/harness/deerflow/AGENTS.md",
+      "path": "deer-flow/backend/packages/harness/deerflow/AGENTS.md",
+      "sha256": "bf960bf1b1cc403d2d0d79b88f0d00045fc940a50cbd4cf16f745646ea0d5bc2"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/packages/harness/deerflow/agents/middlewares/AGENTS.md",
+      "path": "deer-flow/backend/packages/harness/deerflow/agents/middlewares/AGENTS.md",
+      "sha256": "6421d7436411df5dd49e56bcc4d6b3bc8f3f74afc0e67b3dd8e14b4eb7d23681"
+    },
+    {
+      "kind": "upstream-snapshot",
+      "sourcePath": "local-tmp/slot-1-w00-v2-oracle/upstream-snapshot/backend/app/gateway/AGENTS.md",
+      "path": "deer-flow/backend/app/gateway/AGENTS.md",
+      "sha256": "1ab83b52bb93f3d357f66dd5a159938300f8d693670108a8e1ab774e07bb330e"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/core/api/api-client.ts",
+      "sha256": "60120b0361e04a9ffa293154c85112bbabeece0ee41b349ba395ffb1a0735118"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/core/config/index.ts",
+      "sha256": "cbe795e67e4358e976ecfce1762f3dd5d17be78ad2fec27cbc369d82fb69a26d"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/core/threads/hooks.ts",
+      "sha256": "02a706bb280460a3b25167fda44d16abe7b0aac15c659e54b6c16d2ed547c935"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/core/threads/active-steer.ts",
+      "sha256": "9599c2704a1708a7336c534016be3a8e71113e052816acfde706fca8d5029065"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/core/models/api.ts",
+      "sha256": "492a4c17aacefd1ea7d49f2c1988ac7d386c0467048be139e2fa25989dec0ec5"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/core/mcp/api.ts",
+      "sha256": "6ef1febc5d316f4ba563211ea658a7cce7f0c4f41a2f3d55a2f0b2238eb4a830"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/core/skills/api.ts",
+      "sha256": "1f7fbb4ac692531ac752b1109b809353e26ab4685563d8a1b31b5a70bd2daf9d"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/core/projects/api.ts",
+      "sha256": "621fa514460fb063152bd5a14009a478974daecc6520282df2593144a078f0c3"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/core/uploads/api.ts",
+      "sha256": "2de44cc6b0c2a7a68b01d69e5ab3922d90c0baf98097a63935503c99772e5923"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/core/artifacts/utils.ts",
+      "sha256": "0f820f4f5ffadfdec1bc81739d23cdf4a232ca5fd48b1eb91a358134ec5c72b6"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/core/workspace-changes/api.ts",
+      "sha256": "4551bcd3739183a85884425a7a7cfff04c9137505ca4a8f2507aa57bd4e9be9c"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/core/auth/AuthProvider.tsx",
+      "sha256": "c64a7f105273dcfed3bd589f8e32a29da95682207ca19252519c95e3e0b8d86f"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/components/workspace/capabilities/mcp-plugin-manager.tsx",
+      "sha256": "bc6c4543e082569f9a8125d8e02d0a593f5135febf60a89cb6aaf4380810ac00"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/components/workspace/capabilities/skill-gallery.tsx",
+      "sha256": "7efe339596e4a7e786531fc238ac3834142358187990dbe1f736633cb908b604"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/components/workspace/input-box.tsx",
+      "sha256": "b5ed3d718397527d036ee4b8314630f66e44e5dccfdeba3870cd7752d435d411"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/components/workspace/chats/chat-page.tsx",
+      "sha256": "5085fad81e45b32409858553f66324db1eb2dba3f0c09397084a4dc21a646d5d"
+    },
+    {
+      "kind": "frontend",
+      "path": "frontend/src/components/workspace/messages/message-list.tsx",
+      "sha256": "76cc13f7ee0a6d3bd4585b293f07d9b445bcc7f876ec3b9084ec2ddc520bc6c3"
+    },
+    {
+      "kind": "contracts",
+      "path": "contracts/customer-demo-v2/fixtures/customers.csv",
+      "sha256": "ec326b7d0cf68f660ed769f8eecf9b71b43137af4e9aa83de75aa75bc5302f00"
+    },
+    {
+      "kind": "contracts",
+      "path": "contracts/customer-demo-v2/fixtures/reporting-policy.json",
+      "sha256": "563e216fc77f87d968b3c34994746fa1f3368380ede30c97e03782c3895a9e9a"
+    },
+    {
+      "kind": "contracts",
+      "path": "contracts/customer-demo-v2/fixtures/mcp-servers.contract.json",
+      "sha256": "90a6909b76f223a625007b635ca64ed727d2ef0f7b8364193caf3dc63441cde9"
+    },
+    {
+      "kind": "contracts",
+      "path": "contracts/customer-demo-v2/fixtures/skills.contract.json",
+      "sha256": "cf23a8dc6974c490393eb330ea54947f3ca6b3095e8af4fea927c6e9a1481c85"
+    },
+    {
+      "kind": "contracts",
+      "path": "contracts/customer-demo-v2/fixtures/skills/v2-format-control/SKILL.md",
+      "sha256": "e2b6f646901546b2dc210ae7a5c6bf49f429fad97d922d5f6cd6682de736841a"
+    }
+  ]
+}

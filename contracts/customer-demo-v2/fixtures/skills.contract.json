@@ -1,0 +1,102 @@
+{
+  "schemaVersion": "haifa.customer-demo-v2.skill-contract/v1",
+  "contractId": "v2-skill-collection-semantics",
+  "purpose": "Declarative contract for the V2 minimum Skill collection. It fixes 0..N skill semantics, package source, version/hash, independent enable/disable, reload timing and context isolation. It contains no secrets and no fixed runtime port.",
+  "frozenUpstream": {
+    "repository": "bytedance/deer-flow",
+    "commit": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+    "configFile": "deer-flow/extensions_config.example.json",
+    "configKey": "skills",
+    "runtimeModule": "deer-flow/backend/packages/harness/deerflow/skills/catalog.py",
+    "typesModule": "deer-flow/backend/packages/harness/deerflow/skills/types.py",
+    "apiModule": "deer-flow/backend/app/gateway/routers/skills.py"
+  },
+  "collectionSemantics": {
+    "skills": {
+      "cardinality": "0..N",
+      "emptySetMeaning": "no skills available; the agent still runs",
+      "source": "skills/public/ + per-user custom + integrations + legacy; enabled state read from extensions_config.json:skills plus per-user skill state",
+      "forbiddenDesigns": [
+        "hardcoding consulting-analysis",
+        "a single skill config slot",
+        "one global active skill"
+      ]
+    },
+    "package": {
+      "unit": "whole skill directory, not just SKILL.md",
+      "identityFile": "SKILL.md",
+      "packageBoundary": "a nested SKILL.md is not registered as a separate runtime skill; the directory is the package boundary",
+      "licenseRecorded": true,
+      "versionHashRecorded": true
+    },
+    "agentSelection": {
+      "field": "Agent.skills",
+      "source": "deer-flow/backend/app/gateway/routers/agents.py:51",
+      "noneMeaning": "all enabled skills are selectable",
+      "emptyListMeaning": "no skill is selectable",
+      "listMeaning": "only the listed skills are selectable",
+      "enforcement": "an explicit skill list (including []) is intersected with enabled public/user-visible skills at sandbox projection; None keeps the shared mount",
+      "negativeIf": "null is treated as none, or [] is treated as all"
+    },
+    "enableDisable": {
+      "skillField": "skills.<name>.enabled",
+      "api": "PUT /api/skills/{skill_name} {enabled}",
+      "negative": "a disabled Golden Scenario skill must not be activated and must not change agent behavior"
+    },
+    "reload": {
+      "api": "POST /api/skills/reload",
+      "scope": "process-local; current Gateway process only",
+      "timing": "subsequent runs rescan; active runs keep their existing snapshot",
+      "negative": "reload must not require a restart to pick up a newly enabled skill for new runs"
+    },
+    "contextIsolation": {
+      "requirement": "a skill only affects the run/turn in which it is activated; it must not leak its instructions or resources into an unrelated run or another user's context",
+      "negativeIf": "enabling or activating v2-format-control changes the output of a run that selected only consulting-analysis"
+    }
+  },
+  "skills": [
+    {
+      "name": "consulting-analysis",
+      "sourcePath": "deer-flow/skills/public/consulting-analysis/",
+      "category": "public",
+      "goldenScenario": true,
+      "isUpstreamResource": true,
+      "activation": {
+        "mechanism": "SKILL.md is actually read and its instructions/resources change agent behavior",
+        "fileExistsIsNotEnough": true
+      },
+      "scopeBoundary": {
+        "phaseConsumed": "Phase 2 (Report Generation)",
+        "doesNotCollectData": true,
+        "inputsConsumed": ["Analysis Framework", "Data Summary", "External Search Findings"],
+        "chartPolicy": "if no visualization skill is available, use comparison tables and note the absence of charts; charts are optional",
+        "missingP0Policy": "note missing P0 data explicitly in the report rather than fabricating it",
+        "noFullReportClaim": true
+      }
+    },
+    {
+      "name": "v2-format-control",
+      "sourcePath": "contracts/customer-demo-v2/fixtures/skills/v2-format-control/SKILL.md",
+      "category": "test-only",
+      "goldenScenario": false,
+      "isUpstreamResource": false,
+      "purpose": "exercise independent enable/disable, version/hash, reload and context isolation; it must never be presented as an upstream skill",
+      "mustNotImpersonateUpstream": true
+    }
+  ],
+  "requiredContractCases": [
+    {"id": "skills-n", "assertion": "at least 2 skills are discovered from distinct package sources"},
+    {"id": "independent-toggle", "assertion": "disabling v2-format-control leaves consulting-analysis enabled and activatable"},
+    {"id": "version-hash", "assertion": "each skill records source, license and a version or content hash"},
+    {"id": "reload", "assertion": "a newly enabled skill is available to subsequent runs after POST /api/skills/reload without restart"},
+    {"id": "context-isolation", "assertion": "activating one skill does not change an unrelated run's skills or instructions"},
+    {"id": "representative-activation", "assertion": "consulting-analysis activation is proven by a real behavior change, not by file presence"}
+  ],
+  "representativeSkill": {
+    "name": "consulting-analysis",
+    "level": "L2",
+    "stubAllowed": false,
+    "negativeControl": "v2-format-control"
+  },
+  "resultVocabulary": ["PASS", "FAIL", "NOT_RUN", "BLOCKED_EXTERNAL", "UPSTREAM_UNSUPPORTED"]
+}

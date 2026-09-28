@@ -1,0 +1,8 @@
+{
+  "policy_id": "v2-pilot-reporting-001",
+  "currency": "CNY",
+  "high_amount_threshold_cny": 1500,
+  "comparison": ">=",
+  "required_sections": ["数据范围", "按地区汇总"],
+  "source_label": "V2 deterministic local MCP fixture"
+}
