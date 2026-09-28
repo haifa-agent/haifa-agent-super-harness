@@ -29,6 +29,12 @@ $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 $doctor = Join-Path $root 'scripts/verify-customer-demo-v2-doctor.ps1'
 $assertions = 0
 
+$decisionsPath = Join-Path $root 'contracts/customer-demo-v2/v2-m0-decisions.json'
+$decisions = Read-V2Json $decisionsPath
+$l3SelectionRecord = Get-V2Prop $decisions 'decisions.l3McpSelection'
+$recordedL3Tool = [string](Get-V2Prop $l3SelectionRecord 'tool')
+$recordedL3Fact = [string](Get-V2Prop $l3SelectionRecord 'factSpec')
+
 function Assert-True {
     param([bool]$Condition, [string]$Message)
     $script:assertions++
@@ -61,6 +67,15 @@ function Get-Check {
 $temp = Join-Path ([IO.Path]::GetTempPath()) ("w24-v2-doctor-verify-" + [Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Force -Path $temp
 
+function New-DecisionsFixture {
+    param([string]$Name, [scriptblock]$Mutate)
+    $clone = Get-Content -Raw -LiteralPath $decisionsPath | ConvertFrom-Json -Depth 40
+    & $Mutate $clone
+    $path = Join-Path $temp "decisions-$Name.json"
+    [IO.File]::WriteAllText($path, ($clone | ConvertTo-Json -Depth 40), [Text.UTF8Encoding]::new($false))
+    return $path
+}
+
 try {
     # =====================================================================
     # 1. Doctor static positive + missing-parameter fail-closed behaviour.
@@ -81,11 +96,31 @@ try {
     Assert-True ((Get-Check $staticReport 'live-model').status -eq 'NOT_RUN') 'missing managed model source must be NOT_RUN'
     Assert-True ((Get-Check $staticReport 'l2-mcp-transport').status -eq 'NOT_RUN') 'L2 MCP must be NOT_RUN until W10 delivers'
     Assert-True ((Get-Check $staticReport 'shpm-database').status -eq 'NOT_RUN') 'missing SHPM db must be NOT_RUN'
-    Assert-True ((Get-Check $staticReport 'w04-authorization').status -eq 'BLOCKED_EXTERNAL') 'unauthorized W04 slice must be BLOCKED_EXTERNAL, not FAIL'
+    Assert-True ((Get-Check $staticReport 'w04-authorization').status -eq 'PASS') 'an AUTHORIZED W04 record must PASS'
     Assert-True ((Get-Check $staticReport 'w04-authorization').status -ne 'FAIL') 'W04 authorization gate is not a doctor FAIL'
-    Assert-True ((Get-Check $staticReport 'l3-mcp-selection').status -eq 'PENDING_HUMAN_DECISION') 'undecided L3 selection must be PENDING_HUMAN_DECISION'
+    Assert-True ((Get-Check $staticReport 'w04-authorization').detail -match 'W04 whole-package PASS') 'AUTHORIZED W04 detail must state the bounded scope (slice PASS != whole-package PASS)'
+    Assert-True ((Get-Check $staticReport 'l3-mcp-selection').status -eq 'NOT_RUN') 'without a discovery result the recorded L3 tool cannot be confirmed -> NOT_RUN'
     Assert-True ((Get-Check $staticReport 'v2-case-baseline').status -eq 'PASS') 'v2 case baseline must PASS'
     Assert-True ((Get-Check $staticReport 'evidence-contract').status -eq 'PASS') 'evidence contract must PASS'
+
+    # =====================================================================
+    # 1b. W04 authorization follows the recorded value: NOT_AUTHORIZED ->
+    #     BLOCKED_EXTERNAL, unknown/missing -> FAIL.
+    # =====================================================================
+    $w04NotAuthorized = New-DecisionsFixture 'w04-not-authorized' { param($d) $d.decisions.w04RecoveryAuthorization.decision = 'NOT_AUTHORIZED' }
+    $w04NotAuthReport = Invoke-DoctorJson @{ StaticOnly = $true; V2DecisionsPath = $w04NotAuthorized } (Join-Path $temp 'doctor-w04-not-authorized.json')
+    Assert-True ((Get-Check $w04NotAuthReport 'w04-authorization').status -eq 'BLOCKED_EXTERNAL') 'NOT_AUTHORIZED W04 must be BLOCKED_EXTERNAL'
+    Assert-True ((Get-Check $w04NotAuthReport 'w04-authorization').status -ne 'FAIL') 'NOT_AUTHORIZED W04 is a recorded gate, not a FAIL'
+
+    $w04Unknown = New-DecisionsFixture 'w04-unknown' { param($d) $d.decisions.w04RecoveryAuthorization.decision = 'MAYBE_LATER' }
+    $w04UnknownReport = Invoke-DoctorJson @{ StaticOnly = $true; V2DecisionsPath = $w04Unknown } (Join-Path $temp 'doctor-w04-unknown.json')
+    Assert-True ((Get-Check $w04UnknownReport 'w04-authorization').status -eq 'FAIL') 'an unknown W04 decision value must FAIL'
+    Assert-True ($w04UnknownReport.overall -eq 'FAIL') 'an unknown W04 decision must make the overall FAIL'
+
+    $w04Missing = New-DecisionsFixture 'w04-missing' { param($d) $d.decisions.w04RecoveryAuthorization = $null }
+    $w04MissingReport = Invoke-DoctorJson @{ StaticOnly = $true; V2DecisionsPath = $w04Missing } (Join-Path $temp 'doctor-w04-missing.json')
+    Assert-True ((Get-Check $w04MissingReport 'w04-authorization').status -eq 'FAIL') 'a missing W04 decision must FAIL'
+    Assert-True ($w04MissingReport.overall -eq 'FAIL') 'a missing W04 decision must make the overall FAIL'
 
     # =====================================================================
     # 2. Doctor L3 discovery from an offline tools/list fixture.
@@ -96,13 +131,35 @@ try {
     Assert-True ($l3.status -eq 'NOT_RUN') 'offline L3 fixture without a live initialize must be NOT_RUN'
     Assert-True ([int]$l3.evidence.toolCount -ge 1) 'L3 fixture tools must be parsed'
     Assert-True ($l3.evidence.toolsCallTrace -eq $false) 'sample fixture must not contain a tools/call trace'
-    Assert-True ((Get-Check $l3Report 'l3-mcp-selection').status -eq 'PENDING_HUMAN_DECISION') 'L3 selection stays pending without a chosen tool'
-    Assert-True ($l3Report.overall -ne 'PASS') 'doctor must not PASS while the L3 tool is undecided'
+    Assert-True ($recordedL3Tool -eq 'calculate') "the committed decision record must authorize 'calculate' (got '$recordedL3Tool')"
+    Assert-True (-not [string]::IsNullOrWhiteSpace($recordedL3Fact)) 'the committed decision record must carry a factSpec'
+    Assert-True ((Get-Check $l3Report 'l3-mcp-selection').status -eq 'PASS') 'the recorded calculate tool present with readOnlyHint=true must PASS without explicit params'
+    Assert-True ($l3Report.overall -ne 'PASS') 'doctor must not PASS while other live items are NOT_RUN'
 
-    $selectedReport = Invoke-DoctorJson @{ StaticOnly = $true; L3McpToolsFixture = $sampleFixture; L3McpSelectedTool = 'time_now'; L3McpFactSpec = 'current UTC time' } (Join-Path $temp 'doctor-l3-selected.json')
-    Assert-True ((Get-Check $selectedReport 'l3-mcp-selection').status -eq 'PASS') 'a discovered read-only tool selection must PASS'
+    # Explicit parameters must agree with the recorded tool/factSpec.
+    $selectedReport = Invoke-DoctorJson @{ StaticOnly = $true; L3McpToolsFixture = $sampleFixture; L3McpSelectedTool = $recordedL3Tool; L3McpFactSpec = $recordedL3Fact } (Join-Path $temp 'doctor-l3-selected.json')
+    Assert-True ((Get-Check $selectedReport 'l3-mcp-selection').status -eq 'PASS') 'explicit parameters equal to the record must PASS'
+    $badToolReport = Invoke-DoctorJson @{ StaticOnly = $true; L3McpToolsFixture = $sampleFixture; L3McpSelectedTool = 'currency_convert'; L3McpFactSpec = $recordedL3Fact } (Join-Path $temp 'doctor-l3-badtool.json')
+    Assert-True ((Get-Check $badToolReport 'l3-mcp-selection').status -eq 'FAIL') 'an explicit tool disagreeing with the record must FAIL'
+    $badFactReport = Invoke-DoctorJson @{ StaticOnly = $true; L3McpToolsFixture = $sampleFixture; L3McpSelectedTool = $recordedL3Tool; L3McpFactSpec = 'some-other-fact' } (Join-Path $temp 'doctor-l3-badfact.json')
+    Assert-True ((Get-Check $badFactReport 'l3-mcp-selection').status -eq 'FAIL') 'an explicit factSpec disagreeing with the record must FAIL'
     $badSelectReport = Invoke-DoctorJson @{ StaticOnly = $true; L3McpToolsFixture = $sampleFixture; L3McpSelectedTool = 'not_a_tool'; L3McpFactSpec = 'x' } (Join-Path $temp 'doctor-l3-badselect.json')
     Assert-True ((Get-Check $badSelectReport 'l3-mcp-selection').status -eq 'FAIL') 'an undeclared L3 tool must FAIL'
+
+    # Missing decision record -> PENDING_HUMAN_DECISION.
+    $noL3Record = New-DecisionsFixture 'l3-missing' { param($d) $d.decisions.l3McpSelection = $null }
+    $noL3RecordReport = Invoke-DoctorJson @{ StaticOnly = $true; L3McpToolsFixture = $sampleFixture; V2DecisionsPath = $noL3Record } (Join-Path $temp 'doctor-l3-norecord.json')
+    Assert-True ((Get-Check $noL3RecordReport 'l3-mcp-selection').status -eq 'PENDING_HUMAN_DECISION') 'a missing l3McpSelection record must be PENDING_HUMAN_DECISION'
+
+    # Recorded tool absent from discovery -> FAIL.
+    $absentTool = New-DecisionsFixture 'l3-absent-tool' { param($d) $d.decisions.l3McpSelection.tool = 'no_such_tool' }
+    $absentToolReport = Invoke-DoctorJson @{ StaticOnly = $true; L3McpToolsFixture = $sampleFixture; V2DecisionsPath = $absentTool } (Join-Path $temp 'doctor-l3-absent.json')
+    Assert-True ((Get-Check $absentToolReport 'l3-mcp-selection').status -eq 'FAIL') 'a recorded tool absent from discovery must FAIL'
+
+    # Recorded tool present but readOnlyHint != true -> FAIL.
+    $readOnlyFalseFixture = Join-Path $root 'tests/customer-demo-v2/fixtures/l3-mcp-tools-list.readonly-false.json'
+    $readOnlyFalseReport = Invoke-DoctorJson @{ StaticOnly = $true; L3McpToolsFixture = $readOnlyFalseFixture } (Join-Path $temp 'doctor-l3-readonly-false.json')
+    Assert-True ((Get-Check $readOnlyFalseReport 'l3-mcp-selection').status -eq 'FAIL') 'a recorded tool without readOnlyHint=true must FAIL'
 
     # A tools/call trace in the discovery fixture must FAIL the doctor.
     $callFixture = Join-Path $root 'tests/customer-demo-v2/fixtures/l3-mcp-tools-list.tools-call.json'

@@ -8,6 +8,7 @@ param(
     [string[]]$ModelIds,
     [string]$ManagedModelsPath,
     [string]$DecisionRecordPath,
+    [string]$V2DecisionsPath,
     [int]$GatewayPort = 18018,
     [int]$FrontendPort = 33018,
     [int[]]$SubSlotGatewayPorts = @(20618, 30618, 40618),
@@ -51,6 +52,17 @@ function Get-DoctorSha256([string]$Path) {
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 $checks = [System.Collections.Generic.List[object]]::new()
+
+# -- Decision record (read once; the doctor never guesses a path) -----------
+$v2DecisionsFullPath = if ([string]::IsNullOrWhiteSpace($V2DecisionsPath)) {
+    Join-Path $root 'contracts/customer-demo-v2/v2-m0-decisions.json'
+}
+elseif ([IO.Path]::IsPathRooted($V2DecisionsPath)) { $V2DecisionsPath }
+else { Join-Path $root $V2DecisionsPath }
+$v2Decisions = $null
+$v2DecisionsError = $null
+try { $v2Decisions = Read-V2Json $v2DecisionsFullPath }
+catch { $v2DecisionsError = $_.Exception.Message }
 
 # -- 1. Super Harness git SHA / dirty ---------------------------------------
 $gitSha = (& git -C $root rev-parse HEAD 2>$null).Trim()
@@ -390,38 +402,84 @@ if ($l3ToolsCallTrace) { $l3DiscoveryStatus = 'FAIL' }
 Add-Check $checks 'l3-mcp-discovery' $l3DiscoveryStatus $l3DiscoveryDetail ([ordered]@{ endpoint = $L3McpEndpoint; fixture = $L3McpToolsFixture; serverInfo = $l3ServerInfo; protocolVersion = $l3ProtocolVersion; toolCount = $l3Tools.Count; tools = @($l3Tools); credentialRef = $l3CredentialRef; toolsCallTrace = $l3ToolsCallTrace })
 
 # -- 12. L3 selected tool / reference fact decision -------------------------
-if ([string]::IsNullOrWhiteSpace($L3McpSelectedTool) -or [string]::IsNullOrWhiteSpace($L3McpFactSpec)) {
-    Add-Check $checks 'l3-mcp-selection' 'PENDING_HUMAN_DECISION' 'No -L3McpSelectedTool / -L3McpFactSpec provided; the tool and reference fact must be authorized by the human before the doctor can PASS.'
+# The selection is only valid against a committed human decision. The doctor
+# compares explicit parameters against that record and, when they are omitted,
+# validates the recorded values themselves. It never accepts an arbitrary
+# read-only tool.
+$l3SelectionRecord = Get-V2Prop $v2Decisions.decisions 'l3McpSelection'
+$recordedL3Tool = [string](Get-V2Prop $l3SelectionRecord 'tool')
+$recordedL3Fact = [string](Get-V2Prop $l3SelectionRecord 'factSpec')
+if (($null -eq $l3SelectionRecord) -or [string]::IsNullOrWhiteSpace($recordedL3Tool) -or [string]::IsNullOrWhiteSpace($recordedL3Fact)) {
+    Add-Check $checks 'l3-mcp-selection' 'PENDING_HUMAN_DECISION' "No committed l3McpSelection record (tool + factSpec) at $v2DecisionsFullPath; the tool and reference fact must be authorized by the human before the doctor can PASS." ([ordered]@{ decisionsPath = $v2DecisionsFullPath; record = $l3SelectionRecord })
 }
 else {
-    $match = @($l3Tools | Where-Object { $_.name -eq $L3McpSelectedTool })
-    if ($match.Count -eq 0) {
-        Add-Check $checks 'l3-mcp-selection' 'FAIL' "Selected tool '$L3McpSelectedTool' was not found in the discovered read-only tools."
+    $toolParamSupplied = -not [string]::IsNullOrWhiteSpace($L3McpSelectedTool)
+    $factParamSupplied = -not [string]::IsNullOrWhiteSpace($L3McpFactSpec)
+    $effectiveTool = if ($toolParamSupplied) { $L3McpSelectedTool } else { $recordedL3Tool }
+    $effectiveFact = if ($factParamSupplied) { $L3McpFactSpec } else { $recordedL3Fact }
+    $selectionEvidence = [ordered]@{
+        decisionsPath = $v2DecisionsFullPath; recordedTool = $recordedL3Tool; recordedFactSpec = $recordedL3Fact
+        effectiveTool = $effectiveTool; effectiveFactSpec = $effectiveFact
+        toolParamSupplied = $toolParamSupplied; factParamSupplied = $factParamSupplied
+        discoveryStatus = $l3DiscoveryStatus; discoveredToolCount = @($l3Tools).Count
     }
-    elseif ($match[0].readOnlyHint -ne $true) {
-        Add-Check $checks 'l3-mcp-selection' 'FAIL' "Selected tool '$L3McpSelectedTool' is not readOnlyHint=true."
+    if ($toolParamSupplied -and ([string]$L3McpSelectedTool -ne $recordedL3Tool)) {
+        Add-Check $checks 'l3-mcp-selection' 'FAIL' "Provided -L3McpSelectedTool '$L3McpSelectedTool' does not match the human-authorized tool '$recordedL3Tool'." $selectionEvidence
+    }
+    elseif ($factParamSupplied -and ([string]$L3McpFactSpec -ne $recordedL3Fact)) {
+        Add-Check $checks 'l3-mcp-selection' 'FAIL' "Provided -L3McpFactSpec '$L3McpFactSpec' does not match the human-authorized factSpec '$recordedL3Fact'." $selectionEvidence
+    }
+    elseif (@($l3Tools).Count -eq 0) {
+        Add-Check $checks 'l3-mcp-selection' 'NOT_RUN' "Authorized tool '$effectiveTool' cannot be confirmed: no L3 discovery result (live tools/list or -L3McpToolsFixture) is available, and the doctor never infers tool existence." $selectionEvidence
     }
     else {
-        Add-Check $checks 'l3-mcp-selection' 'PASS' "Selected tool '$L3McpSelectedTool' is discovered and readOnlyHint=true; factSpec='$L3McpFactSpec'." ([ordered]@{ tool = $L3McpSelectedTool; factSpec = $L3McpFactSpec })
+        $match = @($l3Tools | Where-Object { $_.name -eq $effectiveTool })
+        if ($match.Count -eq 0) {
+            Add-Check $checks 'l3-mcp-selection' 'FAIL' "Authorized tool '$effectiveTool' was not found in the discovered read-only tools." $selectionEvidence
+        }
+        elseif ($match[0].readOnlyHint -ne $true) {
+            Add-Check $checks 'l3-mcp-selection' 'FAIL' "Authorized tool '$effectiveTool' is not readOnlyHint=true." $selectionEvidence
+        }
+        else {
+            Add-Check $checks 'l3-mcp-selection' 'PASS' "Authorized tool '$effectiveTool' matches the decision record and is discovered with readOnlyHint=true; factSpec='$effectiveFact'." $selectionEvidence
+        }
     }
 }
 
-# -- 13. Human/master decisions (W04, W03/W05, consulting-analysis) ----------
-$decisionsPath = Join-Path $root 'contracts/customer-demo-v2/v2-m0-decisions.json'
-try {
-    $decisions = Read-V2Json $decisionsPath
-    $w04 = Get-V2Prop $decisions.decisions 'w04RecoveryAuthorization'
-    Add-Check $checks 'w04-authorization' 'BLOCKED_EXTERNAL' "human decision $($w04.recordedOn): $($w04.decision); dependent V2-M1+ stages are BLOCKED, not a doctor FAIL." ([ordered]@{ decision = [string]$w04.decision; recordedOn = [string]$w04.recordedOn; source = [string]$decisions.source })
-    $w03w05 = Get-V2Prop $decisions.decisions 'w03W05Ordering'
-    Add-Check $checks 'w03-w05-order' 'PASS' "decision=$($w03w05.decision); parallel=$($w03w05.parallel); reviewedMainSha=$($w03w05.reviewedMainSha)" ([ordered]@{ decision = [string]$w03w05.decision; parallel = $w03w05.parallel; reviewedMainSha = [string]$w03w05.reviewedMainSha })
+# -- 13. Human/master decisions (W04, W03/W05) ------------------------------
+if ($null -eq $v2Decisions) {
+    Add-Check $checks 'w04-authorization' 'FAIL' "Cannot read the committed decision record at ${v2DecisionsFullPath}: $v2DecisionsError" ([ordered]@{ decisionsPath = $v2DecisionsFullPath })
+    Add-Check $checks 'w03-w05-order' 'FAIL' "Cannot read the committed decision record at ${v2DecisionsFullPath}: $v2DecisionsError" ([ordered]@{ decisionsPath = $v2DecisionsFullPath })
 }
-catch {
-    Add-Check $checks 'w04-authorization' 'NOT_RUN' "Cannot read the committed decision record: $($_.Exception.Message)" $null
-    Add-Check $checks 'w03-w05-order' 'NOT_RUN' "Cannot read the committed decision record: $($_.Exception.Message)" $null
+else {
+    $w04 = Get-V2Prop $v2Decisions.decisions 'w04RecoveryAuthorization'
+    $w04Decision = [string](Get-V2Prop $w04 'decision')
+    $w04Evidence = [ordered]@{
+        decisionsPath = $v2DecisionsFullPath; decision = $w04Decision
+        authority = [string](Get-V2Prop $w04 'authority'); recordedOn = [string](Get-V2Prop $w04 'recordedOn')
+        supersedes = Get-V2Prop $w04 'supersedes'
+    }
+    if ($w04Decision -eq 'AUTHORIZED') {
+        Add-Check $checks 'w04-authorization' 'PASS' "Human-authorized bounded W04 file-context slice (recorded $($w04.recordedOn)); scope: only the two proven upload FAILs may be fixed, Project Delete/Trash P0 is untouched, and this slice PASS is not a W04 whole-package PASS; supersedes the earlier NOT_AUTHORIZED record." $w04Evidence
+    }
+    elseif ($w04Decision -eq 'NOT_AUTHORIZED') {
+        Add-Check $checks 'w04-authorization' 'BLOCKED_EXTERNAL' "Human decision $($w04.recordedOn): the bounded W04 slice is NOT authorized; dependent V2-M1+ stages are BLOCKED, not a doctor FAIL." $w04Evidence
+    }
+    else {
+        Add-Check $checks 'w04-authorization' 'FAIL' "Missing or unrecognized W04 recovery authorization decision '$w04Decision'; expected AUTHORIZED or NOT_AUTHORIZED." $w04Evidence
+    }
+
+    $w03w05 = Get-V2Prop $v2Decisions.decisions 'w03W05Ordering'
+    if ($null -eq $w03w05 -or [string]::IsNullOrWhiteSpace([string](Get-V2Prop $w03w05 'decision'))) {
+        Add-Check $checks 'w03-w05-order' 'FAIL' "Missing w03W05Ordering decision in $v2DecisionsFullPath." ([ordered]@{ decisionsPath = $v2DecisionsFullPath })
+    }
+    else {
+        Add-Check $checks 'w03-w05-order' 'PASS' "decision=$($w03w05.decision); parallel=$($w03w05.parallel); reviewedMainSha=$($w03w05.reviewedMainSha)" ([ordered]@{ decision = [string]$w03w05.decision; parallel = $w03w05.parallel; reviewedMainSha = [string]$w03w05.reviewedMainSha })
+    }
 }
 if (-not [string]::IsNullOrWhiteSpace($DecisionRecordPath) -and (Test-Path -LiteralPath $DecisionRecordPath -PathType Leaf)) {
     $readmeText = Get-Content -Raw -LiteralPath $DecisionRecordPath
-    $crossOk = ($readmeText -match '暂不授权') -and ($readmeText -match 'W05 task-3')
+    $crossOk = ($readmeText -match '授权恢复 W04 受界切片') -and ($readmeText -match 'W05 task-3') -and ($readmeText -match 'calculate')
     $crossStatus = if ($crossOk) { 'PASS' } else { 'FAIL' }
     Add-Check $checks 'decision-record-crosscheck' $crossStatus "Cross-checked the provided roadmap README against the committed decisions file." ([ordered]@{ decisionRecord = $DecisionRecordPath; crossCheckOk = $crossOk })
 }
