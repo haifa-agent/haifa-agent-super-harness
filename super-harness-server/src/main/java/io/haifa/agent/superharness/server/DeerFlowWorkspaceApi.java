@@ -67,6 +67,8 @@ final class DeerFlowWorkspaceApi {
     private static final Pattern FORM_FILENAME =
             Pattern.compile("(?:^|;)\\s*filename=(?:\"([^\"]*)\"|([^;\\s]+))");
     private static final Pattern BYTE_RANGE = Pattern.compile("^bytes=(\\d*)-(\\d*)$");
+    /** Frozen {@code deerflow.utils.thread_id.THREAD_ID_PATTERN}. */
+    private static final Pattern THREAD_ID = Pattern.compile("^[A-Za-z0-9_-]{1,64}$");
 
     private final ObjectMapper json;
     private final WorkspaceLimits limits;
@@ -83,28 +85,33 @@ final class DeerFlowWorkspaceApi {
 
     boolean tryHandle(HttpExchange exchange) throws IOException {
         String path = exchange.getRequestURI().getPath();
+        // Frozen uploads.py guards upload/limits/list with require_existing=False: the frozen UI
+        // uploads a new conversation's first files before thread.submit creates the Thread row.
         Matcher match = UPLOAD_LIMITS.matcher(path);
         if (match.matches()) {
-            return route(exchange, match.group(1), "GET", this::uploadLimits);
+            return route(exchange, match.group(1), "GET", false, this::uploadLimits);
         }
         match = UPLOAD_LIST.matcher(path);
         if (match.matches()) {
-            return route(exchange, match.group(1), "GET", this::listUploads);
+            return route(exchange, match.group(1), "GET", false, this::listUploads);
         }
         match = UPLOADS.matcher(path);
         if (match.matches()) {
-            return route(exchange, match.group(1), "POST", this::upload);
+            return route(exchange, match.group(1), "POST", false, this::upload);
         }
         match = ARTIFACT.matcher(path);
         if (match.matches()) {
             String threadId = match.group(1);
             String logicalPath = match.group(2);
-            return route(exchange, threadId, "GET", (request, binding) -> readArtifact(request, binding, logicalPath));
+            return route(exchange, threadId, "GET", true,
+                    (request, binding) -> readArtifact(request, binding, logicalPath));
         }
         return false;
     }
 
-    private boolean route(HttpExchange exchange, String threadId, String method, Route route) throws IOException {
+    private boolean route(
+            HttpExchange exchange, String threadId, String method, boolean requireExisting, Route route)
+            throws IOException {
         if (!isLoopbackPeer(exchange)) {
             sendJson(exchange, 403, Map.of("detail", "Local profile accepts loopback clients only"));
             return true;
@@ -114,7 +121,12 @@ final class DeerFlowWorkspaceApi {
             sendJson(exchange, 405, Map.of("detail", "Method Not Allowed"));
             return true;
         }
-        if (!threadExists.test(threadId)) {
+        if (!THREAD_ID.matcher(threadId).matches()) {
+            sendJson(exchange, 422, Map.of(
+                    "detail", "Invalid thread_id: expected 1-64 ASCII letters, digits, hyphens, or underscores"));
+            return true;
+        }
+        if (requireExisting && !threadExists.test(threadId)) {
             sendJson(exchange, 404, Map.of("detail", "Thread not found"));
             return true;
         }

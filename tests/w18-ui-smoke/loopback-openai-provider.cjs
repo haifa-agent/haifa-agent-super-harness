@@ -195,6 +195,38 @@ function uploadPaths(body) {
   return [...new Set(text.match(/\/mnt\/user-data\/uploads\/[A-Za-z0-9._-]+/g) ?? [])];
 }
 
+// Haifa hands the model a JSON Tool envelope whose summary is the Tool text;
+// the frozen DeerFlow Tool returns the text directly.
+function v2ToolText(content) {
+  const text = textOfContent(content);
+  try {
+    const envelope = JSON.parse(text);
+    if (envelope && typeof envelope.summary === "string") return envelope.summary;
+  } catch {
+    // plain-text Tool result
+  }
+  return text;
+}
+
+function v2CsvAnswer(toolText) {
+  if (/^Error:/.test(toolText)) return `FILE_UNREADABLE ${toolText.split(/\r?\n/)[0]}`;
+  const lines = toolText.split(/\r?\n/);
+  const header = lines.findIndex((line) => line.trim() === "customer_id,region,amount_cny");
+  if (header < 0) return "FILE_UNREADABLE no CSV header";
+  const rows = lines.slice(header + 1).filter((line) => line.trim() !== "").map((line) => line.trim().split(","));
+  const totals = {};
+  let total = 0;
+  let high = 0;
+  for (const [, region, raw] of rows) {
+    const amount = Number.parseInt(raw, 10);
+    totals[region] = (totals[region] ?? 0) + amount;
+    total += amount;
+    if (amount >= 1500) high += 1;
+  }
+  const row17 = rows.length >= 17 ? rows[16][0] : "missing";
+  return `row17=${row17} east=${totals.East ?? 0} west=${totals.West ?? 0} total=${total} high=${high} rows=${rows.length}`;
+}
+
 function firstUserMatch(body, pattern) {
   if (!Array.isArray(body.messages)) return null;
   for (const message of body.messages) {
@@ -426,6 +458,37 @@ const server = http.createServer((request, response) => {
       });
       frame(response, "[DONE]");
       response.end();
+      return;
+    }
+
+    // W04 V2 file context: read the saved original the Run context references
+    // with read_file and derive every value from the Tool result. The provider
+    // never holds the CSV values; a missing reference or unreadable file yields
+    // an explicit NO_FILE_CONTEXT / FILE_UNREADABLE answer instead.
+    const v2FilePrompt = /v2-file-context-[a-z]+-\d+/.exec(rawPrompt)?.[0];
+    if (v2FilePrompt && offeredTools.includes("read_file")) {
+      const id = `v2-file-context-${Date.now()}`;
+      const last = Array.isArray(body.messages) ? body.messages.at(-1) : null;
+      if (last?.role === "tool") {
+        const toolText = v2ToolText(last.content);
+        const answer = `${v2FilePrompt} ${v2CsvAnswer(toolText)}`;
+        console.log(JSON.stringify({
+          type: "v2_file_context", marker: v2FilePrompt, action: "answer", answer,
+          toolResultSha256: /sha256=([0-9a-f]{64})/.exec(toolText)?.[1] ?? null,
+        }));
+        finishWithText(response, id, answer);
+      } else {
+        const target = /\/mnt\/user-data\/uploads\/[^\s)`'"<]+/.exec(rawPrompt)?.[0];
+        if (target) {
+          console.log(JSON.stringify({ type: "v2_file_context", marker: v2FilePrompt, action: "read_file", path: target }));
+          finishWithToolCall(response, id, `v2-read-${Date.now()}`, "read_file", {
+            description: "Read the uploaded CSV",
+            path: target,
+          });
+        } else {
+          finishWithText(response, id, `${v2FilePrompt} NO_FILE_CONTEXT`);
+        }
+      }
       return;
     }
 
