@@ -107,6 +107,21 @@ pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 306
 
 第二轮 `-SkipBuild` 仅在首轮已按 Gateway `30618` 构建成功后使用。每轮脚本在结束时清理槽位进程，Playwright trace、截图及前后端/受控 Provider 日志写到 `local-tmp/slot-2-w15-v2-skill/evidence/ui/run-<时间戳>/`；测试需检查 `skill_load` ToolCall、启用后的模型 Context 和禁用后新 Run 的隔离。完整验收仍以开发报告的实际运行结果为准。
 
+## W21 V2 诊断投影
+
+`GET /api/threads/{thread_id}/runs/{run_id}` 的 `diagnostics` 只读投影使用公开 SDK 的 Run、ModelCall、ToolCall、Interaction 与 Artifact 事实；状态、稳定 ID、错误代码及停止原因均保留 SDK 来源。ToolCall 的实际 MCP/Native 来源、无法证实的 Artifact 路径或 SHA、精确 Run 起止时间，以及失败或缺失的模型 Usage（含 LLM 调用数）返回 `null`，不从当前配置猜测历史事实；SDK 最后更新时间另记 `last_updated_at`。单 Run 最多扫描 20 页、每页 100 条 SDK 事件；超限返回 `projection_complete=false` 与未知 Usage。Run 列表只读 SDK 快照摘要，不扫描每条 Run 的事件；其明细集合为 `null`，须按 ID 单独读取，不把未扫描误报为空集合。
+
+`GET /api/threads/{thread_id}/token-usage?include_active=false` 聚合同一 Thread 中已结束且可核对的 Run，整次请求最多扫描 50 页 SDK 事件；历史被截断或 Usage 无法完整核对时返回 JSON `null`，供冻结前端显示未知而不是 `0`。`by_model` 键采用 `<providerId 字符数>:<providerId><modelId>`，避免不同 Provider 的同名 Model 合并。该投影不创建新事件库，也不改变 Run、审批或 Artifact 权威。
+
+W21 冻结 UI 诊断用例使用独立槽位 3、受控 Provider 和两次相同脚本运行。首轮完成构建，次轮只在源码、前端依赖和 Gateway 代理目标完全一致时复用构建；两轮使用不同数据目录，原始日志、trace、截图和诊断 JSON 保存到 `local-tmp/slot-3-w21/evidence/ui/run-<时间戳>/`。执行前需按 `AGENTS.md` 检查整组端口、空闲内存和冻结来源：
+
+```powershell
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 3 -GatewayPort 40618 -FrontendPort 45618 -V2Diagnostics -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow -DataDirectory local-tmp/slot-3-w21/data/ui-cold
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 3 -GatewayPort 40618 -FrontendPort 45618 -V2Diagnostics -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow -DataDirectory local-tmp/slot-3-w21/data/ui-warm -SkipBuild
+```
+
+用例在真实冻结页面批准生产 `write_file`，核对同一 Run 的 ModelCall、ToolCall、Interaction、Artifact ID 和下载字节，并核对页面请求的 `/token-usage`。受控 Provider 另有真实省略 Usage SSE 帧的负例，要求 SDK 报 `PARTIAL_RESPONSE` 且诊断和 HTTP Usage 保持未知。冻结页面当前关闭可见 token badge，因此不把 badge 当作通过断言；跨身份隔离仍须另行执行。
+
 ## 启动主工作树供人工验收
 
 主工作树固定使用本地回环端口：Gateway `18018`、冻结前端 `33018`。重启时应保持数据目录不变；默认使用被 Git 忽略的 `local-tmp/main-service-data`，其中包含持久化 SQLite Runtime 和日志。重启时不要删除该目录或 Windows 凭据管理器中的 continuation key。

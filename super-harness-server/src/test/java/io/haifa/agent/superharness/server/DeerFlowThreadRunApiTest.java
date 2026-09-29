@@ -589,6 +589,13 @@ class DeerFlowThreadRunApiTest {
         }
         assertThat(transcript).contains("event: end");
         awaitStatus(location, "interrupted");
+        JsonNode cancelledRun = getJson(location);
+        assertThat(cancelledRun.path("diagnostics").path("sdk_status").asText())
+                .isEqualTo("CANCELLED");
+        assertThat(cancelledRun.path("diagnostics").path("stop_reason").asText())
+                .isNotBlank();
+        assertThat(cancelledRun.path("diagnostics").path("thread_run_id").asText())
+                .isEqualTo(cancelledRun.path("run_id").asText());
         JsonNode listed = getJson("/api/threads/thread-cancel/runs?limit=10&offset=0");
         assertThat(listed).hasSize(1);
         assertThat(listed.get(0).path("status").asText()).isEqualTo("interrupted");

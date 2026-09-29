@@ -23,7 +23,9 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -481,6 +483,36 @@ class DeerFlowConfigurationApiTest {
             JsonNode runView = json.readTree(request("GET", runLocation, null).body());
             assertThat(runView.path("status").asText()).isEqualTo("success");
             assertThat(runView.path("llm_call_count").asLong()).isEqualTo(1);
+            assertThat(runView.path("diagnostics").path("usage").path("availability").asText())
+                    .isEqualTo("known");
+            assertThat(runView.path("total_input_tokens").asLong()).isEqualTo(4);
+            assertThat(runView.path("total_output_tokens").asLong()).isEqualTo(3);
+            assertThat(runView.path("diagnostics").path("model_calls").get(0).path("model_id").asText())
+                    .isEqualTo("demo-provider-id");
+            assertThat(runView.path("diagnostics").path("model_calls").get(0).path("provider_id").asText())
+                    .isEqualTo("super-harness-managed-openai-compatible");
+            assertThat(runView.path("diagnostics").path("model_calls").get(0).path("model_call_id").asText())
+                    .isNotBlank();
+            assertThat(runView.path("diagnostics").path("model_calls").get(0).path("status").asText())
+                    .isEqualTo("SUCCEEDED");
+            assertThat(runView.path("diagnostics").path("sdk_status").asText())
+                    .isEqualTo("COMPLETED");
+            JsonNode firstThreadUsage = json.readTree(request(
+                    "GET", "/api/threads/managed-run/token-usage", null).body());
+            assertThat(firstThreadUsage.path("total_input_tokens").asLong()).isEqualTo(4);
+            assertThat(firstThreadUsage.path("total_output_tokens").asLong()).isEqualTo(3);
+            String providerId = "super-harness-managed-openai-compatible";
+            assertThat(firstThreadUsage.path("by_model")
+                            .has(providerId.length() + ":" + providerId + "demo-provider-id"))
+                    .isTrue();
+            assertThat(request("POST", "/api/threads", "{\"thread_id\":\"unrelated-thread\"}")
+                            .statusCode())
+                    .isEqualTo(200);
+            assertThat(request("GET", "/api/threads/unrelated-thread/runs/"
+                            + runView.path("run_id").asText(), null).statusCode())
+                    .isEqualTo(404);
+            assertThat(request("GET", "/api/threads/nonexistent/token-usage", null).statusCode())
+                    .isEqualTo(404);
 
             HttpResponse<String> updated = request(
                     "PUT", "/api/managed-models", saveModelAt(revision, null, endpoint));
@@ -506,10 +538,24 @@ class DeerFlowConfigurationApiTest {
             assertThat(switchedLocation).isNotEqualTo(runLocation);
             assertThat(providerRequests.getLast().path("model").asText()).isEqualTo("second-provider-id");
             restart();
+            JsonNode restoredFirst = json.readTree(request("GET", runLocation, null).body());
+            JsonNode restoredLast = json.readTree(request("GET", switchedLocation, null).body());
+            assertThat(restoredFirst.path("diagnostics").path("model_calls").get(0).path("model_id").asText())
+                    .isEqualTo("demo-provider-id");
+            assertThat(restoredLast.path("diagnostics").path("model_calls").get(0).path("model_id").asText())
+                    .isEqualTo("second-provider-id");
+            assertThat(restoredFirst.path("diagnostics").path("usage").path("availability").asText())
+                    .isEqualTo("known");
             assertThat(request("GET", "/api/threads/managed-run/messages/page", null).body())
                     .contains(runView.path("run_id").asText(), switchedLocation.replaceFirst(".*/", ""));
-            assertThat(request("GET", "/api/threads/managed-run/runs", null).statusCode())
-                    .isEqualTo(200);
+            JsonNode runList = json.readTree(request("GET", "/api/threads/managed-run/runs", null).body());
+            assertThat(runList).hasSize(3);
+            assertThat(runList.get(0).path("diagnostics").path("projection_complete").asBoolean())
+                    .isFalse();
+            assertThat(runList.get(0).path("diagnostics").path("incomplete_reason").asText())
+                    .isEqualTo("run_list_summary");
+            assertThat(runList.get(0).path("diagnostics").path("model_calls").isNull())
+                    .isTrue();
 
             assertThat(providerRequests).hasSize(4);
             assertThat(providerRequests.get(0).path("tools")).isNotEmpty();
@@ -522,6 +568,103 @@ class DeerFlowConfigurationApiTest {
                     + runView.path("run_id").asText()
                     + " model=demo-model revision=" + revision
                     + " provider_calls=" + providerRequests.size());
+        } finally {
+            provider.stop(0);
+        }
+    }
+
+    @Test
+    void omittedProviderUsageRemainsUnknownWhileExplicitZeroIsKnown() throws Exception {
+        List<String> providerFrames = java.util.Collections.synchronizedList(new ArrayList<>());
+        HttpServer provider = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        provider.createContext("/v1/chat/completions", exchange -> {
+            JsonNode providerRequest = json.readTree(exchange.getRequestBody());
+            boolean omitUsage = providerRequest.toString().contains("omit usage");
+            String payload = """
+                    data: {"id":"usage-run","model":"controlled-model","choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":"stop"}]}
+
+                    """
+                    + (omitUsage ? "" : """
+                    data: {"id":"usage-run","model":"controlled-model","choices":[],"usage":{"prompt_tokens":0,"completion_tokens":0}}
+
+                    """)
+                    + """
+                    data: [DONE]
+
+                    """;
+            providerFrames.add(payload);
+            byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
+            System.out.println("W21_PROVIDER_FRAME_" + (omitUsage ? "OMITTED" : "EXPLICIT_ZERO")
+                    + "=" + json.writeValueAsString(payload));
+            try {
+                System.out.println("W21_PROVIDER_FRAME_SHA256_" + (omitUsage ? "OMITTED" : "EXPLICIT_ZERO")
+                        + "=" + HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)));
+            } catch (java.security.NoSuchAlgorithmException unavailable) {
+                throw new IllegalStateException("SHA-256 unavailable", unavailable);
+            }
+            exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        provider.start();
+        try {
+            String endpoint = "http://127.0.0.1:" + provider.getAddress().getPort() + "/v1";
+            assertThat(request("PUT", "/api/managed-models", saveModelAt(null, "controlled-secret", endpoint))
+                            .statusCode())
+                    .isEqualTo(200);
+            for (String threadId : List.of("usage-omitted", "usage-explicit-zero")) {
+                assertThat(request("POST", "/api/threads", "{\"thread_id\":\"" + threadId + "\"}")
+                                .statusCode())
+                        .isEqualTo(200);
+            }
+
+            String runBody = """
+                    {"assistant_id":"lead_agent","input":{"messages":[{"type":"human","content":"%s"}]},"stream_mode":["messages-tuple","updates","custom"],"context":{"model_name":"demo-model","mode":"flash","reasoning_effort":"minimal","thinking_enabled":false,"is_plan_mode":false,"subagent_enabled":false},"on_disconnect":"continue","multitask_strategy":"reject"}
+                    """;
+            HttpResponse<String> omitted = request("POST", "/api/threads/usage-omitted/runs/stream",
+                    runBody.formatted("omit usage"));
+            assertThat(omitted.statusCode()).isEqualTo(200);
+            assertThat(omitted.body()).contains("event: end");
+            String omittedLocation = omitted.headers().firstValue("content-location").orElseThrow();
+            JsonNode omittedRun = json.readTree(request("GET", omittedLocation, null).body());
+            assertThat(omittedRun.path("status").asText()).isEqualTo("error");
+            assertThat(omittedRun.path("total_input_tokens").isNull()).isTrue();
+            assertThat(omittedRun.path("total_output_tokens").isNull()).isTrue();
+            assertThat(omittedRun.path("llm_call_count").isNull()).isTrue();
+            assertThat(omittedRun.path("diagnostics").path("usage").path("availability").asText())
+                    .isEqualTo("unknown");
+            assertThat(omittedRun.path("diagnostics").toString())
+                    .doesNotContain("controlled-secret", "omit usage", endpoint);
+            assertThat(omittedRun.path("diagnostics").path("model_calls").get(0).path("status").asText())
+                    .isEqualTo("FAILED");
+            assertThat(omittedRun.path("diagnostics").path("model_calls").get(0)
+                            .path("reason_code").asText())
+                    .isEqualTo("PARTIAL_RESPONSE");
+            assertThat(json.readTree(request("GET", "/api/threads/usage-omitted/token-usage", null).body())
+                            .isNull())
+                    .isTrue();
+
+            HttpResponse<String> zero = request("POST", "/api/threads/usage-explicit-zero/runs/stream",
+                    runBody.formatted("explicit zero"));
+            assertThat(zero.statusCode()).isEqualTo(200);
+            assertThat(zero.body()).contains("event: end");
+            JsonNode zeroRun = json.readTree(request("GET",
+                    zero.headers().firstValue("content-location").orElseThrow(), null).body());
+            assertThat(zeroRun.path("status").asText()).isEqualTo("success");
+            assertThat(zeroRun.path("total_input_tokens").asLong()).isZero();
+            assertThat(zeroRun.path("total_output_tokens").asLong()).isZero();
+            assertThat(zeroRun.path("diagnostics").path("usage").path("availability").asText())
+                    .isEqualTo("known");
+            JsonNode zeroThreadUsage = json.readTree(
+                    request("GET", "/api/threads/usage-explicit-zero/token-usage", null).body());
+            assertThat(zeroThreadUsage.path("total_tokens").asLong()).isZero();
+            assertThat(providerFrames).hasSize(2);
+            assertThat(providerFrames.get(0)).doesNotContain("\"usage\":");
+            assertThat(providerFrames.get(1)).contains("\"prompt_tokens\":0", "\"completion_tokens\":0");
+            System.out.println("W21_USAGE_EVIDENCE omittedRun=" + omittedRun.path("run_id").asText()
+                    + " omittedStatus=" + omittedRun.path("diagnostics").path("sdk_status").asText()
+                    + " explicitZeroRun=" + zeroRun.path("run_id").asText());
         } finally {
             provider.stop(0);
         }

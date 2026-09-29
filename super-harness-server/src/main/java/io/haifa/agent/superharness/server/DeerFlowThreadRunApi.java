@@ -14,6 +14,7 @@ import io.haifa.agent.runtime.api.InteractionResponseReceiptStatus;
 import io.haifa.agent.runtime.api.InteractionResponseSubmission;
 import io.haifa.agent.runtime.api.InteractionState;
 import io.haifa.agent.runtime.api.InteractionView;
+import io.haifa.agent.runtime.api.RunEventCursor;
 import io.haifa.agent.runtime.api.RunEventPayloads;
 import io.haifa.agent.runtime.api.RuntimeContractException;
 import io.haifa.agent.runtime.api.ToolCallView;
@@ -83,6 +84,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final Pattern THREAD_MESSAGES_PAGE =
             Pattern.compile("^/api/threads/([^/]+)/messages/page$");
     private static final Pattern THREAD_RUNS = Pattern.compile("^/api/threads/([^/]+)/runs$");
+    private static final Pattern THREAD_TOKEN_USAGE =
+            Pattern.compile("^/api/threads/([^/]+)/token-usage$");
     private static final Pattern STREAM = Pattern.compile("^/api/threads/([^/]+)/runs/stream$");
     private static final Pattern JOIN_STREAM =
             Pattern.compile("^/api/threads/([^/]+)/runs/([^/]+)/stream$");
@@ -96,6 +99,9 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final Pattern SSE_CURSOR = Pattern.compile("^(\\d+)-0$");
     private static final int EVENT_RETENTION_CAPACITY = 8;
     private static final int EVENT_PAGE_SIZE = 4;
+    private static final int DIAGNOSTIC_EVENT_PAGE_SIZE = 100;
+    private static final int RUN_DIAGNOSTIC_EVENT_PAGE_BUDGET = 20;
+    private static final int THREAD_USAGE_EVENT_PAGE_BUDGET = 50;
     static final Duration WORKSPACE_COMPLETION_OBSERVER_MAX_WAIT = Duration.ofHours(24);
     static final Duration WORKSPACE_COMPLETION_OBSERVER_INITIAL_POLL = Duration.ofMillis(25);
     static final Duration WORKSPACE_COMPLETION_OBSERVER_MAX_POLL = Duration.ofSeconds(1);
@@ -282,6 +288,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             match = THREAD_RUNS.matcher(path);
             if (match.matches() && exchange.getRequestMethod().equals("GET")) {
                 listRuns(exchange, match.group(1));
+                return;
+            }
+            match = THREAD_TOKEN_USAGE.matcher(path);
+            if (match.matches() && exchange.getRequestMethod().equals("GET")) {
+                getThreadTokenUsage(exchange, match.group(1));
                 return;
             }
             match = WORKSPACE_CHANGES.matcher(path);
@@ -1947,13 +1958,114 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return;
         }
         List<Map<String, Object>> response = durableRuns(thread).stream()
-                .map(this::runResponse)
+                .map(run -> runResponse(run, false))
                 .toList();
         sendJson(exchange, 200, response);
     }
 
+    /** The frozen UI treats a JSON null response as unavailable Usage, without displaying zero. */
+    private void getThreadTokenUsage(HttpExchange exchange, String threadId) throws IOException {
+        ThreadRecord thread = threads.get(threadId);
+        if (thread == null) {
+            sendJson(exchange, 404, Map.of("detail", "Thread not found"));
+            return;
+        }
+        if (queryValue(exchange, "include_active").filter(value -> !Set.of("false", "0").contains(value)).isPresent()) {
+            sendJson(exchange, 422, Map.of("detail", "Active Run Usage is outside this local profile"));
+            return;
+        }
+        long input = 0;
+        long output = 0;
+        int totalRuns = 0;
+        int remainingEventPages = THREAD_USAGE_EVENT_PAGE_BUDGET;
+        Map<String, long[]> byModel = new LinkedHashMap<>();
+        List<RunRecord> threadRuns = durableRuns(thread);
+        if (threadRuns.size() >= RUN_LIST_LIMIT) {
+            sendJson(exchange, 200, null); // A capped history cannot prove a complete thread total.
+            return;
+        }
+        for (RunRecord run : threadRuns) {
+            AgentRunSnapshot snapshot = run.bridge.snapshot(run.runId);
+            if (!snapshot.status().isTerminal()) continue;
+            if (remainingEventPages == 0) {
+                sendJson(exchange, 200, null);
+                return;
+            }
+            DiagnosticScan scan = runDiagnosticFacts(run, snapshot, remainingEventPages, false);
+            remainingEventPages -= scan.pagesRead();
+            RunDiagnosticProjection.Facts facts = scan.facts();
+            if (!facts.usageKnown()) {
+                sendJson(exchange, 200, null);
+                return;
+            }
+            input = Math.addExact(input, snapshot.usage().inputTokens());
+            output = Math.addExact(output, snapshot.usage().outputTokens());
+            totalRuns++;
+            facts.usageByModel().forEach((modelId, values) -> {
+                long[] aggregate = byModel.computeIfAbsent(modelId, ignored -> new long[2]);
+                aggregate[0] = Math.addExact(aggregate[0], Math.addExact(values[0], values[1]));
+                aggregate[1]++;
+            });
+        }
+        if (totalRuns == 0) {
+            sendJson(exchange, 200, null);
+            return;
+        }
+        Map<String, Object> modelBreakdown = new LinkedHashMap<>();
+        byModel.forEach((modelId, values) -> modelBreakdown.put(
+                modelId, Map.of("tokens", values[0], "runs", values[1])));
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("thread_id", threadId);
+        response.put("total_input_tokens", input);
+        response.put("total_output_tokens", output);
+        response.put("total_tokens", Math.addExact(input, output));
+        response.put("total_runs", totalRuns);
+        response.put("by_model", modelBreakdown);
+        response.put("by_caller", null); // The public Run Usage has no caller attribution.
+        response.put("context_usage", null);
+        sendJson(exchange, 200, response);
+    }
+
+    private DiagnosticScan runDiagnosticFacts(
+            RunRecord run, AgentRunSnapshot snapshot, int pageBudget, boolean includeRelatedFacts) {
+        List<AgentRunEvent> events = new ArrayList<>();
+        RunEventCursor cursor = run.bridge.beforeFirstEvent(run.runId);
+        for (int pageNumber = 0; pageNumber < pageBudget; pageNumber++) {
+            var page = run.bridge.events(run.runId, cursor, DIAGNOSTIC_EVENT_PAGE_SIZE);
+            events.addAll(page.items());
+            if (!page.hasMore()) {
+                return new DiagnosticScan(RunDiagnosticProjection.from(snapshot, events,
+                        includeRelatedFacts ? run.bridge.toolCalls(run.runId) : List.of(),
+                        includeRelatedFacts ? run.bridge.pendingInteraction(run.runId) : java.util.Optional.empty(),
+                        true, null),
+                        pageNumber + 1);
+            }
+            if (page.items().isEmpty() || page.nextCursor().equals(cursor)) {
+                return new DiagnosticScan(RunDiagnosticProjection.from(snapshot, events,
+                        includeRelatedFacts ? run.bridge.toolCalls(run.runId) : List.of(),
+                        includeRelatedFacts ? run.bridge.pendingInteraction(run.runId) : java.util.Optional.empty(),
+                        false,
+                        "event_cursor_stalled"), pageNumber + 1);
+            }
+            cursor = page.nextCursor();
+        }
+        return new DiagnosticScan(RunDiagnosticProjection.from(snapshot, events,
+                includeRelatedFacts ? run.bridge.toolCalls(run.runId) : List.of(),
+                includeRelatedFacts ? run.bridge.pendingInteraction(run.runId) : java.util.Optional.empty(), false,
+                "event_page_budget"), pageBudget);
+    }
+
     private Map<String, Object> runResponse(RunRecord run) {
+        return runResponse(run, true);
+    }
+
+    private Map<String, Object> runResponse(RunRecord run, boolean includeDiagnostics) {
         AgentRunSnapshot snapshot = run.bridge.snapshot(run.runId);
+        RunDiagnosticProjection.Facts facts = includeDiagnostics
+                ? runDiagnosticFacts(run, snapshot, RUN_DIAGNOSTIC_EVENT_PAGE_BUDGET, true).facts()
+                : RunDiagnosticProjection.from(snapshot, List.of(), List.of(), java.util.Optional.empty(),
+                        false, "run_list_summary");
+        boolean usageKnown = facts.usageKnown();
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("run_id", run.runId.value());
         response.put("thread_id", run.threadId);
@@ -1973,17 +2085,21 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         response.put("multitask_strategy", "reject");
         response.put("created_at", run.createdAt.toString());
         response.put("updated_at", snapshot.updatedAt().toString());
-        response.put("total_input_tokens", snapshot.usage().inputTokens());
-        response.put("total_output_tokens", snapshot.usage().outputTokens());
-        response.put("total_tokens", snapshot.usage().inputTokens() + snapshot.usage().outputTokens());
-        response.put("llm_call_count", snapshot.usage().modelCalls());
-        response.put("lead_agent_tokens", snapshot.usage().inputTokens() + snapshot.usage().outputTokens());
-        response.put("subagent_tokens", 0);
-        response.put("middleware_tokens", 0);
-        response.put("message_count", 0);
-        response.put("stop_reason", null);
+        response.put("total_input_tokens", usageKnown ? snapshot.usage().inputTokens() : null);
+        response.put("total_output_tokens", usageKnown ? snapshot.usage().outputTokens() : null);
+        response.put("total_tokens", usageKnown
+                ? Math.addExact(snapshot.usage().inputTokens(), snapshot.usage().outputTokens()) : null);
+        response.put("llm_call_count", usageKnown ? snapshot.usage().modelCalls() : null);
+        response.put("lead_agent_tokens", null);
+        response.put("subagent_tokens", null);
+        response.put("middleware_tokens", null);
+        response.put("message_count", null);
+        response.put("stop_reason", facts.values().get("stop_reason"));
+        response.put("diagnostics", facts.values());
         return response;
     }
+
+    private record DiagnosticScan(RunDiagnosticProjection.Facts facts, int pagesRead) {}
 
     private Map<String, Object> threadStateResponse(ThreadRecord thread) {
         List<ConversationTurn> turns = scanTurns(thread, 200);

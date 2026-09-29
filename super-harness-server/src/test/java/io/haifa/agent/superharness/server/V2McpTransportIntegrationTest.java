@@ -30,8 +30,11 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -284,6 +287,71 @@ class V2McpTransportIntegrationTest {
         assertThat(countToolResults(approved.body(), "get_reporting_policy"))
                 .as("the recovered MCP tool must execute exactly once")
                 .isEqualTo(1);
+    }
+
+    @Test
+    @Order(8)
+    void disconnectedMcpResultRetainsFailedToolCallAndRunIdentity() throws Exception {
+        assumeTrue(Boolean.getBoolean("v2.mcp.negative.controls"),
+                "W21 transport-failure diagnostics require the real fixture's negative controls");
+        configureBothServers();
+        URI controlRoot = URI.create(REPORTING_URL).resolve("/__test/");
+        JsonNode before = json.readTree(client.send(
+                HttpRequest.newBuilder(controlRoot.resolve("state")).GET().build(),
+                HttpResponse.BodyHandlers.ofString()).body());
+        HttpResponse<String> armed = client.send(
+                HttpRequest.newBuilder(controlRoot.resolve("arm-disconnect"))
+                        .POST(HttpRequest.BodyPublishers.noBody()).build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(armed.statusCode()).as(armed.body()).isEqualTo(200);
+
+        createThread("mcp-diagnostic-disconnect");
+        HttpResponse<String> pending = postJson(
+                "/api/threads/mcp-diagnostic-disconnect/runs/stream",
+                buildRunBody("call reporting_get_status {}", null));
+        System.out.println("W21_MCP_PENDING_SSE=" + json.writeValueAsString(pending.body()));
+        assertThat(pending.statusCode()).as(pending.body()).isEqualTo(200);
+        String location = pending.headers().firstValue("content-location").orElseThrow();
+        String requestId = humanInputRequestId(pending.body()).orElseThrow();
+        HttpResponse<String> resumed = postJson(
+                "/api/threads/mcp-diagnostic-disconnect/runs/stream", approvalBody(requestId));
+        System.out.println("W21_MCP_RESUMED_SSE=" + json.writeValueAsString(resumed.body()));
+        System.out.println("W21_MCP_RESUMED_SSE_SHA256=" + HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(resumed.body().getBytes(StandardCharsets.UTF_8))));
+        assertThat(resumed.statusCode()).as(resumed.body()).isEqualTo(200);
+        assertThat(resumed.body()).contains("event: end");
+
+        HttpResponse<String> runResponse = client.send(
+                HttpRequest.newBuilder(baseUri.resolve(location)).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(runResponse.statusCode()).isEqualTo(200);
+        JsonNode run = json.readTree(runResponse.body());
+        JsonNode tool = null;
+        for (JsonNode candidate : run.path("diagnostics").path("tool_calls")) {
+            if (candidate.path("name").asText().contains("reporting_get_status")) {
+                tool = candidate;
+                break;
+            }
+        }
+        assertThat(tool).isNotNull();
+        assertThat(tool.path("run_id").asText()).isEqualTo(run.path("run_id").asText());
+        assertThat(tool.path("tool_call_id").asText()).isNotBlank();
+        assertThat(tool.path("status").asText()).isEqualTo("FAILED");
+        assertThat(tool.path("error_code").asText()).isNotBlank();
+        assertThat(run.path("diagnostics").path("interactions").findValuesAsText("request_id"))
+                .contains(requestId);
+        JsonNode after = json.readTree(client.send(
+                HttpRequest.newBuilder(controlRoot.resolve("state")).GET().build(),
+                HttpResponse.BodyHandlers.ofString()).body());
+        assertThat(after.path("get_status_calls").asInt())
+                .isEqualTo(before.path("get_status_calls").asInt() + 1);
+        assertThat(after.path("disconnects_after_call").asInt())
+                .isEqualTo(before.path("disconnects_after_call").asInt() + 1);
+        System.out.println("W21_MCP_FAILURE_EVIDENCE run=" + run.path("run_id").asText()
+                + " tool=" + tool.path("tool_call_id").asText()
+                + " status=" + tool.path("status").asText()
+                + " code=" + tool.path("error_code").asText()
+                + " fixture=" + after);
     }
 
     @Test

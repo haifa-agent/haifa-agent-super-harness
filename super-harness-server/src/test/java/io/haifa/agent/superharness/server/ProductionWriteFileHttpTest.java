@@ -159,6 +159,30 @@ class ProductionWriteFileHttpTest {
                     .isEqualTo("success");
             assertThat(providerRequests).hasSize(2);
             String sha = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(expected));
+            JsonNode runDiagnostics = json.readTree(request(base, "GET", location, null).body())
+                    .path("diagnostics");
+            assertThat(runDiagnostics.path("model_calls")).hasSize(2);
+            assertThat(runDiagnostics.path("model_calls").findValuesAsText("model_id"))
+                    .containsExactly("demo-provider-id", "demo-provider-id");
+            JsonNode threadUsage = json.readTree(request(
+                    base, "GET", "/api/threads/production-file/token-usage", null).body());
+            assertThat(threadUsage.path("total_runs").asInt()).isEqualTo(1);
+            assertThat(threadUsage.path("total_tokens").asLong()).isEqualTo(14);
+            assertThat(threadUsage.path("by_model").size()).isEqualTo(1);
+            JsonNode modelUsage = threadUsage.path("by_model").elements().next();
+            assertThat(modelUsage.path("tokens").asLong()).isEqualTo(14);
+            assertThat(modelUsage.path("runs").asInt()).isEqualTo(1);
+            assertThat(runDiagnostics.path("tool_calls").findValuesAsText("tool_call_id"))
+                    .contains(pendingToolCallId);
+            assertThat(runDiagnostics.path("tool_calls").findValuesAsText("status"))
+                    .contains("COMPLETED");
+            assertThat(runDiagnostics.path("interactions").findValuesAsText("request_id"))
+                    .contains(requestId);
+            assertThat(runDiagnostics.path("artifacts").findValuesAsText("artifact_id"))
+                    .hasSize(1);
+            assertThat(runDiagnostics.path("artifacts").findValuesAsText("path")).contains(path);
+            assertThat(runDiagnostics.path("artifacts").findValuesAsText("sha256"))
+                    .contains("sha256:" + sha);
             assertThat(providerRequests.get(1).toString())
                     .contains("Created", "call-production-write", path, sha);
             JsonNode toolResult = null;
@@ -186,6 +210,8 @@ class ProductionWriteFileHttpTest {
             assertThat(projectedResult.path("content").asText()).contains("artifact:");
             JsonNode structured = projectedResult.path("additional_kwargs").path("haifa_tool_result");
             assertThat(structured.path("path").asText()).isEqualTo(path);
+            assertThat(runDiagnostics.path("artifacts").findValuesAsText("artifact_id"))
+                    .contains(structured.path("artifactId").asText());
             assertThat(structured.path("artifactExecutionRef").asText()).isEqualTo(projectedCallId);
             assertThat(structured.path("artifactSha256").asText()).isEqualTo("sha256:" + sha);
             assertThat(completedState.path("values").path("artifacts").toString()).contains(path);

@@ -394,7 +394,14 @@ class DeerFlowInteractionHttpApiTest {
         assertThat(rejected.statusCode()).isEqualTo(200);
         assertThat(rejected.body()).contains("event: end");
         assertThat(toolInvocations).hasValue(0);
-        assertThat(getJson(location).path("status").asText()).isEqualTo("success");
+        JsonNode rejectedRun = getJson(location);
+        assertThat(rejectedRun.path("status").asText()).isEqualTo("success");
+        assertThat(rejectedRun.path("diagnostics").path("interactions").findValuesAsText("request_id"))
+                .contains(requestId);
+        assertThat(rejectedRun.path("diagnostics").path("interactions").findValuesAsText("action"))
+                .contains("reject");
+        assertThat(rejectedRun.path("diagnostics").path("thread_run_id").asText())
+                .isEqualTo(rejectedRun.path("run_id").asText());
     }
 
     @Test

@@ -704,6 +704,16 @@ const server = http.createServer((request, response) => {
       return;
     }
 
+    // W21 negative control: a real SSE completion without Provider Usage.
+    // Keep the raw frame in the Provider log for later source verification.
+    if (firstUserMatch(body, /w21-omit-usage-\d+/)) {
+      frame(response, completionChunk(id, `W21 usage omitted: ${prompt}`, "stop"));
+      frame(response, "[DONE]");
+      console.log(JSON.stringify({ type: "w21_usage_omitted", id, prompt, usage: null }));
+      response.end();
+      return;
+    }
+
     frame(response, completionChunk(id, "Controlled provider: "));
     frame(response, completionChunk(id, prompt, "stop"));
     frame(response, {

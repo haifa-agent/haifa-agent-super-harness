@@ -16,6 +16,7 @@ param(
     [switch]$V2ModelSwitch,
     [switch]$V2FileContext,
     [switch]$V2Skill,
+    [switch]$V2Diagnostics,
     [switch]$LiveDeepSeek,
     [switch]$SkipBuild
 )
@@ -28,8 +29,8 @@ $expectedFrontendPort = 15618 + (10000 * $AgentSlot)
 if ($GatewayPort -ne $expectedGatewayPort -or $FrontendPort -ne $expectedFrontendPort -or $ProviderPort -ne 0) {
     throw "W18 slot $AgentSlot requires Gateway=$expectedGatewayPort and Frontend=$expectedFrontendPort; controlled Provider must use OS-assigned port 0."
 }
-if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $LiveDeepSeek).Where({ $_ }).Count -gt 1) {
-    throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, V2 model-switch, V2 file-context, V2 Skill, and live DeepSeek profiles are mutually exclusive.'
+if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $LiveDeepSeek).Where({ $_ }).Count -gt 1) {
+    throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, V2 model-switch, V2 file-context, V2 Skill, V2 diagnostics, and live DeepSeek profiles are mutually exclusive.'
 }
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
@@ -50,6 +51,8 @@ if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
         "local-tmp/slot-$AgentSlot-w04-v2-file-context/ui-data"
     } elseif ($V2Skill) {
         "local-tmp/slot-$AgentSlot-w15-v2-skill/data/ui"
+    } elseif ($V2Diagnostics) {
+        "local-tmp/slot-$AgentSlot-w21/data/ui"
     } else {
         "target/agent-slot-$AgentSlot-data"
     })
@@ -90,11 +93,13 @@ $evidenceRootBase = Join-Path $root $(if ($LiveDeepSeek) {
     "local-tmp/slot-$AgentSlot-w04-v2-file-context/evidence/ui"
 } elseif ($V2Skill) {
     "local-tmp/slot-$AgentSlot-w15-v2-skill/evidence/ui"
+} elseif ($V2Diagnostics) {
+    "local-tmp/slot-$AgentSlot-w21/evidence/ui"
 } else {
     'target/w18-ui-smoke-evidence/playwright'
 })
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$evidenceRoot = if ($DemoArtifact -or $V2ModelSwitch -or $V2FileContext -or $V2Skill) { Join-Path $evidenceRootBase "run-$stamp" } else { $evidenceRootBase }
+$evidenceRoot = if ($DemoArtifact -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { Join-Path $evidenceRootBase "run-$stamp" } else { $evidenceRootBase }
 $null = New-Item -ItemType Directory -Force -Path $evidenceRoot
 $serverOut = Join-Path $evidenceRoot "server-$stamp.stdout.log"
 $serverErr = Join-Path $evidenceRoot "server-$stamp.stderr.log"
@@ -145,11 +150,13 @@ $managedEnvironment = @{
         'w04-v2-file-context.spec.cjs'
     } elseif ($V2Skill) {
         'w15-v2-skill.spec.cjs'
+    } elseif ($V2Diagnostics) {
+        'w21-v2-diagnostics.spec.cjs'
     } else {
         'w18-ui-smoke.spec.cjs'
     })
-    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill) { '120000' } else { '60000' })
-    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill) { 'on' } else { 'retain-on-failure' })
+    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { '120000' } else { '60000' })
+    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { 'on' } else { 'retain-on-failure' })
     # Kept disabled through the ordinary build/test gate. The runner enables it
     # only immediately before launching the dedicated guarded test process.
     W05_INTERACTION_ACCEPTANCE = $null
