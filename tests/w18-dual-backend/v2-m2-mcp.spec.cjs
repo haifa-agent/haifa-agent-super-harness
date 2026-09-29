@@ -9,8 +9,19 @@ const app = process.env.E2E_APP_URL;
 const backend = process.env.W18_DIFFERENTIAL_BACKEND;
 const evidenceRoot = process.env.W18_DIFFERENTIAL_EVIDENCE;
 const manifestPath = process.env.W18_MCP_MANIFEST;
-if (!app || !["reference", "haifa"].includes(backend) || !evidenceRoot || !manifestPath) {
+const configPath = process.env.W18_MCP_CONFIG;
+if (!app || !["reference", "haifa"].includes(backend) || !evidenceRoot || !manifestPath || !configPath) {
   throw new Error("Explicit V2-M2 app, backend and real MCP manifest are required");
+}
+
+function baselineServers() {
+  return JSON.parse(fs.readFileSync(configPath, "utf8")).mcp_servers;
+}
+
+async function fixtureState(port) {
+  const response = await fetch(`http://127.0.0.1:${port}/__test/state`);
+  expect(response.status).toBe(200);
+  return response.json();
 }
 
 async function save(testInfo, name, value) {
@@ -258,12 +269,41 @@ test(`${backend}: V2-M2-09 revoked Server Tool is not offered to a new Run`, asy
   });
 });
 
+test(`${backend}: V2-M2-09 missing and invalid Authorization are rejected by the Server`, async ({ context, page }, testInfo) => {
+  await openChat(page);
+  const original = baselineServers();
+  const observations = [];
+  try {
+    for (const variant of ["missing", "invalid"]) {
+      const changed = structuredClone(original);
+      if (variant === "missing") delete changed["v2-region"].headers;
+      else changed["v2-region"].headers.Authorization = "Bearer w18-invalid-fixture-only";
+      const before = await fixtureState(20629);
+      const update = await browserJson(page, "PUT", "/api/mcp/config", { mcp_servers: changed });
+      expect(update.status).toBe(200);
+      const run = await runMcp(context, page, testInfo, "region", false);
+      const after = await fixtureState(20629);
+      expect(after.authorization_rejections, "real Server must reject an Authorization header").toBeGreaterThan(before.authorization_rejections);
+      expect(JSON.stringify(run.state)).not.toContain("华东");
+      observations.push({ variant, before, after, runId: run.runId,
+        offeredTools: run.providerEvents.filter((event) => event.type === "provider_request")
+          .flatMap((event) => event.offeredTools ?? []) });
+    }
+  } finally {
+    const restored = await browserJson(page, "PUT", "/api/mcp/config", { mcp_servers: original });
+    expect(restored.status).toBe(200);
+  }
+  await save(testInfo, "v2-m2-09-authorization", { case: "V2-M2-09", backend, observations,
+    note: "Authorization values are fixture-only sentinels and are omitted from this attachment" });
+});
+
 test(`${backend}: V2-M2-08 one unreachable Server cannot remove sibling Tools`, async ({ context, page }, testInfo) => {
   await openChat(page);
   expect(await isListening(20630), "the negative endpoint must have no listener when this case starts").toBe(false);
-  const before = await browserJson(page, "GET", "/api/mcp/config");
-  expect(before.status).toBe(200);
-  const changed = structuredClone(before.body.mcp_servers);
+  // The GET projection masks Authorization. Restore from our private fixture
+  // config file so the region Server remains usable in later cases.
+  const original = baselineServers();
+  const changed = structuredClone(original);
   changed["v2-region"].url = "http://127.0.0.1:20630/mcp";
   let isolated = null;
   try {
@@ -275,11 +315,74 @@ test(`${backend}: V2-M2-08 one unreachable Server cannot remove sibling Tools`, 
       .flatMap((event) => event.offeredTools ?? []);
     expect(offered.some((name) => name.endsWith("_get_region_label"))).toBe(false);
   } finally {
-    const restored = await browserJson(page, "PUT", "/api/mcp/config", { mcp_servers: before.body.mcp_servers });
+    const restored = await browserJson(page, "PUT", "/api/mcp/config", { mcp_servers: original });
     expect(restored.status).toBe(200);
   }
   await save(testInfo, "v2-m2-08-isolation", {
     case: "V2-M2-08", backend, unreachableUrl: changed["v2-region"].url,
     reportingRunId: isolated?.runId ?? null,
   });
+});
+
+test(`${backend}: V2-M2-11 unknown transport result is not replayed or reported as success`, async ({ context, page }, testInfo) => {
+  const input = await openChat(page);
+  const before = await fixtureState(20628);
+  const arm = await fetch("http://127.0.0.1:20628/__test/arm-disconnect", { method: "POST" });
+  expect(arm.status, await arm.text()).toBe(200);
+  const marker = `w18-v2-m2-disconnect-${Date.now()}`;
+  const streamPromise = page.waitForResponse((response) => response.request().method() === "POST" &&
+    /\/api\/langgraph\/threads\/[^/]+\/runs\/stream$/.test(new URL(response.url()).pathname),
+    { timeout: 25_000 });
+  await input.fill(marker);
+  await input.press("Enter");
+  const stream = await streamPromise;
+  expect(stream.status(), await stream.text()).toBe(200);
+  const identity = runIdentity(stream);
+  let resumed = null;
+  let approvalRequestId = null;
+  if (backend === "haifa") {
+    const card = page.getByTestId("human-input-card");
+    await expect(card).toBeVisible();
+    const pending = await context.request.get(`${app}/api/langgraph/threads/${identity.threadId}/state`);
+    expect(pending.status(), await pending.text()).toBe(200);
+    const pendingState = await pending.json();
+    approvalRequestId = (pendingState.values?.messages ?? [])
+      .find((message) => message?.artifact?.human_input)?.artifact?.human_input?.request_id;
+    expect(approvalRequestId).toBeTruthy();
+    const resumedPromise = page.waitForResponse((response) => {
+      if (response.request().method() !== "POST" ||
+          !/\/api\/langgraph\/threads\/[^/]+\/runs\/stream$/.test(new URL(response.url()).pathname)) return false;
+      try { return Boolean(response.request().postDataJSON()?.input?.messages?.at(-1)
+        ?.additional_kwargs?.human_input_response); } catch { return false; }
+    }, { timeout: 25_000 });
+    await card.getByRole("button", { name: "Approve", exact: true }).click();
+    resumed = await resumedPromise;
+    expect(resumed.status(), await resumed.text()).toBe(200);
+    expect(runIdentity(resumed)).toEqual(identity);
+  }
+  let run = null;
+  await expect.poll(async () => {
+    const response = await context.request.get(`${app}/api/langgraph/threads/${identity.threadId}/runs/${identity.runId}`);
+    expect(response.status(), await response.text()).toBe(200);
+    run = await response.json();
+    return run.status;
+  }, { timeout: 30_000, intervals: [200, 500] }).toMatch(/^(success|error|failed|interrupted|cancelled)$/);
+  const stateResponse = await context.request.get(`${app}/api/langgraph/threads/${identity.threadId}/state`);
+  expect(stateResponse.status(), await stateResponse.text()).toBe(200);
+  const state = await stateResponse.json();
+  const after = await fixtureState(20628);
+  const events = providerEvents(marker);
+  const streams = [await stream.text(), resumed ? await resumed.text() : ""];
+  await save(testInfo, "v2-m2-11-unknown-result", {
+    case: "V2-M2-11", backend, marker, ...identity, approvalRequestId,
+    before, after, run, state, providerEvents: events, streams,
+  });
+  expect(events.filter((event) => event.type === "v2_mcp" && event.action === "call")).toHaveLength(1);
+  expect(after.get_status_calls - before.get_status_calls,
+    "Server-side committed invocation count must stay one; no blind replay").toBe(1);
+  expect(after.disconnects_after_call - before.disconnects_after_call).toBe(1);
+  expect(after.disconnect_armed).toBe(false);
+  expect(JSON.stringify(state)).not.toContain(`MCP_RESULT ${marker}`);
+  expect(events.some((event) => event.type === "v2_mcp" && event.action === "result" &&
+    event.result.includes('"state":"ready"'))).toBe(false);
 });

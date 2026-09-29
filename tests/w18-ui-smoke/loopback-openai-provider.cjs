@@ -512,11 +512,11 @@ const server = http.createServer((request, response) => {
     // W18 V2-M2: request a Tool only when the real backend offered its
     // source-qualified name. The answer is derived solely from the Tool reply
     // returned through the real MCP transport, never from the policy fixture.
-    const mcpPrompt = firstUserMatch(body, /w18-v2-m2-(?:status-reporting|status-region|reporting|region)-\d+/);
+    const mcpPrompt = firstUserMatch(body, /w18-v2-m2-(?:disconnect|status-reporting|status-region|reporting|region)-\d+/);
     if (mcpPrompt) {
-      const action = /^w18-v2-m2-(status-reporting|status-region|reporting|region)-/.exec(mcpPrompt)?.[1];
-      const source = action?.includes("reporting") ? "reporting" : "region";
-      const suffix = action?.startsWith("status-") ? "get_status" :
+      const action = /^w18-v2-m2-(disconnect|status-reporting|status-region|reporting|region)-/.exec(mcpPrompt)?.[1];
+      const source = action === "disconnect" || action?.includes("reporting") ? "reporting" : "region";
+      const suffix = action === "disconnect" || action?.startsWith("status-") ? "get_status" :
         source === "reporting" ? "get_reporting_policy" : "get_region_label";
       const qualified = offeredTools.find((name) =>
         name.endsWith(`_${suffix}`) && name.replace(/_/g, "-").includes(source));
@@ -529,7 +529,11 @@ const server = http.createServer((request, response) => {
           type: "v2_mcp", marker: mcpPrompt, action: "result", source,
           tool: qualified ?? null, result, resultSha256,
         }));
-        finishWithText(response, id, `MCP_RESULT ${mcpPrompt} ${result}`);
+        // A transport error may arrive as a Tool message. Never turn it into
+        // a claimed successful observation for the ambiguous-result case.
+        const prefix = action === "disconnect" && !result.includes('"state":"ready"')
+          ? "MCP_UNKNOWN" : "MCP_RESULT";
+        finishWithText(response, id, `${prefix} ${mcpPrompt} ${result}`);
       } else if (qualified) {
         const args = suffix === "get_region_label" ? { region: "East" } : {};
         console.log(JSON.stringify({ type: "v2_mcp", marker: mcpPrompt, action: "call", source, tool: qualified, args }));

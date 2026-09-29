@@ -20,6 +20,8 @@ param(
     [int]$RegionPort = 20629,
     [string]$EvidenceDir,
     [long]$DelayMs = 0,
+    [switch]$EnableNegativeControls,
+    [string]$RegionExpectedBearer,
     [switch]$Stop,
     [switch]$SkipBuild
 )
@@ -82,7 +84,8 @@ function Invoke-JsonRpc {
         [string]$Url,
         [string]$Method,
         [hashtable]$Params,
-        [int]$Id = 1
+        [int]$Id = 1,
+        [hashtable]$Headers = @{}
     )
     $payload = @{
         jsonrpc = '2.0'
@@ -91,7 +94,7 @@ function Invoke-JsonRpc {
         params  = $Params
     } | ConvertTo-Json -Depth 10 -Compress
     $resp = Invoke-WebRequest -Uri $Url -Method Post -ContentType 'application/json' `
-        -Body $payload -TimeoutSec 10 -SkipHttpErrorCheck
+        -Headers $Headers -Body $payload -TimeoutSec 10 -SkipHttpErrorCheck
     if ($resp.StatusCode -ne 200) {
         throw "JSON-RPC $Method returned HTTP $($resp.StatusCode): $($resp.Content)"
     }
@@ -102,13 +105,14 @@ function Wait-McpInitialize {
     param(
         [string]$Url,
         [string]$ExpectedServerId,
+        [hashtable]$Headers = @{},
         [int]$TimeoutSec = 30
     )
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $lastError = $null
     while ((Get-Date) -lt $deadline) {
         try {
-            $init = Invoke-JsonRpc -Url $Url -Method 'initialize' -Params @{
+            $init = Invoke-JsonRpc -Url $Url -Method 'initialize' -Headers $Headers -Params @{
                 protocolVersion = '2025-06-18'
                 capabilities    = @{}
                 clientInfo      = @{ name = 'w10-start-precheck'; version = '1.0.0' }
@@ -118,7 +122,7 @@ function Wait-McpInitialize {
                 try {
                     $note = @{ jsonrpc = '2.0'; method = 'notifications/initialized' } | ConvertTo-Json -Depth 5 -Compress
                     Invoke-WebRequest -Uri $Url -Method Post -ContentType 'application/json' `
-                        -Body $note -TimeoutSec 10 -SkipHttpErrorCheck | Out-Null
+                        -Headers $Headers -Body $note -TimeoutSec 10 -SkipHttpErrorCheck | Out-Null
                 } catch { }
                 return $init
             }
@@ -132,8 +136,8 @@ function Wait-McpInitialize {
 }
 
 function Get-McpToolNames {
-    param([string]$Url)
-    $list = Invoke-JsonRpc -Url $Url -Method 'tools/list' -Params @{} -Id 2
+    param([string]$Url, [hashtable]$Headers = @{})
+    $list = Invoke-JsonRpc -Url $Url -Method 'tools/list' -Params @{} -Id 2 -Headers $Headers
     return @($list.result.tools | ForEach-Object { $_.name })
 }
 
@@ -283,16 +287,21 @@ function Start-FixtureServer {
     return [pscustomobject]@{ wrapperPid = $wrapperPid; pid = $javaPid; stdout = $stdout; stderr = $stderr }
 }
 
+$negativeArgs = @()
+if ($EnableNegativeControls) { $negativeArgs = @('--negative-controls', 'true') }
+$regionArgs = @($negativeArgs)
+if ($RegionExpectedBearer) { $regionArgs += @('--expected-bearer', $RegionExpectedBearer) }
 $reporting = Start-FixtureServer -ServerId 'v2-reporting' -Port $ReportingPort `
-    -ExtraArgs @('--policy-file', $policyFile, '--policy-sha256', $policySha)
-$region = Start-FixtureServer -ServerId 'v2-region' -Port $RegionPort
+    -ExtraArgs (@('--policy-file', $policyFile, '--policy-sha256', $policySha) + $negativeArgs)
+$region = Start-FixtureServer -ServerId 'v2-region' -Port $RegionPort -ExtraArgs $regionArgs
+$regionHeaders = if ($RegionExpectedBearer) { @{ Authorization = $RegionExpectedBearer } } else { @{} }
 
 $startedAt = (Get-Date).ToUniversalTime().ToString('o')
 try {
     $reportingUrl = "http://127.0.0.1:$ReportingPort/mcp"
     $regionUrl = "http://127.0.0.1:$RegionPort/mcp"
     Wait-McpInitialize -Url $reportingUrl -ExpectedServerId 'v2-reporting' | Out-Null
-    Wait-McpInitialize -Url $regionUrl -ExpectedServerId 'v2-region' | Out-Null
+    Wait-McpInitialize -Url $regionUrl -ExpectedServerId 'v2-region' -Headers $regionHeaders | Out-Null
 } catch {
     foreach ($s in @($reporting, $region)) {
         foreach ($procId in @($s.pid, $s.wrapperPid)) {
@@ -309,6 +318,7 @@ $manifest = [ordered]@{
     generatedAt   = $startedAt
     evidenceDir   = $EvidenceDir
     delayMs       = $DelayMs
+    negativeControls = [bool]$EnableNegativeControls
     mcpServers    = @(
         [ordered]@{
             id              = 'v2-reporting'
@@ -328,7 +338,8 @@ $manifest = [ordered]@{
             wrapperPid      = $region.wrapperPid
             url             = "http://127.0.0.1:$RegionPort/mcp"
             port            = $RegionPort
-            tools           = (Get-McpToolNames -Url "http://127.0.0.1:$RegionPort/mcp")
+            tools           = (Get-McpToolNames -Url "http://127.0.0.1:$RegionPort/mcp" -Headers $regionHeaders)
+            authRequired    = [bool]$RegionExpectedBearer
             fixtureSha256   = $null
             startedAt       = $startedAt
             stdout          = $region.stdout

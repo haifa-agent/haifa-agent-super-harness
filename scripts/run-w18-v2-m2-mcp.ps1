@@ -145,7 +145,10 @@ $testFinishedAt = $null
 $disabledModelName = 'w18-controlled-b-disabled'
 $disabledModelConfigured = $false
 $mcpManifestPath = Join-Path $evidenceRoot 'mcp/manifest.json'
+$mcpConfigPath = Join-Path $evidenceRoot 'mcp-config.json'
 $mcpStarted = $false
+# A public, fixture-only sentinel. No customer or provider credential is used.
+$fixtureBearer = 'Bearer w18-fixture-only'
 $mcpServers = [ordered]@{
     'v2-reporting' = [ordered]@{
         type = 'http'; url = "http://127.0.0.1:$ReportingPort/mcp"
@@ -157,17 +160,19 @@ $mcpServers = [ordered]@{
         type = 'http'; url = "http://127.0.0.1:$RegionPort/mcp"
         enabled = $true; read_only = $true; tool_name_prefix = $true
         session_init_timeout = 20; tool_call_timeout = 20
+        headers = [ordered]@{ Authorization = $fixtureBearer }
         tools = [ordered]@{ get_region_label = @{}; get_status = @{} }
     }
 }
 $mcpBody = @{ mcp_servers = $mcpServers } | ConvertTo-Json -Depth 8 -Compress
-$mcpBody | Set-Content -LiteralPath (Join-Path $evidenceRoot 'mcp-config.json') -Encoding utf8
+$mcpBody | Set-Content -LiteralPath $mcpConfigPath -Encoding utf8
 try {
     # Two independent real Streamable HTTP processes. Raw logs and manifest
     # live under this round's external evidence directory, never target/.
     & (Join-Path $root 'scripts/start-v2-test-mcp-servers.ps1') `
         -ReportingPort $ReportingPort -RegionPort $RegionPort `
-        -EvidenceDir (Join-Path $evidenceRoot 'mcp') -SkipBuild:$SkipBuild
+        -EvidenceDir (Join-Path $evidenceRoot 'mcp') -SkipBuild:$SkipBuild `
+        -EnableNegativeControls -RegionExpectedBearer $fixtureBearer
     if (-not (Test-Path -LiteralPath $mcpManifestPath)) {
         throw 'The two MCP fixture processes did not start.'
     }
@@ -363,6 +368,7 @@ try {
     $env:W18_DISABLED_MODEL_CONFIGURED = $(if ($disabledModelConfigured) { '1' } else { '0' })
     $env:W18_DIFFERENTIAL_GATEWAY = "http://127.0.0.1:$GatewayPort"
     $env:W18_MCP_MANIFEST = $mcpManifestPath
+    $env:W18_MCP_CONFIG = $mcpConfigPath
     $env:W18_MCP_SLICE = '1'
     $testStartedAt = Get-Date
     Push-Location $root

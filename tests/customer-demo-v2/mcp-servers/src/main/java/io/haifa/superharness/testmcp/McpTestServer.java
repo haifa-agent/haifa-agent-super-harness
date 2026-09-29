@@ -21,6 +21,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Minimal standalone Streamable HTTP MCP fixture server (protocol 2025-06-18).
@@ -43,6 +45,8 @@ public final class McpTestServer {
         String serverId = require(opt, "--server-id");
         int port = Integer.parseInt(require(opt, "--port"));
         long delayMs = Long.parseLong(opt.getOrDefault("--delay-ms", "0"));
+        boolean negativeControls = Boolean.parseBoolean(opt.getOrDefault("--negative-controls", "false"));
+        String expectedBearer = opt.get("--expected-bearer");
 
         Fixture fixture;
         if ("v2-reporting".equals(serverId)) {
@@ -57,7 +61,42 @@ public final class McpTestServer {
 
         HttpServer server = HttpServer.create(
                 new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), 0);
-        server.createContext("/mcp", new McpHandler(fixture, delayMs));
+        NegativeControls controls = negativeControls ? new NegativeControls() : null;
+        server.createContext("/mcp", new McpHandler(fixture, delayMs, expectedBearer, controls));
+        if (controls != null) {
+            server.createContext("/__test/state", exchange -> {
+                try {
+                    if (!"GET".equals(exchange.getRequestMethod())) {
+                        sendControl(exchange, 405, "method not allowed");
+                        return;
+                    }
+                    ObjectNode state = MAPPER.createObjectNode();
+                    state.put("server_id", fixture.serverId());
+                    state.put("authorization_rejections", controls.authorizationRejections.get());
+                    state.put("get_status_calls", controls.getStatusCalls.get());
+                    state.put("disconnects_after_call", controls.disconnectsAfterCall.get());
+                    state.put("disconnect_armed", controls.disconnectNextStatus.get());
+                    sendControl(exchange, 200, state.toString());
+                } finally {
+                    exchange.close();
+                }
+            });
+            server.createContext("/__test/arm-disconnect", exchange -> {
+                try {
+                    if (!"POST".equals(exchange.getRequestMethod())) {
+                        sendControl(exchange, 405, "method not allowed");
+                        return;
+                    }
+                    if (controls.disconnectNextStatus.getAndSet(true)) {
+                        sendControl(exchange, 409, "already armed");
+                        return;
+                    }
+                    sendControl(exchange, 200, "armed");
+                } finally {
+                    exchange.close();
+                }
+            });
+        }
         server.createContext("/healthz", exchange -> {
             byte[] body = "ok".getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
@@ -90,6 +129,25 @@ public final class McpTestServer {
             throw new IllegalArgumentException("missing required argument " + key);
         }
         return value;
+    }
+
+    private static void sendControl(HttpExchange exchange, int status, String body) throws IOException {
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        exchange.sendResponseHeaders(status, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
+    }
+
+    static final class NegativeControls {
+        final AtomicInteger authorizationRejections = new AtomicInteger();
+        final AtomicInteger getStatusCalls = new AtomicInteger();
+        final AtomicInteger disconnectsAfterCall = new AtomicInteger();
+        final AtomicBoolean disconnectNextStatus = new AtomicBoolean();
+    }
+
+    static final class DropAfterCall extends RuntimeException {
     }
 
     // ----------------------------------------------------------------- tools
@@ -242,11 +300,15 @@ public final class McpTestServer {
     static final class McpHandler implements com.sun.net.httpserver.HttpHandler {
         private final Fixture fixture;
         private final long delayMs;
+        private final String expectedBearer;
+        private final NegativeControls controls;
         private final String sessionId = UUID.randomUUID().toString();
 
-        McpHandler(Fixture fixture, long delayMs) {
+        McpHandler(Fixture fixture, long delayMs, String expectedBearer, NegativeControls controls) {
             this.fixture = fixture;
             this.delayMs = delayMs;
+            this.expectedBearer = expectedBearer;
+            this.controls = controls;
         }
 
         @Override
@@ -256,6 +318,11 @@ public final class McpTestServer {
                 if (!"POST".equals(method)) {
                     exchange.getResponseHeaders().set("Allow", "POST");
                     sendText(exchange, 405, "method not allowed");
+                    return;
+                }
+                if (expectedBearer != null && !expectedBearer.equals(exchange.getRequestHeaders().getFirst("Authorization"))) {
+                    if (controls != null) controls.authorizationRejections.incrementAndGet();
+                    sendText(exchange, 401, "unauthorized");
                     return;
                 }
                 byte[] body = exchange.getRequestBody().readAllBytes();
@@ -293,6 +360,10 @@ public final class McpTestServer {
                 } else {
                     sendJson(exchange, 200, response.toString());
                 }
+            } catch (DropAfterCall e) {
+                // The Tool already committed its server-side effect. Closing the
+                // exchange before headers makes the transport outcome ambiguous.
+                exchange.close();
             } catch (Exception e) {
                 System.err.println("handler error: " + e);
                 sendJson(exchange, 500, "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":"
@@ -359,6 +430,13 @@ public final class McpTestServer {
                 Thread.sleep(delayMs);
             }
             ToolOutcome outcome = fixture.call(name, arguments);
+            if ("get_status".equals(name) && controls != null) {
+                controls.getStatusCalls.incrementAndGet();
+                if (controls.disconnectNextStatus.compareAndSet(true, false)) {
+                    controls.disconnectsAfterCall.incrementAndGet();
+                    throw new DropAfterCall();
+                }
+            }
             ObjectNode result = MAPPER.createObjectNode();
             ArrayNode content = result.putArray("content");
             content.addObject().put("type", "text").put("text", outcome.text());
