@@ -136,14 +136,9 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         rejectUnavailableBooleanCapability(context, "subagent_enabled", "subagent delegation");
 
         String requestedModel = optionalNonBlankText(context.get("model_name"), "context.model_name");
-        String agentName = optionalNonBlankText(context.get("agent_name"), "context.agent_name");
-        String assistantId = optionalNonBlankText(body.get("assistant_id"), "assistant_id");
-        if (agentName == null && assistantId != null && !assistantId.equals("lead_agent")) {
-            agentName = assistantId.toLowerCase(java.util.Locale.ROOT).replace('_', '-');
-        }
+        String agentName = selectedAgentName(body);
         String agentModel = null;
         if (agentName != null) {
-            validateAgentName(agentName);
             String selectedAgentName = agentName.toLowerCase(java.util.Locale.ROOT);
             ObjectNode agent = store.agent(selectedAgentName)
                     .orElseThrow(
@@ -158,6 +153,35 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                         .orElseThrow(() -> new IllegalArgumentException(
                                 "Model '" + selectedName + "' is not configured and usable"));
         return binding(selected);
+    }
+
+    /**
+     * Frozen {@code Agent.mcp_plugins} tri-state for the Run's selected Agent:
+     * {@code null}=all enabled installations, {@code []}=none, list=only those ids.
+     * A Run without a selected Agent uses the all-enabled default.
+     */
+    McpRunTools.Selection resolveMcpPluginSelection(JsonNode body) {
+        String agentName = selectedAgentName(body);
+        if (agentName == null) {
+            return McpRunTools.Selection.all();
+        }
+        String selected = agentName.toLowerCase(java.util.Locale.ROOT);
+        ObjectNode agent = store.agent(selected)
+                .orElseThrow(() -> new IllegalArgumentException("Agent '" + selected + "' not found"));
+        return McpRunTools.Selection.fromJson(agent.get("mcp_plugins"));
+    }
+
+    private static String selectedAgentName(JsonNode body) {
+        JsonNode context = body.path("context");
+        String agentName = optionalNonBlankText(context.get("agent_name"), "context.agent_name");
+        String assistantId = optionalNonBlankText(body.get("assistant_id"), "assistant_id");
+        if (agentName == null && assistantId != null && !assistantId.equals("lead_agent")) {
+            agentName = assistantId.toLowerCase(java.util.Locale.ROOT).replace('_', '-');
+        }
+        if (agentName != null) {
+            validateAgentName(agentName);
+        }
+        return agentName;
     }
 
     @Override
