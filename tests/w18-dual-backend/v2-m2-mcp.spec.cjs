@@ -13,8 +13,6 @@ if (!app || !["reference", "haifa"].includes(backend) || !evidenceRoot || !manif
   throw new Error("Explicit V2-M2 app, backend and real MCP manifest are required");
 }
 
-test.describe.configure({ mode: "serial" });
-
 async function save(testInfo, name, value) {
   const file = testInfo.outputPath(`${name}.json`);
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
