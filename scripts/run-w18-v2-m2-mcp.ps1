@@ -92,6 +92,12 @@ $currentBranch = (& git -C $root branch --show-current).Trim()
 if ($currentBranch -cne 'codex/w18-v2-m2-mcp-runner') {
     throw "V2-M2 MCP runner rejects branch '$currentBranch'."
 }
+$mainBaselineSha = (& git -C $root rev-parse main).Trim()
+if ($mainBaselineSha -cne '9396b5a24cc0ae04d3902e53162fbeb8e7eb1115') {
+    throw "V2-M2 final round baseline drifted: main=$mainBaselineSha."
+}
+& git -C $root merge-base --is-ancestor main HEAD
+if ($LASTEXITCODE -ne 0) { throw 'Final main baseline is not an ancestor of this W18 runner.' }
 if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
     $DataDirectory = Join-Path $root 'local-tmp/slot-1-w18-v2-m2/data'
 }
@@ -117,6 +123,20 @@ if (-not (Test-Path -LiteralPath (Join-Path $frontendRoot 'node_modules/.bin/nex
 }
 if (-not (Test-Path -LiteralPath (Join-Path $frontendRoot 'node_modules/.bin/playwright.cmd'))) {
     throw 'Missing repo-local Playwright.'
+}
+$sdkRoot = 'D:\DevCache\maven\repository\io\haifa'
+$sdkFiles = [ordered]@{
+    bomPom = Join-Path $sdkRoot 'haifa-agent-bom/0.1.2-SNAPSHOT/haifa-agent-bom-0.1.2-SNAPSHOT.pom'
+    starterJar = Join-Path $sdkRoot 'haifa-agent-sdk-starter/0.1.2-SNAPSHOT/haifa-agent-sdk-starter-0.1.2-SNAPSHOT.jar'
+    mcpJar = Join-Path $sdkRoot 'haifa-agent-mcp/0.1.2-SNAPSHOT/haifa-agent-mcp-0.1.2-SNAPSHOT.jar'
+    skillCoreJar = Join-Path $sdkRoot 'haifa-agent-skill-core/0.1.2-SNAPSHOT/haifa-agent-skill-core-0.1.2-SNAPSHOT.jar'
+}
+$sdkHashes = [ordered]@{}
+foreach ($entry in $sdkFiles.GetEnumerator()) {
+    if (-not (Test-Path -LiteralPath $entry.Value -PathType Leaf)) {
+        throw "Published SDK artifact is missing: $($entry.Value)"
+    }
+    $sdkHashes[$entry.Key] = (Get-FileHash -Algorithm SHA256 -LiteralPath $entry.Value).Hash.ToLowerInvariant()
 }
 
 $phaseRoot = Join-Path $dataRoot $Backend
@@ -331,6 +351,9 @@ try {
         round = $Round
         sourceSha = (& git -C $source rev-parse HEAD).Trim()
         harnessSha = (& git -C $root rev-parse HEAD).Trim()
+        mainBaselineSha = $mainBaselineSha
+        sdkVersion = '0.1.2-SNAPSHOT'
+        sdkArtifactSha256 = $sdkHashes
         gatewayUrl = "http://127.0.0.1:$GatewayPort"
         gatewayPid = $gatewayProcess.Id
         frontendUrl = "http://127.0.0.1:$FrontendPort"
