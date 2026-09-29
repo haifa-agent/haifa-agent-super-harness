@@ -545,6 +545,35 @@ const server = http.createServer((request, response) => {
       return;
     }
 
+    // W15 Skill proof: the answer is derived from the SDK's offered Tool and
+    // the instructions visible in the resumed model request, not from a local
+    // copy of SKILL.md or a hard-coded successful response.
+    const skillMarker = firstUserMatch(body, /w15-skill-(?:enabled|disabled)-\d+/);
+    if (skillMarker) {
+      const id = `w15-skill-${Date.now()}`;
+      const hasSkillTool = offeredTools.includes("skill_load");
+      const skillBodyVisible = JSON.stringify(body.messages ?? []).includes("Data Authenticity Protocol");
+      const toolResults = toolResultCount(body);
+      let action;
+      if (skillMarker.includes("-enabled-") && toolResults === 0 && hasSkillTool) {
+        action = "skill_load";
+        finishWithToolCall(response, id, `w15-skill-load-${Date.now()}`, "skill_load", {
+          skill: "consulting-analysis",
+        });
+      } else {
+        action = "answer";
+        const answer = skillMarker.includes("-disabled-")
+          ? (!hasSkillTool && !skillBodyVisible ? "SKILL_DISABLED_NO_TOOL" : "SKILL_DISABLED_LEAK")
+          : (toolResults > 0 && skillBodyVisible ? "SKILL_ACTIVE_FROM_CONTEXT" : "SKILL_BODY_MISSING");
+        finishWithText(response, id, `${skillMarker} ${answer}`);
+      }
+      console.log(JSON.stringify({
+        type: "w15_skill_context", marker: skillMarker, action,
+        hasSkillTool, skillBodyVisible, toolResults,
+      }));
+      return;
+    }
+
     // W18 differential scripts only drive tools the backend actually offers; a
     // backend without that production Tool falls through to the plain answer.
     const fileToolPrompt = firstUserMatch(body, /w18-file-tool-\d+/);

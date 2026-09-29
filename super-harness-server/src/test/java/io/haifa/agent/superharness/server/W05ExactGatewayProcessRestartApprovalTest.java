@@ -186,7 +186,7 @@ class W05ExactGatewayProcessRestartApprovalTest {
         // After the Gateway is fully stopped, one authoritative Artifact must remain and its bytes
         // must match both the download and the on-disk workspace file.
         assertWorkspaceArtifactExactlyOnceAndMatchingBytes();
-        requirePortAvailable(GATEWAY_PORT);
+        awaitPortAvailable(GATEWAY_PORT);
     }
 
     private void assertWorkspaceArtifactExactlyOnceAndMatchingBytes() throws Exception {
@@ -326,6 +326,7 @@ class W05ExactGatewayProcessRestartApprovalTest {
             process.destroyForcibly();
             process.waitFor(10, TimeUnit.SECONDS);
         }
+        assertThat(process.isAlive()).as("Gateway process %s must stop", process.pid()).isFalse();
     }
 
     private void stopProvider() {

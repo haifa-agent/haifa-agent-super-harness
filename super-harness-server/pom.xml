@@ -26,6 +26,10 @@
             <artifactId>haifa-agent-store-sqlite</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.haifa</groupId>
+            <artifactId>haifa-agent-skill-core</artifactId>
+        </dependency>
+        <dependency>
             <groupId>io.haifa.agent.superharness</groupId>
             <artifactId>super-harness-app</artifactId>
         </dependency>
