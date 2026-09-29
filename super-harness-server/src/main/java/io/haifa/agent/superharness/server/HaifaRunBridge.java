@@ -33,7 +33,6 @@ import io.haifa.agent.sdk.contribution.ModelContribution;
 import io.haifa.agent.sdk.contribution.PolicyPlatformContribution;
 import io.haifa.agent.sdk.contribution.SkillPlatformContribution;
 import io.haifa.agent.sdk.contribution.SkillToolContributions;
-import io.haifa.agent.sdk.contribution.ToolRegistration;
 import io.haifa.agent.sdk.conversation.ConversationRecord;
 import io.haifa.agent.sdk.conversation.ConversationTurnPage;
 import io.haifa.agent.sdk.conversation.ConversationTurnQuery;
@@ -136,16 +135,10 @@ final class HaifaRunBridge implements AutoCloseable {
                 .policy(new PolicyPlatformContribution(
                         PolicyPresets.standardApproval(), new DefaultPolicyDecisionService()));
         if (skillProjection != null && skillProjection.installTools()) {
-            var contributions = SkillToolContributions.create(
-                    foundation.persistence(), skillProjection.loader(), Instant::now);
-            List<ToolRegistration> registrations = contributions.stream()
-                    .map(contribution -> new ToolRegistration(
-                            contribution.alias(), contribution.definition(),
-                            contribution.providerBindingReference(), contribution.provider()))
-                    .toList();
             builder.skillPlatform(new SkillPlatformContribution(
                             skillProjection.catalog(), skillProjection.loader()))
-                    .toolRegistrations(registrations);
+                    .toolRegistrations(SkillToolContributions.createRegistrations(
+                            foundation.persistence(), skillProjection.loader(), Instant::now));
         }
         McpToolPlatforms.McpToolPlatform platform = null;
         if (!mcpSpecs.isEmpty()) {
