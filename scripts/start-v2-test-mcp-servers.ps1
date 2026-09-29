@@ -36,6 +36,7 @@ if (-not $EvidenceDir) {
     $EvidenceDir = Join-Path $repoRoot 'local-tmp/slot-1-w10-test-mcp/evidence'
 }
 New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
+$EvidenceDir = (Resolve-Path -LiteralPath $EvidenceDir).Path
 $manifestPath = Join-Path $EvidenceDir 'manifest.json'
 
 function Test-LoopbackBind {
@@ -144,17 +145,26 @@ function Stop-TestMcpServers {
     }
     $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
     foreach ($entry in $manifest.mcpServers) {
-        $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $($entry.pid)" -ErrorAction SilentlyContinue
-        if ($null -eq $proc) {
-            Write-Output "pid $($entry.pid) ($($entry.id)) already exited"
-            continue
+        $targets = @()
+        foreach ($pidProp in @('pid', 'wrapperPid')) {
+            $prop = $entry.PSObject.Properties[$pidProp]
+            if ($null -ne $prop -and $null -ne $prop.Value) { $targets += [int]$prop.Value }
         }
-        $cmd = [string]$proc.CommandLine
-        if ($cmd -notmatch 'McpTestServer' -or $cmd -notmatch [regex]::Escape($entry.id)) {
-            throw "refusing to stop pid $($entry.pid): command line does not match the expected MCP fixture server"
+        foreach ($targetPid in $targets) {
+            $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $targetPid" -ErrorAction SilentlyContinue
+            if ($null -eq $proc) {
+                Write-Output "pid $targetPid ($($entry.id)) already exited"
+                continue
+            }
+            $cmd = [string]$proc.CommandLine
+            $isFixture = $proc.Name -eq 'java.exe' -and $cmd -match 'McpTestServer' -and $cmd -match [regex]::Escape($entry.id)
+            $isWrapper = $proc.Name -eq 'cmd.exe' -and $cmd -match 'McpTestServer' -and $cmd -match [regex]::Escape($entry.id)
+            if (-not $isFixture -and -not $isWrapper) {
+                throw "refusing to stop pid ${targetPid}: command line does not match the expected MCP fixture server or its wrapper"
+            }
+            Stop-Process -Id $targetPid -Force
+            Write-Output "stopped $($entry.id) pid $targetPid ($($proc.Name))"
         }
-        Stop-Process -Id $entry.pid -Force
-        Write-Output "stopped $($entry.id) pid $($entry.pid)"
     }
     Start-Sleep -Milliseconds 500
     $ports = @($manifest.mcpServers | ForEach-Object { [int]$_.port })
@@ -172,6 +182,83 @@ Assert-PortsBindable -Ports @($ReportingPort, $RegionPort)
 $classpath = Get-McpClasspath
 $java = (Get-Command java -ErrorAction Stop).Source
 
+function ConvertTo-CmdQuoted {
+    # Produces a double-quoted token using the CommandLineToArgvW backslash rules
+    # so cmd.exe and the child process both parse it unchanged.
+    param([string]$Value)
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.Append('"')
+    $backslashes = 0
+    foreach ($ch in $Value.ToCharArray()) {
+        if ($ch -eq '\') { $backslashes++; continue }
+        if ($ch -eq '"') {
+            [void]$sb.Append('\' * (($backslashes * 2) + 1))
+            [void]$sb.Append('"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) { [void]$sb.Append('\' * $backslashes); $backslashes = 0 }
+        [void]$sb.Append($ch)
+    }
+    [void]$sb.Append('\' * ($backslashes * 2))
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
+function Start-DetachedProcess {
+    # Creates a process out-of-band through the CIM Win32_Process.Create provider
+    # so it does NOT inherit the caller's stdout/stderr pipe handles (W10-task-5).
+    # cmd.exe performs the file redirection so the logs are still captured.
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList,
+        [string]$StdoutPath,
+        [string]$StderrPath,
+        [string]$WorkingDirectory
+    )
+    $tokens = @($FilePath) + $ArgumentList
+    $quoted = ($tokens | ForEach-Object { ConvertTo-CmdQuoted -Value $_ }) -join ' '
+    $inner = "$quoted > $(ConvertTo-CmdQuoted -Value $StdoutPath) 2> $(ConvertTo-CmdQuoted -Value $StderrPath)"
+    $comspec = if ($env:ComSpec) { $env:ComSpec } else { Join-Path $env:SystemRoot 'System32\cmd.exe' }
+    $commandLine = "$comspec /d /s /c `"$inner`""
+    $result = $null
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+            CommandLine      = $commandLine
+            CurrentDirectory = $WorkingDirectory
+        }
+        if ($result.ReturnValue -eq 0) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    if ($result.ReturnValue -ne 0) {
+        throw "Win32_Process.Create failed for $FilePath (ReturnValue=$($result.ReturnValue) after 3 attempts)"
+    }
+    return [int]$result.ProcessId
+}
+
+function Get-JavaChildPid {
+    # The manifest must record the Java PID that actually owns the listening port,
+    # not the cmd.exe wrapper, so -Stop and the SDK verifier can target it.
+    param(
+        [int]$WrapperPid,
+        [string]$ServerId,
+        [int]$Port,
+        [int]$TimeoutSec = 40
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $child = Get-CimInstance Win32_Process -Filter "ParentProcessId = $WrapperPid" -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -eq 'java.exe' -and
+                $_.CommandLine -match [regex]::Escape($ServerId) -and
+                $_.CommandLine -match [regex]::Escape("$Port")
+            } | Select-Object -First 1
+        if ($null -ne $child) { return [int]$child.ProcessId }
+        Start-Sleep -Milliseconds 200
+    }
+    return 0
+}
+
 function Start-FixtureServer {
     param(
         [string]$ServerId,
@@ -183,9 +270,17 @@ function Start-FixtureServer {
     Remove-Item -LiteralPath $stdout, $stderr -ErrorAction SilentlyContinue
     $argList = @('-cp', $classpath, 'io.haifa.superharness.testmcp.McpTestServer',
         '--server-id', $ServerId, '--port', "$Port", '--delay-ms', "$DelayMs") + $ExtraArgs
-    $proc = Start-Process -FilePath $java -ArgumentList $argList -PassThru `
-        -RedirectStandardOutput $stdout -RedirectStandardError $stderr -WorkingDirectory $repoRoot
-    return [pscustomobject]@{ proc = $proc; stdout = $stdout; stderr = $stderr }
+    $wrapperPid = Start-DetachedProcess -FilePath $java -ArgumentList $argList `
+        -StdoutPath $stdout -StderrPath $stderr -WorkingDirectory $repoRoot
+    $javaPid = Get-JavaChildPid -WrapperPid $wrapperPid -ServerId $ServerId -Port $Port
+    if ($javaPid -eq 0) {
+        foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $wrapperPid" -ErrorAction SilentlyContinue)) {
+            try { Stop-Process -Id $child.ProcessId -Force } catch { }
+        }
+        try { Stop-Process -Id $wrapperPid -Force } catch { }
+        throw "detached MCP server $ServerId (port $Port) did not start under wrapper pid $wrapperPid"
+    }
+    return [pscustomobject]@{ wrapperPid = $wrapperPid; pid = $javaPid; stdout = $stdout; stderr = $stderr }
 }
 
 $reporting = Start-FixtureServer -ServerId 'v2-reporting' -Port $ReportingPort `
@@ -199,8 +294,12 @@ try {
     Wait-McpInitialize -Url $reportingUrl -ExpectedServerId 'v2-reporting' | Out-Null
     Wait-McpInitialize -Url $regionUrl -ExpectedServerId 'v2-region' | Out-Null
 } catch {
-    foreach ($p in @($reporting.proc, $region.proc)) {
-        try { if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force } } catch { }
+    foreach ($s in @($reporting, $region)) {
+        foreach ($procId in @($s.pid, $s.wrapperPid)) {
+            try {
+                if (Get-Process -Id $procId -ErrorAction SilentlyContinue) { Stop-Process -Id $procId -Force }
+            } catch { }
+        }
     }
     throw
 }
@@ -213,7 +312,8 @@ $manifest = [ordered]@{
     mcpServers    = @(
         [ordered]@{
             id              = 'v2-reporting'
-            pid             = $reporting.proc.Id
+            pid             = $reporting.pid
+            wrapperPid      = $reporting.wrapperPid
             url             = "http://127.0.0.1:$ReportingPort/mcp"
             port            = $ReportingPort
             tools           = (Get-McpToolNames -Url "http://127.0.0.1:$ReportingPort/mcp")
@@ -224,7 +324,8 @@ $manifest = [ordered]@{
         },
         [ordered]@{
             id              = 'v2-region'
-            pid             = $region.proc.Id
+            pid             = $region.pid
+            wrapperPid      = $region.wrapperPid
             url             = "http://127.0.0.1:$RegionPort/mcp"
             port            = $RegionPort
             tools           = (Get-McpToolNames -Url "http://127.0.0.1:$RegionPort/mcp")
@@ -237,5 +338,5 @@ $manifest = [ordered]@{
 }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 Write-Output "mcp servers ready; manifest: $manifestPath"
-Write-Output "  v2-reporting pid=$($reporting.proc.Id) url=http://127.0.0.1:$ReportingPort/mcp"
-Write-Output "  v2-region    pid=$($region.proc.Id) url=http://127.0.0.1:$RegionPort/mcp"
+Write-Output "  v2-reporting pid=$($reporting.pid) url=http://127.0.0.1:$ReportingPort/mcp"
+Write-Output "  v2-region    pid=$($region.pid) url=http://127.0.0.1:$RegionPort/mcp"
