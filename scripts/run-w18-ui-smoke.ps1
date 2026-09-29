@@ -309,7 +309,9 @@ try {
                 base_url = "$providerUrl/v1"
                 enabled = $true
                 supports_vision = $false
-                context_window = 8192
+                # The frozen consulting-analysis entry is ~8.2k tokens by itself.
+                # Its full activated body must fit alongside Run context and output.
+                context_window = $(if ($V2Skill) { 32768 } else { 8192 })
                 max_tokens = 1024
                 api_key = 'w18-loopback-only'
             }
