@@ -85,6 +85,12 @@ pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 1 -GatewayPort 206
 
 第二轮的 `-SkipBuild` 只能用于首轮已按同一 Gateway 代理目标构建的前端；每轮使用独立数据目录，trace、截图及前后端/Provider 日志写入 `local-tmp/slot-1-w03-v2-model-switch/evidence/ui/run-<时间戳>/`。该受控 UI 回归不代替 W18 双后端差分、真实模型链或 V2 阶段门禁。
 
+## W18 V2-M2 MCP 双后端差分
+
+`scripts/run-w18-v2-m2-mcp-rounds.ps1` 在 W18 独立 worktree 中按 reference 冷/暖、Haifa 冷/暖顺序运行同一套冻结 UI MCP 用例；每轮由 `scripts/run-w18-v2-m2-mcp.ps1` 管理独立 Gateway、Frontend、受控 Provider 和两个真实 Streamable HTTP MCP Server。槽位固定为 `20618/25618`，测试 MCP 使用 `20628/20629`，负例无监听端口为 `20630`，Provider 使用 `46618`。脚本会对整组端口查询 NAT 排除范围并实际绑定预检，保存每轮原始日志、trace、截图、Run 与配置证据，结束时只清理自己启动的进程。失败轮次保留 `FAIL`，不会暗中重试；MCP 切片通过也不自动提升 V2-M2 阶段。
+
+运行前须在该 worktree 以离线 Maven 门禁生成 `super-harness-server/target/*-exec.jar`，并在 `frontend/` 用精确版本 Corepack `pnpm 10.26.2` 离线安装依赖。只有空闲物理内存超过 4 GB、其他 Maven 构建或发布已停止时才运行重型门禁和四轮脚本。完整命令和证据目录由 W18 任务报告记录。
+
 ## 启动主工作树供人工验收
 
 主工作树固定使用本地回环端口：Gateway `18018`、冻结前端 `33018`。重启时应保持数据目录不变；默认使用被 Git 忽略的 `local-tmp/main-service-data`，其中包含持久化 SQLite Runtime 和日志。重启时不要删除该目录或 Windows 凭据管理器中的 continuation key。

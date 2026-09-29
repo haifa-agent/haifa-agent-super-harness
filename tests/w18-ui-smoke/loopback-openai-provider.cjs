@@ -509,6 +509,38 @@ const server = http.createServer((request, response) => {
       return;
     }
 
+    // W18 V2-M2: request a Tool only when the real backend offered its
+    // source-qualified name. The answer is derived solely from the Tool reply
+    // returned through the real MCP transport, never from the policy fixture.
+    const mcpPrompt = firstUserMatch(body, /w18-v2-m2-(?:status-reporting|status-region|reporting|region)-\d+/);
+    if (mcpPrompt) {
+      const action = /^w18-v2-m2-(status-reporting|status-region|reporting|region)-/.exec(mcpPrompt)?.[1];
+      const source = action?.includes("reporting") ? "reporting" : "region";
+      const suffix = action?.startsWith("status-") ? "get_status" :
+        source === "reporting" ? "get_reporting_policy" : "get_region_label";
+      const qualified = offeredTools.find((name) =>
+        name.endsWith(`_${suffix}`) && name.replace(/_/g, "-").includes(source));
+      const lastTool = [...(body.messages ?? [])].reverse().find((message) => message?.role === "tool");
+      const id = `w18-v2-m2-${Date.now()}`;
+      if (lastTool) {
+        const result = v2ToolText(lastTool.content);
+        const resultSha256 = crypto.createHash("sha256").update(result, "utf8").digest("hex");
+        console.log(JSON.stringify({
+          type: "v2_mcp", marker: mcpPrompt, action: "result", source,
+          tool: qualified ?? null, result, resultSha256,
+        }));
+        finishWithText(response, id, `MCP_RESULT ${mcpPrompt} ${result}`);
+      } else if (qualified) {
+        const args = suffix === "get_region_label" ? { region: "East" } : {};
+        console.log(JSON.stringify({ type: "v2_mcp", marker: mcpPrompt, action: "call", source, tool: qualified, args }));
+        finishWithToolCall(response, id, `w18-v2-m2-${source}-${Date.now()}`, qualified, args);
+      } else {
+        console.log(JSON.stringify({ type: "v2_mcp", marker: mcpPrompt, action: "unavailable", source, offeredTools }));
+        finishWithText(response, id, `NO_MCP_TOOL ${mcpPrompt}`);
+      }
+      return;
+    }
+
     // W18 differential scripts only drive tools the backend actually offers; a
     // backend without that production Tool falls through to the plain answer.
     const fileToolPrompt = firstUserMatch(body, /w18-file-tool-\d+/);
