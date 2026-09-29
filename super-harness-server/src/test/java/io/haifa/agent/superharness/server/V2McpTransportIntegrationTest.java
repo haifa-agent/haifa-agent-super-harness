@@ -35,9 +35,13 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.MethodOrderer.OrderAnnotation;
@@ -62,7 +66,8 @@ class V2McpTransportIntegrationTest {
     private static final long REGION_PID = Long.getLong("v2.mcp.region.pid", -1L);
 
     private final ObjectMapper json = new ObjectMapper();
-    private final ScriptedMcpModel model = new ScriptedMcpModel();
+    private final SwitchableMcpModel model = new SwitchableMcpModel();
+    private final SecretKey continuationKey = new SecretKeySpec(new byte[32], "AES");
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .build();
@@ -70,16 +75,18 @@ class V2McpTransportIntegrationTest {
     Path dataDirectory;
     private DeerFlowBootstrapApi api;
     private URI baseUri;
+    private HaifaRunBridge.ModelBinding binding;
 
     @BeforeEach
     void startServer() throws Exception {
         assumeTrue(reachable(REPORTING_URL), "v2-reporting test MCP server is not running");
         assumeTrue(reachable(REGION_URL), "v2-region test MCP server is not running");
-        var binding = new HaifaRunBridge.ModelBinding("v2-mcp-probe", "1.0.0", model, snapshot());
+        binding = new HaifaRunBridge.ModelBinding("v2-mcp-probe", "1.0.0", model, snapshot());
         api = DeerFlowBootstrapApi.createForTests(
                 new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
                 dataDirectory,
-                ignored -> binding);
+                ignored -> binding,
+                continuationKey);
         api.start();
         baseUri = URI.create("http://127.0.0.1:" + api.address().getPort());
     }
@@ -162,7 +169,125 @@ class V2McpTransportIntegrationTest {
     }
 
     @Test
-    @Order(4)
+    @Order(5)
+    void changedDeclarationRebuildsTheBridgeButAnUnchangedConfigDoesNot() throws Exception {
+        configureBothServers();
+        createThread("mcp-signature");
+        assertThat(run("mcp-signature", null, "list tools")).contains("get_reporting_policy");
+        long afterFirst = api.threadRunApi().bridgeBuildCount();
+
+        assertThat(run("mcp-signature", null, "list tools")).contains("get_reporting_policy");
+        assertThat(api.threadRunApi().bridgeBuildCount())
+                .as("an identical MCP projection must not rebuild the bridge")
+                .isEqualTo(afterFirst);
+
+        replaceServer("v2-reporting", """
+                {"type":"http","url":"%s","read_only":true,"tool_name_prefix":true,
+                 "session_init_timeout":20,"tool_call_timeout":21,
+                 "tools":{"get_reporting_policy":{},"get_status":{}}}
+                """.formatted(REPORTING_URL));
+        assertThat(run("mcp-signature", null, "list tools")).contains("get_reporting_policy");
+        assertThat(api.threadRunApi().bridgeBuildCount())
+                .as("a tool_call_timeout change must rebuild with the new declaration")
+                .isEqualTo(afterFirst + 1);
+
+        replaceServer("v2-reporting", """
+                {"type":"http","url":"%s","read_only":true,"tool_name_prefix":true,
+                 "session_init_timeout":20,"tool_call_timeout":21,
+                 "headers":{"X-Probe":"alpha"},
+                 "tools":{"get_reporting_policy":{},"get_status":{}}}
+                """.formatted(REPORTING_URL));
+        assertThat(run("mcp-signature", null, "list tools")).contains("get_reporting_policy");
+        assertThat(api.threadRunApi().bridgeBuildCount())
+                .as("a header change must rebuild with the new declaration")
+                .isEqualTo(afterFirst + 2);
+    }
+
+    @Test
+    @Order(6)
+    void activeSteerAndApprovalReuseTheMountedMcpBridgeWithoutRebuild() throws Exception {
+        configureBothServers();
+        createThread("mcp-reuse");
+
+        model.arm();
+        HttpResponse<java.io.InputStream> started = postStream(
+                "/api/threads/mcp-reuse/runs/stream", buildRunBody("list tools", null), null, null);
+        assertThat(started.statusCode()).isEqualTo(200);
+        long mounted = api.threadRunApi().bridgeBuildCount();
+        assertThat(model.awaitEntered()).as("model must enter its first call").isTrue();
+
+        HttpResponse<java.io.InputStream> steer = postStream(
+                "/api/threads/mcp-reuse/runs/stream",
+                buildSteerBody("list tools"),
+                "X-Haifa-Run-Input",
+                "steer");
+        assertThat(steer.statusCode()).as("an active steer must be accepted").isEqualTo(200);
+        assertThat(api.threadRunApi().bridgeBuildCount())
+                .as("a steer must never rebuild the mounted bridge")
+                .isEqualTo(mounted);
+
+        model.release();
+        drain(started.body());
+        drain(steer.body());
+        assertThat(run("mcp-reuse", null, "list tools")).contains("get_reporting_policy");
+        assertThat(api.threadRunApi().bridgeBuildCount())
+                .as("the MCP tool stays mounted after a steer")
+                .isEqualTo(mounted);
+
+        // Read-only MCP tools still traverse the SDK approval policy. The pending card and
+        // the approval must both reuse the same mounted bridge.
+        HttpResponse<String> pending = postJson(
+                "/api/threads/mcp-reuse/runs/stream", buildRunBody("call get_reporting_policy {}", null));
+        assertThat(pending.statusCode()).as(pending.body()).isEqualTo(200);
+        String requestId = humanInputRequestId(pending.body()).orElseThrow();
+        assertThat(api.threadRunApi().bridgeBuildCount())
+                .as("a pending approval must not rebuild the bridge")
+                .isEqualTo(mounted);
+
+        HttpResponse<String> approved = postJson(
+                "/api/threads/mcp-reuse/runs/stream", approvalBody(requestId));
+        assertThat(approved.statusCode()).as(approved.body()).isEqualTo(200);
+        assertThat(approved.body()).contains("v2-pilot-reporting-001");
+        assertThat(countToolResults(approved.body(), "get_reporting_policy")).isEqualTo(1);
+        assertThat(api.threadRunApi().bridgeBuildCount())
+                .as("approval must reuse the mounted bridge")
+                .isEqualTo(mounted);
+    }
+
+    @Test
+    @Order(7)
+    void restartRecoversPendingMcpApprovalAndExecutesTheToolExactlyOnce() throws Exception {
+        configureBothServers();
+        createThread("mcp-restart");
+        HttpResponse<String> pending = postJson(
+                "/api/threads/mcp-restart/runs/stream", buildRunBody("call get_reporting_policy {}", null));
+        assertThat(pending.statusCode()).as(pending.body()).isEqualTo(200);
+        String location = pending.headers().firstValue("content-location").orElseThrow();
+        String requestId = humanInputRequestId(pending.body()).orElseThrow();
+        assertThat(countToolResults(pending.body(), "get_reporting_policy")).isZero();
+
+        // An exact gateway restart on the same data-root and continuation key.
+        api.close();
+        api = DeerFlowBootstrapApi.createForTests(
+                new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
+                dataDirectory,
+                ignored -> binding,
+                continuationKey);
+        api.start();
+        baseUri = URI.create("http://127.0.0.1:" + api.address().getPort());
+
+        HttpResponse<String> approved = postJson(
+                "/api/threads/mcp-restart/runs/stream", approvalBody(requestId));
+        assertThat(approved.statusCode()).as(approved.body()).isEqualTo(200);
+        assertThat(approved.headers().firstValue("content-location")).contains(location);
+        assertThat(approved.body()).contains("event: end", "v2-pilot-reporting-001");
+        assertThat(countToolResults(approved.body(), "get_reporting_policy"))
+                .as("the recovered MCP tool must execute exactly once")
+                .isEqualTo(1);
+    }
+
+    @Test
+    @Order(9)
     void oneServerFailureIsIsolatedFromItsSibling() throws Exception {
         configureBothServers();
         assumeTrue(REGION_PID > 0, "no v2.mcp.region.pid supplied; isolation kill step not run");
@@ -241,6 +366,23 @@ class V2McpTransportIntegrationTest {
                 .formatted(requestId);
     }
 
+    /** The steer contract rejects {@code multitask_strategy} on the same request. */
+    private static String buildSteerBody(String message) throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        var root = mapper.createObjectNode();
+        root.put("assistant_id", "lead_agent");
+        var messageNode = root.putObject("input").putArray("messages").addObject();
+        messageNode.put("id", "steer-1");
+        messageNode.put("type", "human");
+        messageNode.putArray("content").addObject().put("type", "text").put("text", message);
+        var streamMode = root.putArray("stream_mode");
+        streamMode.add("messages-tuple");
+        streamMode.add("updates");
+        streamMode.add("custom");
+        root.put("on_disconnect", "continue");
+        return mapper.writeValueAsString(root);
+    }
+
     private static String buildRunBody(String message, String agentName) throws Exception {
         ObjectMapper mapper = new ObjectMapper();
         var root = mapper.createObjectNode();
@@ -283,6 +425,49 @@ class V2McpTransportIntegrationTest {
                         .build(),
                 HttpResponse.BodyHandlers.ofString());
         assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+    }
+
+    private void replaceServer(String name, String serverJson) throws Exception {
+        HttpResponse<String> response = client.send(
+                HttpRequest.newBuilder(baseUri.resolve("/api/mcp/config/server"))
+                        .header("Content-Type", "application/json")
+                        .PUT(HttpRequest.BodyPublishers.ofString(
+                                "{\"server_name\":\"" + name + "\",\"server\":" + serverJson + "}"))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+    }
+
+    private HttpResponse<java.io.InputStream> postStream(
+            String path, String body, String headerName, String headerValue) throws Exception {
+        HttpRequest.Builder request = HttpRequest.newBuilder(baseUri.resolve(path))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body));
+        if (headerName != null) {
+            request.header(headerName, headerValue);
+        }
+        return client.send(request.build(), HttpResponse.BodyHandlers.ofInputStream());
+    }
+
+    private static void drain(java.io.InputStream body) throws Exception {
+        try (body) {
+            body.transferTo(java.io.OutputStream.nullOutputStream());
+        }
+    }
+
+    /** Counts the frozen {@code tool} transcript messages for one MCP tool in an SSE transcript. */
+    private static int countToolResults(String transcript, String toolNameFragment) throws Exception {
+        Matcher matcher = Pattern.compile("event: messages\\ndata: ([^\\n]+)\\n").matcher(transcript);
+        int count = 0;
+        while (matcher.find()) {
+            JsonNode message = new ObjectMapper().readTree(matcher.group(1)).path(0);
+            if ("tool".equals(message.path("type").asText())
+                    && message.path("name").asText().contains(toolNameFragment)
+                    && message.path("additional_kwargs").path("haifa_tool_result").isObject()) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private static int countOccurrences(String haystack, String needle) {
@@ -340,6 +525,59 @@ class V2McpTransportIntegrationTest {
                 1_024,
                 Map.of(),
                 Map.of());
+    }
+
+    /**
+     * Wraps the scripted probe model so a test can hold the first model call open and issue
+     * an Active Steer against a genuinely running Run.
+     */
+    static final class SwitchableMcpModel implements AgentChatModel {
+        private final ScriptedMcpModel delegate = new ScriptedMcpModel();
+        private volatile CountDownLatch entered;
+        private volatile CountDownLatch release;
+
+        void arm() {
+            entered = new CountDownLatch(1);
+            release = new CountDownLatch(1);
+        }
+
+        boolean awaitEntered() throws InterruptedException {
+            CountDownLatch latch = entered;
+            return latch != null && latch.await(15, TimeUnit.SECONDS);
+        }
+
+        void release() {
+            CountDownLatch latch = release;
+            if (latch != null) {
+                latch.countDown();
+            }
+        }
+
+        private void gate() {
+            CountDownLatch enteredLatch = entered;
+            CountDownLatch releaseLatch = release;
+            if (enteredLatch == null || releaseLatch == null) {
+                return;
+            }
+            enteredLatch.countDown();
+            try {
+                releaseLatch.await(15, TimeUnit.SECONDS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        @Override
+        public AgentChatResponse invoke(AgentChatRequest request) {
+            gate();
+            return delegate.invoke(request);
+        }
+
+        @Override
+        public AgentChatResponse invokeStreaming(AgentChatRequest request, ModelStreamSink sink) {
+            gate();
+            return delegate.invokeStreaming(request, sink);
+        }
     }
 
     /**

@@ -19,7 +19,6 @@ import io.haifa.agent.runtime.api.RuntimeContractException;
 import io.haifa.agent.runtime.api.ToolCallView;
 import io.haifa.agent.store.sqlite.SqliteStoreException;
 import io.haifa.agent.sdk.tool.JavaTool;
-import io.haifa.agent.starter.McpServerSpec;
 import io.haifa.agent.project.changeset.FileChange;
 import io.haifa.agent.project.changeset.FileChangeType;
 import io.haifa.agent.project.changeset.FileVersion;
@@ -59,6 +58,7 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -112,13 +112,19 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final java.time.Duration TERMINAL_EVENT_SETTLE_TIMEOUT =
             java.time.Duration.ofSeconds(2);
     static final Duration RUN_START_TIMEOUT = Duration.ofSeconds(5);
+    /**
+     * Thread metadata key holding the last MCP Run's {@code mcp_plugins} tri-state so an
+     * exact restart can recompute the same projection against the current configuration.
+     * Server-owned; stripped from client-supplied metadata.
+     */
+    static final String MCP_SELECTION_METADATA_KEY = "haifa_mcp_plugins";
 
     private final ObjectMapper json;
     private final Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver;
     private final Predicate<String> projectExists;
     private final PersistentProjectWorkspaceService workspaceChanges;
     private final Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread;
-    private final Function<JsonNode, List<McpServerSpec>> runMcpSpecs;
+    private final McpProjectionProvider mcpProjections;
     private final DeerFlowUploadContext uploadContext;
     private final PersistentThreadCatalog threadCatalog;
     private final DurableHaifaFoundation foundation;
@@ -127,6 +133,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     // A terminal Run can leave the hot cache while its bridge still owns SDK resources.
     // Keep process-lifetime ownership separate from the bounded Run projection cache.
     private final Set<HaifaRunBridge> ownedBridges = ConcurrentHashMap.newKeySet();
+    // Test/observability seam: how many bridges this process built (each MCP projection
+    // rebuild and restart-recovery bridge counts once).
+    private final java.util.concurrent.atomic.AtomicLong bridgeBuilds =
+            new java.util.concurrent.atomic.AtomicLong();
     private final Set<Thread> workspaceCompletionObservers = ConcurrentHashMap.newKeySet();
     private final Set<Thread> titleCompletionObservers = ConcurrentHashMap.newKeySet();
     private volatile DurableTurnScanner durableTurnScanner = this::scanPersistedUserTurns;
@@ -140,7 +150,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             Path dataDirectory,
             SecretKey continuationKey,
             Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread,
-            Function<JsonNode, List<McpServerSpec>> runMcpSpecs,
+            McpProjectionProvider mcpProjections,
             DeerFlowUploadContext uploadContext)
             throws IOException {
         this.json = json;
@@ -148,7 +158,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         this.projectExists = projectExists;
         this.workspaceChanges = workspaceChanges;
         this.runToolsForThread = runToolsForThread;
-        this.runMcpSpecs = runMcpSpecs == null ? ignored -> List.of() : runMcpSpecs;
+        this.mcpProjections = mcpProjections == null ? McpProjectionProvider.none() : mcpProjections;
         this.uploadContext = java.util.Objects.requireNonNull(uploadContext, "uploadContext");
         this.threadCatalog = new PersistentThreadCatalog(json, dataDirectory);
         this.foundation = new DurableHaifaFoundation(dataDirectory, continuationKey);
@@ -157,8 +167,38 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
     }
 
+    /**
+     * Resolves the MCP declaration for a Run body and, separately, for a persisted
+     * selection replayed against the current configuration after a restart. Keeping both
+     * in one seam makes the "current config + that selection" recovery explicit.
+     */
+    interface McpProjectionProvider {
+        McpRunTools.Projection forRun(JsonNode body);
+
+        McpRunTools.Projection forSelection(McpRunTools.Selection selection);
+
+        static McpProjectionProvider none() {
+            return new McpProjectionProvider() {
+                @Override
+                public McpRunTools.Projection forRun(JsonNode body) {
+                    return McpRunTools.Projection.empty();
+                }
+
+                @Override
+                public McpRunTools.Projection forSelection(McpRunTools.Selection selection) {
+                    return McpRunTools.Projection.empty();
+                }
+            };
+        }
+    }
+
     boolean hasThread(String threadId) {
         return threads.containsKey(threadId);
+    }
+
+    /** Package-private seam for rebuild assertions in the V2 MCP integration tests. */
+    long bridgeBuildCount() {
+        return bridgeBuilds.get();
     }
 
     @Override
@@ -264,6 +304,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         metadata.remove("user_id");
         metadata.remove("system_role");
         metadata.remove("deerflow_project_id");
+        // Server-owned: only a Run may record the MCP projection used for restart recovery.
+        metadata.remove(MCP_SELECTION_METADATA_KEY);
         if (body.has("project_id") && !body.get("project_id").isNull()) {
             if (!body.get("project_id").isTextual() || body.get("project_id").asText().isBlank()) {
                 sendJson(exchange, 422, Map.of("detail", "Invalid project_id"));
@@ -594,7 +636,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         String modelInput = runInput == null
                 ? uploadContext.modelInput(threadId, body.path("input").path("messages"), message)
                 : message;
-        List<McpServerSpec> mcpSpecs = runInput == null ? runMcpSpecs.apply(body) : List.of();
+        // A Steer must never re-declare tools: it only feeds the active Run's own bridge.
+        McpRunTools.Projection mcpProjection = runInput == null
+                ? mcpProjections.forRun(body)
+                : McpRunTools.Projection.empty();
 
         RunRecord run = null;
         RunRecord steerRun = null;
@@ -654,8 +699,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (steerRun == null) {
             boolean createdBridge = thread.bridge == null;
             if (thread.bridge == null) {
-                HaifaRunBridge bridge =
-                        new HaifaRunBridge(binding, toolsForThread(thread), foundation, mcpSpecs);
+                HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection);
                 // Restoring the Conversation is read-only; claim the selected model only
                 // after the SDK has admitted the new Run successfully.
                 attachBridge(thread, bridge, false);
@@ -668,9 +712,9 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             // A configuration change only affects the tool snapshot of later Runs; a Turn whose
             // MCP projection differs from the attached bridge rebuilds it rather than hot-editing
             // the active Run.
-            boolean switchingMcp = !selectedBridge.mcpSignature().equals(mcpSignature(mcpSpecs));
+            boolean switchingMcp = !selectedBridge.mcpSignature().equals(mcpProjection.fingerprint());
             if (switchingModel || switchingMcp) {
-                selectedBridge = new HaifaRunBridge(binding, toolsForThread(thread), foundation, mcpSpecs);
+                selectedBridge = newBridge(binding, thread, mcpProjection);
             }
             // Frozen TitleMiddleware names the thread only from its first user Turn. The boundary is
             // the in-memory message sequence (seeded from durable turns when a persisted session is
@@ -722,6 +766,13 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             thread.updatedAt = Instant.now();
             thread.activeRunId = started.runId().value();
             thread.latestRunId = started.runId().value();
+            // The last Run's MCP selection is the recovery projection for a later restart.
+            // A Run that produced no MCP declaration clears any stale selection.
+            if (mcpProjection.specs().isEmpty()) {
+                thread.clearMcpSelection();
+            } else {
+                thread.setMcpSelection(mcpProjection.selection());
+            }
             long humanSequence = thread.nextMessageSequence;
             thread.nextMessageSequence += 2;
             run = new RunRecord(
@@ -1003,8 +1054,13 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             // The same published Tool registrations must be available when the SDK resumes
             // an approved Interaction after a process restart. The SDK still owns the
             // pending request and its side-effect admission; this bridge only restores it.
-            HaifaRunBridge bridge = new HaifaRunBridge(
-                    binding, toolsForThread(thread), foundation);
+            // The last Run's persisted mcp_plugins selection is recomputed against the
+            // current configuration; a thread with no recorded MCP Run restores no MCP.
+            McpRunTools.Selection selection = thread.mcpSelection();
+            McpRunTools.Projection mcpProjection = selection == null
+                    ? McpRunTools.Projection.empty()
+                    : mcpProjections.forSelection(selection);
+            HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection);
             boolean claimBinding = thread.modelBindingIdentity == null
                     || thread.modelBindingIdentity.equals(bridge.bindingIdentity());
             // Conversation/run reads use shared SQLite. The last selected model is preferred
@@ -1018,10 +1074,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         attachBridge(thread, bridge, true);
     }
 
-    private static String mcpSignature(List<McpServerSpec> specs) {
-        return specs.stream()
-                .map(McpServerSpec::toString)
-                .collect(java.util.stream.Collectors.joining("|"));
+    private HaifaRunBridge newBridge(
+            HaifaRunBridge.ModelBinding binding, ThreadRecord thread, McpRunTools.Projection mcpProjection) {
+        bridgeBuilds.incrementAndGet();
+        return new HaifaRunBridge(binding, toolsForThread(thread), foundation, mcpProjection);
     }
 
     private List<? extends JavaTool<?, ?>> toolsForThread(ThreadRecord thread) {
@@ -3136,6 +3192,54 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             Map<String, Object> updated = new LinkedHashMap<>(metadata);
             updated.put("title", title);
             this.metadata = Collections.unmodifiableMap(updated);
+        }
+
+        /** The last Run's MCP selection, or {@code null} when no MCP Run was recorded. */
+        private McpRunTools.Selection mcpSelection() {
+            return parseMcpSelection(metadata.get(MCP_SELECTION_METADATA_KEY));
+        }
+
+        private void setMcpSelection(McpRunTools.Selection selection) {
+            Map<String, Object> encoded = new LinkedHashMap<>();
+            if (selection.ids().isEmpty()) {
+                encoded.put("mode", "all");
+            } else if (selection.ids().orElseThrow().isEmpty()) {
+                encoded.put("mode", "none");
+            } else {
+                encoded.put("mode", "list");
+                encoded.put("ids", List.copyOf(selection.ids().orElseThrow()));
+            }
+            Map<String, Object> updated = new LinkedHashMap<>(metadata);
+            updated.put(MCP_SELECTION_METADATA_KEY, encoded);
+            this.metadata = Collections.unmodifiableMap(updated);
+        }
+
+        private void clearMcpSelection() {
+            if (!metadata.containsKey(MCP_SELECTION_METADATA_KEY)) return;
+            Map<String, Object> updated = new LinkedHashMap<>(metadata);
+            updated.remove(MCP_SELECTION_METADATA_KEY);
+            this.metadata = Collections.unmodifiableMap(updated);
+        }
+
+        private static McpRunTools.Selection parseMcpSelection(Object raw) {
+            if (raw == null) return null;
+            if (!(raw instanceof Map<?, ?> encoded)) {
+                throw new IllegalStateException("persisted MCP selection is invalid");
+            }
+            Object mode = encoded.get("mode");
+            if ("all".equals(mode)) return McpRunTools.Selection.all();
+            if ("none".equals(mode)) return McpRunTools.Selection.none();
+            if ("list".equals(mode) && encoded.get("ids") instanceof List<?> ids) {
+                Set<String> serverIds = new LinkedHashSet<>();
+                for (Object id : ids) {
+                    if (!(id instanceof String text) || text.isBlank()) {
+                        throw new IllegalStateException("persisted MCP selection is invalid");
+                    }
+                    serverIds.add(text);
+                }
+                return McpRunTools.Selection.of(serverIds);
+            }
+            throw new IllegalStateException("persisted MCP selection is invalid");
         }
     }
 

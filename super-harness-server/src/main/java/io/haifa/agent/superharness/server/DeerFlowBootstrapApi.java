@@ -98,10 +98,21 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                                                 scope.threadId(), scope.artifactProjectRef(), projects, toolWorkspace),
                                         new ProductionReadFileTool(scope.threadId(), projects, toolWorkspace))
                                 : List.of(),
-                body -> McpRunTools.specs(
-                        mcpStore.servers(),
-                        configurationApi.resolveMcpPluginSelection(body),
-                        new java.util.ArrayList<>()),
+                new DeerFlowThreadRunApi.McpProjectionProvider() {
+                    @Override
+                    public McpRunTools.Projection forRun(JsonNode body) {
+                        return McpRunTools.projection(
+                                mcpStore.servers(),
+                                configurationApi.resolveMcpPluginSelection(body),
+                                new java.util.ArrayList<>());
+                    }
+
+                    @Override
+                    public McpRunTools.Projection forSelection(McpRunTools.Selection selection) {
+                        return McpRunTools.projection(
+                                mcpStore.servers(), selection, new java.util.ArrayList<>());
+                    }
+                },
                 new DeerFlowUploadContext(toolWorkspace));
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);

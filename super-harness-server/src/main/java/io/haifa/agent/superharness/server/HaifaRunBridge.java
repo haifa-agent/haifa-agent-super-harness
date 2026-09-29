@@ -49,7 +49,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.Collectors;
 
 /** Adapter that exposes only public Haifa Agent SDK types to the HTTP boundary. */
 final class HaifaRunBridge implements AutoCloseable {
@@ -80,19 +79,22 @@ final class HaifaRunBridge implements AutoCloseable {
             ModelBinding binding,
             List<? extends JavaTool<?, ?>> tools,
             DurableHaifaFoundation foundation) {
-        this(binding, tools, foundation, List.of());
+        this(binding, tools, foundation, McpRunTools.Projection.empty());
     }
 
     HaifaRunBridge(
             ModelBinding binding,
             List<? extends JavaTool<?, ?>> tools,
             DurableHaifaFoundation foundation,
-            List<McpServerSpec> mcpSpecs) {
+            McpRunTools.Projection mcpProjection) {
+        List<McpServerSpec> mcpSpecs = mcpProjection.specs();
         this.binding = binding;
         // MCP ToolLifecycle events are projected by the frozen transcript only when the
         // bridge advertises tools; a bridge whose only tools come from MCP still does.
         this.hasTools = !tools.isEmpty() || !mcpSpecs.isEmpty();
-        this.mcpSignature = signature(mcpSpecs);
+        // The canonical fingerprint covers every field that shaped the SDK declaration, so
+        // a header credential reference or timeout change forces a later Run to rebuild.
+        this.mcpSignature = mcpProjection.fingerprint();
         ModelContribution models = new ModelContribution(
                 Map.of(ModelAdapterCoordinate.from(binding.snapshot()), binding.model()),
                 binding.snapshot(),
@@ -129,10 +131,6 @@ final class HaifaRunBridge implements AutoCloseable {
             }
             throw failure;
         }
-    }
-
-    private static String signature(List<McpServerSpec> mcpSpecs) {
-        return mcpSpecs.stream().map(McpServerSpec::toString).collect(Collectors.joining("|"));
     }
 
     String mcpSignature() {

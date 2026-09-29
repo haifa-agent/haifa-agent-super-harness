@@ -171,6 +171,54 @@ class V2McpConfigApiTest {
         assertThat(diagnostics).anyMatch(line -> line.startsWith("gamma:"));
     }
 
+    @Test
+    void canonicalFingerprintCoversCredentialRefsTimeoutsAndReadOnlyWithoutPlaintext() {
+        ObjectNode baseline = serverNode(
+                "https://reporting.example/mcp", true, true, "{\"get_status\":{}}");
+        baseline.putObject("headers").put("Authorization", "$REPORTING_TOKEN_A");
+        baseline.put("session_init_timeout", 20);
+        baseline.put("tool_call_timeout", 20);
+
+        String original = fingerprint(baseline);
+        assertThat(original).hasSize(64).matches("[0-9a-f]{64}");
+        // The fingerprint is a hash only; the credential reference must not leak through it.
+        assertThat(original).doesNotContain("REPORTING_TOKEN_A", "Authorization");
+        // An unchanged projection must be byte-identical so a later Run never rebuilds.
+        assertThat(fingerprint(baseline.deepCopy())).isEqualTo(original);
+
+        ObjectNode credentialChanged = baseline.deepCopy();
+        ((ObjectNode) credentialChanged.path("headers")).put("Authorization", "$REPORTING_TOKEN_B");
+        assertThat(fingerprint(credentialChanged)).isNotEqualTo(original);
+
+        ObjectNode requestTimeoutChanged = baseline.deepCopy();
+        requestTimeoutChanged.put("tool_call_timeout", 21);
+        assertThat(fingerprint(requestTimeoutChanged)).isNotEqualTo(original);
+
+        ObjectNode connectTimeoutChanged = baseline.deepCopy();
+        connectTimeoutChanged.put("session_init_timeout", 21);
+        assertThat(fingerprint(connectTimeoutChanged)).isNotEqualTo(original);
+
+        ObjectNode readOnlyChanged = baseline.deepCopy();
+        readOnlyChanged.put("read_only", false);
+        assertThat(fingerprint(readOnlyChanged)).isNotEqualTo(original);
+
+        ObjectNode toolsChanged = baseline.deepCopy();
+        toolsChanged.putObject("tools").putObject("get_reporting_policy");
+        assertThat(fingerprint(toolsChanged)).isNotEqualTo(original);
+
+        // A disabled server contributes no declaration, so it has the empty fingerprint.
+        ObjectNode disabled = baseline.deepCopy();
+        disabled.put("enabled", false);
+        assertThat(fingerprint(disabled)).isEmpty();
+    }
+
+    private static String fingerprint(ObjectNode server) {
+        Map<String, ObjectNode> servers = new LinkedHashMap<>();
+        servers.put("reporting", server);
+        return McpRunTools.projection(servers, McpRunTools.Selection.all(), new ArrayList<>())
+                .fingerprint();
+    }
+
     private static ObjectNode serverNode(
             String url, boolean enabled, boolean readOnly, String toolsJson) {
         try {

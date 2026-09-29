@@ -4,14 +4,20 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.haifa.agent.starter.McpServerSpec;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 
 /**
  * Maps the trusted MCP configuration onto the public Haifa Agent SDK MCP declarations.
@@ -21,6 +27,11 @@ import java.util.Set;
  * allowlist). Connection isolation, real discovery, tool naming, invocation, error
  * handling and resource release are owned by the SDK through
  * {@code McpToolPlatforms.applyTo(...)}.</p>
+ *
+ * <p>Each projection carries a canonical SHA-256 fingerprint of every projected field so
+ * that a later Run can detect an effective declaration change (including a header
+ * credential reference or a timeout) without exposing any plaintext. The fingerprint is
+ * a hash only; no header value or credential reference is ever stored or logged here.</p>
  */
 final class McpRunTools {
     static final String TENANT_ID = "super-harness";
@@ -44,6 +55,14 @@ final class McpRunTools {
             return new Selection(Optional.empty());
         }
 
+        static Selection none() {
+            return new Selection(Optional.of(new LinkedHashSet<>()));
+        }
+
+        static Selection of(Set<String> serverIds) {
+            return new Selection(Optional.of(new LinkedHashSet<>(serverIds)));
+        }
+
         static Selection fromJson(JsonNode value) {
             if (value == null || value.isNull()) return all();
             if (!value.isArray()) {
@@ -60,10 +79,33 @@ final class McpRunTools {
         }
     }
 
-    static List<McpServerSpec> specs(
+    /**
+     * The SDK declarations derived from the trusted configuration plus the Run's
+     * {@code mcp_plugins} selection, together with the canonical fingerprint used to
+     * decide whether a later Run must rebuild its bridge.
+     */
+    record Projection(List<McpServerSpec> specs, String fingerprint, Selection selection) {
+        Projection {
+            specs = List.copyOf(specs);
+            fingerprint = fingerprint == null ? "" : fingerprint;
+            selection = selection == null ? Selection.all() : selection;
+        }
+
+        static Projection empty() {
+            return new Projection(List.of(), "", Selection.all());
+        }
+
+        boolean isEmpty() {
+            return specs.isEmpty();
+        }
+    }
+
+    static Projection projection(
             Map<String, ObjectNode> servers, Selection selection, List<String> diagnostics) {
         List<McpServerSpec> specs = new ArrayList<>();
-        for (Map.Entry<String, ObjectNode> entry : servers.entrySet()) {
+        StringBuilder canonical = new StringBuilder();
+        // Stable server order so a re-serialized configuration cannot perturb the fingerprint.
+        for (Map.Entry<String, ObjectNode> entry : new TreeMap<>(servers).entrySet()) {
             String id = entry.getKey();
             ObjectNode server = entry.getValue();
             if (!selection.admits(id)) continue;
@@ -88,6 +130,8 @@ final class McpRunTools {
             }
             try {
                 URI endpoint = URI.create(server.path("url").asText());
+                Duration connectTimeout = timeout(server, "session_init_timeout");
+                Duration requestTimeout = timeout(server, "tool_call_timeout");
                 McpServerSpec spec = McpServerSpec.streamableHttp(id, endpoint)
                         .allowTools(allowed)
                         .protocolVersion(PROTOCOL_VERSION);
@@ -97,11 +141,9 @@ final class McpRunTools {
                 if (server.path("read_only").asBoolean(false)) {
                     spec = spec.readOnly();
                 }
-                Duration connectTimeout = timeout(server, "session_init_timeout");
                 if (connectTimeout != null) {
                     spec = spec.connectTimeout(connectTimeout);
                 }
-                Duration requestTimeout = timeout(server, "tool_call_timeout");
                 if (requestTimeout != null) {
                     spec = spec.requestTimeout(requestTimeout);
                 }
@@ -109,12 +151,73 @@ final class McpRunTools {
                 // Per-server isolation: one unreachable or uncredentialed server must
                 // degrade to a diagnostic instead of removing its siblings' tools.
                 specs.add(spec.optional());
+                canonical.append(canonicalServer(
+                                id, server, type, endpoint, allowed, connectTimeout, requestTimeout))
+                        .append('\n');
             } catch (RuntimeException invalid) {
                 // A projection the SDK rejects must not abort sibling servers or be faked.
                 diagnostics.add(id + ": " + invalid.getMessage());
             }
         }
-        return specs;
+        // No declaration -> no fingerprint, matching a bridge built with no MCP projection.
+        String fingerprint = specs.isEmpty() ? "" : sha256Hex(canonical.toString());
+        return new Projection(specs, fingerprint, selection);
+    }
+
+    /** Convenience view used by the L1 mapping contract tests; the projection is authoritative. */
+    static List<McpServerSpec> specs(
+            Map<String, ObjectNode> servers, Selection selection, List<String> diagnostics) {
+        return projection(servers, selection, diagnostics).specs();
+    }
+
+    /**
+     * Canonical, order-independent description of exactly the fields that shape the SDK
+     * declaration. It is hashed and discarded; only the hash is retained.
+     */
+    private static String canonicalServer(
+            String id,
+            ObjectNode server,
+            String type,
+            URI endpoint,
+            Set<String> allowed,
+            Duration connectTimeout,
+            Duration requestTimeout) {
+        StringBuilder canonical = new StringBuilder();
+        canonical.append("id=").append(id).append('\u0000');
+        canonical.append("type=").append(type).append('\u0000');
+        canonical.append("url=").append(endpoint).append('\u0000');
+        canonical.append("read_only=").append(server.path("read_only").asBoolean(false)).append('\u0000');
+        canonical.append("tool_name_prefix=")
+                .append(server.path("tool_name_prefix").asBoolean(true))
+                .append('\u0000');
+        canonical.append("protocol_version=").append(PROTOCOL_VERSION).append('\u0000');
+        canonical.append("loopback=").append(isLoopbackHttp(endpoint)).append('\u0000');
+        canonical.append("connect_timeout_ms=")
+                .append(connectTimeout == null ? "" : connectTimeout.toMillis())
+                .append('\u0000');
+        canonical.append("request_timeout_ms=")
+                .append(requestTimeout == null ? "" : requestTimeout.toMillis())
+                .append('\u0000');
+        JsonNode headers = server.path("headers");
+        if (headers.isObject()) {
+            TreeMap<String, String> sortedHeaders = new TreeMap<>();
+            headers.properties().forEach(header ->
+                    sortedHeaders.put(header.getKey(), header.getValue().asText("")));
+            sortedHeaders.forEach((name, value) ->
+                    canonical.append("header:").append(name).append('=').append(value).append('\u0000'));
+        }
+        new TreeSet<>(allowed).forEach(remote -> canonical.append("tool:").append(remote).append('\u0000'));
+        return canonical.toString();
+    }
+
+    private static String sha256Hex(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is required", impossible);
+        }
     }
 
     /**
