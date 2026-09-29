@@ -913,6 +913,7 @@ test(`${backend}: V2-M1-04-N2 attaching to a Thread the caller cannot write`, as
     case: "V2-M1-04-N2",
     backend,
     status: "NOT_RUN",
+    deferral: "human-2026-09-29-single-identity",
     reason,
     precondition: "two isolated identities (Thread owner plus a different caller)",
     observedPrincipalId,

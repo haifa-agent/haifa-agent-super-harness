@@ -79,6 +79,7 @@ if ($GatewayPort -ne 40618 -or $FrontendPort -ne 45618 -or $ProviderPort -ne 466
     throw 'W18 slot 3 requires Gateway=40618, Frontend=45618 and the main-controller-assigned test-only Provider=46618.'
 }
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
+$oracleDeferrals = Get-W18OracleDeferrals -OraclePath (Join-Path $root 'contracts/customer-demo-v2/v2-case-oracle.json')
 $source = (Resolve-Path -LiteralPath $SourceRepository).Path
 if ((& git -C $source rev-parse HEAD).Trim() -cne 'e545c28ac301e6f9feae247c513d8ea8f83df294') {
     throw 'Frozen DeerFlow source SHA drifted.'
@@ -384,9 +385,12 @@ finally {
         # differential cases without an Oracle id are omitted here (still in
         # `cases`); this never promotes another backend's result.
         oracleCases = @($cases | Where-Object { $_['oracleCaseId'] } | ForEach-Object {
+                $deferralRef = $oracleDeferrals[[string]$_['oracleCaseId']]
                 [ordered]@{
                     id = $_['oracleCaseId']
-                    status = $_['status']
+                    status = $(if ($deferralRef) { Get-W18DeferredStatus -Status ([string]$_['status']) } else { $_['status'] })
+                    requiredForStage = (-not $deferralRef)
+                    deferral = $deferralRef
                     seconds = $_['seconds']
                     retry = $_['retry']
                     classificationReason = $_['classificationReason']

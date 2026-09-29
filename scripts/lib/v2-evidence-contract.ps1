@@ -4,7 +4,8 @@
 # SHPM, never calls a model, and never opens a network connection.
 #
 # Fail-closed contract: Test-V2EvidenceInstance returns a result object whose
-# `decision` is only "GO" when every one of the 48 oracle case ids is PASS on the
+# `decision` is only "GO" when every oracle case id required for GO (every case
+# except those carrying a human-ruled `deferral` in the oracle) is PASS on the
 # Haifa backend on one main SHA with raw originals, external copies, truthful
 # usage, released ports, and a signed human Pilot declaration. Every other state
 # (including NOT_RUN, BLOCKED_EXTERNAL, UPSTREAM_UNSUPPORTED, a missing field, an
@@ -32,7 +33,8 @@ $script:V2RequiredNoGoConditionIds = @(
     'upstream-unsupported-as-pass',
     'uncleaned',
     'nonzero-subprocess-exit',
-    'missing-human-declaration'
+    'missing-human-declaration',
+    'deferred-as-pass'
 )
 
 $script:V2ResultVocabulary = @('PASS', 'FAIL', 'NOT_RUN', 'BLOCKED_EXTERNAL', 'UPSTREAM_UNSUPPORTED', 'NOT_APPLICABLE')
@@ -325,6 +327,23 @@ function Test-V2PassCaseRecord {
     }
 }
 
+# Case ids a human ruling deferred out of the GO denominator. The deferral lives
+# in the oracle; a deferred case stays in every list and must still be reported,
+# but only as NOT_RUN.
+function Get-V2DeferredCaseIds {
+    param([Parameter(Mandatory = $true)][object]$Oracle)
+    $rulingIds = @(@(Get-V2Prop $Oracle 'rulings') | Where-Object { $null -ne $_ -and [string]$_.decidedBy -eq 'human' } | ForEach-Object { [string]$_.id })
+    $ids = New-Object System.Collections.Generic.List[string]
+    foreach ($case in @($Oracle.cases)) {
+        $deferral = Get-V2Prop $case 'deferral'
+        if ($null -eq $deferral) { continue }
+        if ($rulingIds -notcontains [string]$deferral.rulingRef) { throw "V2 oracle case $($case.id) is deferred without a human ruling recorded in the oracle." }
+        if ([string]$deferral.result -ne 'NOT_RUN') { throw "V2 oracle case $($case.id) deferral must stay NOT_RUN." }
+        $ids.Add([string]$case.id)
+    }
+    return , $ids.ToArray()
+}
+
 function Test-V2EvidenceContract {
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
@@ -371,6 +390,7 @@ function Test-V2EvidenceContract {
     if ([int]$contract.caseDenominator.count -ne $oracleIds.Count) { throw "V2 evidence contract denominator count does not match the oracle ($($contract.caseDenominator.count) vs $($oracleIds.Count))." }
     if ($contractCases.Count -ne $oracleIds.Count) { throw "V2 evidence contract case list does not match the oracle denominator." }
 
+    $deferredIds = Get-V2DeferredCaseIds -Oracle $oracle
     $contractIds = @($contractCases | ForEach-Object { [string]$_.id })
     $missing = @($oracleIds | Where-Object { $contractIds -notcontains $_ })
     $extra = @($contractIds | Where-Object { $oracleIds -notcontains $_ })
@@ -392,7 +412,11 @@ function Test-V2EvidenceContract {
         if ([string]$case.level -ne [string]$meta.level) { throw "V2 evidence contract case $($case.id) level drifted." }
         if ([string]$case.referenceSupport -ne [string]$meta.reference.support) { throw "V2 evidence contract case $($case.id) referenceSupport drifted." }
         if ([string]$case.defaultResult -ne 'NOT_RUN') { throw "V2 evidence contract case $($case.id) must default to NOT_RUN." }
+        $isDeferred = $deferredIds -contains [string]$case.id
+        if ([bool]$case.requiredForStagePass -eq $isDeferred) { throw "V2 evidence contract case $($case.id) requiredForStagePass must be $(-not $isDeferred) to match the oracle deferral." }
     }
+    $declaredDeferred = @(@(Get-V2Prop $contract.caseDenominator 'deferredCaseIds') | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ } | Sort-Object)
+    if (($declaredDeferred -join ',') -ne (@($deferredIds | Sort-Object) -join ',')) { throw "V2 evidence contract caseDenominator.deferredCaseIds does not match the oracle deferrals." }
 
     $noGoIds = @($contract.noGoConditions | ForEach-Object { [string]$_.id })
     foreach ($required in $script:V2RequiredNoGoConditionIds) {
@@ -409,6 +433,7 @@ function Test-V2EvidenceContract {
         OracleSha   = $oracleSha
         IndexSha    = $indexSha
         CaseCount   = $contractCases.Count
+        DeferredIds = $deferredIds
     }
 }
 
@@ -469,6 +494,8 @@ function Test-V2EvidenceInstance {
     }
 
     $oracleCases = @($oracle.cases)
+    $deferredIds = @($contractInfo.DeferredIds)
+    $requiredCases = @($oracleCases | Where-Object { $deferredIds -notcontains [string]$_.id })
     $records = @($instance.caseResults)
     $haifaById = @{}
     $referenceById = @{}
@@ -504,6 +531,9 @@ function Test-V2EvidenceInstance {
         if ([string]$record.level -ne [string]$case.level) { Add-V2Violation $violations 'field-inconsistency' "case $caseId level does not match the oracle" $caseId }
 
         $result = [string]$record.result
+        if (($deferredIds -contains $caseId) -and $result -ne 'NOT_RUN') {
+            Add-V2Violation $violations 'deferred-as-pass' "haifa case $caseId is deferred by a human ruling and may only be NOT_RUN (got '$result')" $caseId
+        }
         if ($result -eq 'UPSTREAM_UNSUPPORTED' -or $result -eq 'NOT_APPLICABLE') {
             Add-V2Violation $violations 'upstream-unsupported-as-pass' "haifa case $caseId may not use result '$result'" $caseId
         }
@@ -532,7 +562,7 @@ function Test-V2EvidenceInstance {
     }
     $computedStage = @{}
     foreach ($stage in $script:V2StageVocabulary) {
-        $stageHaifa = @($oracleCases | Where-Object { [string]$_.stage -eq $stage } | ForEach-Object { $haifaById[[string]$_.id] } | Where-Object { $null -ne $_ })
+        $stageHaifa = @($requiredCases | Where-Object { [string]$_.stage -eq $stage } | ForEach-Object { $haifaById[[string]$_.id] } | Where-Object { $null -ne $_ })
         $computed = if ($stageHaifa.Count -eq 0) { 'NOT_RUN' } else { Get-V2AggregatedStageResult -HaifaRecords $stageHaifa }
         $computedStage[$stage] = $computed
         if (-not $declaredStages.ContainsKey($stage)) {
@@ -550,7 +580,7 @@ function Test-V2EvidenceInstance {
 
     $allStagesPass = $true
     foreach ($stage in $script:V2StageVocabulary) { if ($computedStage[$stage] -ne 'PASS') { $allStagesPass = $false } }
-    $allCasesPass = (@($haifaById.Values | Where-Object { [string]$_.result -eq 'PASS' }).Count -eq $oracleCases.Count)
+    $allCasesPass = (@($requiredCases | Where-Object { $haifaById.ContainsKey([string]$_.id) -and [string]$haifaById[[string]$_.id].result -eq 'PASS' }).Count -eq $requiredCases.Count)
     $declaration = $instance.humanPilotDeclaration
     $hasDeclaration = ($null -ne $declaration) -and (Test-V2FieldPopulated (Get-V2Prop $declaration 'signedBy')) -and (Test-V2FieldPopulated (Get-V2Prop $declaration 'signedAt')) -and (Test-V2FieldPopulated (Get-V2Prop $declaration 'scope')) -and (Test-V2FieldPopulated (Get-V2Prop $declaration 'result'))
     if (-not $hasDeclaration) {

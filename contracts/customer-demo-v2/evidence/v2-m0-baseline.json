@@ -2,17 +2,17 @@
   "schemaVersion": "haifa.customer-demo-v2.evidence-instance/v1",
   "demoId": "DEMO-V2",
   "contractRef": "contracts/customer-demo-v2/v2-evidence-contract.json",
-  "contractSha256": "af19c51995d8d1e78050105843786b30af5d248f385395de95d3b2d6065686c2",
-  "generatedAt": "2026-09-28T16:13:54.1356744+08:00",
+  "contractSha256": "3e777394ae279d4168605527422443627061269c7ed99c22771b5223cdbb0728",
+  "generatedAt": "2026-09-29T00:00:00+08:00",
   "pins": {
     "mainSha": null,
     "sdkCommit": null,
     "sdkBomSha256": null,
     "customersCsvSha256": "ec326b7d0cf68f660ed769f8eecf9b71b43137af4e9aa83de75aa75bc5302f00",
     "reportingPolicySha256": "563e216fc77f87d968b3c34994746fa1f3368380ede30c97e03782c3895a9e9a",
-    "caseOracleSha256": "7dcfcb08806ed465e7475bb42ce824a58934d1234eb23f5d0e5816a8920e1191",
+    "caseOracleSha256": "d38cbc6f62a203643fd1e215067b0264781b3e38e24ec3e78250053714662930",
     "sourceIndexSha256": "49cd4020e6e8bab989438fb82451ea4dba08db89eb9c274642992aa2b0c3a3f0",
-    "contractSha256": "af19c51995d8d1e78050105843786b30af5d248f385395de95d3b2d6065686c2"
+    "contractSha256": "3e777394ae279d4168605527422443627061269c7ed99c22771b5223cdbb0728"
   },
   "humanPilotDeclaration": null,
   "stageResults": [

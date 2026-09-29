@@ -47,7 +47,7 @@ Assert-Classification 'annotation-cannot-hide-failure' 'failed' @(
 ) 'FAIL(failed)'
 
 $branchAssertions = 0
-foreach ($allowedBranch in @('codex/w18-demo-l2-differential', 'codex/w18-v2-m1-differential', 'main')) {
+foreach ($allowedBranch in @('codex/w18-demo-l2-differential', 'codex/w18-v2-m1-differential', 'codex/w18-v2-m1-rerun', 'main')) {
     Assert-W18DifferentialBranch -Branch $allowedBranch
     $branchAssertions++
 }
@@ -165,4 +165,25 @@ if (-not $specText.Contains('v2-m1-02-next-run-failure')) {
 }
 $caseListAssertions++
 
-Write-Output "W18_RESULT_CLASSIFICATION PASS assertions=$script:classificationAssertions branch_assertions=$branchAssertions oracle_assertions=$oracleAssertions case_list_assertions=$caseListAssertions"
+# Single-identity ruling (2026-09-29): the committed oracle defers exactly
+# V2-M1-04-N2, V2-M1-06 and V2-M3-09. The runner may report them only as
+# NOT_RUN with the ruling id and never as coverage.
+$deferralAssertions = 0
+$oracleDeferrals = Get-W18OracleDeferrals -OraclePath (Join-Path $PSScriptRoot '../../contracts/customer-demo-v2/v2-case-oracle.json')
+$deferredIds = @($oracleDeferrals.Keys | Sort-Object)
+if (($deferredIds -join ',') -ne 'V2-M1-04-N2,V2-M1-06,V2-M3-09') { throw "oracle deferrals must be exactly V2-M1-04-N2,V2-M1-06,V2-M3-09 (got $($deferredIds -join ','))" }
+$deferralAssertions++
+foreach ($id in $deferredIds) {
+    if ($oracleDeferrals[$id] -cne 'human-2026-09-29-single-identity') { throw "deferral $id must cite the human single-identity ruling" }
+    $deferralAssertions++
+}
+if ((Get-W18DeferredStatus -Status 'NOT_RUN') -cne 'NOT_RUN') { throw 'a deferred NOT_RUN must stay NOT_RUN' }
+$deferralAssertions++
+foreach ($status in @('PASS', 'FAIL(failed)', 'BLOCKED_EXTERNAL')) {
+    if ((Get-W18DeferredStatus -Status $status) -notlike 'FAIL(deferred-reported-*') { throw "a deferred case reported as $status must classify as FAIL" }
+    $deferralAssertions++
+}
+if (-not $specText.Contains('deferral: "human-2026-09-29-single-identity"')) { throw 'V2-M1-04-N2 raw evidence must cite the single-identity deferral ruling' }
+$deferralAssertions++
+
+Write-Output "W18_RESULT_CLASSIFICATION PASS deferral_assertions=$deferralAssertions assertions=$script:classificationAssertions branch_assertions=$branchAssertions oracle_assertions=$oracleAssertions case_list_assertions=$caseListAssertions"

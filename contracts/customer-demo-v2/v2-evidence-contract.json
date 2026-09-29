@@ -5,7 +5,7 @@
   "status": "static-spec-not-run",
   "generatedFrom": {
     "caseOracle": "contracts/customer-demo-v2/v2-case-oracle.json",
-    "caseOracleSha256": "7dcfcb08806ed465e7475bb42ce824a58934d1234eb23f5d0e5816a8920e1191",
+    "caseOracleSha256": "d38cbc6f62a203643fd1e215067b0264781b3e38e24ec3e78250053714662930",
     "sourceIndex": "contracts/customer-demo-v2/source-index.json",
     "sourceIndexSha256": "49cd4020e6e8bab989438fb82451ea4dba08db89eb9c274642992aa2b0c3a3f0"
   },
@@ -32,7 +32,7 @@
   "pinnedHashes": {
     "customersCsvSha256": "ec326b7d0cf68f660ed769f8eecf9b71b43137af4e9aa83de75aa75bc5302f00",
     "reportingPolicySha256": "563e216fc77f87d968b3c34994746fa1f3368380ede30c97e03782c3895a9e9a",
-    "caseOracleSha256": "7dcfcb08806ed465e7475bb42ce824a58934d1234eb23f5d0e5816a8920e1191",
+    "caseOracleSha256": "d38cbc6f62a203643fd1e215067b0264781b3e38e24ec3e78250053714662930",
     "sourceIndexSha256": "49cd4020e6e8bab989438fb82451ea4dba08db89eb9c274642992aa2b0c3a3f0",
     "note": "The contract hash of this file is recorded in the M0 baseline instance and recomputed by the verifier; it is not embedded here to avoid a self-reference."
   },
@@ -47,7 +47,11 @@
       "V2-M5": 4,
       "V2-M6": 4
     },
-    "rule": "The 48 oracle case ids are the denominator. No case may be added, removed, renamed, or re-staged by the evidence contract or by any runner."
+    "rule": "The 48 oracle case ids are the denominator of record. No case may be added, removed, renamed, or re-staged by the evidence contract or by any runner. Cases that carry a human-ruled `deferral` in the oracle (deferredCaseIds; ruling human-2026-09-29-single-identity) stay in every list and must still be reported, but only as NOT_RUN; they are excluded from stage aggregation and from the GO requirement. Deferral is never PASS.",
+    "deferredCaseIds": [
+      "V2-M1-06",
+      "V2-M3-09"
+    ]
   },
   "evidenceRules": {
     "commonRequiredEvidence": [
@@ -145,7 +149,7 @@
       "NOT_RUN",
       "BLOCKED_EXTERNAL"
     ],
-    "goRule": "GO requires every V2-M1..V2-M6 stage PASS on the same main SHA, every required case PASS with raw originals and external copies present, zero hidden retries, and a signed human/客户 Pilot declaration for V2-M6. Any missing required evidence, inconsistent field, uncleaned port/process, wrong SHA or hash, mock/substitution, hidden retry, expired credential reference, or missing human declaration forces NO_GO.",
+    "goRule": "GO requires every V2-M1..V2-M6 stage PASS on the same main SHA, every required case PASS with raw originals and external copies present, zero hidden retries, and a signed human/客户 Pilot declaration for V2-M6. Any missing required evidence, inconsistent field, uncleaned port/process, wrong SHA or hash, mock/substitution, hidden retry, expired credential reference, or missing human declaration forces NO_GO. Human-ruled deferred cases (caseDenominator.deferredCaseIds) are not required for GO and must be NOT_RUN.",
     "forbiddenEvidence": [
       "v1-evidence-as-v2",
       "component-pass-as-stage-pass",
@@ -239,6 +243,10 @@
     {
       "id": "missing-human-declaration",
       "rule": "The V2-M6 human/客户 Pilot declaration is absent, unsigned, or not bound to the run."
+    },
+    {
+      "id": "deferred-as-pass",
+      "rule": "A case deferred by a human ruling in the oracle is reported with any result other than NOT_RUN (for example PASS)."
     }
   ],
   "cases": [
@@ -294,7 +302,8 @@
       "level": "L2",
       "referenceSupport": "SUPPORTED",
       "defaultResult": "NOT_RUN",
-      "requiredForStagePass": true
+      "requiredForStagePass": false,
+      "deferralRef": "human-2026-09-29-single-identity"
     },
     {
       "id": "V2-M2-01",
@@ -528,7 +537,8 @@
       "level": "L2",
       "referenceSupport": "PARTIAL",
       "defaultResult": "NOT_RUN",
-      "requiredForStagePass": true
+      "requiredForStagePass": false,
+      "deferralRef": "human-2026-09-29-single-identity"
     },
     {
       "id": "V2-M3-10",

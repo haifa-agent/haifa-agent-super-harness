@@ -3,6 +3,10 @@
   "demoId": "DEMO-V2",
   "contractId": "v2-m0-case-oracle",
   "status": "static-spec-not-run",
+  "revision": {"number": 2, "date": "2026-09-29", "previousSha256": "7dcfcb08806ed465e7475bb42ce824a58934d1234eb23f5d0e5816a8920e1191", "change": "defer the three cross-identity assertions under ruling human-2026-09-29-single-identity; no other case, assertion, fixture or threshold changed"},
+  "rulings": [
+    {"id": "human-2026-09-29-single-identity", "decidedBy": "human", "decidedAt": "2026-09-29", "source": "private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-2/README.md section 2.2 (private-docs@b45effa)", "summary": "deliver V2 with a single auth-disabled identity; defer V2-M1-04-N2, V2-M1-06 and V2-M3-09; deferral is not PASS"}
+  ],
   "frozenUpstream": {
     "repository": "bytedance/deer-flow",
     "commit": "e545c28ac301e6f9feae247c513d8ea8f83df294",
@@ -163,7 +167,7 @@
       "positiveOracle": ["the attached file is listed on the thread", "the run reports the file as an input reference (not inlined text)"],
       "negativeCases": [
         {"id": "V2-M1-04-N1", "assertion": "an un-attached document is NOT readable by the run (no prompt stuffing)"},
-        {"id": "V2-M1-04-N2", "assertion": "attaching to a thread the caller cannot write returns 404"}
+        {"id": "V2-M1-04-N2", "assertion": "attaching to a thread the caller cannot write returns 404", "deferral": {"rulingRef": "human-2026-09-29-single-identity", "decidedAt": "2026-09-29", "reason": "V2 is delivered with a single auth-disabled identity; neither the frozen reference auth_disabled.py nor the Haifa local profile can establish two isolated identities, so this cross-identity assertion cannot be exercised", "restoreCondition": "a bounded dual-identity profile exists on both backends and a human re-authorizes this assertion into the V2 denominator", "result": "NOT_RUN"}}
       ],
       "runner": "W18 runner",
       "evidencePaths": ["local-tmp/slot-1-w00-v2-oracle/evidence/l2/V2-M1-04-*.json"],
@@ -227,7 +231,8 @@
       ],
       "runner": "W18 runner",
       "evidencePaths": ["local-tmp/slot-1-w00-v2-oracle/evidence/l2/V2-M1-06-*.json"],
-      "defaultResult": "NOT_RUN"
+      "defaultResult": "NOT_RUN",
+      "deferral": {"rulingRef": "human-2026-09-29-single-identity", "decidedAt": "2026-09-29", "reason": "V2 is delivered with a single auth-disabled identity; neither the frozen reference auth_disabled.py nor the Haifa local profile can establish two isolated identities, so this cross-identity assertion cannot be exercised", "restoreCondition": "a bounded dual-identity profile exists on both backends and a human re-authorizes this assertion into the V2 denominator", "result": "NOT_RUN"}
     },
     {
       "id": "V2-M2-01",
@@ -984,7 +989,8 @@
       "negativeCases": [{"id": "V2-M3-09-N1", "assertion": "a foreign approve succeeding FAILs"}],
       "runner": "W05/W18 runner",
       "evidencePaths": ["local-tmp/slot-1-w00-v2-oracle/evidence/l2/V2-M3-09-*.json"],
-      "defaultResult": "NOT_RUN"
+      "defaultResult": "NOT_RUN",
+      "deferral": {"rulingRef": "human-2026-09-29-single-identity", "decidedAt": "2026-09-29", "reason": "V2 is delivered with a single auth-disabled identity; neither the frozen reference auth_disabled.py nor the Haifa local profile can establish two isolated identities, so this cross-identity assertion cannot be exercised", "restoreCondition": "a bounded dual-identity profile exists on both backends and a human re-authorizes this assertion into the V2 denominator", "result": "NOT_RUN"}
     },
     {
       "id": "V2-M3-10",

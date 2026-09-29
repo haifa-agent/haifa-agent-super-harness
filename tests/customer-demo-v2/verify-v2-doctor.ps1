@@ -186,6 +186,10 @@ try {
     Assert-True ($baselineResult.DeclaredDecision -eq 'NO_GO') 'blank M0 baseline must declare NO_GO'
     Assert-True ($baselineResult.Decision -eq 'NO_GO') 'blank M0 baseline must aggregate to NO_GO'
     Assert-True (@($baselineResult.CaseResults.Values | Where-Object { $_.result -eq 'NOT_RUN' }).Count -eq 48) 'blank M0 baseline must be all NOT_RUN'
+    $baselinePinViolations = @($baselineResult.Violations | Where-Object { @('field-inconsistency', 'wrong-sha', 'wrong-fixture-hash', 'wrong-config-hash', 'deferred-as-pass') -contains [string]$_.id })
+    Assert-True ($baselinePinViolations.Count -eq 0) "re-frozen M0 baseline must pin the committed contract/oracle/fixtures (got: $(@($baselinePinViolations | ForEach-Object { $_.detail }) -join '; '))"
+    $deferredIds = @($contractInfo.DeferredIds | Sort-Object)
+    Assert-True (($deferredIds -join ',') -eq 'V2-M1-06,V2-M3-09') "human-ruled deferred cases must be exactly V2-M1-06,V2-M3-09 (got: $($deferredIds -join ','))"
 
     # =====================================================================
     # 5. Synthetic fully-populated instance -> GO.
@@ -237,6 +241,8 @@ try {
             $record.downloadProvenancePath = $provFile; $record.downloadProvenanceSha256 = $provSha; $record.fileSha256 = $downloadSha
         }
         if ([string]$case.stage -eq 'V2-M5') { $record.referenceResult = 'PASS' }
+        # A human-ruled deferred case is reported but may only be NOT_RUN.
+        if ($deferredIds -contains $id) { $record.result = 'NOT_RUN' }
         if ([string]$case.level -eq 'L3') {
             $record.interactionId = "interaction-$id"; $record.mcpServerId = 'utility-mcp'; $record.mcpTool = 'time_now'
             $record.mcpCalls = @('initialize', 'tools/list'); $record.l3StubSubstitution = $false
@@ -318,6 +324,9 @@ try {
     Assert-NoGo { param($i) (Get-HaifaRecord $i 'V2-M1-01').portsReleased = $false } 'uncleaned' 'uncleaned'
     Assert-NoGo { param($i) (Get-HaifaRecord $i 'V2-M1-01').subprocessExitStatus = 1 } 'nonzero-subprocess-exit' 'nonzero-subprocess-exit'
     Assert-NoGo { param($i) $i.humanPilotDeclaration = $null } 'missing-human-declaration' 'missing-human-declaration'
+    Assert-NoGo { param($i) (Get-HaifaRecord $i 'V2-M1-06').result = 'PASS' } 'deferred-as-pass' 'deferred-as-pass'
+    Assert-NoGo { param($i) (Get-HaifaRecord $i 'V2-M3-09').result = 'FAIL' } 'deferred-as-pass' 'deferred-reported-as-run'
+    Assert-NoGo { param($i) $i.caseResults = @($i.caseResults | Where-Object { [string]$_.id -ne 'V2-M1-06' }) } 'missing-case' 'deferred-case-omitted'
 
     # =====================================================================
     # 7. Contract tampering -> rejected.
@@ -337,6 +346,10 @@ try {
     Assert-ContractRejected { param($c) $c.pinnedHashes.customersCsvSha256 = ('0' * 64) } 'contract-fixture-pin'
     Assert-ContractRejected { param($c) $c.generatedFrom.caseOracleSha256 = ('0' * 64) } 'contract-oracle-pin'
     Assert-ContractRejected { param($c) $c.noGoConditions = @($c.noGoConditions | Where-Object { [string]$_.id -ne 'hidden-retry' }) } 'contract-missing-nogo'
+    Assert-ContractRejected { param($c) ($c.cases | Where-Object { [string]$_.id -eq 'V2-M1-06' }).requiredForStagePass = $true } 'contract-deferred-marked-required'
+    Assert-ContractRejected { param($c) ($c.cases | Where-Object { [string]$_.id -eq 'V2-M1-01' }).requiredForStagePass = $false } 'contract-undeferred-marked-optional'
+    Assert-ContractRejected { param($c) $c.caseDenominator.deferredCaseIds = @('V2-M1-06') } 'contract-deferred-list-drift'
+    Assert-ContractRejected { param($c) $c.noGoConditions = @($c.noGoConditions | Where-Object { [string]$_.id -ne 'deferred-as-pass' }) } 'contract-missing-deferred-nogo'
 
     # =====================================================================
     # 8. Fixture SHA baseline matches the frozen README oracle.
