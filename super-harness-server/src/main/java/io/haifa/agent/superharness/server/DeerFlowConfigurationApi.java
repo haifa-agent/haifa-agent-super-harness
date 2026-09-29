@@ -171,6 +171,16 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         return McpRunTools.Selection.fromJson(agent.get("mcp_plugins"));
     }
 
+    /** Frozen Agent.skills: null selects all enabled packages, [] selects none. */
+    SkillRunTools.Selection resolveSkillSelection(JsonNode body) {
+        String agentName = selectedAgentName(body);
+        if (agentName == null) return SkillRunTools.Selection.all();
+        String selected = agentName.toLowerCase(java.util.Locale.ROOT);
+        ObjectNode agent = store.agent(selected)
+                .orElseThrow(() -> new IllegalArgumentException("Agent '" + selected + "' not found"));
+        return SkillRunTools.Selection.fromJson(agent.get("skills"));
+    }
+
     private static String selectedAgentName(JsonNode body) {
         JsonNode context = body.path("context");
         String agentName = optionalNonBlankText(context.get("agent_name"), "context.agent_name");

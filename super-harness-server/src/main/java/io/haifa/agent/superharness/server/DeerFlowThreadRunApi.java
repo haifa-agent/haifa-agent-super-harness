@@ -125,6 +125,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private final PersistentProjectWorkspaceService workspaceChanges;
     private final Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread;
     private final McpProjectionProvider mcpProjections;
+    private final SkillProjectionProvider skillProjections;
     private final DeerFlowUploadContext uploadContext;
     private final PersistentThreadCatalog threadCatalog;
     private final DurableHaifaFoundation foundation;
@@ -151,6 +152,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             SecretKey continuationKey,
             Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread,
             McpProjectionProvider mcpProjections,
+            SkillProjectionProvider skillProjections,
             DeerFlowUploadContext uploadContext)
             throws IOException {
         this.json = json;
@@ -159,6 +161,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         this.workspaceChanges = workspaceChanges;
         this.runToolsForThread = runToolsForThread;
         this.mcpProjections = mcpProjections == null ? McpProjectionProvider.none() : mcpProjections;
+        this.skillProjections = skillProjections == null ? SkillProjectionProvider.none() : skillProjections;
         this.uploadContext = java.util.Objects.requireNonNull(uploadContext, "uploadContext");
         this.threadCatalog = new PersistentThreadCatalog(json, dataDirectory);
         this.foundation = new DurableHaifaFoundation(dataDirectory, continuationKey);
@@ -187,6 +190,26 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 @Override
                 public McpRunTools.Projection forSelection(McpRunTools.Selection selection) {
                     return McpRunTools.Projection.empty();
+                }
+            };
+        }
+    }
+
+    interface SkillProjectionProvider {
+        SkillRunTools.Projection forRun(JsonNode body);
+
+        SkillRunTools.Projection forRecovery();
+
+        static SkillProjectionProvider none() {
+            return new SkillProjectionProvider() {
+                @Override
+                public SkillRunTools.Projection forRun(JsonNode body) {
+                    return null;
+                }
+
+                @Override
+                public SkillRunTools.Projection forRecovery() {
+                    return null;
                 }
             };
         }
@@ -640,6 +663,16 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         McpRunTools.Projection mcpProjection = runInput == null
                 ? mcpProjections.forRun(body)
                 : McpRunTools.Projection.empty();
+        SkillRunTools.Projection skillProjection;
+        try {
+            skillProjection = runInput == null ? skillProjections.forRun(body) : null;
+        } catch (IllegalArgumentException invalid) {
+            sendJson(exchange, 422, Map.of("detail", invalid.getMessage()));
+            return;
+        } catch (IllegalStateException unavailable) {
+            sendJson(exchange, 409, Map.of("detail", "Trusted Skill configuration is unavailable"));
+            return;
+        }
 
         RunRecord run = null;
         RunRecord steerRun = null;
@@ -699,7 +732,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (steerRun == null) {
             boolean createdBridge = thread.bridge == null;
             if (thread.bridge == null) {
-                HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection);
+                HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection, skillProjection);
                 // Restoring the Conversation is read-only; claim the selected model only
                 // after the SDK has admitted the new Run successfully.
                 attachBridge(thread, bridge, false);
@@ -713,8 +746,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             // MCP projection differs from the attached bridge rebuilds it rather than hot-editing
             // the active Run.
             boolean switchingMcp = !selectedBridge.mcpSignature().equals(mcpProjection.fingerprint());
-            if (switchingModel || switchingMcp) {
-                selectedBridge = newBridge(binding, thread, mcpProjection);
+            boolean switchingSkills = !selectedBridge.skillSignature().equals(
+                    skillProjection == null ? "" : skillProjection.fingerprint());
+            if (switchingModel || switchingMcp || switchingSkills) {
+                selectedBridge = newBridge(binding, thread, mcpProjection, skillProjection);
             }
             // Frozen TitleMiddleware names the thread only from its first user Turn. The boundary is
             // the in-memory message sequence (seeded from durable turns when a persisted session is
@@ -738,7 +773,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 // switchingModel cannot both be true. On a failed switch the old bridge stays
                 // attached for durable history and a subsequent Turn; only the rejected new
                 // bridge is closed here.
-                if (switchingModel || switchingMcp || createdBridge) {
+                if (switchingModel || switchingMcp || switchingSkills || createdBridge) {
                     if (createdBridge) thread.bridge = null;
                     ownedBridges.remove(selectedBridge);
                     selectedBridge.close();
@@ -747,7 +782,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 sendJson(exchange, 500, Map.of("detail", "Run could not start"));
                 return;
             }
-            if (switchingModel || switchingMcp) {
+            if (switchingModel || switchingMcp || switchingSkills) {
                 thread.bridge = selectedBridge;
                 ownedBridges.add(selectedBridge);
             }
@@ -1060,7 +1095,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             McpRunTools.Projection mcpProjection = selection == null
                     ? McpRunTools.Projection.empty()
                     : mcpProjections.forSelection(selection);
-            HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection);
+            HaifaRunBridge bridge = newBridge(
+                    binding, thread, mcpProjection, skillProjections.forRecovery());
             boolean claimBinding = thread.modelBindingIdentity == null
                     || thread.modelBindingIdentity.equals(bridge.bindingIdentity());
             // Conversation/run reads use shared SQLite. The last selected model is preferred
@@ -1075,9 +1111,12 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private HaifaRunBridge newBridge(
-            HaifaRunBridge.ModelBinding binding, ThreadRecord thread, McpRunTools.Projection mcpProjection) {
+            HaifaRunBridge.ModelBinding binding,
+            ThreadRecord thread,
+            McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection) {
         bridgeBuilds.incrementAndGet();
-        return new HaifaRunBridge(binding, toolsForThread(thread), foundation, mcpProjection);
+        return new HaifaRunBridge(binding, toolsForThread(thread), foundation, mcpProjection, skillProjection);
     }
 
     private List<? extends JavaTool<?, ?>> toolsForThread(ThreadRecord thread) {

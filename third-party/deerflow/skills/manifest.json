@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "packages": [
+    {
+      "name": "consulting-analysis",
+      "category": "public",
+      "license": "MIT",
+      "license_file": "third-party/deerflow/LICENSES/deer-flow-MIT.txt",
+      "license_sha256": "3e8f6a7262f5e487dae334647320367f58ec258aa68fecf6a6a6f97ae39f9b52",
+      "source": "bytedance/deer-flow",
+      "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+      "version": "sha256:5bc99df7e5f8af5471eaa5d20b85fc46e99895cf3f2642fa9da94108d03ca13e",
+      "active": true,
+      "enabled_by_default": true,
+      "root": "third-party/deerflow/skills/e545c28ac301e6f9feae247c513d8ea8f83df294/5bc99df7e5f8af5471eaa5d20b85fc46e99895cf3f2642fa9da94108d03ca13e/public",
+      "files": {
+        "consulting-analysis/SKILL.md": "5bc99df7e5f8af5471eaa5d20b85fc46e99895cf3f2642fa9da94108d03ca13e"
+      },
+      "parser": "compatible",
+      "max_instruction_lines": 700,
+      "max_estimated_tokens": 9000
+    }
+  ]
+}

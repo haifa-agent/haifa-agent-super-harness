@@ -1,0 +1,79 @@
+# W15-task-1 交付报告（待主控验收）
+
+日期：2026-09-29。工作树：`D:\workspace\haifa-agent-worktrees\w15-v2-skill-prep\haifa-agent-super-harness`；分支：`codex/w15-v2-skill-prep`；基线：`main@d867f408f4425045e254d3c5fba9f67cf3035804`。最终 commit SHA 由主控在提交后补记私有副本。执行者仅提交实现与证据，不修改 SHPM，不合并，也不宣告 V2-M2 PASS。
+
+## 设计与来源
+
+- 仅消费本地发布的 HA `0.1.2-SNAPSHOT` BOM/JAR。`spike/pom.xml` 的公开 API 探针使用 sdk-starter、skill-core 与 SQLite 持久层；没有 SDK 源码路径依赖。
+- 生产 `third-party/deerflow/skills/manifest.json` **仅登记 consulting-analysis**，完整原件放在按 DeerFlow commit、内容 SHA 分层的不可变目录。原件 `SKILL.md` SHA-256 为 `5BC99DF7E5F8AF5471EAA5D20B85FC46E99895CF3F2642FA9DA94108D03CA13E`。`third-party/deerflow/SOURCE.md` 记录来源、许可与固定 commit。测试用的 `contracts/customer-demo-v2/fixtures/skills/v2-format-control/` 只在 `local-tmp` 独立测试 manifest 中登记，未加入生产 manifest。
+- SDK 默认解析上限拒绝冻结的 632 行、约 8196 token 原件；只对这个已哈希校验的受信来源声明 700 行、9000 token 上限。第二个 v2 fixture 保持独立的默认限制。解析器证据见 `evidence/public-run-canonical.raw.log`、`evidence/negative-probe-3.raw.log`。
+- 发行物保留旧版完整字节；当前 manifest 只把一个版本标 `active`，旧版仍供 loader 读取。`data-root/skills_config.json` 只存 enable 开关，原子替换。SDK 持有 catalog、binding、activation、Run 持久化；SH 没有 Skill Runtime、Run→Skill 表或 thread metadata。设计依据见 `spike/immutable-resource-decision.md`。
+- `README.md` 已同步中文资源、配置与接口说明。
+
+变更文件：`.gitattributes`、`README.md`、`super-harness-server/pom.xml`、`super-harness-server/src/main/java/io/haifa/agent/superharness/server/{DeerFlowBootstrapApi,DeerFlowConfigurationApi,DeerFlowSkillsApi,DeerFlowThreadRunApi,HaifaRunBridge,SkillConfigStore,SkillRunTools}.java`、`super-harness-server/src/test/java/io/haifa/agent/superharness/server/V2SkillConfigStoreTest.java`、`third-party/deerflow/SOURCE.md`、`third-party/deerflow/skills/manifest.json`、冻结 `SKILL.md` 与本报告。
+
+## 已执行的定向证据
+
+| 门禁 | 结果 | 原始证据（均相对 `local-tmp/slot-2-w15-v2-skill/`） |
+| --- | --- | --- |
+| 公开 JAR/BOM 两 Skill 持久 Run | PASS | `evidence/public-run-canonical.raw.log`；两个真实 SDK ToolCall，Run 重启后可恢复。 |
+| 旧版/新版快照及禁用后恢复 | PASS | `evidence/versioned-immutable-spike.raw.log`、`evidence/versioned-disabled-spike.raw.log`；旧 Run `01a0ebe0-d07c-7d23-9faa-ad46cb72d1f8` 重启后仍读 v1，新 Run 使用 v2。 |
+| SDK None/[]/allowlist、禁用与按需激活 | PASS | `evidence/visibility-canonical-spike.raw.log`；正文只在 `skill_load` 后可见。 |
+| SH 生产资源/持久配置 | PASS | `evidence/store-probe.raw.log`；来源、许可、哈希、禁用、reload、重开保持。 |
+| SH Run 桥与 ToolCall | PASS | `evidence/sh-bridge-probe-4.raw.log`；启用 Run `01a0ebf6-8753-744d-a2e6-7a4d8a46059f` 完成真实 `skill_load`；禁用和 Agent `[]` 的模型请求没有目录、正文或 `skill_load` 工具。 |
+| 恢复桥后新 Run | PASS | `evidence/sh-http-recovery-probe-3.raw.log`；恢复历史建桥一次，禁用后的新 Run 重建桥，`loadTool=false,index=false`。 |
+| pending Approval 跨重启 | PASS（修复后） | `evidence/sh-http-pending-probe-2.raw.log`；旧 Run `01a0ebf6-21b5-7f4d-930c-07d6dae507a4`、request `01a0ebf6-31ce-7613-bebe-564abd0a8668`，禁用并重启后审批执行，旧正文仍可读。 |
+| 两 Skill 独立投影与 REST | PASS | `evidence/sh-dual-skill-http-probe-2.raw.log`；独立 enable、GET list/detail、PUT 单条响应、reload 形状、None/[]/双 allowlist、激活隔离、禁用后新 Run。测试专用 manifest、资源和数据在 `spike/dual-http-repository-2/`。 |
+| 坏包/越界/哈希负例 | PASS | `evidence/store-negative-probe.raw.log`、`evidence/negative-probe-3.raw.log`；缺 license、哈希漂移、重复 active、路径逃逸、坏 frontmatter 均拒绝，失败 reload 保留已发布视图。 |
+| 仓库根与模块 cwd | PASS | `evidence/repo-root-probe.raw.log`、`evidence/module-root-probe.raw.log`；均可解析受信 manifest。 |
+| `git diff --check` 与静态 secret scan | PASS | 本 lane 执行；secret pattern 无命中。提交后再执行 `git diff --cached --check`。 |
+| reactor compile | PASS，但不能提升为完整门禁 | `evidence/reactor-compile.raw.log`；约 14:45:23–14:45:33，FreePhysicalMemory 4,473,856 KB，`mvn -o -ntp -pl super-harness-server -am -DskipTests compile` 5/5，10.292 秒。此时其它 `spring-boot:run` PID 39852 尚在，主控随后明确要求将其视为其它 Maven，故不再发起 Maven。之后变更已用本地 classpath 的 `javac` 编译，JUnit 源也可编译，JUnit 运行仍未执行。 |
+
+全部原始 probe 日志直接写在本工作包外置独立目录 `local-tmp/slot-2-w15-v2-skill/evidence/`，没有放在任何 `target`；未执行 `mvn clean`，故无清理前复制动作，也无伪造的副本路径。该目录共有 25 份证据文件（包括 Maven compile、首次失败和复跑）；轻量探针没有统一计时器，各次独立耗时记 **未测量**，不能推定为零。唯一计时的 Maven compile 为 10.292 秒。没有运行 Playwright，次数 0、耗时 0、trace/screenshot 不存在。
+
+### 可复现的轻量命令
+
+在上述工作树根目录的 PowerShell 7 中，先准备本地发布 JAR 的 classpath。以下 `local-tmp` 下的 Java 探针源码、class 和测试数据为本 lane 的原始证据，不属于产品发行物；重跑应使用全新的独立 data 子目录，保留本次首次失败日志。
+
+```powershell
+$repo = (Resolve-Path .).Path
+$spike = Join-Path $repo 'local-tmp/slot-2-w15-v2-skill/spike'
+$deps = (Get-Content (Join-Path $spike 'classpath.txt') -Raw).Trim()
+$moduleClasses = @(Get-ChildItem -Directory -Filter 'super-harness-*' | ForEach-Object { Join-Path $_.FullName 'target/classes' })
+$jna = 'D:/DevCache/maven/repository/net/java/dev/jna/jna/5.13.0/jna-5.13.0.jar'
+$jnaPlatform = 'D:/DevCache/maven/repository/net/java/dev/jna/jna-platform/5.13.0/jna-platform-5.13.0.jar'
+$sdkCp = @((Join-Path $spike 'classes'), $deps) -join ';'
+$shCp = (@((Join-Path $spike 'sh-classes')) + $moduleClasses + @($deps, $jna, $jnaPlatform)) -join ';'
+$frozen = Join-Path $repo 'third-party/deerflow/skills/e545c28ac301e6f9feae247c513d8ea8f83df294/5bc99df7e5f8af5471eaa5d20b85fc46e99895cf3f2642fa9da94108d03ca13e/public'
+$fixture = Join-Path $repo 'contracts/customer-demo-v2/fixtures/skills'
+java -cp $sdkCp SkillRunSpike $frozen $fixture (Join-Path $spike 'repro-sdk-data')
+java -cp $sdkCp SkillRunSpike (Join-Path $spike 'versions/v1') (Join-Path $spike 'versions/v2') (Join-Path $spike 'repro-versioned-data') versioned
+java -cp $sdkCp SkillRunSpike (Join-Path $spike 'versions/v1') (Join-Path $spike 'versions/v2') (Join-Path $spike 'repro-disabled-data') versioned-disabled
+java -cp $sdkCp SkillRunSpike $frozen $fixture (Join-Path $spike 'repro-visibility-data') visibility
+java -cp $shCp io.haifa.agent.superharness.server.SkillBridgeProbe $repo (Join-Path $spike 'repro-bridge-data')
+java -cp $shCp io.haifa.agent.superharness.server.SkillHttpProbe $repo (Join-Path $spike 'repro-http-data') pending
+java -cp $shCp io.haifa.agent.superharness.server.SkillStoreNegativeProbe $repo (Join-Path $spike 'repro-negative-repository')
+java -cp $shCp io.haifa.agent.superharness.server.SkillStoreNegativeProbe $repo (Join-Path $spike 'repro-dual-repository') dual-http
+```
+
+上述各关键探针的最终通过轮 exit code 均为 0。首次 `sh-http-pending-probe.raw.log` 与 `sh-http-recovery-probe.raw.log` exit code 为 1；首次 `sh-bridge-probe.raw.log` 进程 exit 0，但其禁用 Run 仍有 `loadTool=true`，按行为判 FAIL，未因进程码为零放过。`git diff --cached --check` exit 0，静态 secret pattern 扫描 exit 0、无命中。`mvn -o -ntp -pl super-harness-server -am -DskipTests compile` exit 0。探针源码未设计为可反复覆写同一 data-root，因此恢复运行前须为 `repro-*` 选择新的空目录。
+
+`dual-fixture` 的 Agent 明确配置 `skills=[v2-format-control]`。其激活前模型输入是 `consultIndex=false,fixtureIndex=true,consultBody=false,fixtureBody=false`（日志第 18 行）；激活后为 `consultBody=false,fixtureBody=true`。激活后的 `consultIndex=true` 仅因为测试 fixture 的正文第 26 行包含字符串 `consulting-analysis`；它不表示 consulting-analysis 目录入选。报告将“目录选择”和“激活后正文”分开判断。
+
+## 保留的首次失败
+
+- `evidence/sh-bridge-probe.raw.log`：最初禁用 Run 仍暴露 `skill_load` Tool。修复为仅有当前 Skill 或恢复旧 Run 时安装 Skill Tool；`sh-bridge-probe-4.raw.log` 复核。
+- `evidence/sh-http-recovery-probe.raw.log`：轻量 harness classpath 漏 JNA，`NoClassDefFoundError`，补本地 JNA classpath 后 `sh-http-recovery-probe-3.raw.log` 通过；非产品故障。
+- `evidence/sh-http-pending-probe.raw.log`：首次 HTTP 500 `SQLITE_TRANSACTION_FAILED`。`evidence/sh-http-pending-direct.raw.log` 的最内层异常为 `LocalDirectorySkillSource.load` 报“frozen Skill was not discovered from this source”。retained loader 在当前 catalog 未选旧源时必须先调用 SDK `discover`；增加每个受信 source 的 eager discover 后 `sh-http-pending-probe-2.raw.log` 通过。未放宽断言。
+
+## 尚未执行和恢复条件
+
+- 全仓 `mvn clean verify`、JUnit Surefire 定向运行、Next/冻结 UI 两轮、主服务 30618/前端 35618 smoke、V2-M2 差分 runner 均为 **NOT_RUN**。原因：其它 Maven `spring-boot:run` PID 39852 持续运行；主控指示不启动其它 Maven/Next 重型门禁。本 lane 轻量探针只使用短生命周期 in-process HTTP，无槽位服务留存。
+- 资源恢复后第一轮先执行 `mvn -o -ntp -pl super-harness-server -am "-Dtest=V2SkillConfigStoreTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`，再运行可执行全仓门禁与 30618/35618 冻结 UI 双轮；按 AGENTS.md 保留全部原始日志、耗时、重试、端口/子进程清理结果。不能把本轮轻量 PASS 视为 M2 验收。
+- 受信 manifest 若要添加新 Skill 或版本，必须先提供完整且不会被覆盖的不可变目录、准确哈希和许可；已有旧目录不得覆盖或自动 GC。
+
+端口/进程释放检查：本 lane 未启动 30618/35618 的 Gateway/Next；2026-09-29 提交前 `Get-NetTCPConnection -State Listen` 核对两端口均无监听，轻量 HTTP 探针的端口由 OS 临时分配并在 try-with-resources 中关闭。无本 lane 常驻子进程。其它 Maven PID 39852 仍在运行，未被停止或修改。
+
+## 提交与验收边界
+
+本报告按提示词提交在 `docs/ai-coding-report/39-deerflow-parity-delivery/show-roadmap-2/W15/W15-V2ThinSkill.md`；主控之后同步到私有报告库并登记 SHPM 证据。实现提交 SHA 与最终 `git status` 在提交后由主控补记。下一切片须先完成本报告的 NOT_RUN 门禁，再让 W18 在合入后的同一主线 SHA 上跑冻结 UI 差分；W16 不以本轻量证据提前启动验收。

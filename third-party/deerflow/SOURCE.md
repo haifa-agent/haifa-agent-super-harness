@@ -1,5 +1,11 @@
 # DeerFlow frontend source record
 
+## W15 frozen Skill package
+
+`skills/manifest.json` records the complete `skills/public/consulting-analysis/` package from the same pinned upstream commit. Its sole `SKILL.md` is copied byte for byte to a versioned directory, with SHA-256 `5bc99df7e5f8af5471eaa5d20b85fc46e99895cf3f2642fa9da94108d03ca13e`. The package is attributed to `bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294` under the repository's MIT license in `LICENSES/deer-flow-MIT.txt`; the Skill frontmatter itself does not declare a license. The manifest checks both the package file and license bytes before the SDK catalog is built. Older manifest entries and their full directories must be retained while persisted Runs may reference them. The V2 `v2-format-control` contract fixture belongs to this repository's tests and is absent from the production manifest.
+
+## Frontend source
+
 The `frontend/` directory started from the complete tracked `frontend/` tree
 at the pinned DeerFlow revision below. W18 applies one documented, reproducible
 configuration-boundary patch after import.
