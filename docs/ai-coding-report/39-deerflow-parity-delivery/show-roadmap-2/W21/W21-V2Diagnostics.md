@@ -4,7 +4,7 @@
 
 ## 工作范围与来源
 
-- 分支：`codex/w21-v2-diagnostics`；复用独立 W05 管理工作树，起点 SH main `09549e160b070b579d60759bb447945664749cc0`。2026-09-29 已将 W21 未提交变更安全保存后 rebase 到 `main@14e516b8f9c0e0f900b522c2ded0988b0fc492ac`（包含 W16 连续 Interaction 展示修复）；最终 commit SHA 待提交后填写。rebase 备份为 `local-tmp/slot-3-w21/evidence/pre-rebase-main14e516b/`，含 binary patch、9 文件 SHA manifest 与独立 Git stash commit；恢复无冲突，W16 产品/测试 diff 保留。
+- 分支：`codex/w21-v2-diagnostics`；复用独立 W05 管理工作树，起点 SH main `09549e160b070b579d60759bb447945664749cc0`。2026-09-29 已将 W21 未提交变更安全保存后 rebase 到 `main@14e516b8f9c0e0f900b522c2ded0988b0fc492ac`（包含 W16 连续 Interaction 展示修复）；W21 12 路径产品、测试与报告首提交为 `fd86e2a9c1392fe1b7f77152bc63597aa39102fd`，尚未合入 main。rebase 备份为 `local-tmp/slot-3-w21/evidence/pre-rebase-main14e516b/`，含 binary patch、9 文件 SHA manifest 与独立 Git stash commit；恢复无冲突，W16 产品/测试 diff 保留。
 - SHPM 派工：原 `asg-W21-task-1-diagnostics`，主线恢复 assignment `asg-W21-task-1-main14e516b-resume`，映射 `DEMO-V2/V2-M4`；阶段和任务状态仅由主控更新。
 - 冻结 DeerFlow：`bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294`。本工作树 `local-tmp/slot-3-w21/context/` 的 10 份只读材料与 SHA manifest 已核对，未修改冻结源码。
 - W24 evidence gate 所需、SHPM 已登记的 28 份 ignored `private-docs/` 材料由主控逐件 SHA 核对后复制到本工作树同相对路径；清单 `local-tmp/slot-3-w21/context/shpm-registered-private-docs-copy-manifest.json`，mismatch=0。仅用于门禁，未改 tracked 文件。
