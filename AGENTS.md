@@ -60,6 +60,7 @@
 
 - 本机 `opencode` 1.18.32 在独立 worktree 中默认拒绝读取 worktree 外的主目录 `AGENTS.md` 或 `private-docs/prompts/...`，非交互 `opencode run` 提示 `permission requested: external_directory ... auto-rejecting`；用 `--auto` 关闭审批不是修复。`--file PATH` 与后续位置消息同用时会把整段消息误当文件名并报 `File not found`。检查：`opencode --version`、`opencode run --help`、目标 worktree 的 `git status --short`。工作法：主控在启动命令所在的 PowerShell 中以 `Get-Content -Raw` 读取提示词及必要的冻结源码摘录，作为**一个位置参数字符串**交给 `opencode run --model deepseek/deepseek-flash`；OpenCode 只读取自身 worktree 的 `AGENTS.md` 和代码，不授权外部目录、不复制 SDK/依赖、不传任何密钥。启动后须从输出确认它已核对 branch/worktree、在预期目录内读取代码；无法安全获取必要上下文则标记阻塞并由主控改派。
 - 2026-09-28 实测：OpenCode 在 worktree 内执行含 `cd ..`、`../` 或 `..\` 的 shell 命令（即使最终仍落在 worktree 内，例如 `sha256sum -c ../x.SHA256SUMS`）也会被判为访问上级目录，触发 `external_directory (<worktrees 父目录>\*)` 自动拒绝，非交互运行随即在未修改任何文件的情况下以 exit 0 结束。检查：在 `opencode-run.log` 中搜索 `permission requested`，并核对 `git log`/`checkpoints.md` 是否真有进展（exit 0 不代表完成）。最小修复：主控提供的上下文目录与 `SHA256SUMS` 一律使用**相对 worktree 根目录**的路径，派单提示词明确禁止 `..` 路径，然后原样重派；不得授权外部目录或用 `--auto` 绕过。PowerShell `Start-Job` 启动的 `opencode run` 会随工具调用的 host 退出而被终止，须改用后台任务直接运行。
+- 2026-09-29 实测（1.18.33）：OpenCode 读取 `$env:USERPROFILE\.m2\settings.xml` 等 worktree 外文件同样触发 `external_directory (C:\Users\<user>\.m2\*)` 自动拒绝，随后在未改动文件的情况下以 exit 0 结束；Maven 子进程自身读取本地仓库不受影响（`mvn -o` 可正常用）。最小修复：派单消息直接写明所需环境事实（本地仓库 `D:\DevCache\maven\repository`、相关构件的可用版本），并明确禁止读取或列出 worktree 外路径（含 `~/.m2`、Maven 本地仓库目录），依赖是否齐全一律以 worktree 内 `mvn -o -ntp` 的结果判断；然后原样重派。
 
 # 主控 Agent 规则
 
