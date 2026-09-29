@@ -53,6 +53,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final ObjectMapper objectMapper;
     private final DeerFlowThreadRunApi threadRunApi;
     private final DeerFlowConfigurationApi configurationApi;
+    private final DeerFlowMcpApi mcpApi;
     private final DeerFlowWorkspaceApi workspaceApi;
     private final DeerFlowProjectApi projectApi;
     private final DeerFlowTrashApi trashApi;
@@ -72,6 +73,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.executor = executor;
         this.objectMapper = new ObjectMapper();
         this.configurationApi = new DeerFlowConfigurationApi(objectMapper, dataDirectory);
+        McpConfigStore mcpStore = new McpConfigStore(objectMapper, dataDirectory);
+        this.mcpApi = new DeerFlowMcpApi(objectMapper, mcpStore);
         PersistentProjectWorkspaceService projects = new PersistentProjectWorkspaceService(
                 dataDirectory.resolve("workspace"), WorkspaceLimits.defaults(), WorkspaceChangeLimits.defaults());
         RestrictedWorkspaceService toolWorkspace = new RestrictedWorkspaceService(
@@ -95,6 +98,10 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                                                 scope.threadId(), scope.artifactProjectRef(), projects, toolWorkspace),
                                         new ProductionReadFileTool(scope.threadId(), projects, toolWorkspace))
                                 : List.of(),
+                body -> McpRunTools.specs(
+                        mcpStore.servers(),
+                        configurationApi.resolveMcpPluginSelection(body),
+                        new java.util.ArrayList<>()),
                 new DeerFlowUploadContext(toolWorkspace));
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
@@ -404,6 +411,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         server.createContext("/api/models", configurationApi);
         server.createContext("/api/managed-models", configurationApi);
         server.createContext("/api/agents", configurationApi);
+        server.createContext("/api/mcp", mcpApi);
         server.createContext(DeerFlowInputPolishApi.PATH, inputPolishApi);
         server.createContext("/api/suggestions", suggestionsApi);
         server.createContext("/api/projects", projectApi);

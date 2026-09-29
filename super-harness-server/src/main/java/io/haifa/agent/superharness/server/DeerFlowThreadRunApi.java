@@ -19,6 +19,7 @@ import io.haifa.agent.runtime.api.RuntimeContractException;
 import io.haifa.agent.runtime.api.ToolCallView;
 import io.haifa.agent.store.sqlite.SqliteStoreException;
 import io.haifa.agent.sdk.tool.JavaTool;
+import io.haifa.agent.starter.McpServerSpec;
 import io.haifa.agent.project.changeset.FileChange;
 import io.haifa.agent.project.changeset.FileChangeType;
 import io.haifa.agent.project.changeset.FileVersion;
@@ -117,6 +118,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private final Predicate<String> projectExists;
     private final PersistentProjectWorkspaceService workspaceChanges;
     private final Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread;
+    private final Function<JsonNode, List<McpServerSpec>> runMcpSpecs;
     private final DeerFlowUploadContext uploadContext;
     private final PersistentThreadCatalog threadCatalog;
     private final DurableHaifaFoundation foundation;
@@ -138,6 +140,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             Path dataDirectory,
             SecretKey continuationKey,
             Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread,
+            Function<JsonNode, List<McpServerSpec>> runMcpSpecs,
             DeerFlowUploadContext uploadContext)
             throws IOException {
         this.json = json;
@@ -145,6 +148,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         this.projectExists = projectExists;
         this.workspaceChanges = workspaceChanges;
         this.runToolsForThread = runToolsForThread;
+        this.runMcpSpecs = runMcpSpecs == null ? ignored -> List.of() : runMcpSpecs;
         this.uploadContext = java.util.Objects.requireNonNull(uploadContext, "uploadContext");
         this.threadCatalog = new PersistentThreadCatalog(json, dataDirectory);
         this.foundation = new DurableHaifaFoundation(dataDirectory, continuationKey);
@@ -590,6 +594,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         String modelInput = runInput == null
                 ? uploadContext.modelInput(threadId, body.path("input").path("messages"), message)
                 : message;
+        List<McpServerSpec> mcpSpecs = runInput == null ? runMcpSpecs.apply(body) : List.of();
 
         RunRecord run = null;
         RunRecord steerRun = null;
@@ -649,7 +654,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (steerRun == null) {
             boolean createdBridge = thread.bridge == null;
             if (thread.bridge == null) {
-                HaifaRunBridge bridge = new HaifaRunBridge(binding, toolsForThread(thread), foundation);
+                HaifaRunBridge bridge =
+                        new HaifaRunBridge(binding, toolsForThread(thread), foundation, mcpSpecs);
                 // Restoring the Conversation is read-only; claim the selected model only
                 // after the SDK has admitted the new Run successfully.
                 attachBridge(thread, bridge, false);
@@ -659,8 +665,12 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             HaifaRunBridge selectedBridge = thread.bridge;
             boolean switchingModel = !selectedBridge.bindingIdentity()
                     .equals(binding.name() + "@" + binding.revision());
-            if (switchingModel) {
-                selectedBridge = new HaifaRunBridge(binding, toolsForThread(thread), foundation);
+            // A configuration change only affects the tool snapshot of later Runs; a Turn whose
+            // MCP projection differs from the attached bridge rebuilds it rather than hot-editing
+            // the active Run.
+            boolean switchingMcp = !selectedBridge.mcpSignature().equals(mcpSignature(mcpSpecs));
+            if (switchingModel || switchingMcp) {
+                selectedBridge = new HaifaRunBridge(binding, toolsForThread(thread), foundation, mcpSpecs);
             }
             // Frozen TitleMiddleware names the thread only from its first user Turn. The boundary is
             // the in-memory message sequence (seeded from durable turns when a persisted session is
@@ -684,7 +694,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 // switchingModel cannot both be true. On a failed switch the old bridge stays
                 // attached for durable history and a subsequent Turn; only the rejected new
                 // bridge is closed here.
-                if (switchingModel || createdBridge) {
+                if (switchingModel || switchingMcp || createdBridge) {
                     if (createdBridge) thread.bridge = null;
                     ownedBridges.remove(selectedBridge);
                     selectedBridge.close();
@@ -693,7 +703,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 sendJson(exchange, 500, Map.of("detail", "Run could not start"));
                 return;
             }
-            if (switchingModel) {
+            if (switchingModel || switchingMcp) {
                 thread.bridge = selectedBridge;
                 ownedBridges.add(selectedBridge);
             }
@@ -1006,6 +1016,12 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private void attachBridge(ThreadRecord thread, HaifaRunBridge bridge) {
         attachBridge(thread, bridge, true);
+    }
+
+    private static String mcpSignature(List<McpServerSpec> specs) {
+        return specs.stream()
+                .map(McpServerSpec::toString)
+                .collect(java.util.stream.Collectors.joining("|"));
     }
 
     private List<? extends JavaTool<?, ?>> toolsForThread(ThreadRecord thread) {
