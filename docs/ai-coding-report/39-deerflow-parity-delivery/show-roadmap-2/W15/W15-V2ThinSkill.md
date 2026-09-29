@@ -29,7 +29,7 @@
 | `git diff --check` 与静态 secret scan | PASS | 本 lane 执行；secret pattern 无命中。提交后再执行 `git diff --cached --check`。 |
 | reactor compile | PASS，但不能提升为完整门禁 | `evidence/reactor-compile.raw.log`；约 14:45:23–14:45:33，FreePhysicalMemory 4,473,856 KB，`mvn -o -ntp -pl super-harness-server -am -DskipTests compile` 5/5，10.292 秒。此时其它 `spring-boot:run` PID 39852 尚在，主控随后明确要求将其视为其它 Maven，故不再发起 Maven。之后变更已用本地 classpath 的 `javac` 编译，JUnit 源也可编译，JUnit 运行仍未执行。 |
 
-全部原始 probe 日志直接写在本工作包外置独立目录 `local-tmp/slot-2-w15-v2-skill/evidence/`，没有放在任何 `target`；未执行 `mvn clean`，故无清理前复制动作，也无伪造的副本路径。该目录共有 25 份证据文件（包括 Maven compile、首次失败和复跑）；轻量探针没有统一计时器，各次独立耗时记 **未测量**，不能推定为零。唯一计时的 Maven compile 为 10.292 秒。没有运行 Playwright，次数 0、耗时 0、trace/screenshot 不存在。
+首阶段全部原始 probe 日志直接写在本工作包外置独立目录 `local-tmp/slot-2-w15-v2-skill/evidence/`，没有放在任何 `target`；首阶段未执行 `mvn clean`，故无清理前复制动作。首阶段有 25 份证据文件（包括 Maven compile、首次失败和复跑）；轻量探针没有统一计时器，各次独立耗时记 **未测量**，不能推定为零。首阶段唯一计时的 Maven compile 为 10.292 秒。
 
 ### 可复现的轻量命令
 
@@ -66,14 +66,28 @@ java -cp $shCp io.haifa.agent.superharness.server.SkillStoreNegativeProbe $repo 
 - `evidence/sh-http-recovery-probe.raw.log`：轻量 harness classpath 漏 JNA，`NoClassDefFoundError`，补本地 JNA classpath 后 `sh-http-recovery-probe-3.raw.log` 通过；非产品故障。
 - `evidence/sh-http-pending-probe.raw.log`：首次 HTTP 500 `SQLITE_TRANSACTION_FAILED`。`evidence/sh-http-pending-direct.raw.log` 的最内层异常为 `LocalDirectorySkillSource.load` 报“frozen Skill was not discovered from this source”。retained loader 在当前 catalog 未选旧源时必须先调用 SDK `discover`；增加每个受信 source 的 eager discover 后 `sh-http-pending-probe-2.raw.log` 通过。未放宽断言。
 
-## 尚未执行和恢复条件
+## 资源恢复后的真实门禁（2026-09-29）
 
-- 全仓 `mvn clean verify`、JUnit Surefire 定向运行、Next/冻结 UI 两轮、主服务 30618/前端 35618 smoke、V2-M2 差分 runner 均为 **NOT_RUN**。原因：其它 Maven `spring-boot:run` PID 39852 持续运行；主控指示不启动其它 Maven/Next 重型门禁。本 lane 轻量探针只使用短生命周期 in-process HTTP，无槽位服务留存。
-- 资源恢复后第一轮先执行 `mvn -o -ntp -pl super-harness-server -am "-Dtest=V2SkillConfigStoreTest" "-Dsurefire.failIfNoSpecifiedTests=false" test`，再运行可执行全仓门禁与 30618/35618 冻结 UI 双轮；按 AGENTS.md 保留全部原始日志、耗时、重试、端口/子进程清理结果。不能把本轮轻量 PASS 视为 M2 验收。
-- 受信 manifest 若要添加新 Skill 或版本，必须先提供完整且不会被覆盖的不可变目录、准确哈希和许可；已有旧目录不得覆盖或自动 GC。
+主控停止另一个项目的精确服务进程链后，本 lane 预检空闲物理内存 5.24 GiB、无其他 Maven、槽位 30618/35618 非 NAT 排除且 loopback bind PASS。所有下表原始日志均直接写在 `local-tmp/slot-2-w15-v2-skill/evidence/`；首次失败及其 Surefire XML/TXT 保留，未改记为 NOT_RUN。
 
-端口/进程释放检查：本 lane 未启动 30618/35618 的 Gateway/Next；2026-09-29 提交前 `Get-NetTCPConnection -State Listen` 核对两端口均无监听，轻量 HTTP 探针的端口由 OS 临时分配并在 try-with-resources 中关闭。无本 lane 常驻子进程。其它 Maven PID 39852 仍在运行，未被停止或修改。
+| 门禁/命令 | 结果 | 原始证据、次数与耗时 |
+| --- | --- | --- |
+| `mvn -o -ntp -pl super-harness-server -am '-Dtest=V2SkillConfigStoreTest' '-Dsurefire.failIfNoSpecifiedTests=false' '-DargLine=-Xmx768m -XX:+UseSerialGC' test` | PASS，exit 0，2/2、0 skipped | `evidence/junit-targeted-1.raw.log`，15.063 秒；clean 前把 `super-harness-server/target/surefire-reports/` 复制到 `evidence/junit-targeted-1-surefire-reports/`。 |
+| `mvn -o -ntp '-DargLine=-Xmx768m -XX:+UseSerialGC' clean verify` 首次 | **FAIL**，exit 1，196 tests / 12 failures / 9 skipped | `evidence/full-clean-verify-1.raw.log`，5:45；`evidence/full-clean-verify-1-surefire-reports/` 是 63 个原始 Surefire 文件的外置副本。11 个 W04 fixture 失败源于 checkout CRLF，另 1 个 W15 ArchUnit 失败源于公开 SDK 方法返回内部类型。原始及副本路径均保留。 |
+| `mvn -o -ntp -pl super-harness-server -am '-Dtest=DeerFlowUploadRunContextHttpTest' ... test` 修复 checkout 后首次 | **FAIL**，exit 1，11 个 license ERROR | `evidence/upload-checkout-repair-1.raw.log`。W15 manifest 的 license SHA 误取 CRLF checkout 字节 `3e8f6a...`，Git 固定 LF 字节实际 `b23dff...`；这是独立的首次失败。 |
+| 同一定向命令，修正受信 license hash 与 `.gitattributes` 后第二次 | PASS，exit 0，11/11、0 skipped | `evidence/upload-checkout-repair-2.raw.log`，测试 77.61 秒、Maven 1:21；含真实上传 SHA `ec326b7d...`、Run、ToolCall、回答。 |
+| `tests/contracts/verify-deerflow-contracts.ps1 -DeerFlowRoot D:/workspace/haifa-agent-super-harness/deer-flow` | PASS，exit 0 | `evidence/deerflow-contract-gate-1.raw.log`；冻结源 HEAD `e545c28ac301e6f9feae247c513d8ea8f83df294`。 |
+| `tests/contracts/verify-resource-license-inventory.ps1` | PASS，exit 0，24 checks | `evidence/resource-license-gate-1.raw.log`。 |
+| `tests/evidence/verify-evidence-report.ps1` 首次 | **FAIL**，exit 1 | `evidence/evidence-report-gate-1.raw.log`；本 worktree 被忽略的 `private-docs/` 缺失，测试无法把 SHPM prompt 路径复制到临时 fixture。 |
+| 同一证据命令，仅复制 SHPM 只读快照登记的 24 个 prompt/roadmap 文件到忽略的 `private-docs/` 后 | PASS，exit 0，101 assertions | `evidence/evidence-report-gate-2.raw.log`；只读快照 `evidence/shpm-readonly-snapshot.json`，未修改 SHPM。 |
+| `corepack pnpm install --offline --frozen-lockfile`（`frontend/`） | PASS，exit 0 | `evidence/frontend-offline-install-1.raw.log`；`pnpm 10.26.2`，1088 包，`downloaded 0`，41.9 秒；`next.cmd`/`playwright.cmd` 已存在。 |
+
+CRLF 修复过程：先确认整个 worktree clean，`git archive HEAD` 中 `contracts/customer-demo-v2/fixtures/customers.csv` 的 SHA256 为 `EC326B7D...`、工作树原字节为 `6E8E37B5...`；用 `git archive --format=tar -o local-tmp/slot-2-w15-v2-skill/evidence/checkout-byte-repair.tar HEAD frontend third-party contracts` 仅重落这些已跟踪字节，随后 CSV SHA 与 Oracle 一致、`SKILL.md` SHA 保持 `5BC99D...`。`git add -u frontend third-party contracts` 只刷新相同 blob 的索引状态，`git diff --cached --stat` 为空。W15 license hash 与 checkout 属性的产品修正单独保留在当前分支。
+
+ArchUnit 的具体失败见 `evidence/full-clean-verify-1-surefire-reports/io.haifa.agent.superharness.server.ServerSdkBoundaryArchitectureTest.txt`：`SkillToolContributions.create` 的公开签名返回内部 `SkillToolCatalogContribution`，SH 拆取该类型的四个字段触犯 SDK 边界。最小上游 API 修复设计和 `javap` 证据在 `local-tmp/slot-2-w15-v2-skill/skill-tool-public-registration-gap.md`，待主控复审；不放宽架构测试，也不在 SH 复制 Skill Tool。
+
+冻结 UI runner 已新增 `-V2Skill` profile 和 `tests/w18-ui-smoke/w15-v2-skill.spec.cjs`，静态 `node --check` 与 PowerShell parser PASS；**Next build、冻结 UI 同脚本两轮、30618/35618 真实服务 smoke 仍 NOT_RUN**，等待 SDK 公共 API 修复与最终 SHA 后执行。Playwright 次数 0、耗时 0、trace/screenshot 尚不存在；不能把 Java/HTTP 探针或本轮 W04 Run 提升为 W15 UI PASS。V2-M2 差分 runner 与 W16 成果也未由本 lane 执行。脚本当前没有启动常驻槽位进程，30618/35618 检查均无监听。受信 manifest 后续新增 Skill/版本必须保留完整旧字节，不做原位覆盖或自动 GC。
 
 ## 提交与验收边界
 
-本报告按提示词提交在 `docs/ai-coding-report/39-deerflow-parity-delivery/show-roadmap-2/W15/W15-V2ThinSkill.md`；主控之后同步到私有报告库并登记 SHPM 证据。实现提交 SHA 与最终 `git status` 在提交后由主控补记。下一切片须先完成本报告的 NOT_RUN 门禁，再让 W18 在合入后的同一主线 SHA 上跑冻结 UI 差分；W16 不以本轻量证据提前启动验收。
+本报告按提示词放在 `docs/ai-coding-report/39-deerflow-parity-delivery/show-roadmap-2/W15/W15-V2ThinSkill.md`；主控之后同步到私有报告库并登记 SHPM 证据。最终代码 SHA 与 clean 状态待上游 API 修复、全仓及 UI 门禁结束后补记。下一步先解决 ArchUnit SDK 公开 API 缺口，重跑全仓门禁并做冻结 UI 双轮；之后 W18 才能在合入后的同一主线 SHA 上跑差分。W16 不以本轻量证据提前启动验收。
