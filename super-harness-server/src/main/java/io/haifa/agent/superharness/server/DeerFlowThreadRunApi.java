@@ -549,15 +549,15 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (isInFlightWithoutDurableHuman(run, durableHumanRuns)) {
                 eligible.add(messageRow(run, run.humanSequence, run.createdAt, pendingHumanMessage(run)));
             }
-            synchronized (run) {
-                if (run.interactionRequestMessage != null) {
-                    eligible.add(messageRow(run, run.interactionRequestSequence,
-                            run.createdAt, run.interactionRequestMessage));
-                }
-                if (run.acceptedInteractionResponse != null) {
-                    eligible.add(messageRow(run, run.interactionResponseSequence,
-                            run.bridge.snapshot(run.runId).updatedAt(),
-                            run.acceptedInteractionResponse.message()));
+        }
+        synchronized (thread) {
+            for (var display : thread.interactionDisplays) {
+                if (!isVisibleInteractionDisplay(thread, display)) continue;
+                eligible.add(messageRow(display.runId(), display.requestSequence(),
+                        display.createdAt(), requestMessage(display)));
+                if (display.answeredOption() != null) {
+                    eligible.add(messageRow(display.runId(), display.requestSequence() + 1,
+                            display.createdAt(), responseMessage(display)));
                 }
             }
         }
@@ -950,9 +950,17 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     }
                     Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
                     if (pending.isEmpty()
-                            || run.interactionRequestId == null
-                            || !run.interactionRequestId.equals(response.requestId())) {
+                            || !pending.orElseThrow().requestId().value().equals(response.requestId())) {
                         sendJson(exchange, 409, Map.of("detail", "Thread has no matching Interaction"));
+                        return;
+                    }
+                    try {
+                        // A legacy/restarted Run may have an SDK pending view but no saved
+                        // presentation yet. Never accept its side effect before the card is durable.
+                        ensureSavedPendingDisplay(thread, run, pending.orElseThrow());
+                    } catch (IOException | IllegalArgumentException unavailablePresentation) {
+                        sendJson(exchange, 503, Map.of(
+                                "detail", "Interaction card could not be saved; approval was not submitted"));
                         return;
                     }
                     InteractionResponseSubmission submission;
@@ -979,6 +987,36 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     Map<String, Object> responseMessage =
                             DeerFlowInteractionHttpProjection.responseMessage(
                                     response, submittedText, run.runId.value());
+                    List<PersistentThreadCatalog.InteractionDisplay> updated =
+                            new ArrayList<>(thread.interactionDisplays);
+                    boolean savedDisplay = false;
+                    for (int index = 0; index < updated.size(); index++) {
+                        var display = updated.get(index);
+                        if (display.runId().equals(run.runId.value())
+                                && display.requestId().equals(response.requestId())) {
+                            updated.set(index, display.answered(response.optionId()));
+                            savedDisplay = true;
+                            break;
+                        }
+                    }
+                    if (!savedDisplay) throw new IllegalStateException(
+                            "Saved Interaction card disappeared after SDK accepted the response");
+                    thread.interactionDisplays = List.copyOf(updated);
+                    try {
+                        persistThread(thread);
+                    } catch (IOException | RuntimeException failedPersistence) {
+                        // The SDK has already accepted this response. Keep the in-process
+                        // display answered, expose the degraded durability explicitly, and
+                        // continue the same Run. A restart filters the stale unaccepted card
+                        // against the SDK's current pending ID.
+                        exchange.getResponseHeaders().set(
+                                "X-Haifa-Interaction-Presentation", "accepted-not-persisted");
+                        INTERACTION_LOG.log(System.Logger.Level.ERROR,
+                                "INTERACTION_PRESENTATION_SAVE_AFTER_ACCEPT_FAILURE run="
+                                        + run.runId.value() + " request=" + response.requestId()
+                                        + " sdk_receipt=ACCEPTED cause="
+                                        + failedPersistence.getClass().getSimpleName());
+                    }
                     run.acceptedInteractionResponse = new AcceptedInteractionResponse(
                             response, submission, responseMessage);
                     thread.updatedAt = Instant.now();
@@ -1154,7 +1192,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 .orElseThrow(() -> new IllegalStateException("persisted thread conversation is unavailable"));
         long latestSequence = latestVisibleTurnSequence(thread, thread.bridge);
         thread.session = new HaifaRunBridge.SessionState(conversation.sessionId(), conversation.revision());
-        thread.nextMessageSequence = latestSequence + 1;
+        long latestDisplaySequence = thread.interactionDisplays.stream()
+                .mapToLong(display -> display.requestSequence() + 1)
+                .max().orElse(0);
+        thread.nextMessageSequence = Math.max(latestSequence, latestDisplaySequence) + 1;
     }
 
     private long latestVisibleTurnSequence(ThreadRecord thread, HaifaRunBridge bridge) {
@@ -1186,7 +1227,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     thread.createdAt,
                     thread.updatedAt,
                     Optional.ofNullable(thread.persistedSessionId),
-                    Optional.ofNullable(thread.modelBindingIdentity)));
+                    Optional.ofNullable(thread.modelBindingIdentity),
+                    thread.interactionDisplays));
         }
     }
 
@@ -1585,54 +1627,45 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         Map<String, Object> requestMessage;
         synchronized (thread) {
             synchronized (run) {
-                if (run.interactionRequestMessage == null) {
-                    Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
-                    if (pending.isEmpty()
-                            || !pending.orElseThrow()
-                                    .requestId()
-                                    .value()
-                                    .equals(projectedRequestId)) {
-                        writeSse(
-                                output,
-                                "error",
-                                Map.of(
-                                        "code", "interaction_view_unavailable",
-                                        "request_id", projectedRequestId,
-                                        "message", "Pending Interaction view is unavailable"),
-                                cursor);
-                        return true;
-                    }
-                    try {
-                        run.interactionRequestMessage =
-                                DeerFlowInteractionHttpProjection.requestMessage(
-                                        pending.orElseThrow(), run.runId.value());
-                    } catch (IllegalArgumentException unsupported) {
-                        writeSse(
-                                output,
-                                "error",
-                                Map.of(
-                                        "code", "unsupported_interaction_projection",
-                                        "request_id", projectedRequestId,
-                                        "message", unsupported.getMessage()),
-                                cursor);
-                        return true;
-                    }
-                    run.interactionRequestId = projectedRequestId;
-                    run.interactionRequestSequence = run.humanSequence + 1;
-                    run.interactionResponseSequence = run.humanSequence + 2;
-                    run.assistantSequence = run.humanSequence + 3;
-                    thread.nextMessageSequence += 2;
-                } else if (!projectedRequestId.equals(run.interactionRequestId)) {
+                Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
+                if (pending.isEmpty()
+                        || !pending.orElseThrow().requestId().value().equals(projectedRequestId)) {
                     writeSse(
                             output,
                             "error",
                             Map.of(
-                                    "code", "multiple_interactions_unsupported",
+                                    "code", "interaction_view_unavailable",
                                     "request_id", projectedRequestId,
-                                    "message", "Only one Interaction per Run is supported"),
+                                    "message", "Pending Interaction view is unavailable"),
                             cursor);
                     return true;
                 }
+                PersistentThreadCatalog.InteractionDisplay display;
+                try {
+                    display = ensureSavedPendingDisplay(thread, run, pending.orElseThrow());
+                } catch (IOException failedPersistence) {
+                    writeSse(output, "error", Map.of(
+                            "code", "interaction_projection_not_persisted",
+                            "request_id", projectedRequestId,
+                            "message", "Interaction card could not be saved"), cursor);
+                    return true;
+                } catch (IllegalArgumentException unsupported) {
+                    writeSse(output, "error", Map.of(
+                            "code", "unsupported_interaction_projection",
+                            "request_id", projectedRequestId,
+                            "message", "Pending Interaction cannot be projected"), cursor);
+                    return true;
+                }
+                if (!projectedRequestId.equals(run.interactionRequestId)) {
+                    run.acceptedInteractionResponse = null;
+                }
+                run.interactionRequestId = projectedRequestId;
+                run.interactionRequestSequence = display.requestSequence();
+                run.interactionResponseSequence = display.requestSequence() + 1;
+                run.assistantSequence = display.requestSequence() + 2;
+                thread.nextMessageSequence = Math.max(
+                        thread.nextMessageSequence, display.requestSequence() + 2);
+                run.interactionRequestMessage = requestMessage(display);
                 requestMessage = run.interactionRequestMessage;
             }
         }
@@ -2113,8 +2146,13 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private Map<String, Object> messageRow(
             RunRecord run, long sequence, Instant createdAt, Map<String, Object> content) {
+        return messageRow(run.runId.value(), sequence, createdAt, content);
+    }
+
+    private Map<String, Object> messageRow(
+            String runId, long sequence, Instant createdAt, Map<String, Object> content) {
         Map<String, Object> row = new LinkedHashMap<>();
-        row.put("run_id", run.runId.value());
+        row.put("run_id", runId);
         row.put("seq", sequence);
         row.put("content", content);
         row.put("metadata", Map.of("caller", "lead_agent"));
@@ -2187,7 +2225,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 ? bridgeForPersistedThread(thread).toolCalls(runId)
                 : cached.bridge.toolCalls(runId);
         calls.stream().map(DeerFlowToolTranscriptProjection::requestMessage).forEach(messages::add);
-        if (cached != null) addInteractionMessages(cached, messages);
+        addInteractionMessages(thread, runId.value(), cached, messages);
         calls.stream()
                 .map(DeerFlowToolTranscriptProjection::resultMessage)
                 .flatMap(Optional::stream)
@@ -2278,12 +2316,91 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         return message;
     }
 
-    private void addInteractionMessages(RunRecord run, List<Map<String, Object>> messages) {
-        synchronized (run) {
-            if (run.interactionRequestMessage != null) messages.add(run.interactionRequestMessage);
-            if (run.acceptedInteractionResponse != null) {
-                messages.add(run.acceptedInteractionResponse.message());
+    private void addInteractionMessages(
+            ThreadRecord thread, String runId, RunRecord run, List<Map<String, Object>> messages) {
+        synchronized (thread) {
+            for (var display : thread.interactionDisplays) {
+                if (!display.runId().equals(runId)) continue;
+                if (!isVisibleInteractionDisplay(thread, display)) continue;
+                messages.add(requestMessage(display));
+                if (display.answeredOption() != null) messages.add(responseMessage(display));
             }
+        }
+        if (run != null) {
+            synchronized (run) {
+                if (run.interactionRequestMessage != null
+                        && thread.interactionDisplays.stream().noneMatch(display ->
+                                display.runId().equals(runId)
+                                        && display.requestId().equals(run.interactionRequestId))) {
+                    messages.add(run.interactionRequestMessage);
+                }
+            }
+        }
+    }
+
+    private Map<String, Object> requestMessage(PersistentThreadCatalog.InteractionDisplay display) {
+        return DeerFlowInteractionHttpProjection.requestMessage(
+                display.runId(), display.requestId(), display.toolCallId(), display.title(),
+                display.question(), display.context(), display.options());
+    }
+
+    /** Persist only the SDK's safe card presentation before exposing or answering this request. */
+    private PersistentThreadCatalog.InteractionDisplay ensureSavedPendingDisplay(
+            ThreadRecord thread, RunRecord run, InteractionView view) throws IOException {
+        String requestId = view.requestId().value();
+        var saved = thread.interactionDisplays.stream()
+                .filter(candidate -> candidate.requestId().equals(requestId))
+                .findFirst();
+        if (saved.isPresent()) {
+            var display = saved.orElseThrow();
+            if (!display.runId().equals(run.runId.value()) || display.answeredOption() != null) {
+                throw new IllegalArgumentException("Pending Interaction conflicts with saved presentation");
+            }
+            return display;
+        }
+        DeerFlowInteractionHttpProjection.requestMessage(view, run.runId.value());
+        var display = new PersistentThreadCatalog.InteractionDisplay(
+                run.runId.value(), requestId,
+                Math.max(thread.nextMessageSequence, run.humanSequence + 1),
+                view.createdAt(), view.target().reference(), view.title(),
+                view.safePrompt(), view.target().safeSummary(),
+                view.allowedActions().stream().map(action -> action.value()).toList(), null);
+        List<PersistentThreadCatalog.InteractionDisplay> updated =
+                new ArrayList<>(thread.interactionDisplays);
+        updated.add(display);
+        PersistentThreadCatalog.validateDisplays(updated);
+        List<PersistentThreadCatalog.InteractionDisplay> previous = thread.interactionDisplays;
+        thread.interactionDisplays = List.copyOf(updated);
+        try {
+            persistThread(thread);
+        } catch (IOException | RuntimeException failedPersistence) {
+            thread.interactionDisplays = previous;
+            throw new IOException("Interaction card presentation could not be persisted", failedPersistence);
+        }
+        return display;
+    }
+
+    private Map<String, Object> responseMessage(PersistentThreadCatalog.InteractionDisplay display) {
+        String option = display.answeredOption();
+        if (option == null) throw new IllegalArgumentException("Interaction has no display response");
+        var response = new DeerFlowInteractionHttpProjection.FrozenResponse(
+                DeerFlowInteractionHttpProjection.SOURCE, display.requestId(), "option", option, option);
+        return DeerFlowInteractionHttpProjection.responseMessage(response, "", display.runId());
+    }
+
+    private boolean isVisibleInteractionDisplay(
+            ThreadRecord thread, PersistentThreadCatalog.InteractionDisplay display) {
+        if (display.answeredOption() != null) return true;
+        try {
+            RunRecord cached = runs.get(display.runId());
+            HaifaRunBridge bridge = cached != null && cached.threadId.equals(thread.threadId)
+                    ? cached.bridge : bridgeForPersistedThread(thread);
+            return bridge.pendingInteraction(new AgentRunId(display.runId()))
+                    .filter(view -> view.requestId().value().equals(display.requestId()))
+                    .isPresent();
+        } catch (RuntimeException unavailable) {
+            // A stale or unverifiable saved card must never look actionable after restart.
+            return false;
         }
     }
 
@@ -2408,12 +2525,20 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 false);
         bridge.pendingInteraction(requested).ifPresent(pending -> {
             try {
-                restored.interactionRequestMessage =
-                        DeerFlowInteractionHttpProjection.requestMessage(pending, requested.value());
+                var saved = thread.interactionDisplays.stream()
+                        .filter(display -> display.runId().equals(requested.value())
+                                && display.requestId().equals(pending.requestId().value())
+                                && display.answeredOption() == null)
+                        .findFirst();
+                restored.interactionRequestMessage = saved.isPresent()
+                        ? requestMessage(saved.orElseThrow())
+                        : DeerFlowInteractionHttpProjection.requestMessage(pending, requested.value());
                 restored.interactionRequestId = pending.requestId().value();
-                restored.interactionRequestSequence = restored.humanSequence + 1;
-                restored.interactionResponseSequence = restored.humanSequence + 2;
-                restored.assistantSequence = restored.humanSequence + 3;
+                restored.interactionRequestSequence = saved
+                        .map(PersistentThreadCatalog.InteractionDisplay::requestSequence)
+                        .orElse(restored.humanSequence + 1);
+                restored.interactionResponseSequence = restored.interactionRequestSequence + 1;
+                restored.assistantSequence = restored.interactionRequestSequence + 2;
             } catch (IllegalArgumentException unsupported) {
                 // The public SDK view is still authoritative. An unsupported card is
                 // reported by the SSE/response path, never manufactured in history.
@@ -3201,6 +3326,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private volatile String modelBindingIdentity;
         private volatile String activeRunId;
         private volatile String latestRunId;
+        /** Safe frozen-card presentation only; the SDK owns every pending/accepted decision. */
+        private volatile List<PersistentThreadCatalog.InteractionDisplay> interactionDisplays = List.of();
         private boolean admissionRecovered;
         private long nextMessageSequence = 1;
 
@@ -3219,6 +3346,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             this.updatedAt = entry.updatedAt();
             this.persistedSessionId = entry.sessionId().orElse(null);
             this.modelBindingIdentity = entry.modelBindingIdentity().orElse(null);
+            this.interactionDisplays = entry.interactionDisplays();
         }
 
         private String title() {

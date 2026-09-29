@@ -65,9 +65,21 @@ final class DeerFlowInteractionHttpProjection {
 
     static Map<String, Object> requestMessage(InteractionView interaction, String runId) {
         requireApprovalCard(interaction);
+        return requestMessage(
+                runId,
+                interaction.requestId().value(),
+                interaction.target().reference(),
+                interaction.title(),
+                interaction.safePrompt(),
+                interaction.target().safeSummary(),
+                interaction.allowedActions().stream().map(InteractionAction::value).toList());
+    }
+
+    static Map<String, Object> requestMessage(
+            String runId, String requestId, String toolCallId, String title, String question,
+            String context, List<String> actions) {
         List<Map<String, Object>> options = new ArrayList<>();
-        for (InteractionAction action : interaction.allowedActions()) {
-            String value = action.value();
+        for (String value : actions) {
             options.add(Map.of(
                     "id", value,
                     "label", label(value),
@@ -78,21 +90,21 @@ final class DeerFlowInteractionHttpProjection {
         payload.put("version", 1);
         payload.put("kind", "human_input_request");
         payload.put("source", SOURCE);
-        payload.put("request_id", interaction.requestId().value());
-        payload.put("tool_call_id", interaction.target().reference());
+        payload.put("request_id", requestId);
+        payload.put("tool_call_id", toolCallId);
         payload.put("clarification_type", "risk_confirmation");
-        payload.put("title", interaction.title());
-        payload.put("question", interaction.safePrompt());
-        payload.put("context", interaction.target().safeSummary());
+        payload.put("title", title);
+        payload.put("question", question);
+        payload.put("context", context);
         payload.put("input_mode", "single_choice");
         payload.put("options", options);
 
         Map<String, Object> message = new LinkedHashMap<>();
-        String interactionMessageId = "interaction-" + interaction.requestId().value();
+        String interactionMessageId = "interaction-" + requestId;
         message.put("id", interactionMessageId);
         message.put("type", "tool");
         message.put("name", TOOL_NAME);
-        message.put("content", interaction.safePrompt());
+        message.put("content", question);
         // The top-level key is only the frozen UI grouping identity. It must not collide
         // with the authoritative Runtime ToolCall result; the nested payload retains the
         // real ToolCall target that this Interaction approves.
