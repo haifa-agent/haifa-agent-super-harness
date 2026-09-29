@@ -1,6 +1,6 @@
 # W15-task-1 交付报告（待主控验收）
 
-日期：2026-09-29。工作树：`D:\workspace\haifa-agent-worktrees\w15-v2-skill-prep\haifa-agent-super-harness`；分支：`codex/w15-v2-skill-prep`；基线：`main@d867f408f4425045e254d3c5fba9f67cf3035804`。最终 commit SHA 由主控在提交后补记私有副本。执行者仅提交实现与证据，不修改 SHPM，不合并，也不宣告 V2-M2 PASS。
+日期：2026-09-29。工作树：`D:\workspace\haifa-agent-worktrees\w15-v2-skill-prep\haifa-agent-super-harness`；分支：`codex/w15-v2-skill-prep`；基线：`main@d867f408f4425045e254d3c5fba9f67cf3035804`。公开 SDK 消费提交 `4a875eeca4b735393b5673462861f34db000e281`，冻结 UI runner Context 修复提交 `7d429bb45cc360256a0768f7cb6b8be7027de4fb`；最终报告提交 SHA 由主控补记私有副本。执行者仅提交实现与证据，不修改 SHPM，不合并，也不宣告 V2-M2 PASS。
 
 ## 设计与来源
 
@@ -84,10 +84,26 @@ java -cp $shCp io.haifa.agent.superharness.server.SkillStoreNegativeProbe $repo 
 
 CRLF 修复过程：先确认整个 worktree clean，`git archive HEAD` 中 `contracts/customer-demo-v2/fixtures/customers.csv` 的 SHA256 为 `EC326B7D...`、工作树原字节为 `6E8E37B5...`；用 `git archive --format=tar -o local-tmp/slot-2-w15-v2-skill/evidence/checkout-byte-repair.tar HEAD frontend third-party contracts` 仅重落这些已跟踪字节，随后 CSV SHA 与 Oracle 一致、`SKILL.md` SHA 保持 `5BC99D...`。`git add -u frontend third-party contracts` 只刷新相同 blob 的索引状态，`git diff --cached --stat` 为空。W15 license hash 与 checkout 属性的产品修正单独保留在当前分支。
 
-ArchUnit 的具体失败见 `evidence/full-clean-verify-1-surefire-reports/io.haifa.agent.superharness.server.ServerSdkBoundaryArchitectureTest.txt`：`SkillToolContributions.create` 的公开签名返回内部 `SkillToolCatalogContribution`，SH 拆取该类型的四个字段触犯 SDK 边界。最小上游 API 修复设计和 `javap` 证据在 `local-tmp/slot-2-w15-v2-skill/skill-tool-public-registration-gap.md`，待主控复审；不放宽架构测试，也不在 SH 复制 Skill Tool。
+ArchUnit 首败见 `evidence/full-clean-verify-1-surefire-reports/io.haifa.agent.superharness.server.ServerSdkBoundaryArchitectureTest.txt`：旧 `SkillToolContributions.create` 返回内部类型，SH 拆字段触犯 SDK 边界。HA SDK `feat-sh-w15-skill-tool-registrations@3c971e920a5e4a8f864b180bafa0737c08ce8d85` 新增公开 `createRegistrations(...)`，L3 门禁通过，JAR/BOM `0.1.2-SNAPSHOT` 已串行发布到本地 Maven，公开 JAR SHA-256 `2FC4342AD1D3AD5C6A439FC0BD53471FD6F4BDB3D6B5B3ECDF231AC5B387B1FB`，`javap` 验证公开返回 `List<ToolRegistration>`。SH 仅替换调用与内部映射，未复制 SDK。HA PR [#263](https://github.com/haifa-agent/haifa-agent/pull/263) OPEN，须人工审查合并；不能因本地消费将 PR 视为已合入。定向 JUnit `V2SkillConfigStoreTest,ServerSdkBoundaryArchitectureTest` 3/3 PASS，原始 `evidence/public-sdk-consume-targeted.raw.log`。
 
-冻结 UI runner 已新增 `-V2Skill` profile 和 `tests/w18-ui-smoke/w15-v2-skill.spec.cjs`，静态 `node --check` 与 PowerShell parser PASS；**Next build、冻结 UI 同脚本两轮、30618/35618 真实服务 smoke 仍 NOT_RUN**，等待 SDK 公共 API 修复与最终 SHA 后执行。Playwright 次数 0、耗时 0、trace/screenshot 尚不存在；不能把 Java/HTTP 探针或本轮 W04 Run 提升为 W15 UI PASS。V2-M2 差分 runner 与 W16 成果也未由本 lane 执行。脚本当前没有启动常驻槽位进程，30618/35618 检查均无监听。受信 manifest 后续新增 Skill/版本必须保留完整旧字节，不做原位覆盖或自动 GC。
+同一 SH SHA `4a875eeca4b735393b5673462861f34db000e281` 首次全仓 `clean verify` **FAIL**：196 tests / 1 failure / 9 skipped，`ProductionWriteFileHttpTest` 曾读到 `workspace changes available=false`，首败日志 `evidence/public-sdk-consume-full-clean-verify.raw.log`、Surefire `evidence/public-sdk-consume-full-clean-verify-1-surefire/`。同 SHA 定向复现 PASS 1/1（`evidence/public-sdk-consume-writefile-repro-1.raw.log`），同 SHA 第二次全仓 PASS 196/0/9（`evidence/public-sdk-consume-full-clean-verify-2.raw.log`、外置 Surefire 目录）。首次失败的原 workspace 已销毁，`available=false` 也可来自完成后空 diff，故根因未证实，不将首次 FAIL 改记为 NOT_RUN。
+
+## 冻结 UI 与真实 HTTP（2026-09-29）
+
+修复后代码提交 `7d429bb45cc360256a0768f7cb6b8be7027de4fb` 的全仓 `mvn -o -ntp clean verify '-DargLine=-Xmx768m -XX:+UseSerialGC'` exit 0，BUILD SUCCESS，06:32，服务端 196 tests / 0 failures / 0 errors / 9 skipped；原始 `evidence/public-sdk-consume-full-clean-verify-3.raw.log`，63 个 Surefire 文件在 `evidence/public-sdk-consume-full-clean-verify-3-surefire/`。`git diff --check`、PowerShell parser、静态 secret scan 均 PASS。每次 clean 前的 trace 与日志均在外置 `local-tmp/slot-2-w15-v2-skill/evidence/`，不在 `target`。
+
+同脚本为 `pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -V2Skill -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -DataDirectory <独立 data-root>`。启动前核对 NAT 排除段与 30618/35618 loopback bind 均 PASS；每轮采用不同 data-root，Provider 为受控 loopback 模型，未发送真实客户数据。
+
+| 轮次 | 结果、耗时及过程 | 原始证据 |
+| --- | --- | --- |
+| cold 首次，`data/ui-cold-20260929`，不带 `-SkipBuild` | **FAIL**，runner exit 1，总约 10m43s；Next compile 51s、TypeScript 65s，profile 代理 30618 正确；Playwright 1/1 FAIL、约 50.4s、retry 0。首卡点为启用 Skill Run 45s 内未 success，实际 Run 为 error。SQLite Run `01a0ec70-572c-7231-bd36-f9bfa74d3ea8` 的 `skill_load` 已 COMPLETED、`activated=true`；随后 Context 报 `MODEL_CONTEXT_TOO_LONG` / `REQUIRED_CONTEXT_TOO_LARGE`，无第二次流式模型请求。 | `evidence/ui-cold-runner.raw.log`、`evidence/ui/run-20260929-170311/` 的 profile、trace.zip、截图、results.json、前后端与 Provider 日志；原 DB `data/ui-cold-20260929/runtime/haifa-agent.sqlite`。 |
+| cold 修复后，`data/ui-cold-fixed-20260929`，不带 `-SkipBuild` | **PASS**，runner exit 0，约 7m49s（17:25:08–17:32:57），Maven package 196/0/9；Next compile 8.1s、TypeScript 5.1s；Playwright 1/1 PASS 11.806s、retry 0、flaky 0。profile 代理 30618，前端 35618。 | `evidence/ui-cold-fixed-runner.raw.log`、`evidence/ui/run-20260929-172510/` 的 profile、trace.zip、results.json、前后端与 Provider 日志。 |
+| warm 修复后，`data/ui-warm-fixed-20260929`，同脚本加 `-SkipBuild` | **PASS**，runner exit 0，约 53s（17:34:44–17:35:37）；复用上一轮已验证的同槽 Next 构建，故本轮动态编译 0、未重跑 Maven；Playwright 1/1 PASS 14.174s、retry 0、flaky 0。 | `evidence/ui-warm-fixed-runner.raw.log`、`evidence/ui/run-20260929-173446/` 的 profile、trace.zip、results.json、前后端与 Provider 日志。 |
+
+修复仅在 `-V2Skill` 模式把受控模型 `context_window` 从 8192 改为 32768；冻结 `consulting-analysis` 本身约 8196 token，完整激活正文、Run 历史和 1024 输出预算必须同时容纳。其它 runner 模式仍用 8192；未删减 Skill、放宽 UI 断言或截断正文。冷暖两轮 Provider 日志均证明激活前正文不可见、`skill_load` 后第二次流请求正文可见；禁用后新 Run 的 offered tools 仅 `read_file`/`write_file`，无 Skill Tool、无正文。两轮末端口 30618/35618 均释放，无遗留 runner 子进程。
+
+另用独立 `data/http-smoke-20260929` 启动当前 exec JAR 做真实 HTTP smoke，exit 0：`/health`、`/api/v1/auth/me`、`/api/skills`、`/api/skills/consulting-analysis`、`/api/managed-models` 均 200；原始 `evidence/http-smoke.raw.log`、`evidence/http-smoke-server.{stdout,stderr}.log`。仅停止本轮启动且核对命令行的 PID 13916，30618/35618 无监听。V2-M2 差分 runner、最终双后端整链与 W16 成果不属于本 lane，仍 NOT_RUN；受信 manifest 后续新版本须保留旧完整字节，不做原位覆盖或自动 GC。
 
 ## 提交与验收边界
 
-本报告按提示词放在 `docs/ai-coding-report/39-deerflow-parity-delivery/show-roadmap-2/W15/W15-V2ThinSkill.md`；主控之后同步到私有报告库并登记 SHPM 证据。最终代码 SHA 与 clean 状态待上游 API 修复、全仓及 UI 门禁结束后补记。下一步先解决 ArchUnit SDK 公开 API 缺口，重跑全仓门禁并做冻结 UI 双轮；之后 W18 才能在合入后的同一主线 SHA 上跑差分。W16 不以本轻量证据提前启动验收。
+本报告按提示词放在 `docs/ai-coding-report/39-deerflow-parity-delivery/show-roadmap-2/W15/W15-V2ThinSkill.md`；主控同步到私有报告库并登记 SHPM 证据。所有产品改动与 runner 修复在本分支，尚未合入 SH main；V2-M2 仍 NOT_RUN，需待合入后由 W18 在新主线 SHA 上跑双后端冷暖差分。HA PR #263 仅创建未合并，需人工审查。W16 不以本切片证据提前启动验收。
