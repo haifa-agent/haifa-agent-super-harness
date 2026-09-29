@@ -2,6 +2,12 @@
 
 > 本报告记录 W21 的 V2 只读切片。`main@14e516b` 的定向 L2、全仓 `clean verify`、合同/证据门禁与冻结 UI 冷暖两轮已运行；主控独立验收尚未完成。V2-M4 阶段仍以 SHPM 主控判定为准，不得据此自行提升阶段或 W21 工作包状态。
 
+## 主控收尾（2026-09-29 23:43 CST）
+
+- 主控复审后将交付提交 `fd86e2a`、`2a21893` 依次 cherry-pick 到 SH `main@390673f`、`14e8c05`，并推送 `origin/main`。合入时单独保存并恢复主工作树原有的 `README.md` 未提交修改；`AGENTS.md` 和未跟踪诊断测试也未纳入这两次提交。W21 产品 JAR SHA-256 `6a69729c562a428ada70e67da80b90d87d646819d787f27537b45cb186348fb4` 与已验门禁的工作树构建一致。
+- 主控按 18018 端口精确核对原 Gateway PID 19688 的 Super Harness JAR 命令行，备份原 JAR 至 `local-tmp/main-jar-backup-20260929-233956/`，替换后用 `scripts/start-main-super-harness.ps1 -GatewayOnly` 重启为 PID 48504。`/health`、`/api/v1/auth/me`、`/api/mcp/config` 与前端 `33018/` 均返回 HTTP 200；未知 Thread 的 `/token-usage` 和 Run 详情均返回预期 404。主控为加快收尾，未在合入后重复已在相同产品代码和最终 spec 上完成的 W21 双轮或全仓 `clean verify`；主端口检查只是 smoke，不替代完整 V2-M4 退出门禁。
+- SHPM 最终 spec 冷/暖证据为 `ver-ae5c26d3`、`ver-5ede34ac`；跨 owner 隔离登记 `ver-98348515` 为 `NOT_RUN`。`W21-task-1` 交付为 `ready_for_acceptance`，assignment 已释放，留待人工验收；V2-M4 保持 `NOT_RUN`，总体仍 `NO_GO`。下文“尚未合入 main”和“主控复审尚未完成”描述的是子智能体交付当时状态，以本段收尾状态为准。
+
 ## 工作范围与来源
 
 - 分支：`codex/w21-v2-diagnostics`；复用独立 W05 管理工作树，起点 SH main `09549e160b070b579d60759bb447945664749cc0`。2026-09-29 已将 W21 未提交变更安全保存后 rebase 到 `main@14e516b8f9c0e0f900b522c2ded0988b0fc492ac`（包含 W16 连续 Interaction 展示修复）；W21 12 路径产品、测试与报告首提交为 `fd86e2a9c1392fe1b7f77152bc63597aa39102fd`，尚未合入 main。rebase 备份为 `local-tmp/slot-3-w21/evidence/pre-rebase-main14e516b/`，含 binary patch、9 文件 SHA manifest 与独立 Git stash commit；恢复无冲突，W16 产品/测试 diff 保留。
