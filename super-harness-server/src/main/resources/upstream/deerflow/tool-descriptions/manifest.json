@@ -64,6 +64,27 @@
       "source_function": "ask_clarification_tool",
       "source_lineno": 23,
       "description_sha256": "6ce2c648b3f9b1080ea855c4b8f9d701d416982b33d4ad14a92a48282302451a"
+    },
+    {
+      "tool": "web_search",
+      "source_file": "deerflow/community/ddg_search/tools.py",
+      "source_function": "web_search_tool",
+      "source_lineno": 156,
+      "description_sha256": "a6562af615f8d8c5375588a6c0a233703b3c6ee628288438f61d75205bc597f4"
+    },
+    {
+      "tool": "web_fetch",
+      "source_file": "deerflow/community/jina_ai/tools.py",
+      "source_function": "web_fetch_tool",
+      "source_lineno": 44,
+      "description_sha256": "9c6a5d6465549b7ab69a9f9425e4d39415714679dfec509c86603870894c5820"
+    },
+    {
+      "tool": "image_search",
+      "source_file": "deerflow/community/image_search/tools.py",
+      "source_function": "image_search_tool",
+      "source_lineno": 77,
+      "description_sha256": "3398f1de8ce20f78de3cb3d3eda85db4262fc3ed4a40180cad1a87c479844d8d"
     }
   ]
 }

@@ -208,11 +208,12 @@ class DeerFlowUploadRunContextHttpTest {
     }
 
     /**
-     * W04-task-7/8, W05-task-8: the Bridge must register the eight frozen default file tools plus
-     * {@code ask_clarification}. Reaching the model proves the whole tool set (including the
-     * {@code glob}/{@code grep} {@code pattern} schemas, {@code present_files} {@code filepaths} and
-     * the {@code ask_clarification} form schema) passed SDK definition validation and was advertised
-     * to the provider.
+     * W04-task-7/8, W05-task-8, W11-task-1: the Bridge must register the eight frozen default file
+     * tools plus {@code ask_clarification} and the three frozen default web tools ({@code web_search},
+     * {@code web_fetch}, {@code image_search}). Reaching the model proves the whole tool set
+     * (including the {@code glob}/{@code grep} {@code pattern} schemas, {@code present_files}
+     * {@code filepaths}, the {@code ask_clarification} form schema and the web tool schemas) passed
+     * SDK definition validation and was advertised to the provider.
      */
     @Test
     void bridgeRegistersAllFrozenDefaultTools() throws Exception {
@@ -225,7 +226,7 @@ class DeerFlowUploadRunContextHttpTest {
         List<String> tools = providerRequests.get(before).path("tools").findValuesAsText("name");
         assertThat(tools).contains(
                 "read_file", "write_file", "str_replace", "ls", "glob", "grep", "list_uploaded_files",
-                "present_files", "ask_clarification");
+                "present_files", "ask_clarification", "web_search", "web_fetch", "image_search");
     }
 
     @Test

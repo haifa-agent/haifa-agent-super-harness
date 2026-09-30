@@ -1,0 +1,9 @@
+Search for images online. Use this tool BEFORE image generation to find reference images for characters, portraits, objects, scenes, or any content requiring visual accuracy.
+
+**When to use:**
+- Before generating character/portrait images: search for similar poses, expressions, styles
+- Before generating specific objects/products: search for accurate visual references
+- Before generating scenes/locations: search for architectural or environmental references
+- Before generating fashion/clothing: search for style and detail references
+
+The returned image URLs can be used as reference images in image generation to significantly improve quality.

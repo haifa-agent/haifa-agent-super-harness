@@ -1,0 +1,222 @@
+package io.haifa.agent.superharness.server;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+
+/**
+ * Minimal DuckDuckGo HTTP client for the frozen default {@code web_search} and
+ * {@code image_search} tools. It mirrors the request shapes used by the frozen {@code ddgs} package:
+ * the HTML endpoint for text and the {@code /i.js} JSON endpoint (with a {@code vqd} handshake) for
+ * images. The frozen implementation only enables the {@code duckduckgo} engine; the multi-engine
+ * {@code backend=auto} aggregation and Wikipedia region inference are a registered known difference.
+ */
+final class DuckDuckGoClient {
+    private static final String USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) HaifaSuperHarness/1.0";
+    private static final String AD_PREFIX = "https://duckduckgo.com/y.js?";
+    private static final ObjectMapper JSON = new ObjectMapper();
+
+    private final WebToolConfig config;
+    private final HttpClient http;
+
+    DuckDuckGoClient(WebToolConfig config) {
+        this.config = Objects.requireNonNull(config, "config");
+        this.http = HttpClient.newBuilder()
+                .connectTimeout(config.timeout())
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
+    }
+
+    record TextResult(String title, String url, String content) {}
+
+    record ImageResult(String title, String imageUrl, String thumbnailUrl) {}
+
+    /** Frozen {@code _search_text} for the single {@code duckduckgo} backend. */
+    List<TextResult> search(String query, int maxResults, Optional<String> timeRange) {
+        StringBuilder form = new StringBuilder()
+                .append("q=").append(encode(query))
+                .append("&b=")
+                .append("&l=").append(encode(config.region()));
+        timeRange.ifPresent(value -> form.append("&df=").append(encode(value)));
+        HttpRequest request = HttpRequest.newBuilder(URI.create(config.duckduckgoHtmlUrl()))
+                .timeout(config.timeout())
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .header("User-Agent", USER_AGENT)
+                .POST(HttpRequest.BodyPublishers.ofString(form.toString(), UTF_8))
+                .build();
+        Document document;
+        try {
+            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(UTF_8));
+            if (response.statusCode() != 200) {
+                throw new WebToolException("DuckDuckGo HTML endpoint returned status " + response.statusCode());
+            }
+            document = Jsoup.parse(response.body());
+        } catch (IOException exception) {
+            throw new WebToolException("DuckDuckGo text request failed: " + exception.getClass().getSimpleName());
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new WebToolException("DuckDuckGo text request was interrupted");
+        }
+
+        List<TextResult> results = new ArrayList<>();
+        for (Element item : document.select("div[class*=body]")) {
+            // Frozen xpath uses "./a" (a direct child), not any descendant `a`; the direct child is
+            // the result snippet anchor, while the title link sits inside the heading.
+            Element anchor = directChildAnchor(item);
+            if (anchor == null) continue;
+            String href = normalizeHref(anchor.attr("href"));
+            if (href.isEmpty() || href.startsWith(AD_PREFIX)) continue;
+            Element heading = item.selectFirst("h2");
+            String title = heading == null ? "" : collapse(heading.text());
+            String body = collapse(anchor.text());
+            results.add(new TextResult(title, href, body));
+            if (results.size() >= maxResults) break;
+        }
+        return results;
+    }
+
+    /** Frozen {@code _search_images} for the single {@code duckduckgo} backend. */
+    List<ImageResult> images(
+            String query,
+            int maxResults,
+            Optional<String> size,
+            Optional<String> typeImage,
+            Optional<String> layout) {
+        String vqd = vqd(query);
+        List<String> filters = List.of(
+                "",
+                size.map(value -> "size:" + value).orElse(""),
+                "",
+                typeImage.map(value -> "type:" + value).orElse(""),
+                layout.map(value -> "layout:" + value).orElse(""),
+                "");
+        String filter = String.join(",", filters);
+        StringBuilder url = new StringBuilder(config.duckduckgoImagesUrl())
+                .append("?o=json")
+                .append("&q=").append(encode(query))
+                .append("&l=").append(encode(config.region()))
+                .append("&vqd=").append(encode(vqd))
+                .append("&p=").append(encode(safeSearchCode()))
+                .append("&ct=AT");
+        if (!filter.replace(",", "").isEmpty()) {
+            url.append("&f=").append(encode(filter));
+        }
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url.toString()))
+                .timeout(config.timeout())
+                .header("Accept", "*/*")
+                .header("Accept-Language", "en-US,en;q=0.5")
+                .header("Referer", config.duckduckgoHomeUrl() + "/")
+                .header("User-Agent", USER_AGENT)
+                .GET()
+                .build();
+        JsonNode payload;
+        try {
+            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(UTF_8));
+            if (response.statusCode() != 200) {
+                throw new WebToolException("DuckDuckGo image endpoint returned status " + response.statusCode());
+            }
+            payload = JSON.readTree(response.body());
+        } catch (IOException exception) {
+            throw new WebToolException("DuckDuckGo image request failed: " + exception.getClass().getSimpleName());
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new WebToolException("DuckDuckGo image request was interrupted");
+        }
+
+        List<ImageResult> results = new ArrayList<>();
+        for (JsonNode item : payload.path("results")) {
+            if (results.size() >= maxResults) break;
+            results.add(new ImageResult(
+                    text(item, "title"), text(item, "image"), text(item, "thumbnail")));
+        }
+        return results;
+    }
+
+    /** Frozen {@code ddgs.utils._extract_vqd}: first {@code vqd="..."}, then {@code vqd=...&}, then {@code vqd='...'}. */
+    String vqd(String query) {
+        HttpRequest request = HttpRequest.newBuilder(
+                        URI.create(config.duckduckgoHomeUrl() + "/?q=" + encode(query)))
+                .timeout(config.timeout())
+                .header("User-Agent", USER_AGENT)
+                .GET()
+                .build();
+        String body;
+        try {
+            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(UTF_8));
+            if (response.statusCode() != 200) {
+                throw new WebToolException("DuckDuckGo vqd handshake returned status " + response.statusCode());
+            }
+            body = response.body();
+        } catch (IOException exception) {
+            throw new WebToolException("DuckDuckGo vqd handshake failed: " + exception.getClass().getSimpleName());
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new WebToolException("DuckDuckGo vqd handshake was interrupted");
+        }
+        for (String[] pattern : List.of(
+                new String[] {"vqd=\"", "\""}, new String[] {"vqd=", "&"}, new String[] {"vqd='", "'"})) {
+            int start = body.indexOf(pattern[0]);
+            if (start < 0) continue;
+            int from = start + pattern[0].length();
+            int end = body.indexOf(pattern[1], from);
+            if (end >= 0) return body.substring(from, end);
+        }
+        throw new WebToolException("Could not extract vqd from DuckDuckGo response");
+    }
+
+    private String safeSearchCode() {
+        return switch (config.safeSearch().toLowerCase(java.util.Locale.ROOT)) {
+            case "off" -> "-1";
+            case "on", "moderate" -> "1";
+            default -> "1";
+        };
+    }
+
+    private static String text(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() ? "" : value.asText("");
+    }
+
+    private static Element directChildAnchor(Element item) {
+        for (Element child : item.children()) {
+            if (child.tagName().equals("a")) return child;
+        }
+        return null;
+    }
+
+    private static String normalizeHref(String href) {
+        String trimmed = href == null ? "" : href.trim();
+        if (trimmed.startsWith("//")) return "https:" + trimmed;
+        return trimmed;
+    }
+
+    private static String collapse(String text) {
+        return text == null ? "" : text.replaceAll("\\s+", " ").trim();
+    }
+
+    private static String encode(String value) {
+        return URLEncoder.encode(value, UTF_8);
+    }
+
+    /** Internal transport/parse failure; tools translate it into the frozen no-result/error shape. */
+    static final class WebToolException extends RuntimeException {
+        WebToolException(String message) {
+            super(message);
+        }
+    }
+}

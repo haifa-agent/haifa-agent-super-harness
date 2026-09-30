@@ -63,16 +63,22 @@ class ProductionFileToolsTest {
     @Test
     void importedDescriptionsMatchTheJavaSpecAndTheLedger() throws Exception {
         Fixture fixture = new Fixture(dataRoot.resolve("workspace"), "thread-descriptions");
-        Map<String, String> actual = Map.of(
-                "read_file", fixture.read.spec().description(),
-                "write_file", fixture.write.spec().description(),
-                "str_replace", fixture.replace.spec().description(),
-                "ls", fixture.ls.spec().description(),
-                "glob", fixture.glob.spec().description(),
-                "grep", fixture.grep.spec().description(),
-                "list_uploaded_files", fixture.uploads.spec().description(),
-                "present_files", fixture.present.spec().description(),
-                "ask_clarification", new ProductionAskClarificationTool().spec().description());
+        Map<String, String> actual = Map.ofEntries(
+                Map.entry("read_file", fixture.read.spec().description()),
+                Map.entry("write_file", fixture.write.spec().description()),
+                Map.entry("str_replace", fixture.replace.spec().description()),
+                Map.entry("ls", fixture.ls.spec().description()),
+                Map.entry("glob", fixture.glob.spec().description()),
+                Map.entry("grep", fixture.grep.spec().description()),
+                Map.entry("list_uploaded_files", fixture.uploads.spec().description()),
+                Map.entry("present_files", fixture.present.spec().description()),
+                Map.entry("ask_clarification", new ProductionAskClarificationTool().spec().description()),
+                Map.entry("web_search",
+                        new ProductionWebSearchTool(WebToolConfig.defaults()).spec().description()),
+                Map.entry("web_fetch",
+                        new ProductionWebFetchTool(WebToolConfig.defaults()).spec().description()),
+                Map.entry("image_search",
+                        new ProductionImageSearchTool(WebToolConfig.defaults()).spec().description()));
         JsonNode manifest = JSON.readTree(getClass().getClassLoader()
                 .getResourceAsStream("upstream/deerflow/tool-descriptions/manifest.json"));
         for (JsonNode entry : manifest.path("descriptions")) {
