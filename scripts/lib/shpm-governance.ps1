@@ -21,7 +21,8 @@ function Assert-ShpmCondition {
 function Get-ShpmProp {
     param([object]$Object, [string]$Name)
     if ($null -eq $Object) { return $null }
-    if ($Object.PSObject.Properties.Name -contains $Name) { return $Object.$Name }
+    # StrictMode throws on `.Name` of an empty property collection (e.g. a stage without details_json).
+    if (@($Object.PSObject.Properties | ForEach-Object { $_.Name }) -contains $Name) { return $Object.$Name }
     return $null
 }
 

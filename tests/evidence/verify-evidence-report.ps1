@@ -200,6 +200,9 @@ function Read-EvidenceManifest([string]$Root) {
 }
 
 try {
+    # A stage/assignment without details_json yields an empty object; property lookup must not throw under StrictMode.
+    Assert-True ($null -eq (Get-ShpmProp ([pscustomobject]@{}) 'proof')) "Get-ShpmProp must tolerate an empty details object"
+    Assert-True ((Get-ShpmProp ([pscustomobject]@{ proof = 'x' }) 'proof') -eq 'x') "Get-ShpmProp must read an existing property"
     $null = New-Item -ItemType Directory -Force -Path $TempRoot
     # Fixtures mutate a copy of the live SHPM export; the live database is never written.
     $null = Export-ShpmSnapshot -Database $env:SHPM_DB -OutputPath $BaseSnapshot
