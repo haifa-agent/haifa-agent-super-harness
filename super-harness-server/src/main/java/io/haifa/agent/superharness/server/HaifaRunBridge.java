@@ -279,7 +279,7 @@ final class HaifaRunBridge implements AutoCloseable {
                 new AgentDefinitionVersion(1, 0, 0),
                 "Return a concise answer to the local user's request.",
                 new ProductRunProfileRef(snapshot.modelId().value(), "1.0.0"),
-                new AgentRunBudget(65_536, 8_192, 65_536, 16, 16, 0, "USD", 100),
+                new AgentRunBudget(0, 8_192, 65_536, 16, 16, 0, "USD", 100),
                 new AgentRunLimits(16, 0, 1, 120_000, 60_000, 16, 16, 0),
                 allowedTools,
                 allowedSkills);

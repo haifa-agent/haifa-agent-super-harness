@@ -2,6 +2,10 @@
 
 本仓库是冻结 DeerFlow 对齐项目的独立 Java 21 产品工程。项目只通过 Maven 仓库中已发布的 `io.haifa:haifa-agent-bom:0.1.2-SNAPSHOT` 及公开 JAR 消费 Haifa Agent，不依赖 Haifa Agent 源码目录。
 
+## Run 输入预算
+
+生产持久 Run 的 `AgentRunBudget.maxInputTokens` 为 `0`，使用 Haifa SDK 的公开语义，不设置整 Run 累计输入 token 上限。模型自身的上下文窗口仍按模型配置生效；累计输出、缓存输入、成本、Tool/模型调用次数和时间限制继续按现有 Run profile 执行。此设置只影响新建 Run，既有失败记录保留。
+
 ## 客户演示与项目看板
 
 项目的任务状态、派工、checkpoint、验收证据和客户演示门禁由 SHPM（Super Harness Project Manager）维护；人工可在 http://127.0.0.1:8787/ 只读查看。只有主控智能体通过 `shpm` 命令写入，子智能体不写 SHPM。提示词、roadmap、交付报告和原始证据的正文仍在 `private-docs`、`contracts` 与各 worktree 的 `local-tmp` 等原位置，SHPM 只保存路径。
