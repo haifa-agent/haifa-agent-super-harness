@@ -19,6 +19,8 @@ import java.util.Set;
 /** Exact frozen-card wire projection over the SDK-owned Interaction lifecycle. */
 final class DeerFlowInteractionHttpProjection {
     static final String SOURCE = "haifa_interaction";
+    /** The frozen {@code HumanInputRequest.source} for the real {@code ask_clarification} tool. */
+    static final String CLARIFICATION_SOURCE = "ask_clarification";
     private static final String TOOL_NAME = "ask_clarification";
     private static final Set<InteractionAction> APPROVAL_ACTIONS =
             Set.of(InteractionAction.APPROVE, InteractionAction.REJECT);

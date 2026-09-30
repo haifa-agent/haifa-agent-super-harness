@@ -123,26 +123,39 @@ final class DeerFlowToolTranscriptProjection {
      * approval card.
      */
     static Optional<Map<String, Object>> clarificationCard(ToolCallView call) {
-        ToolResultView result = call.result().orElseThrow();
-        Object raw = result.structuredData().values().get("humanInput");
-        if (!(raw instanceof String humanInput) || humanInput.isBlank()) {
-            return Optional.empty();
-        }
-        Map<String, Object> payload;
-        try {
-            payload = JSON.readValue(humanInput, new com.fasterxml.jackson.core.type.TypeReference<>() {});
-        } catch (JsonProcessingException invalid) {
-            return Optional.empty();
-        }
+        Map<String, Object> payload = clarificationPayload(call).orElse(null);
         if (payload == null) {
             return Optional.empty();
         }
+        String messageId = clarificationRequestId(call, payload);
+        return Optional.of(DeerFlowInteractionHttpProjection.humanInputMessage(
+                call.runId().value(), messageId, call.id().value(),
+                call.result().orElseThrow().summary().text(), payload));
+    }
+
+    /** The normalized {@code artifact.human_input} payload of a completed clarification call. */
+    static Optional<Map<String, Object>> clarificationPayload(ToolCallView call) {
+        if (call.result().isEmpty()) {
+            return Optional.empty();
+        }
+        Object raw = call.result().orElseThrow().structuredData().values().get("humanInput");
+        if (!(raw instanceof String humanInput) || humanInput.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            Map<String, Object> payload =
+                    JSON.readValue(humanInput, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            return Optional.ofNullable(payload);
+        } catch (JsonProcessingException invalid) {
+            return Optional.empty();
+        }
+    }
+
+    static String clarificationRequestId(ToolCallView call, Map<String, Object> payload) {
         Object requestId = payload.get("request_id");
-        String messageId = requestId instanceof String text && !text.isBlank()
+        return requestId instanceof String text && !text.isBlank()
                 ? text
                 : "clarification:" + call.id().value();
-        return Optional.of(DeerFlowInteractionHttpProjection.humanInputMessage(
-                call.runId().value(), messageId, call.id().value(), result.summary().text(), payload));
     }
 
     /**
