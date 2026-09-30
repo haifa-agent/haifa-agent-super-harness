@@ -97,14 +97,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 projects,
                 dataDirectory,
                 continuationKey,
-                scope -> !testRunTools.isEmpty()
-                        ? testRunTools
-                        : testRunModelResolver == null
-                                ? List.of(
-                                        new ProductionWriteFileTool(
-                                                scope.threadId(), scope.artifactProjectRef(), projects, toolWorkspace),
-                                        new ProductionReadFileTool(scope.threadId(), projects, toolWorkspace))
-                                : List.of(),
+                scope -> promptReadyTools(testRunTools, projects, toolWorkspace, scope),
                 new DeerFlowThreadRunApi.McpProjectionProvider() {
                     @Override
                     public McpRunTools.Projection forRun(JsonNode body) {
@@ -142,6 +135,29 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.suggestionsApi = new DeerFlowSuggestionsApi(
                 objectMapper, modelResolver, threadRunApi::hasThread, suggestionsSettings);
         registerRoutes();
+    }
+
+    /**
+     * Every Bridge renders the frozen lead-agent prompt, which references {@code read_file} and
+     * {@code write_file}. Test assemblies that inject their own tools therefore still advertise the
+     * production file tools so the prompt's whole-word tool reconciliation holds fail-closed.
+     */
+    private static List<? extends JavaTool<?, ?>> promptReadyTools(
+            List<? extends JavaTool<?, ?>> configured,
+            PersistentProjectWorkspaceService projects,
+            RestrictedWorkspaceService toolWorkspace,
+            DeerFlowThreadRunApi.ThreadToolScope scope) {
+        List<JavaTool<?, ?>> tools = new java.util.ArrayList<>(configured);
+        boolean hasRead = tools.stream().anyMatch(tool -> tool.spec().name().value().equals("read_file"));
+        boolean hasWrite = tools.stream().anyMatch(tool -> tool.spec().name().value().equals("write_file"));
+        if (!hasWrite) {
+            tools.add(new ProductionWriteFileTool(
+                    scope.threadId(), scope.artifactProjectRef(), projects, toolWorkspace));
+        }
+        if (!hasRead) {
+            tools.add(new ProductionReadFileTool(scope.threadId(), projects, toolWorkspace));
+        }
+        return tools;
     }
 
     public static DeerFlowBootstrapApi create(LocalServerConfiguration configuration)

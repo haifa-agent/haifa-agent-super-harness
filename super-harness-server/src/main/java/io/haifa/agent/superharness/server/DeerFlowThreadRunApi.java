@@ -31,6 +31,7 @@ import io.haifa.agent.superharness.events.ProjectionCursor;
 import io.haifa.agent.superharness.events.ProjectionGap;
 import io.haifa.agent.superharness.events.ReplayResult;
 import io.haifa.agent.superharness.events.RunTerminalKind;
+import io.haifa.agent.superharness.server.prompt.InputTrustBoundary;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
 import io.haifa.agent.superharness.workspace.StagedRunChanges;
 import io.haifa.agent.superharness.workspace.WorkspaceBinding;
@@ -667,9 +668,12 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
         // Frozen UploadsMiddleware: the files of this message reach the model as verified references
         // (read with read_file); title and optimistic display keep the user's own text.
+        // Frozen InputSanitizationMiddleware: the genuine user text is wrapped in the boundary the
+        // system prompt declares; the <current_uploads> block stays outside the boundary.
+        String boundaryInput = InputTrustBoundary.wrap(message);
         String modelInput = runInput == null
-                ? uploadContext.modelInput(threadId, body.path("input").path("messages"), message)
-                : message;
+                ? uploadContext.modelInput(threadId, body.path("input").path("messages"), boundaryInput)
+                : boundaryInput;
         // A Steer must never re-declare tools: it only feeds the active Run's own bridge.
         McpRunTools.Projection mcpProjection = runInput == null
                 ? mcpProjections.forRun(body)
@@ -715,7 +719,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     RunInputResult result;
                     try {
                         result = active.bridge.submitInput(
-                                new RunInputCommand(active.runId, idempotencyKey, message));
+                                new RunInputCommand(active.runId, idempotencyKey, boundaryInput));
                     } catch (RuntimeException failure) {
                         sendJson(exchange, 500, Map.of("detail", "Steer input could not be submitted"));
                         return;
@@ -759,7 +763,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             boolean switchingMcp = !selectedBridge.mcpSignature().equals(mcpProjection.fingerprint());
             boolean switchingSkills = !selectedBridge.skillSignature().equals(
                     skillProjection == null ? "" : skillProjection.fingerprint());
-            if (switchingModel || switchingMcp || switchingSkills) {
+            // The rendered lead prompt is a pure function of the tool/Skill declaration, so a
+            // prompt change is detected without building the new Bridge.
+            boolean switchingPrompt = !selectedBridge.promptSignature().equals(
+                    HaifaRunBridge.promptSignatureFor(toolsForThread(thread), skillProjection));
+            if (switchingModel || switchingMcp || switchingSkills || switchingPrompt) {
                 selectedBridge = newBridge(binding, thread, mcpProjection, skillProjection);
             }
             // Frozen TitleMiddleware names the thread only from its first user Turn. The boundary is
@@ -784,7 +792,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 // switchingModel cannot both be true. On a failed switch the old bridge stays
                 // attached for durable history and a subsequent Turn; only the rejected new
                 // bridge is closed here.
-                if (switchingModel || switchingMcp || switchingSkills || createdBridge) {
+                if (switchingModel || switchingMcp || switchingSkills || switchingPrompt || createdBridge) {
                     if (createdBridge) thread.bridge = null;
                     ownedBridges.remove(selectedBridge);
                     selectedBridge.close();
@@ -793,7 +801,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 sendJson(exchange, 500, Map.of("detail", "Run could not start"));
                 return;
             }
-            if (switchingModel || switchingMcp || switchingSkills) {
+            if (switchingModel || switchingMcp || switchingSkills || switchingPrompt) {
                 thread.bridge = selectedBridge;
                 ownedBridges.add(selectedBridge);
             }
@@ -2277,11 +2285,15 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private Map<String, Object> messageForTurn(ConversationTurn turn, int ordinal) {
-        String type = turn.role() == io.haifa.agent.core.message.MessageRole.USER ? "human" : "ai";
+        boolean human = turn.role() == io.haifa.agent.core.message.MessageRole.USER;
+        String type = human ? "human" : "ai";
         String id = turn.runId()
                 .map(runId -> wireMessageId(runId.value(), type, ordinal))
                 .orElseGet(turn::messageId);
-        Map<String, Object> projected = message(id, type, turn.text());
+        // The model-facing transcript persists the wrapped user text; the frozen UI must not show
+        // the boundary markers, so the display projection strips them.
+        String text = human ? InputTrustBoundary.unwrapForDisplay(turn.text()) : turn.text();
+        Map<String, Object> projected = message(id, type, text);
         turn.runId().ifPresent(runId -> projected.put("run_id", runId.value()));
         return projected;
     }

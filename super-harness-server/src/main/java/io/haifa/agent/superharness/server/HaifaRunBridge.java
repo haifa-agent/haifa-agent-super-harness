@@ -38,6 +38,7 @@ import io.haifa.agent.sdk.conversation.ConversationTurnPage;
 import io.haifa.agent.sdk.conversation.ConversationTurnQuery;
 import io.haifa.agent.sdk.conversation.StartConversationCommand;
 import io.haifa.agent.sdk.conversation.SubmitConversationTurnCommand;
+import io.haifa.agent.sdk.diagnostics.PromptDiagnostics;
 import io.haifa.agent.sdk.product.ProductId;
 import io.haifa.agent.sdk.product.ProductProfile;
 import io.haifa.agent.sdk.product.ProductRunProfileRef;
@@ -46,6 +47,9 @@ import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.starter.HaifaAgentStarter;
 import io.haifa.agent.starter.McpServerSpec;
 import io.haifa.agent.starter.McpToolPlatforms;
+import io.haifa.agent.superharness.server.prompt.LeadPromptComposer;
+import io.haifa.agent.superharness.server.prompt.LeadPromptInputs;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -55,11 +59,15 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** Adapter that exposes only public Haifa Agent SDK types to the HTTP boundary. */
 final class HaifaRunBridge implements AutoCloseable {
+    /** Test/compatibility starter path only; production always renders the frozen lead prompt. */
+    private static final String STARTER_INSTRUCTIONS = "Return a concise answer to the local user's request.";
+
     private final HaifaAgent agent;
     private final ModelBinding binding;
     private final boolean hasTools;
     private final String mcpSignature;
     private final String skillSignature;
+    private final String promptSignature;
     private final AtomicLong turnPageReads = new AtomicLong();
 
     HaifaRunBridge(ModelBinding binding) {
@@ -71,9 +79,10 @@ final class HaifaRunBridge implements AutoCloseable {
         this.hasTools = !tools.isEmpty();
         this.mcpSignature = "";
         this.skillSignature = "";
+        this.promptSignature = "";
         this.agent = HaifaAgentStarter.builder()
                 .name("Super Harness local compatibility agent")
-                .instructions("Return a concise answer to the local user's request.")
+                .instructions(STARTER_INSTRUCTIONS)
                 .model(binding.model(), binding.snapshot())
                 .defaultModel(binding.name())
                 .tools(tools)
@@ -116,15 +125,13 @@ final class HaifaRunBridge implements AutoCloseable {
                 Map.of(ModelAdapterCoordinate.from(binding.snapshot()), binding.model()),
                 binding.snapshot(),
                 Map.of(binding.name(), binding.snapshot()));
-        Set<String> allowedTools = tools.stream()
-                .map(tool -> tool.spec().name().value())
-                .collect(java.util.stream.Collectors.toSet());
-        if (skillProjection != null && skillProjection.installTools()) {
-            allowedTools.add("skill_load");
-            allowedTools.add("skill_resource_read");
-        }
+        Set<String> allowedTools = registeredToolNames(tools, skillProjection);
+        // The frozen lead prompt is rendered once per Bridge; its signature drives the later-Run
+        // rebuild criterion in DeerFlowThreadRunApi, exactly like the MCP/Skill fingerprints.
+        LeadPromptComposer.Composition prompt = composePrompt(allowedTools, skillProjection);
+        this.promptSignature = prompt.signature();
         HaifaAgentBuilder builder = HaifaAgents.builder(profile(
-                        binding.snapshot(), allowedTools,
+                        binding.snapshot(), prompt.instructions(), allowedTools,
                         skillProjection == null ? Set.of() : skillProjection.allowedSkills()))
                 .metadata(new AgentMetadata("Super Harness local compatibility agent"))
                 .callerProvider(SdkCallerProvider.defaultPublicUser())
@@ -168,6 +175,40 @@ final class HaifaRunBridge implements AutoCloseable {
 
     String skillSignature() {
         return skillSignature;
+    }
+
+    String promptSignature() {
+        return promptSignature;
+    }
+
+    /** The rendered lead-agent prompt signature for a candidate declaration, without building it. */
+    static String promptSignatureFor(
+            List<? extends JavaTool<?, ?>> tools, SkillRunTools.Projection skillProjection) {
+        return composePrompt(registeredToolNames(tools, skillProjection), skillProjection).signature();
+    }
+
+    private static Set<String> registeredToolNames(
+            List<? extends JavaTool<?, ?>> tools, SkillRunTools.Projection skillProjection) {
+        Set<String> names = tools.stream()
+                .map(tool -> tool.spec().name().value())
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        if (skillProjection != null && skillProjection.installTools()) {
+            names.add("skill_load");
+            names.add("skill_resource_read");
+        }
+        return names;
+    }
+
+    private static LeadPromptComposer.Composition composePrompt(
+            Set<String> registeredTools, SkillRunTools.Projection skillProjection) {
+        List<LeadPromptInputs.Skill> skills = skillProjection == null
+                ? List.of()
+                : skillProjection.selectedPackages().stream()
+                        .map(pkg -> new LeadPromptInputs.Skill(pkg.name(), pkg.description()))
+                        .toList();
+        // This slice has no agent identity yet, so soul/selfUpdate are always empty.
+        LeadPromptInputs inputs = new LeadPromptInputs(null, null, false, skills);
+        return LeadPromptComposer.classpath().compose(inputs, registeredTools);
     }
 
     String bindingIdentity() {
@@ -240,6 +281,11 @@ final class HaifaRunBridge implements AutoCloseable {
         return agent.runs().pendingInteraction(runId);
     }
 
+    /** Read-only SDK prompt-layer diagnostics; never contains prompt text. */
+    PromptDiagnostics promptDiagnostics(AgentRunId runId) {
+        return agent.runs().promptDiagnostics(runId);
+    }
+
     List<ToolCallView> toolCalls(AgentRunId runId) {
         return agent.runs().toolCalls(runId);
     }
@@ -271,13 +317,16 @@ final class HaifaRunBridge implements AutoCloseable {
     record StartedRun(AgentRunId runId, SessionState session) {}
 
     private static ProductProfile profile(
-            ResolvedModelSnapshot snapshot, Set<String> allowedTools, Set<String> allowedSkills) {
+            ResolvedModelSnapshot snapshot,
+            String instructions,
+            Set<String> allowedTools,
+            Set<String> allowedSkills) {
         return ProductProfile.create(
                 new ProductId("haifa-super-harness"),
                 new ProductVersion("1.0.0"),
                 new AgentDefinitionId("haifa-super-harness-agent"),
                 new AgentDefinitionVersion(1, 0, 0),
-                "Return a concise answer to the local user's request.",
+                instructions,
                 new ProductRunProfileRef(snapshot.modelId().value(), "1.0.0"),
                 new AgentRunBudget(0, 8_192, 65_536, 16, 16, 0, "USD", 100),
                 new AgentRunLimits(16, 0, 1, 120_000, 60_000, 16, 16, 0),

@@ -167,6 +167,63 @@ function Get-OptionalProperty {
     return $null
 }
 
+function Get-ExtractedResourceBytes {
+    param(
+        [string]$SourcePath,
+        [object]$Extraction,
+        [string]$ResourceId
+    )
+    $kind = [string]$Extraction.kind
+    if ($kind -ne 'python-double-quoted-literal-region') {
+        throw "Resource '$ResourceId' declares an unsupported extraction kind '$kind'."
+    }
+    $encodingName = [string]$Extraction.encoding
+    if ($encodingName -ne 'utf-8') {
+        throw "Resource '$ResourceId' extraction encoding must be utf-8."
+    }
+    # Latin1 round-trips every byte 1:1, so anchors and the extracted region keep exact bytes.
+    $bytes = [System.IO.File]::ReadAllBytes($SourcePath)
+    $latin1 = [System.Text.Encoding]::Latin1.GetString($bytes)
+    $startAnchor = [string]$Extraction.start_anchor
+    $endAnchor = [string]$Extraction.end_anchor
+    if ([string]::IsNullOrEmpty($startAnchor) -or [string]::IsNullOrEmpty($endAnchor)) {
+        throw "Resource '$ResourceId' extraction is missing an anchor."
+    }
+    $start = $latin1.IndexOf($startAnchor, [System.StringComparison]::Ordinal)
+    if ($start -lt 0) {
+        throw "Resource '$ResourceId' extraction start anchor was not found in $SourcePath."
+    }
+    $contentStart = $start + $startAnchor.Length
+    $end = $latin1.IndexOf($endAnchor, $contentStart, [System.StringComparison]::Ordinal)
+    if ($end -lt 0) {
+        throw "Resource '$ResourceId' extraction end anchor was not found in $SourcePath."
+    }
+    $region = $latin1.Substring($contentStart, $end - $contentStart)
+    $failOnBackslash = $true
+    if ($Extraction.PSObject.Properties.Name -contains 'fail_on_backslash') {
+        $failOnBackslash = [bool]$Extraction.fail_on_backslash
+    }
+    if ($failOnBackslash) {
+        foreach ($character in $region.ToCharArray()) {
+            if ($character -eq [char]92) {
+                throw "Resource '$ResourceId' extracted region contains a backslash; failing closed."
+            }
+        }
+    }
+    return [System.Text.Encoding]::Latin1.GetBytes($region)
+}
+
+function Get-BytesSha256 {
+    param([byte[]]$Bytes)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [System.BitConverter]::ToString($sha.ComputeHash($Bytes)).Replace('-', '').ToLowerInvariant()
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
 function Assert-ThreadHookMatrix {
     param(
         [object]$Matrix,
@@ -849,19 +906,45 @@ foreach ($resource in @($resourceManifest.resources)) {
     if ($allowedImportStatuses -notcontains [string]$resource.import_status) {
         throw "Resource '$($resource.id)' has invalid import_status '$($resource.import_status)'; parity PASS is never a resource import status."
     }
-    $resourcePath = Join-Path $resolvedDeerFlowRoot ([string]$resource.source_path)
-    if (-not (Test-Path -LiteralPath $resourcePath -PathType Leaf)) {
-        throw "Resource '$($resource.id)' source is missing: $($resource.source_path)"
+    $id = $resource.id
+    $hasSource = ($resource.PSObject.Properties.Name -contains 'source_path') -and
+        -not [string]::IsNullOrWhiteSpace([string]$resource.source_path)
+    $hasLocalHash = $resource.PSObject.Properties.Name -contains 'local_sha256'
+    $hasExtraction = $resource.PSObject.Properties.Name -contains 'extraction'
+    if (-not $hasSource -and -not $hasLocalHash) {
+        throw "Resource '$id' declares neither a frozen source nor a local content hash."
     }
-    $actualHash = (Get-FileHash -LiteralPath $resourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
-    Assert-Equal $actualHash ([string]$resource.sha256).ToLowerInvariant() "Resource '$($resource.id)' hash drifted"
+    $resourcePath = $null
+    $sourceHash = $null
+    if ($hasSource) {
+        $resourcePath = Join-Path $resolvedDeerFlowRoot ([string]$resource.source_path)
+        if (-not (Test-Path -LiteralPath $resourcePath -PathType Leaf)) {
+            throw "Resource '$id' source is missing: $($resource.source_path)"
+        }
+        $sourceHash = (Get-FileHash -LiteralPath $resourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        Assert-Equal $sourceHash ([string]$resource.sha256).ToLowerInvariant() "Resource '$id' hash drifted"
+    }
+    if ($hasExtraction) {
+        if (-not $hasSource) {
+            throw "Resource '$id' declares an extraction without a frozen source_path."
+        }
+        $extractedBytes = Get-ExtractedResourceBytes -SourcePath $resourcePath -Extraction $resource.extraction -ResourceId $id
+        Assert-Equal (Get-BytesSha256 -Bytes $extractedBytes) ([string]$resource.local_sha256).ToLowerInvariant() `
+            "Resource '$id' extracted bytes drifted from local_sha256"
+    }
     if ($resource.import_status -eq 'IMPORTED') {
         $importedPath = Join-Path $RepositoryRoot ([string]$resource.intended_local_path)
         if (-not (Test-Path -LiteralPath $importedPath -PathType Leaf)) {
-            throw "Resource '$($resource.id)' claims IMPORTED but local file is missing: $($resource.intended_local_path)"
+            throw "Resource '$id' claims IMPORTED but local file is missing: $($resource.intended_local_path)"
         }
         $importedHash = (Get-FileHash -LiteralPath $importedPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        Assert-Equal $importedHash $actualHash "Resource '$($resource.id)' imported content differs from frozen source"
+        if ($hasLocalHash) {
+            Assert-Equal $importedHash ([string]$resource.local_sha256).ToLowerInvariant() `
+                "Resource '$id' local content differs from local_sha256"
+        }
+        else {
+            Assert-Equal $importedHash $sourceHash "Resource '$id' imported content differs from frozen source"
+        }
     }
 }
 $resourceIds = @($resourceManifest.resources | ForEach-Object { [string]$_.id })

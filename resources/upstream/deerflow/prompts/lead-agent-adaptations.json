@@ -1,0 +1,90 @@
+[
+  {
+    "id": "A1-write-file-append",
+    "find": "- File Editing Workflow: When revising an existing file, prefer\n  `str_replace` over `write_file` — it sends only the diff and avoids\n  re-emitting the whole file (mirrors Claude Code's Edit and Codex's\n  apply_patch). When writing long new content from scratch, split it\n  into sections: the first `write_file` call creates the file, then use\n  `write_file` with append=True to extend it section by section. This\n  keeps each tool call small and avoids mid-stream chunk-gap timeouts\n  on oversized single-shot writes. (See issue #3189.)  ",
+    "replace": "- File Editing Workflow: `write_file` creates a new UTF-8 file and cannot\n  append to or change an existing file; each call is limited to 80 KiB.\n  When writing long new content, split it across multiple separate files\n  instead of extending one oversized file.",
+    "reason": "Super Harness write_file only creates new files, caps one call at 80 KiB and rejects append; str_replace is not registered in this slice.",
+    "unlock_condition": "W04-DeerFlowFileTools restores write_file overwrite/append and str_replace",
+    "owner_wp": "W03"
+  },
+  {
+    "id": "A2-present-files",
+    "find": "`/mnt/user-data/outputs` and presented using `present_files` tool",
+    "replace": "`/mnt/user-data/outputs`",
+    "reason": "present_files is not registered in this slice; writing under /mnt/user-data/outputs is the delivery signal and artifacts are listed automatically.",
+    "unlock_condition": "W04-PresentFiles",
+    "owner_wp": "W03"
+  },
+  {
+    "id": "A3-skill-manage-deliverables",
+    "find": "must be copied to `/mnt/user-data/outputs` (⚠️ Skills are NOT deliverables — use `skill_manage` tool instead)",
+    "replace": "must be saved under `/mnt/user-data/outputs` (⚠️ Skills are NOT deliverables)",
+    "reason": "skill_manage is not registered in this slice; keep the 'Skills are NOT deliverables' intent without naming the tool.",
+    "unlock_condition": "W15 skill_manage (skill_evolution)",
+    "owner_wp": "W03"
+  },
+  {
+    "id": "A3-skill-manage-output",
+    "find": "- Output Files: Final deliverables must be in `/mnt/user-data/outputs` (⚠️ Skills are NOT deliverables — use `skill_manage` tool instead)",
+    "replace": "- Output Files: Final deliverables must be in `/mnt/user-data/outputs` (⚠️ Skills are NOT deliverables)",
+    "reason": "Same as A3-skill-manage-deliverables for the critical-reminders copy.",
+    "unlock_condition": "W15 skill_manage (skill_evolution)",
+    "owner_wp": "W03"
+  },
+  {
+    "id": "A2-present-files-image",
+    "find": "  - Call `present_files` for the image before referencing it.\n",
+    "replace": "",
+    "reason": "present_files is not registered in this slice; the full virtual artifact path rule on the preceding line is kept.",
+    "unlock_condition": "W04-PresentFiles",
+    "owner_wp": "W03"
+  },
+  {
+    "id": "A4-list-uploaded-files-grep",
+    "find": "- Historical uploads: `/mnt/user-data/uploads` - Files from earlier turns. Use `list_uploaded_files` to discover which historical files exist. If you know the filename, access it directly with `read_file` or `grep`.\n",
+    "replace": "- Historical uploads: `/mnt/user-data/uploads` - Files from earlier turns are not automatically listed. If you know the filename, read it directly with `read_file`.\n",
+    "reason": "list_uploaded_files and grep are not registered in this slice; historical uploads are not enumerated and known filenames are read with read_file.",
+    "unlock_condition": "W04-DeerFlowFileTools (list_uploaded_files, grep)",
+    "owner_wp": "W03"
+  },
+  {
+    "id": "A4-list-uploaded-files",
+    "find": "- Files uploaded in previous turns are NOT automatically listed. Use `list_uploaded_files` to discover them on demand — it returns filenames, sizes, and optionally document outlines\n",
+    "replace": "- Files uploaded in previous turns are NOT automatically listed. Only files named in `<current_uploads>` are provided for this Run.\n",
+    "reason": "list_uploaded_files is not registered in this slice.",
+    "unlock_condition": "W04-DeerFlowFileTools (list_uploaded_files)",
+    "owner_wp": "W03"
+  },
+  {
+    "id": "A5-citations",
+    "find": "<citations>\n**CRITICAL: Always include citations when using web search results**\n\n- **When to Use**: MANDATORY after web_search, web_fetch, or any external information source\n- **Format**: Use Markdown link format `[citation:TITLE](URL)` immediately after the claim\n- **Placement**: Inline citations should appear right after the sentence or claim they support\n- **Sources Section**: Also collect all citations in a \"Sources\" section at the end of reports\n\n**Example - Inline Citations:**\n```markdown\nThe key AI trends for 2026 include enhanced reasoning capabilities and multimodal integration\n[citation:AI Trends 2026](https://techcrunch.com/ai-trends).\nRecent breakthroughs in language models have also accelerated progress\n[citation:OpenAI Research](https://openai.com/research).\n```\n\n**Example - Deep Research Report with Citations:**\n```markdown\n## Executive Summary\n\nDeerFlow is an open-source AI agent framework that gained significant traction in early 2026\n[citation:GitHub Repository](https://github.com/bytedance/deer-flow). The project focuses on\nproviding a production-ready agent system with sandbox execution and memory management\n[citation:DeerFlow Documentation](https://deer-flow.dev/docs).\n\n## Key Analysis\n\n### Architecture Design\n\nThe system uses LangGraph for workflow orchestration [citation:LangGraph Docs](https://langchain.com/langgraph),\ncombined with a FastAPI gateway for REST API access [citation:FastAPI](https://fastapi.tiangolo.com).\n\n## Sources\n\n### Primary Sources\n- [GitHub Repository](https://github.com/bytedance/deer-flow) - Official source code and documentation\n- [DeerFlow Documentation](https://deer-flow.dev/docs) - Technical specifications\n\n### Media Coverage\n- [AI Trends 2026](https://techcrunch.com/ai-trends) - Industry analysis\n```\n\n**CRITICAL: Sources section format:**\n- Every item in the Sources section MUST be a clickable markdown link with URL\n- Use standard markdown link `[Title](URL) - Description` format (NOT `[citation:...]` format)\n- The `[citation:Title](URL)` format is ONLY for inline citations within the report body\n- ❌ WRONG: `GitHub 仓库 - 官方源代码和文档` (no URL!)\n- ❌ WRONG in Sources: `[citation:GitHub Repository](url)` (citation prefix is for inline only!)\n- ✅ RIGHT in Sources: `[GitHub Repository](https://github.com/bytedance/deer-flow) - 官方源代码和文档`\n\n**WORKFLOW for Research Tasks:**\n1. Use web_search to find sources → Extract {{title, url, snippet}} from results\n2. Write content with inline citations: `claim [citation:Title](url)`\n3. Collect all citations in a \"Sources\" section at the end\n4. NEVER write claims without citations when sources are available\n\n**CRITICAL RULES:**\n- ❌ DO NOT write research content without citations\n- ❌ DO NOT forget to extract URLs from search results\n- ✅ ALWAYS add `[citation:Title](URL)` after claims from external sources\n- ✅ ALWAYS include a \"Sources\" section listing all references\n</citations>\n\n",
+    "replace": "",
+    "reason": "The <citations> block references web_search/web_fetch in plain text; neither tool is registered in this slice (D5).",
+    "unlock_condition": "W11-DdgJinaWebTools",
+    "owner_wp": "W03"
+  },
+  {
+    "id": "A7-tool-word-task-hand",
+    "find": "redirect to the task at hand.",
+    "replace": "redirect to the work at hand.",
+    "reason": "The known tool name `task` appears as an English word; the tool-name reconciliation matches whole words and would report a false unregistered tool reference.",
+    "unlock_condition": "W08/W09 task tool plus a reconciliation that distinguishes prose",
+    "owner_wp": "W03"
+  },
+  {
+    "id": "A7-tool-word-task-breakdown",
+    "find": "- Break down the task: What is clear?",
+    "replace": "- Break down the request: What is clear?",
+    "reason": "Same whole-word `task` collision as A7-tool-word-task-hand.",
+    "unlock_condition": "W08/W09 task tool plus a reconciliation that distinguishes prose",
+    "owner_wp": "W03"
+  },
+  {
+    "id": "A7-tool-word-task-multitask",
+    "find": "- Multi-task: Better utilize parallel tool calling",
+    "replace": "- Parallelism: Better utilize parallel tool calling",
+    "reason": "`Multi-task` contains the whole word `task`; same collision as A7-tool-word-task-hand.",
+    "unlock_condition": "W08/W09 task tool plus a reconciliation that distinguishes prose",
+    "owner_wp": "W03"
+  }
+]

@@ -33,6 +33,10 @@ import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
 import io.haifa.agent.store.sqlite.SqliteSdkContributions;
 import io.haifa.agent.store.sqlite.SqliteStoreConfiguration;
+import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
+import io.haifa.agent.superharness.workspace.RestrictedWorkspaceService;
+import io.haifa.agent.superharness.workspace.WorkspaceChangeLimits;
+import io.haifa.agent.superharness.workspace.WorkspaceLimits;
 import io.haifa.agent.tool.api.ToolSideEffect;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -90,7 +94,7 @@ public final class W05RestartResumeProcess {
                             dataRoot.resolve("runtime").resolve("haifa-agent.sqlite")),
                     Clock.systemUTC(),
                     key);
-            try (HaifaAgent agent = buildAgent(snapshot, sqlite, new MarkerTool(markerFile))) {
+            try (HaifaAgent agent = buildAgent(snapshot, sqlite, dataRoot, new MarkerTool(markerFile))) {
                 AgentRunId runId = new AgentRunId(runIdValue);
                 Optional<InteractionView> pending = agent.runs().pendingInteraction(runId);
                 evidence.put("pending_after_restart", pending.isPresent());
@@ -139,11 +143,23 @@ public final class W05RestartResumeProcess {
     }
 
     private static HaifaAgent buildAgent(
-            ResolvedModelSnapshot snapshot, SqliteSdkContributions sqlite, JavaTool<?, ?> tool) {
+            ResolvedModelSnapshot snapshot,
+            SqliteSdkContributions sqlite,
+            Path dataRoot,
+            JavaTool<?, ?> tool) {
         var models = new ModelContribution(
                 Map.of(ModelAdapterCoordinate.from(snapshot), new FinalAnswerModel()),
                 snapshot,
                 Map.of(snapshot.modelId().value(), snapshot));
+        // The original Run was admitted by the Gateway bootstrap, which always declares the
+        // production file tools; the SDK rejects a resume whose frozen tool catalog differs.
+        PersistentProjectWorkspaceService projects = new PersistentProjectWorkspaceService(
+                dataRoot.resolve("workspace"), WorkspaceLimits.defaults(), WorkspaceChangeLimits.defaults());
+        RestrictedWorkspaceService toolWorkspace = new RestrictedWorkspaceService(
+                dataRoot.resolve("workspace"), WorkspaceLimits.defaults());
+        JavaTool<?, ?> readTool = new ProductionReadFileTool("w05-cross-process", projects, toolWorkspace);
+        JavaTool<?, ?> writeTool =
+                new ProductionWriteFileTool("w05-cross-process", "w05-cross-process", projects, toolWorkspace);
         ProductProfile profile = ProductProfile.create(
                 new ProductId("haifa-super-harness"),
                 new ProductVersion("1.0.0"),
@@ -153,7 +169,7 @@ public final class W05RestartResumeProcess {
                 new ProductRunProfileRef(snapshot.modelId().value(), "1.0.0"),
                 new AgentRunBudget(65_536, 8_192, 65_536, 16, 16, 0, "USD", 100),
                 new AgentRunLimits(16, 0, 1, 120_000, 60_000, 16, 16, 0),
-                Set.of(tool.spec().name().value()),
+                Set.of(tool.spec().name().value(), "read_file", "write_file"),
                 Set.of());
         return HaifaAgents.builder(profile)
                 .metadata(new AgentMetadata("W05 cross-process restart probe"))
@@ -161,7 +177,7 @@ public final class W05RestartResumeProcess {
                 .model(models)
                 .persistence(sqlite.borrowedPersistence())
                 .conversation(() -> sqlite.conversation().conversationStore())
-                .tool(tool)
+                .tools(List.<JavaTool<?, ?>>of(tool, readTool, writeTool))
                 .policy(new PolicyPlatformContribution(
                         PolicyPresets.standardApproval(), new DefaultPolicyDecisionService()))
                 .build();

@@ -14,6 +14,7 @@ import io.haifa.agent.model.api.ModelStreamEvent;
 import io.haifa.agent.model.api.ModelStreamSink;
 import io.haifa.agent.model.api.ModelUsage;
 import io.haifa.agent.model.api.ResolvedModelSnapshot;
+import io.haifa.agent.superharness.server.prompt.InputTrustBoundary;
 import java.net.URI;
 import java.util.List;
 import java.util.Map;
@@ -95,11 +96,13 @@ final class LocalProbeModelTestSupport {
         }
 
         private static String lastUserText(io.haifa.agent.model.api.AgentChatRequest request) {
-            return request.messages().stream()
+            // The genuine user text reaches the model inside the declared trust boundary; the probe
+            // interprets and echoes the user's own text, exactly as a real model would.
+            return InputTrustBoundary.unwrapForDisplay(request.messages().stream()
                     .filter(message -> message.role().name().equals("USER"))
                     .reduce((first, second) -> second)
                     .map(message -> message.content())
-                    .orElse("");
+                    .orElse(""));
         }
 
         private static AgentChatResponse response(

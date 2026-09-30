@@ -156,6 +156,56 @@
       "import_status": "NOT_RUN",
       "license_assessment": "Nested license text discovered; full Skill package was not imported or execution-reviewed.",
       "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.prompt.lead-agent-system-template",
+      "kind": "prompt",
+      "source_path": "backend/packages/harness/deerflow/agents/lead_agent/prompt.py",
+      "sha256": "dd36fc045720055ce0506b787c76ab8a909ed25bf595ede0a5f0d42c9aa83dc1",
+      "intended_local_path": "resources/upstream/deerflow/prompts/lead-agent-system-template.txt",
+      "local_sha256": "6d54a9271f76aff4d60d2d05f4e0c614770532962fb5b0a37219a84a7a833e80",
+      "extraction": {
+        "kind": "python-double-quoted-literal-region",
+        "start_anchor": "SYSTEM_PROMPT_TEMPLATE = \"\"\"",
+        "end_anchor": "\"\"\"",
+        "encoding": "utf-8",
+        "fail_on_backslash": true,
+        "rule": "Raw bytes after the start anchor up to the next triple quote; LF and trailing spaces preserved, no Python string evaluation."
+      },
+      "import_status": "IMPORTED",
+      "license_assessment": "Original text reuse from DeerFlow under the root MIT license; attribution retained at third-party/deerflow/LICENSES/deer-flow-MIT.txt. Not a legal review.",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.prompt.lead-agent-adaptations",
+      "kind": "prompt-adaptation",
+      "intended_local_path": "resources/upstream/deerflow/prompts/lead-agent-adaptations.json",
+      "local_sha256": "8dd8e7201acbe5150f4859259254c6fe50b2e3d2c1e1b43fdf8b9eab025768d8",
+      "authored": true,
+      "import_status": "IMPORTED",
+      "license_assessment": "Super Harness authored adaptation data derived from the frozen template positions; no upstream text is copied. Not a legal review.",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.prompt.lead-agent-assembly",
+      "kind": "prompt",
+      "source_path": "backend/packages/harness/deerflow/agents/lead_agent/agent.py",
+      "sha256": "241782497d229ab3e4e2e07ecc84403dcfac62a49b45fc319fc41932862238ad",
+      "intended_local_path": "resources/upstream/deerflow/prompts/lead-agent-assembly.md",
+      "local_sha256": "526405eb4c5a38172c3ecce7ba7281aa478df8d10dafd0b81d814a2c2b742ff6",
+      "authored": true,
+      "import_status": "IMPORTED",
+      "license_assessment": "Super Harness authored assembly ledger describing upstream variables, branches and injection points; no upstream text is copied. Not a legal review.",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.prompt.input-trust-boundary",
+      "kind": "prompt",
+      "source_path": "backend/packages/harness/deerflow/agents/middlewares/input_sanitization_middleware.py",
+      "sha256": "ac3839d1470da4d838c5d86f37586a56a947e9c4b0f536316c0427c25dd2ded5",
+      "import_status": "NOT_RUN",
+      "license_assessment": "Only the boundary marker constants and the neutralization rule originate from this frozen file; they are reimplemented in Java (InputTrustBoundary) without copying the file. Not a legal review.",
+      "status": "SOURCE_VERIFIED"
     }
   ],
   "required_license_resource_ids": [
