@@ -77,6 +77,9 @@ public final class ProductionPresentFilesTool
         if (!Instant.now().isBefore(context.deadline())) {
             throw new IllegalStateException("present_files deadline has expired");
         }
+        if (ClarificationBoundaryRegistry.active(context.runId().value())) {
+            return Output.failure(ClarificationBoundaryRegistry.DISCARD_MESSAGE);
+        }
         List<String> requested = input.filepaths();
         if (requested == null || requested.isEmpty()) {
             return Output.failure("filepaths must contain at least one path");

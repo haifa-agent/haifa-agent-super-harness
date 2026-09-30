@@ -20,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -28,6 +29,13 @@ import org.junit.jupiter.api.Test;
  */
 class AskClarificationToolTest {
     private static final ObjectMapper JSON = new ObjectMapper();
+
+    // The tool publishes a process-wide Run boundary on invoke; this unit context reuses the
+    // literal run id "run-1", so the marker must not leak into the other tool tests.
+    @AfterEach
+    void clearClarificationBoundary() {
+        ClarificationBoundaryRegistry.resetForTests();
+    }
 
     // ---- normalization: request shapes -------------------------------------------------------
 

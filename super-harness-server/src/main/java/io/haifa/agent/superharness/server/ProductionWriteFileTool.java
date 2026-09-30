@@ -73,6 +73,9 @@ public final class ProductionWriteFileTool
         if (!Instant.now().isBefore(context.deadline())) {
             throw new IllegalStateException("write_file deadline has expired");
         }
+        if (ClarificationBoundaryRegistry.active(context.runId().value())) {
+            return Output.failure(input.path(), ClarificationBoundaryRegistry.DISCARD_MESSAGE);
+        }
         String path = input.path();
         boolean append = input.append().orElse(false);
         byte[] content = input.content().getBytes(StandardCharsets.UTF_8);

@@ -70,6 +70,9 @@ public final class ProductionStrReplaceTool
         if (!Instant.now().isBefore(context.deadline())) {
             throw new IllegalStateException("str_replace deadline has expired");
         }
+        if (ClarificationBoundaryRegistry.active(context.runId().value())) {
+            return Output.failure(input.path(), "replace", ClarificationBoundaryRegistry.DISCARD_MESSAGE);
+        }
         String path = input.path();
         String normalized;
         try {

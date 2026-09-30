@@ -66,6 +66,8 @@ public final class ProductionAskClarificationTool
         List<Map<String, Object>> fields = ClarificationRequestNormalizer.normalizeFields(args.get("fields"));
         String content = ClarificationRequestNormalizer.formatClarificationMessage(args, fields);
         String toolCallId = context.toolCallId().value();
+        // Publish the stop boundary before any sibling side-effecting SH tool can observe it.
+        ClarificationBoundaryRegistry.mark(context.runId().value(), toolCallId);
         String requestId = ClarificationRequestNormalizer.stableRequestId(toolCallId, content);
         Map<String, Object> humanInput =
                 ClarificationRequestNormalizer.buildHumanInputPayload(args, toolCallId, requestId, fields);
