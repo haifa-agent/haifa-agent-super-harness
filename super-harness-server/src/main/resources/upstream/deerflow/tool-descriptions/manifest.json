@@ -57,6 +57,13 @@
       "source_function": "present_file_tool",
       "source_lineno": 83,
       "description_sha256": "fbdbace96657db352aa3f37b30e8659ea53c4e6d956946de0fd83ea294ec1a25"
+    },
+    {
+      "tool": "ask_clarification",
+      "source_file": "deerflow/tools/builtins/clarification_tool.py",
+      "source_function": "ask_clarification_tool",
+      "source_lineno": 23,
+      "description_sha256": "6ce2c648b3f9b1080ea855c4b8f9d701d416982b33d4ad14a92a48282302451a"
     }
   ]
 }

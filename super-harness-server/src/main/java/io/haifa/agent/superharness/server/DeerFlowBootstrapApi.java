@@ -142,11 +142,11 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     }
 
     /**
-     * The frozen DeerFlow default file tool set for one Thread: all eight frozen default file tools
+     * The frozen DeerFlow default tool set for one Thread: the eight frozen default file tools
      * ({@code read_file}, {@code write_file}, {@code str_replace}, {@code ls}, {@code glob},
-     * {@code grep}, {@code list_uploaded_files}, {@code present_files}). The read/write/str_replace
-     * trio shares one READ-BEFORE-WRITE session so a {@code read_file} mark is visible to the write
-     * tools.
+     * {@code grep}, {@code list_uploaded_files}, {@code present_files}) plus the side-effect-free
+     * {@code ask_clarification}. The read/write/str_replace trio shares one READ-BEFORE-WRITE session
+     * so a {@code read_file} mark is visible to the write tools.
      */
     private static List<? extends JavaTool<?, ?>> fileTools(
             DeerFlowThreadRunApi.ThreadToolScope scope,
@@ -165,7 +165,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 new ProductionListUploadedFilesTool(
                         scope.threadId(), projects, workspace, scope.currentRunUploads()),
                 new ProductionPresentFilesTool(
-                        scope.threadId(), scope.artifactProjectRef(), projects, workspace));
+                        scope.threadId(), scope.artifactProjectRef(), projects, workspace),
+                new ProductionAskClarificationTool());
     }
 
     public static DeerFlowBootstrapApi create(LocalServerConfiguration configuration)

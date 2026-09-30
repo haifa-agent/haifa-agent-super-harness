@@ -71,7 +71,8 @@ class ProductionFileToolsTest {
                 "glob", fixture.glob.spec().description(),
                 "grep", fixture.grep.spec().description(),
                 "list_uploaded_files", fixture.uploads.spec().description(),
-                "present_files", fixture.present.spec().description());
+                "present_files", fixture.present.spec().description(),
+                "ask_clarification", new ProductionAskClarificationTool().spec().description());
         JsonNode manifest = JSON.readTree(getClass().getClassLoader()
                 .getResourceAsStream("upstream/deerflow/tool-descriptions/manifest.json"));
         for (JsonNode entry : manifest.path("descriptions")) {
