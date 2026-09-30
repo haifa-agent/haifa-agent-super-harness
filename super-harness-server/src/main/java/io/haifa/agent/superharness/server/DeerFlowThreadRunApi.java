@@ -1246,7 +1246,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     thread.updatedAt,
                     Optional.ofNullable(thread.persistedSessionId),
                     Optional.ofNullable(thread.modelBindingIdentity),
-                    thread.interactionDisplays));
+                    thread.interactionDisplays,
+                    thread.clarificationDisplays));
         }
     }
 
@@ -3453,6 +3454,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private final CurrentRunUploads currentRunUploads = new CurrentRunUploads();
         /** Safe frozen-card presentation only; the SDK owns every pending/accepted decision. */
         private volatile List<PersistentThreadCatalog.InteractionDisplay> interactionDisplays = List.of();
+        /** Durable clarification card boundary and answered state for restart-safe projection. */
+        private volatile List<PersistentThreadCatalog.ClarificationDisplay> clarificationDisplays = List.of();
         private boolean admissionRecovered;
         private long nextMessageSequence = 1;
 
@@ -3472,6 +3475,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             this.persistedSessionId = entry.sessionId().orElse(null);
             this.modelBindingIdentity = entry.modelBindingIdentity().orElse(null);
             this.interactionDisplays = entry.interactionDisplays();
+            this.clarificationDisplays = entry.clarificationDisplays();
         }
 
         private String title() {
