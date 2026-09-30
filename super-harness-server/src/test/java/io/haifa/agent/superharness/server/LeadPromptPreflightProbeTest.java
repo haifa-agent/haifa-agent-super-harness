@@ -80,6 +80,9 @@ public class LeadPromptPreflightProbeTest {
         var withoutSkills = store.projection(SkillRunTools.Selection.none());
         String enabled = HaifaRunBridge.promptSignatureFor(promptTools(), withSkills);
         String disabled = HaifaRunBridge.promptSignatureFor(promptTools(), withoutSkills);
+        // A restart-recovered Bridge must reproduce the original Run's prompt signature.
+        assertThat(HaifaRunBridge.promptSignatureFor(promptTools(), withSkills.forRecovery()))
+                .isEqualTo(enabled);
         assertThat(enabled).matches("[0-9a-f]{64}").isNotEqualTo(disabled);
         try (var foundation = new DurableHaifaFoundation(
                 dataDirectory, new SecretKeySpec(new byte[32], "AES"))) {
