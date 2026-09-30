@@ -142,16 +142,10 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     }
 
     /**
-     * The frozen DeerFlow default file tool set for one Thread. All tools share one
-     * READ-BEFORE-WRITE session so a {@code read_file} mark is visible to the write tools.
-     *
-     * <p><b>Upstream blocker (W04-task-7):</b> {@code glob}/{@code grep} require a model-visible
-     * {@code pattern} parameter, but the published {@code haifa-agent-tool-core 0.1.2-SNAPSHOT}
-     * {@code ToolDefinitionValidator} rejects ANY schema map that contains the key {@code pattern}
-     * (even inside {@code properties}), with
-     * {@code IllegalArgumentException: inputSchema pattern is outside the bounded schema subset}.
-     * Registering either tool fails the whole Bridge build, so both are implemented and unit-tested
-     * but intentionally omitted here until the validator accepts a {@code pattern} property.
+     * The frozen DeerFlow default file tool set for one Thread: all seven frozen default file tools
+     * ({@code read_file}, {@code write_file}, {@code str_replace}, {@code ls}, {@code glob},
+     * {@code grep}, {@code list_uploaded_files}). All tools share one READ-BEFORE-WRITE session so a
+     * {@code read_file} mark is visible to the write tools.
      */
     private static List<? extends JavaTool<?, ?>> fileTools(
             DeerFlowThreadRunApi.ThreadToolScope scope,
@@ -165,6 +159,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 new ProductionStrReplaceTool(
                         scope.threadId(), scope.artifactProjectRef(), projects, workspace, session),
                 new ProductionLsTool(scope.threadId(), projects, workspace),
+                new ProductionGlobTool(scope.threadId(), projects, workspace),
+                new ProductionGrepTool(scope.threadId(), projects, workspace),
                 new ProductionListUploadedFilesTool(
                         scope.threadId(), projects, workspace, scope.currentRunUploads()));
     }

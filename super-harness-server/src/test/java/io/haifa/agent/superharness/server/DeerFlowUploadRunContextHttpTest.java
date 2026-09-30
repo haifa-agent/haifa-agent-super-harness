@@ -207,6 +207,24 @@ class DeerFlowUploadRunContextHttpTest {
                 + " answer=" + run.answer());
     }
 
+    /**
+     * W04-task-7: the Bridge must register all seven frozen default file tools. Reaching the model
+     * proves the whole tool set (including the {@code glob}/{@code grep} {@code pattern} schemas)
+     * passed SDK definition validation and was advertised to the provider.
+     */
+    @Test
+    void bridgeRegistersAllSevenFrozenDefaultFileTools() throws Exception {
+        String threadId = "v2-file-tools";
+        assertThat(request("POST", "/api/threads", "{\"thread_id\":\"" + threadId + "\"}").statusCode())
+                .isEqualTo(200);
+        int before = providerRequests.size();
+        RunResult run = runWithFiles(threadId, "v2-file-context tool registry", List.of());
+        assertThat(run.status()).isEqualTo("success");
+        List<String> tools = providerRequests.get(before).path("tools").findValuesAsText("name");
+        assertThat(tools).contains(
+                "read_file", "write_file", "str_replace", "ls", "glob", "grep", "list_uploaded_files");
+    }
+
     @Test
     void aFileThatIsNotAttachedToThisMessageIsNotInjectedIntoTheRunContext() throws Exception {
         String threadId = "v2-not-attached";
