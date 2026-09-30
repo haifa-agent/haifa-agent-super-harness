@@ -72,17 +72,35 @@ final class DeerFlowToolTranscriptProjection {
 
     static List<String> artifactPaths(List<ToolCallView> calls) {
         return calls.stream()
-                .filter(call -> call.status() == ToolCallStatus.COMPLETED)
-                .filter(call -> "write_file".equals(call.toolName()) || "str_replace".equals(call.toolName()))
-                .flatMap(call -> call.result().stream())
-                .map(result -> result.structuredData().values())
-                .filter(values -> values.get("artifactId") instanceof String id && !id.isBlank())
-                .map(values -> values.get("path"))
-                .filter(String.class::isInstance)
-                .map(String.class::cast)
+                .flatMap(call -> presentedPaths(call).stream())
                 .filter(path -> path.startsWith("/mnt/user-data/"))
                 .distinct()
                 .toList();
+    }
+
+    /**
+     * The output paths of one completed file tool call. {@code write_file}/{@code str_replace}
+     * publish an Artifact with a durable id, and {@code present_files} returns the normalized
+     * outputs paths it validated (it publishes any that were not already listed), so both keep the
+     * frozen UI's automatic artifact list complete without duplicating a path.
+     */
+    private static List<String> presentedPaths(ToolCallView call) {
+        if (call.status() != ToolCallStatus.COMPLETED || call.result().isEmpty()) {
+            return List.of();
+        }
+        Map<String, Object> values = call.result().orElseThrow().structuredData().values();
+        if ("present_files".equals(call.toolName())) {
+            return values.get("paths") instanceof List<?> paths
+                    ? paths.stream().filter(String.class::isInstance).map(String.class::cast).toList()
+                    : List.of();
+        }
+        if ("write_file".equals(call.toolName()) || "str_replace".equals(call.toolName())) {
+            if (values.get("artifactId") instanceof String id && !id.isBlank()
+                    && values.get("path") instanceof String path) {
+                return List.of(path);
+            }
+        }
+        return List.of();
     }
 
     private static Map<String, Object> baseMessage(ToolCallView call, String suffix, String type) {

@@ -56,6 +56,8 @@ class ProductionFileToolsTest {
                 List.of("pattern", "path"));
         assertSchema(generator, "list_uploaded_files", ProductionListUploadedFilesTool.Input.class,
                 List.of("include_outline", "max_results", "query", "extensions"), List.of());
+        assertSchema(generator, "present_files", ProductionPresentFilesTool.Input.class,
+                List.of("filepaths"), List.of("filepaths"));
     }
 
     @Test
@@ -68,7 +70,8 @@ class ProductionFileToolsTest {
                 "ls", fixture.ls.spec().description(),
                 "glob", fixture.glob.spec().description(),
                 "grep", fixture.grep.spec().description(),
-                "list_uploaded_files", fixture.uploads.spec().description());
+                "list_uploaded_files", fixture.uploads.spec().description(),
+                "present_files", fixture.present.spec().description());
         JsonNode manifest = JSON.readTree(getClass().getClassLoader()
                 .getResourceAsStream("upstream/deerflow/tool-descriptions/manifest.json"));
         for (JsonNode entry : manifest.path("descriptions")) {
@@ -366,6 +369,7 @@ class ProductionFileToolsTest {
         private final ProductionGlobTool glob;
         private final ProductionGrepTool grep;
         private final ProductionListUploadedFilesTool uploads;
+        private final ProductionPresentFilesTool present;
 
         private Fixture(Path root, String threadId) {
             var bindings = new PersistentProjectWorkspaceService(root,
@@ -382,6 +386,7 @@ class ProductionFileToolsTest {
             this.glob = new ProductionGlobTool(threadId, bindings, workspace);
             this.grep = new ProductionGrepTool(threadId, bindings, workspace);
             this.uploads = new ProductionListUploadedFilesTool(threadId, bindings, workspace, currentRunUploads);
+            this.present = new ProductionPresentFilesTool(threadId, projectRef, bindings, workspace);
             this.currentRunUploads = currentRunUploads;
         }
 
