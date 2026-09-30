@@ -12,6 +12,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Duration;
@@ -34,6 +35,195 @@ class ProductionWriteFileHttpTest {
     @TempDir Path dataRoot;
     private final ObjectMapper json = new ObjectMapper();
     private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+
+    @Test
+    void productionPendingWriteCancellationLeavesNoFileOrArtifactAfterLateApprovalAndRestart() throws Exception {
+        String assignedRoot = System.getProperty("w05.pendingCancel.dataRoot");
+        if (assignedRoot != null) {
+            Files.createDirectories(Path.of(assignedRoot));
+            dataRoot = Files.createTempDirectory(Path.of(assignedRoot), "pending-cancel-");
+        }
+        String evidenceRoot = System.getProperty("w05.pendingCancel.evidence");
+        Path evidence = evidenceRoot == null ? dataRoot.resolve("evidence") : Path.of(evidenceRoot);
+        Files.createDirectories(evidence);
+        String threadId = "production-pending-cancel";
+        String path = "/mnt/user-data/outputs/pending-cancel.txt";
+        AtomicInteger calls = new AtomicInteger();
+        HttpServer provider = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        provider.createContext("/v1/chat/completions", exchange -> {
+            JsonNode body = json.readTree(exchange.getRequestBody());
+            int call = calls.incrementAndGet();
+            // Provider headers and managed-model credentials are deliberately absent from evidence.
+            Files.writeString(evidence.resolve("provider-request-" + call + ".json"),
+                    body.toPrettyString(), StandardCharsets.UTF_8);
+            String arguments = json.writeValueAsString(Map.of("path", path, "content", "must never be written\n"));
+            String chunk = json.writeValueAsString(Map.of(
+                    "id", "provider-pending-cancel-" + call, "model", "demo-provider-id",
+                    "choices", List.of(Map.of("index", 0, "finish_reason", "tool_calls",
+                            "delta", Map.of("tool_calls", List.of(Map.of(
+                                    "index", 0, "id", "call-pending-cancel-" + call, "type", "function",
+                                    "function", Map.of("name", "write_file", "arguments", arguments))))))));
+            byte[] response = ("data: " + chunk + "\n\n"
+                    + "data: {\"id\":\"provider-pending-cancel-" + call
+                    + "\",\"model\":\"demo-provider-id\",\"choices\":[],"
+                    + "\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":3}}\n\n"
+                    + "data: [DONE]\n\n").getBytes(StandardCharsets.UTF_8);
+            Files.write(evidence.resolve("provider-response-" + call + ".sse"), response);
+            exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        provider.start();
+        int gatewayPort = Integer.getInteger("w05.pendingCancel.gatewayPort", 0);
+        String key = Base64.getEncoder().encodeToString(new byte[32]);
+        Map<String, String> environment = Map.of(
+                "HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF", "env://W05_TEST_KEY", "W05_TEST_KEY", key);
+        String location;
+        String runId;
+        String toolCallId;
+        try {
+            try (var api = DeerFlowBootstrapApi.create(
+                    new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), gatewayPort),
+                    dataRoot, environment)) {
+                api.start();
+                URI base = URI.create("http://127.0.0.1:" + api.address().getPort());
+                String model = """
+                        {"config":{"name":"demo-model","display_name":"Demo Model",
+                        "provider":"openai-compatible","model":"demo-provider-id",
+                        "base_url":"http://127.0.0.1:%s/v1","enabled":true,"supports_vision":false,
+                        "context_window":8192,"max_tokens":1024,"api_key":"controlled-key"},
+                        "expected_revision":null}
+                        """.formatted(provider.getAddress().getPort());
+                assertThat(request(base, "PUT", "/api/managed-models", model).statusCode()).isEqualTo(200);
+                assertThat(request(base, "POST", "/api/threads", "{\"thread_id\":\"" + threadId + "\"}")
+                        .statusCode()).isEqualTo(200);
+                String runBody = """
+                        {"assistant_id":"lead_agent","input":{"messages":[{"type":"human","content":"create a file"}]},
+                        "stream_mode":["messages-tuple","updates","custom"],
+                        "context":{"model_name":"demo-model","mode":"flash","reasoning_effort":"minimal",
+                        "thinking_enabled":false,"is_plan_mode":false,"subagent_enabled":false},
+                        "on_disconnect":"continue","multitask_strategy":"reject"}
+                        """;
+                HttpResponse<String> pending = recordedRequest(
+                        evidence, "pending.sse", base, "POST", "/api/threads/" + threadId + "/runs/stream", runBody);
+                assertThat(pending.statusCode()).as(pending.body()).isEqualTo(200);
+                assertThat(pending.body()).contains("event: end");
+                location = pending.headers().firstValue("content-location").orElseThrow();
+                runId = location.substring(location.lastIndexOf('/') + 1);
+                JsonNode pendingRun = recordedJson(evidence, "pending-run.json", base, location);
+                assertThat(pendingRun.path("run_id").asText()).isEqualTo(runId);
+                assertThat(pendingRun.path("thread_id").asText()).isEqualTo(threadId);
+                assertThat(pendingRun.path("diagnostics").path("sdk_status").asText()).isEqualTo("WAITING_APPROVAL");
+                JsonNode pendingState = recordedJson(
+                        evidence, "pending-state.json", base, "/api/threads/" + threadId + "/state");
+                JsonNode call = firstMessageWith(pendingState, "tool_calls").path("tool_calls").get(0);
+                assertThat(call.path("name").asText()).isEqualTo("write_file");
+                assertThat(call.path("args").path("path").asText()).isEqualTo(path);
+                toolCallId = call.path("id").asText();
+                JsonNode card = firstHumanInputCard(pendingState).path("artifact").path("human_input");
+                assertThat(card.path("tool_call_id").asText()).isEqualTo(toolCallId);
+                String requestId = card.path("request_id").asText();
+                assertThat(requestId).isNotBlank();
+                assertThat(json.readTree(Files.readString(evidence.resolve("provider-request-1.json")))
+                        .path("tools").findValuesAsText("name")).contains("write_file");
+                assertNoPendingWriteSideEffect(evidence, "pending", base, threadId, path, runId, toolCallId);
+
+                HttpResponse<String> cancelled = recordedRequest(evidence, "cancel.http", base, "POST",
+                        location + "/cancel?action=interrupt&wait=0", "");
+                assertThat(cancelled.statusCode()).as(cancelled.body()).isEqualTo(202);
+                awaitCancelled(evidence, base, location, runId, threadId);
+                HttpResponse<String> repeated = recordedRequest(evidence, "repeated-cancel.http", base, "POST",
+                        location + "/cancel?action=interrupt&wait=0", "");
+                assertThat(repeated.statusCode()).as(repeated.body()).isEqualTo(409);
+                assertThat(repeated.body()).contains("not cancellable");
+                HttpResponse<String> lateApproval = recordedRequest(evidence, "late-approval.http", base, "POST",
+                        "/api/threads/" + threadId + "/runs/stream", interactionResponse(requestId, "approve"));
+                assertThat(lateApproval.statusCode()).as(lateApproval.body()).isEqualTo(409);
+                assertThat(calls).hasValue(1);
+                assertNoPendingWriteSideEffect(evidence, "cancelled", base, threadId, path, runId, toolCallId);
+                System.out.println("W05_PENDING_WRITE_CANCEL_EVIDENCE run=" + runId + " thread=" + threadId
+                        + " toolCall=" + toolCallId + " interaction=" + requestId
+                        + " sdk_status=CANCELLED http_status=interrupted cancel=202 repeated_cancel=409 late_approve=409");
+            }
+            // Closing the production Runtime joins its completion observers. Reopening the same
+            // SQLite and workspace proves durable cancellation without a time-based quiet window.
+            try (var restarted = DeerFlowBootstrapApi.create(
+                    new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), gatewayPort),
+                    dataRoot, environment)) {
+                restarted.start();
+                URI base = URI.create("http://127.0.0.1:" + restarted.address().getPort());
+                awaitCancelled(evidence, base, location, runId, threadId);
+                assertNoPendingWriteSideEffect(evidence, "restarted", base, threadId, path, runId, toolCallId);
+                JsonNode runs = recordedJson(evidence, "restarted-runs.json", base,
+                        "/api/threads/" + threadId + "/runs");
+                assertThat(runs.findValuesAsText("run_id")).containsExactly(runId);
+                assertThat(calls).hasValue(1);
+                assertThat(dataRoot.resolve("runtime/haifa-agent.sqlite")).exists();
+                System.out.println("W05_PENDING_WRITE_CANCEL_EVIDENCE restart_same_run=true provider_calls=1"
+                        + " production_file=false persisted_artifacts=0 dataRoot=" + dataRoot + " evidence=" + evidence);
+            }
+        } finally {
+            provider.stop(0);
+        }
+    }
+
+    private JsonNode awaitCancelled(Path evidence, URI base, String location, String runId, String threadId)
+            throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        JsonNode run;
+        do {
+            run = recordedJson(evidence, "cancel-status-latest.json", base, location);
+            assertThat(run.path("run_id").asText()).isEqualTo(runId);
+            assertThat(run.path("thread_id").asText()).isEqualTo(threadId);
+            if ("CANCELLED".equals(run.path("diagnostics").path("sdk_status").asText())) {
+                assertThat(run.path("status").asText()).isEqualTo("interrupted");
+                return run;
+            }
+            Thread.sleep(25);
+        } while (System.nanoTime() < deadline);
+        throw new AssertionError("Run did not durably cancel within 10 seconds: " + run);
+    }
+
+    private void assertNoPendingWriteSideEffect(Path evidence, String phase, URI base, String threadId,
+            String path, String runId, String toolCallId) throws Exception {
+        assertThat(recordedRequest(evidence, phase + "-download.http", base, "GET",
+                "/api/threads/" + threadId + "/artifacts" + path, null).statusCode()).isEqualTo(404);
+        JsonNode state = recordedJson(evidence, phase + "-state.json", base, "/api/threads/" + threadId + "/state");
+        assertThat(state.path("values").path("artifacts")).isEmpty();
+        assertThat(messagesNamed(state, "write_file")).isEmpty();
+        JsonNode run = recordedJson(evidence, phase + "-run.json", base, "/api/threads/" + threadId + "/runs/" + runId);
+        assertThat(run.path("diagnostics").path("tool_calls").findValuesAsText("status")).doesNotContain("COMPLETED");
+        assertThat(run.path("diagnostics").path("artifacts")).isEmpty();
+        var bindings = new PersistentProjectWorkspaceService(
+                dataRoot.resolve("workspace"), WorkspaceLimits.defaults(), WorkspaceChangeLimits.defaults());
+        var artifacts = new RestrictedWorkspaceService(dataRoot.resolve("workspace"), WorkspaceLimits.defaults());
+        var binding = bindings.requireThreadWorkspace("default", threadId);
+        var published = artifacts.findArtifacts("default", binding.workspaceId(), "thread:" + threadId);
+        Path target = dataRoot.resolve("workspace/workspaces").resolve(binding.workspaceId().value())
+                .resolve("user-data/outputs/pending-cancel.txt");
+        Files.writeString(evidence.resolve(phase + "-workspace-proof.json"), json.writeValueAsString(Map.of(
+                "run_id", runId, "tool_call_id", toolCallId, "path", target.toString(),
+                "file_exists", Files.exists(target), "persisted_artifact_count", published.size())), StandardCharsets.UTF_8);
+        assertThat(target).doesNotExist();
+        assertThat(published).isEmpty();
+    }
+
+    private JsonNode recordedJson(Path evidence, String name, URI base, String path) throws Exception {
+        HttpResponse<String> response = recordedRequest(evidence, name, base, "GET", path, null);
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        return json.readTree(response.body());
+    }
+
+    private HttpResponse<String> recordedRequest(Path evidence, String name, URI base,
+            String method, String path, String body) throws Exception {
+        HttpResponse<String> response = request(base, method, path, body);
+        Files.writeString(evidence.resolve(name), response.body(), StandardCharsets.UTF_8);
+        Files.writeString(evidence.resolve(name + ".metadata.json"), json.writeValueAsString(Map.of(
+                "method", method, "path", path, "status", response.statusCode(),
+                "content_location", response.headers().firstValue("content-location").orElse(""))), StandardCharsets.UTF_8);
+        return response;
+    }
 
     @Test
     void productionApprovalGateRejectsMismatchedCrossThreadDuplicateAndRejectedWrites() throws Exception {
@@ -310,6 +500,19 @@ class ProductionWriteFileHttpTest {
             assertThat(reloadedResult.path("additional_kwargs").path("haifa_tool_result").path("artifactSha256")
                             .asText())
                     .isEqualTo("sha256:" + persistedProjection[2]);
+            HttpResponse<byte[]> restartedDownload = client.send(
+                    HttpRequest.newBuilder(restartedBase.resolve(
+                            "/api/threads/production-file/artifacts" + path))
+                            .timeout(Duration.ofSeconds(10)).GET().build(),
+                    HttpResponse.BodyHandlers.ofByteArray());
+            assertThat(restartedDownload.statusCode()).isEqualTo(200);
+            assertThat(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                            .digest(restartedDownload.body())))
+                    .isEqualTo(persistedProjection[2]);
+            assertThat(restartedDownload.headers().firstValue("etag"))
+                    .contains("\"" + persistedProjection[2] + "\"");
+            System.out.println("W05_RESTART_DOWNLOAD_EVIDENCE artifact=" + persistedProjection[1]
+                    + " sha256=" + persistedProjection[2] + " http=200");
             assertThat(reloaded.path("values").path("artifacts").toString()).contains(path);
             }
         } finally {
