@@ -1,5 +1,7 @@
 package io.haifa.agent.superharness.server;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.haifa.agent.core.tool.ToolCallStatus;
 import io.haifa.agent.runtime.api.ToolCallView;
 import io.haifa.agent.runtime.api.ToolResultView;
@@ -11,11 +13,42 @@ import java.util.Optional;
 
 /** Frozen LangGraph message projection over the caller-authorized SDK ToolCall view. */
 final class DeerFlowToolTranscriptProjection {
+    static final String ASK_CLARIFICATION = "ask_clarification";
+    private static final ObjectMapper JSON = new ObjectMapper();
+
     private DeerFlowToolTranscriptProjection() {}
+
+    /**
+     * The completed {@code ask_clarification} call ends the Run in frozen DeerFlow (its middleware
+     * returns {@code Command(goto=END)}). SH only projects the Run up to that tool result: later
+     * model text and tool calls are never shown, whether the Run ends COMPLETED or CANCELLED. The
+     * boundary is derived from the durable SDK ToolCall view, so it is identical after a refresh or a
+     * gateway restart.
+     */
+    static int clarificationBoundaryIndex(List<ToolCallView> calls) {
+        for (int index = 0; index < calls.size(); index++) {
+            ToolCallView call = calls.get(index);
+            if (ASK_CLARIFICATION.equals(call.toolName())
+                    && call.status() == ToolCallStatus.COMPLETED
+                    && call.result().isPresent()) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    static boolean hasClarificationBoundary(List<ToolCallView> calls) {
+        return clarificationBoundaryIndex(calls) >= 0;
+    }
+
+    static List<ToolCallView> upToClarificationBoundary(List<ToolCallView> calls) {
+        int boundary = clarificationBoundaryIndex(calls);
+        return boundary < 0 ? calls : List.copyOf(calls.subList(0, boundary + 1));
+    }
 
     static List<Map<String, Object>> messages(List<ToolCallView> calls) {
         List<Map<String, Object>> messages = new ArrayList<>();
-        for (ToolCallView call : calls) {
+        for (ToolCallView call : upToClarificationBoundary(calls)) {
             messages.add(requestMessage(call));
             resultMessage(call).ifPresent(messages::add);
         }
@@ -39,6 +72,11 @@ final class DeerFlowToolTranscriptProjection {
     static Optional<Map<String, Object>> resultMessage(ToolCallView call) {
         if (call.result().isEmpty() && !terminal(call.status())) {
             return Optional.empty();
+        }
+        if (ASK_CLARIFICATION.equals(call.toolName())
+                && call.status() == ToolCallStatus.COMPLETED
+                && call.result().isPresent()) {
+            return clarificationCard(call);
         }
         Map<String, Object> message = baseMessage(call, "result", "tool");
         message.put("name", call.toolName());
@@ -71,11 +109,40 @@ final class DeerFlowToolTranscriptProjection {
     }
 
     static List<String> artifactPaths(List<ToolCallView> calls) {
-        return calls.stream()
+        return upToClarificationBoundary(calls).stream()
                 .flatMap(call -> presentedPaths(call).stream())
                 .filter(path -> path.startsWith("/mnt/user-data/"))
                 .distinct()
                 .toList();
+    }
+
+    /**
+     * Frozen {@code ClarificationMiddleware} ToolMessage: the readable fallback is the content and
+     * the structured request payload is {@code artifact.human_input}. The tool already normalized the
+     * payload; SH only re-serializes the exact frozen shape, sharing the wire builder with the
+     * approval card.
+     */
+    static Optional<Map<String, Object>> clarificationCard(ToolCallView call) {
+        ToolResultView result = call.result().orElseThrow();
+        Object raw = result.structuredData().values().get("humanInput");
+        if (!(raw instanceof String humanInput) || humanInput.isBlank()) {
+            return Optional.empty();
+        }
+        Map<String, Object> payload;
+        try {
+            payload = JSON.readValue(humanInput, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+        } catch (JsonProcessingException invalid) {
+            return Optional.empty();
+        }
+        if (payload == null) {
+            return Optional.empty();
+        }
+        Object requestId = payload.get("request_id");
+        String messageId = requestId instanceof String text && !text.isBlank()
+                ? text
+                : "clarification:" + call.id().value();
+        return Optional.of(DeerFlowInteractionHttpProjection.humanInputMessage(
+                call.runId().value(), messageId, call.id().value(), result.summary().text(), payload));
     }
 
     /**

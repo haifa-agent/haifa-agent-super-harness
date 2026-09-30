@@ -99,16 +99,27 @@ final class DeerFlowInteractionHttpProjection {
         payload.put("input_mode", "single_choice");
         payload.put("options", options);
 
-        Map<String, Object> message = new LinkedHashMap<>();
         String interactionMessageId = "interaction-" + requestId;
-        message.put("id", interactionMessageId);
+        // The top-level tool_call_id is only the frozen UI grouping identity. It must not collide
+        // with the authoritative Runtime ToolCall result; the nested payload retains the real
+        // ToolCall target that this Interaction approves.
+        return humanInputMessage(runId, interactionMessageId, interactionMessageId, question, payload);
+    }
+
+    /**
+     * Shared frozen Human Input Card wire shape: a {@code type: tool} message named
+     * {@code ask_clarification} whose {@code artifact.human_input} carries the request payload. The
+     * approval card and the real clarification tool both use this so the frozen UI parses them with
+     * one code path; the approval path's {@code requireApprovalCard} constraint is unchanged.
+     */
+    static Map<String, Object> humanInputMessage(
+            String runId, String messageId, String toolCallId, String content, Map<String, Object> payload) {
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("id", messageId);
         message.put("type", "tool");
         message.put("name", TOOL_NAME);
-        message.put("content", question);
-        // The top-level key is only the frozen UI grouping identity. It must not collide
-        // with the authoritative Runtime ToolCall result; the nested payload retains the
-        // real ToolCall target that this Interaction approves.
-        message.put("tool_call_id", interactionMessageId);
+        message.put("content", content);
+        message.put("tool_call_id", toolCallId);
         message.put("artifact", Map.of("human_input", payload));
         message.put("additional_kwargs", Map.of());
         message.put("run_id", runId);
