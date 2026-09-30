@@ -670,6 +670,12 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         String modelInput = runInput == null
                 ? uploadContext.modelInput(threadId, body.path("input").path("messages"), message)
                 : message;
+        if (runInput == null) {
+            // list_uploaded_files reports historical uploads only; the current Run's files are
+            // already surfaced through <current_uploads>.
+            thread.currentRunUploads.set(
+                    DeerFlowUploadContext.currentUploadFilenames(body.path("input").path("messages")));
+        }
         // A Steer must never re-declare tools: it only feeds the active Run's own bridge.
         McpRunTools.Projection mcpProjection = runInput == null
                 ? mcpProjections.forRun(body)
@@ -1173,7 +1179,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         Optional<String> project = projectId instanceof String value && !value.isBlank()
                 ? Optional.of(value)
                 : Optional.empty();
-        return runToolsForThread.apply(new ThreadToolScope(thread.threadId, project));
+        return runToolsForThread.apply(
+                new ThreadToolScope(thread.threadId, project, thread.currentRunUploads));
     }
 
     private void attachBridge(ThreadRecord thread, HaifaRunBridge bridge, boolean claimBinding) {
@@ -3442,6 +3449,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private volatile String modelBindingIdentity;
         private volatile String activeRunId;
         private volatile String latestRunId;
+        /** Files referenced by the newest Run input; {@code list_uploaded_files} excludes them. */
+        private final CurrentRunUploads currentRunUploads = new CurrentRunUploads();
         /** Safe frozen-card presentation only; the SDK owns every pending/accepted decision. */
         private volatile List<PersistentThreadCatalog.InteractionDisplay> interactionDisplays = List.of();
         private boolean admissionRecovered;
@@ -3583,10 +3592,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             InteractionResponseSubmission submission,
             Map<String, Object> message) {}
 
-    record ThreadToolScope(String threadId, Optional<String> projectId) {
+    record ThreadToolScope(String threadId, Optional<String> projectId, CurrentRunUploads currentRunUploads) {
         ThreadToolScope {
             java.util.Objects.requireNonNull(threadId, "threadId");
             java.util.Objects.requireNonNull(projectId, "projectId");
+            java.util.Objects.requireNonNull(currentRunUploads, "currentRunUploads");
         }
 
         String artifactProjectRef() {

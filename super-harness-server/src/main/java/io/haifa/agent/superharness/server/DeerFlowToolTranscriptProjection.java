@@ -73,7 +73,7 @@ final class DeerFlowToolTranscriptProjection {
     static List<String> artifactPaths(List<ToolCallView> calls) {
         return calls.stream()
                 .filter(call -> call.status() == ToolCallStatus.COMPLETED)
-                .filter(call -> "write_file".equals(call.toolName()))
+                .filter(call -> "write_file".equals(call.toolName()) || "str_replace".equals(call.toolName()))
                 .flatMap(call -> call.result().stream())
                 .map(result -> result.structuredData().values())
                 .filter(values -> values.get("artifactId") instanceof String id && !id.isBlank())

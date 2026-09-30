@@ -100,10 +100,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 scope -> !testRunTools.isEmpty()
                         ? testRunTools
                         : testRunModelResolver == null
-                                ? List.of(
-                                        new ProductionWriteFileTool(
-                                                scope.threadId(), scope.artifactProjectRef(), projects, toolWorkspace),
-                                        new ProductionReadFileTool(scope.threadId(), projects, toolWorkspace))
+                                ? fileTools(scope, projects, toolWorkspace)
                                 : List.of(),
                 new DeerFlowThreadRunApi.McpProjectionProvider() {
                     @Override
@@ -142,6 +139,34 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.suggestionsApi = new DeerFlowSuggestionsApi(
                 objectMapper, modelResolver, threadRunApi::hasThread, suggestionsSettings);
         registerRoutes();
+    }
+
+    /**
+     * The frozen DeerFlow default file tool set for one Thread. All tools share one
+     * READ-BEFORE-WRITE session so a {@code read_file} mark is visible to the write tools.
+     *
+     * <p><b>Upstream blocker (W04-task-7):</b> {@code glob}/{@code grep} require a model-visible
+     * {@code pattern} parameter, but the published {@code haifa-agent-tool-core 0.1.2-SNAPSHOT}
+     * {@code ToolDefinitionValidator} rejects ANY schema map that contains the key {@code pattern}
+     * (even inside {@code properties}), with
+     * {@code IllegalArgumentException: inputSchema pattern is outside the bounded schema subset}.
+     * Registering either tool fails the whole Bridge build, so both are implemented and unit-tested
+     * but intentionally omitted here until the validator accepts a {@code pattern} property.
+     */
+    private static List<? extends JavaTool<?, ?>> fileTools(
+            DeerFlowThreadRunApi.ThreadToolScope scope,
+            PersistentProjectWorkspaceService projects,
+            RestrictedWorkspaceService workspace) {
+        FileToolSession session = new FileToolSession();
+        return List.of(
+                new ProductionWriteFileTool(
+                        scope.threadId(), scope.artifactProjectRef(), projects, workspace, session),
+                new ProductionReadFileTool(scope.threadId(), projects, workspace, session),
+                new ProductionStrReplaceTool(
+                        scope.threadId(), scope.artifactProjectRef(), projects, workspace, session),
+                new ProductionLsTool(scope.threadId(), projects, workspace),
+                new ProductionListUploadedFilesTool(
+                        scope.threadId(), projects, workspace, scope.currentRunUploads()));
     }
 
     public static DeerFlowBootstrapApi create(LocalServerConfiguration configuration)

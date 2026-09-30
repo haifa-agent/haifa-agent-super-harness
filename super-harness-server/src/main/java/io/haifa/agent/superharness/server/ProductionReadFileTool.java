@@ -31,22 +31,24 @@ public final class ProductionReadFileTool
     private static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
     private static final JavaToolSpec<Input, Output> SPEC = JavaToolSpec.builder("read_file", Input.class, Output.class)
             .title("Read a saved file")
-            .description("Read a UTF-8 text file saved in this conversation under /mnt/user-data/uploads/, "
-                    + "/mnt/user-data/workspace/ or /mnt/user-data/outputs/. Returns the saved file's SHA-256 "
-                    + "and the requested 1-indexed inclusive start_line/end_line window (at most 3 KiB per "
-                    + "call); continue a truncated read with a later start_line.")
+            .description(ToolDescriptions.load("read_file"))
             .sideEffects(ToolSideEffect.FILE_READ)
             .build();
 
     private final String threadId;
     private final PersistentProjectWorkspaceService bindings;
     private final RestrictedWorkspaceService workspace;
+    private final FileToolSession readState;
 
     ProductionReadFileTool(
-            String threadId, PersistentProjectWorkspaceService bindings, RestrictedWorkspaceService workspace) {
+            String threadId,
+            PersistentProjectWorkspaceService bindings,
+            RestrictedWorkspaceService workspace,
+            FileToolSession readState) {
         this.threadId = Objects.requireNonNull(threadId, "threadId");
         this.bindings = Objects.requireNonNull(bindings, "bindings");
         this.workspace = Objects.requireNonNull(workspace, "workspace");
+        this.readState = Objects.requireNonNull(readState, "readState");
     }
 
     @Override
@@ -99,6 +101,9 @@ public final class ProductionReadFileTool
                     "file is not valid UTF-8 text; read_file cannot return it as text");
         }
         String text = facts.text().orElseThrow();
+        // Frozen ReadBeforeWriteMiddleware stamps the hash of every successful read_file result;
+        // the write tools consult the same mark before changing an existing file.
+        readState.recordRead(RestrictedWorkspaceService.normalizeLogicalPath(path), facts.sha256());
         String[] lines = text.split("(?<=\n)", -1);
         int total = text.isEmpty() ? 0 : (text.endsWith("\n") ? lines.length - 1 : lines.length);
         if (start > Math.max(total, 1)) {

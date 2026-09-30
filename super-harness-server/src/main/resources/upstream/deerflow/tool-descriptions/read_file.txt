@@ -1,0 +1,1 @@
+Read the contents of a text file. Use this to examine source code, configuration files, logs, or any text-based file.

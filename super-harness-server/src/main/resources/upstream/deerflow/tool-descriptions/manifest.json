@@ -1,0 +1,55 @@
+{
+  "schema": "sh.deerflow-tool-descriptions/v1",
+  "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+  "descriptions": [
+    {
+      "tool": "read_file",
+      "source_file": "deerflow/sandbox/tools.py",
+      "source_function": "read_file_tool",
+      "source_lineno": 2515,
+      "description_sha256": "25a7864c7b184658529dac363a7a280cb9db5409c258c73458060e5d2956ded6"
+    },
+    {
+      "tool": "write_file",
+      "source_file": "deerflow/sandbox/tools.py",
+      "source_function": "write_file_tool",
+      "source_lineno": 2616,
+      "description_sha256": "597513659a54be01381846e0df1263404891f5441a761f911b7e831c7284ae84"
+    },
+    {
+      "tool": "str_replace",
+      "source_file": "deerflow/sandbox/tools.py",
+      "source_function": "str_replace_tool",
+      "source_lineno": 2715,
+      "description_sha256": "3f8c3c627ca79cc056cefd81dea2d113e289f5384afc38682827567e9595357c"
+    },
+    {
+      "tool": "ls",
+      "source_file": "deerflow/sandbox/tools.py",
+      "source_function": "ls_tool",
+      "source_lineno": 2225,
+      "description_sha256": "ffd5dc8ff5815ef38b7ef5c9db466da8f9a9d00a62ce90cc8b3689e22bb918f9"
+    },
+    {
+      "tool": "glob",
+      "source_file": "deerflow/sandbox/tools.py",
+      "source_function": "glob_tool",
+      "source_lineno": 2293,
+      "description_sha256": "de97d2978e391127cdef646fc6940e5b7885f009ec7cac28a37e7c1e837d2728"
+    },
+    {
+      "tool": "grep",
+      "source_file": "deerflow/sandbox/tools.py",
+      "source_function": "grep_tool",
+      "source_lineno": 2373,
+      "description_sha256": "6e0e393f75e318abf891fb5ccd457db71dcc8e87dbfd07b77b660b2301f6464e"
+    },
+    {
+      "tool": "list_uploaded_files",
+      "source_file": "deerflow/tools/builtins/list_uploaded_files_tool.py",
+      "source_function": "list_uploaded_files",
+      "source_lineno": 246,
+      "description_sha256": "cb9f23ff0d2bf34e304a1ae1f3599635970202ff1534a490db47700dfc6f9f38"
+    }
+  ]
+}
