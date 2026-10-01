@@ -65,20 +65,23 @@ final class DuckDuckGoClient {
 
     record ImageResult(String title, String imageUrl, String thumbnailUrl) {}
 
-    /** Frozen {@code _search_text} for the single {@code duckduckgo} backend. */
+    /**
+     * Frozen {@code _search_text} for the single {@code duckduckgo} backend. The query is sent as a
+     * GET (query params {@code q}, {@code kl} for region, {@code df} for time range) without a
+     * {@code Content-Type} header: DuckDuckGo's HTML endpoint answers any explicit
+     * {@code Content-Type} with a 202 bot challenge (see W11-task-2), and a browser GET carries none.
+     */
     List<TextResult> search(String query, int maxResults, Optional<String> timeRange) {
-        StringBuilder form = new StringBuilder()
-                .append("q=").append(encode(query))
-                .append("&b=")
-                .append("&l=").append(encode(config.region()));
-        timeRange.ifPresent(value -> form.append("&df=").append(encode(value)));
-        HttpRequest request = HttpRequest.newBuilder(URI.create(config.duckduckgoHtmlUrl()))
+        StringBuilder url = new StringBuilder(config.duckduckgoHtmlUrl())
+                .append("?q=").append(encode(query))
+                .append("&kl=").append(encode(config.region()));
+        timeRange.ifPresent(value -> url.append("&df=").append(encode(value)));
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url.toString()))
                 .timeout(config.timeout())
-                .header("Content-Type", "application/x-www-form-urlencoded")
                 .header("Accept", BROWSER_ACCEPT)
                 .header("Accept-Language", BROWSER_ACCEPT_LANGUAGE)
                 .header("User-Agent", USER_AGENT)
-                .POST(HttpRequest.BodyPublishers.ofString(form.toString(), UTF_8))
+                .GET()
                 .build();
         Document document;
         try {

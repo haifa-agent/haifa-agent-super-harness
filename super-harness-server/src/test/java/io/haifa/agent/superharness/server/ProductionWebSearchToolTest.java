@@ -32,6 +32,7 @@ class ProductionWebSearchToolTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private final List<Map<String, String>> requests = java.util.Collections.synchronizedList(new ArrayList<>());
     private final List<Headers> requestHeaders = java.util.Collections.synchronizedList(new ArrayList<>());
+    private final List<String> requestMethods = java.util.Collections.synchronizedList(new ArrayList<>());
     private HttpServer server;
     private ProductionWebSearchTool tool;
 
@@ -65,9 +66,22 @@ class ProductionWebSearchToolTest {
     void timeRangeWeekIsSentAsTheDfParameter() throws Exception {
         run("haifa", Optional.empty(), Optional.of(ProductionWebSearchTool.TimeRange.week));
         assertThat(requests.get(0).get("df")).isEqualTo("w");
+        assertThat(requests.get(0).get("kl")).isEqualTo("wt-wt");
         requests.clear();
         run("haifa", Optional.empty(), Optional.of(ProductionWebSearchTool.TimeRange.day));
         assertThat(requests.get(0).get("df")).isEqualTo("d");
+    }
+
+    @Test
+    void textSearchUsesGetWithoutContentTypeAndSendsQueryParameters() throws Exception {
+        run("haifa", Optional.empty(), Optional.of(ProductionWebSearchTool.TimeRange.week));
+
+        assertThat(requestMethods.get(0)).isEqualTo("GET");
+        assertThat(header(requestHeaders.get(0), "Content-Type")).isEmpty();
+        Map<String, String> params = requests.get(0);
+        assertThat(params.get("q")).isEqualTo("haifa");
+        assertThat(params.get("kl")).isEqualTo("wt-wt");
+        assertThat(params.get("df")).isEqualTo("w");
     }
 
     @Test
@@ -115,7 +129,7 @@ class ProductionWebSearchToolTest {
                 .doesNotContain("HaifaSuperHarness");
         assertThat(header(headers, "Accept")).contains("text/html");
         assertThat(header(headers, "Accept-Language")).contains("en-US");
-        assertThat(header(headers, "Content-Type")).contains("application/x-www-form-urlencoded");
+        assertThat(header(headers, "Content-Type")).isEmpty();
     }
 
     @Test
@@ -152,9 +166,9 @@ class ProductionWebSearchToolTest {
     }
 
     private void handle(HttpExchange exchange) throws IOException {
+        requestMethods.add(exchange.getRequestMethod());
         requestHeaders.add(exchange.getRequestHeaders());
-        String form = WebToolTestSupport.bodyText(exchange);
-        requests.add(parse(form));
+        requests.add(parse(exchange.getRequestURI().getRawQuery()));
         String query = requests.get(requests.size() - 1).getOrDefault("q", "");
         int status = 200;
         String html;
@@ -198,6 +212,7 @@ class ProductionWebSearchToolTest {
 
     private static Map<String, String> parse(String form) {
         Map<String, String> fields = new LinkedHashMap<>();
+        if (form == null) return fields;
         for (String pair : form.split("&")) {
             if (pair.isEmpty()) continue;
             int separator = pair.indexOf('=');
