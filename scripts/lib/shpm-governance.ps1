@@ -10,6 +10,9 @@ $script:ShpmStageStatuses = @('pending', 'in_progress', 'blocked', 'finished')
 $script:ShpmStageResults = @('PASS', 'FAIL', 'NOT_RUN', 'BLOCKED_EXTERNAL', 'UPSTREAM_UNSUPPORTED')
 # Human scope decision 2026-09-28 (mirrors SHPM MAX_DELIVERY_TASKS).
 $script:ShpmMaxDeliveryTasks = 8
+# Per-package human scope decisions above the default cap.
+# 2026-10-01: W05 may hold 9 tasks (UX-V1 clarification ordering fix W05-task-9).
+$script:ShpmDeliveryTaskCapOverrides = @{ 'W05' = 9 }
 $script:ShpmSlotPorts = @{ 1 = '20618/25618'; 2 = '30618/35618'; 3 = '40618/45618' }
 $script:ShpmRequiredTables = @('work_package', 'task', 'sprint', 'sprint_stage', 'relation', 'assignment', 'verification', 'issue', 'todo', 'event')
 
@@ -214,7 +217,10 @@ function Test-ShpmGovernance {
     }
     foreach ($package in $packages | Where-Object kind -eq 'delivery') {
         $count = @($tasks | Where-Object work_package_id -eq $package.id).Count
-        Assert-ShpmCondition ($count -le $script:ShpmMaxDeliveryTasks) "$($package.id) must have at most $($script:ShpmMaxDeliveryTasks) tasks; more requires human scope decision"
+        $cap = if ($script:ShpmDeliveryTaskCapOverrides.ContainsKey([string]$package.id)) {
+            [int]$script:ShpmDeliveryTaskCapOverrides[[string]$package.id]
+        } else { $script:ShpmMaxDeliveryTasks }
+        Assert-ShpmCondition ($count -le $cap) "$($package.id) must have at most $cap tasks; more requires human scope decision"
         if ([string]$package.state -eq 'in_progress') {
             Assert-ShpmCondition ($count -gt 0) "$($package.id) needs a bounded delivery task"
         }
