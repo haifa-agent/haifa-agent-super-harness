@@ -2442,7 +2442,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             ThreadRecord thread, int limit, Long exclusiveBeforeSequence) {
         if (thread.persistedSessionId == null) return List.of();
         HaifaRunBridge bridge = bridgeForPersistedThread(thread);
-        HistoryAccumulator accumulator = new HistoryAccumulator(limit, exclusiveBeforeSequence);
+        HistoryAccumulator accumulator =
+                new HistoryAccumulator(limit, exclusiveBeforeSequence, clarificationRunIds(thread));
         Optional<ConversationTurnCursor> cursor = Optional.empty();
         int pages = 0;
         while (true) {
@@ -2455,6 +2456,28 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             requireAnotherScanPage(pages);
             cursor = page.nextCursor();
         }
+    }
+
+    /**
+     * Runs that ended at an {@code ask_clarification} boundary. Frozen DeerFlow checkpoints the human
+     * input and the tool result, so a clarification Run has a durable head even without a later
+     * assistant turn; the SDK's {@code history} read (and the frozen UI) needs that head to place the
+     * card after the human instead of leaving the submitted human optimistic. The boundary is read
+     * from the persisted card, with the durable ToolCall as a fallback for a persistence failure.
+     */
+    private Set<String> clarificationRunIds(ThreadRecord thread) {
+        Set<String> runIds = new HashSet<>();
+        synchronized (thread) {
+            for (var display : thread.clarificationDisplays) {
+                runIds.add(display.runId());
+            }
+        }
+        for (RunRecord run : runs.values()) {
+            if (run.threadId.equals(thread.threadId) && runHasClarificationBoundary(run)) {
+                runIds.add(run.runId.value());
+            }
+        }
+        return runIds;
     }
 
     private Map<String, Object> messageRow(ThreadRecord thread, ConversationTurn turn, int ordinal) {
@@ -3829,13 +3852,19 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     static final class HistoryAccumulator {
         private final int limit;
         private final Long exclusiveBeforeSequence;
+        private final Set<String> clarificationRunIds;
         private final Deque<ConversationTurn> messages = new ArrayDeque<>();
         private final Deque<HistoryProjection> checkpoints = new ArrayDeque<>();
         private Long parentSequence;
 
         HistoryAccumulator(int limit, Long exclusiveBeforeSequence) {
+            this(limit, exclusiveBeforeSequence, Set.of());
+        }
+
+        HistoryAccumulator(int limit, Long exclusiveBeforeSequence, Set<String> clarificationRunIds) {
             this.limit = limit;
             this.exclusiveBeforeSequence = exclusiveBeforeSequence;
+            this.clarificationRunIds = clarificationRunIds;
         }
 
         void accept(ConversationTurn turn) {
@@ -3846,7 +3875,15 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (exclusiveBeforeSequence != null && turn.sequence() >= exclusiveBeforeSequence) return;
             messages.addLast(turn);
             while (messages.size() > HISTORY_MESSAGE_RETENTION) messages.removeFirst();
-            if (turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT) {
+            // Frozen checkpoints the human input before the agent runs, so a clarification Run has a
+            // durable head even though it produced no assistant turn.
+            boolean checkpoint = turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT
+                    || (turn.role() == io.haifa.agent.core.message.MessageRole.USER
+                            && turn.runId()
+                                    .map(AgentRunId::value)
+                                    .filter(clarificationRunIds::contains)
+                                    .isPresent());
+            if (checkpoint) {
                 checkpoints.addLast(new HistoryProjection(turn, List.copyOf(messages), parentSequence));
                 while (checkpoints.size() > limit) checkpoints.removeFirst();
                 parentSequence = turn.sequence();

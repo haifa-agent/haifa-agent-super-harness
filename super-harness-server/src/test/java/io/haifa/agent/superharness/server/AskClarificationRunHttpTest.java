@@ -79,6 +79,141 @@ class AskClarificationRunHttpTest {
                 + " request_id=" + requestId(card) + " status=" + run.status());
     }
 
+    // ---- W05-task-9: the card orders after the human message that triggered it ------------------
+
+    @Test
+    void clarificationCardOrdersAfterTheTriggeringHumanMessage() throws Exception {
+        // The model never produces text after the clarification (it is cancelled at the boundary),
+        // so the durable transcript holds only the human Turn. That is the case where the frozen
+        // SDK's POST /history head must still expose the human + card in order.
+        startProvider(request -> {
+            if (!hasClarificationToolResult(request)) {
+                return clarificationToolCall();
+            }
+            sleepQuietly(1_500);
+            return text("IGNORED_PRECANCEL");
+        });
+        startGateway();
+        String threadId = "clarify-order";
+        createThread(threadId);
+        String question = "please clarify which environment";
+
+        streamRun(threadId, question);
+
+        JsonNode state = state(threadId);
+        JsonNode stateMessages = state.path("values").path("messages");
+        System.out.println("W05_CLARIFICATION_ORDER_STATE " + stateMessages);
+        assertCardAfterTriggeringHuman(stateMessages, question, true, "state");
+        assertNoClarificationAnswerByComposerBypass(stateMessages, "state");
+
+        JsonNode page = requestJson("GET", "/api/threads/" + threadId + "/messages/page?limit=50");
+        JsonNode pageRows = page.path("data");
+        System.out.println("W05_CLARIFICATION_ORDER_PAGE " + pageRows);
+        // The frozen UI reads POST /history for the durable head; the clarification Run must
+        // expose it there or the SDK keeps the submitted human optimistic and answers the card.
+        JsonNode history = postJson("/api/threads/" + threadId + "/history", "{\"limit\":1}");
+        System.out.println("W05_CLARIFICATION_ORDER_HISTORY " + history);
+        JsonNode headMessages = history.path(0).path("values").path("messages");
+        assertCardAfterTriggeringHuman(headMessages, question, true, "history head");
+        assertNoClarificationAnswerByComposerBypass(headMessages, "history head");
+
+        // The page endpoint projects canonical turns only; the card is not one of them, but a
+        // card that is present must still follow the human.
+        assertCardAfterTriggeringHuman(pageRows, question, false, "messages page");
+        assertNoClarificationAnswerByComposerBypass(pageRows, "messages page");
+    }
+
+    private void assertCardAfterTriggeringHuman(
+            JsonNode rows, String question, boolean requireCard, String source) {
+        List<JsonNode> messages = messageContents(rows);
+        int humanIndex = -1;
+        int cardIndex = -1;
+        boolean monotonic = true;
+        Long previousSeq = null;
+        for (int index = 0; index < messages.size(); index++) {
+            JsonNode message = messages.get(index);
+            if (message.path("type").asText().equals("human")
+                    && message.path("content").asText().contains(question)
+                    && !message.path("additional_kwargs").path("hide_from_ui").asBoolean()) {
+                humanIndex = index;
+            }
+            if (isClarificationCard(message)) {
+                cardIndex = index;
+            }
+            JsonNode seqNode = message.path("additional_kwargs").path("deerflow_seq");
+            if (seqNode.isNumber()) {
+                long seq = seqNode.asLong();
+                if (previousSeq != null && seq <= previousSeq) {
+                    monotonic = false;
+                }
+                previousSeq = seq;
+            }
+        }
+        assertThat(humanIndex).as(source + " has a visible triggering human: " + messages)
+                .isGreaterThanOrEqualTo(0);
+        if (requireCard) {
+            assertThat(cardIndex).as(source + " has the clarification card: " + messages)
+                    .isGreaterThanOrEqualTo(0);
+        }
+        if (cardIndex >= 0) {
+            assertThat(humanIndex)
+                    .as(source + " must project the triggering human before its clarification card: "
+                            + messages)
+                    .isLessThan(cardIndex);
+        }
+        assertThat(monotonic).as(source + " deerflow_seq must be monotonic: " + messages).isTrue();
+    }
+
+    private static List<JsonNode> messageContents(JsonNode rows) {
+        List<JsonNode> messages = new ArrayList<>();
+        if (rows == null || !rows.isArray()) {
+            return messages;
+        }
+        for (JsonNode row : rows) {
+            if (row.has("type")) {
+                messages.add(row);
+            } else if (row.has("content") && row.path("content").isObject()) {
+                messages.add(row.path("content"));
+            } else {
+                messages.add(row);
+            }
+        }
+        return messages;
+    }
+
+    private static boolean isClarificationCard(JsonNode message) {
+        return "ask_clarification"
+                .equals(message.path("artifact").path("human_input").path("source").asText());
+    }
+
+    /**
+     * Frozen {@code deriveHumanInputThreadState} composer-bypass closure: a visible plain human
+     * message after the request answers the latest open request. Assert the card is not answered.
+     */
+    private void assertNoClarificationAnswerByComposerBypass(JsonNode rows, String source) {
+        List<JsonNode> messages = messageContents(rows);
+        boolean requestSeen = false;
+        for (JsonNode message : messages) {
+            if (isClarificationCard(message)) {
+                requestSeen = true;
+                continue;
+            }
+            boolean visibleHuman = "human".equals(message.path("type").asText())
+                    && !message.path("additional_kwargs").path("hide_from_ui").asBoolean()
+                    && !message.path("additional_kwargs").has("human_input_response");
+            if (requestSeen && visibleHuman) {
+                throw new AssertionError(
+                        source + " treats the card as answered by a later human message: " + messages);
+            }
+        }
+    }
+
+    private JsonNode postJson(String path, String body) throws Exception {
+        HttpResponse<String> response = request("POST", path, body);
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        return json.readTree(response.body());
+    }
+
     // ---- Oracle #4b: slow model is cancelled and mapped to a clarification end ------------------
 
     @Test
