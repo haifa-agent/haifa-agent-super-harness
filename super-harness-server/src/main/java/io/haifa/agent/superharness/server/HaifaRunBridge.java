@@ -5,6 +5,8 @@ import io.haifa.agent.core.agent.AgentDefinitionVersion;
 import io.haifa.agent.core.run.AgentRunBudget;
 import io.haifa.agent.core.run.AgentRunId;
 import io.haifa.agent.core.run.AgentRunLimits;
+import io.haifa.agent.core.reference.PrincipalRef;
+import io.haifa.agent.core.reference.TenantRef;
 import io.haifa.agent.core.run.AgentRunStatus;
 import io.haifa.agent.core.session.AgentSessionId;
 import io.haifa.agent.model.api.AgentChatModel;
@@ -22,12 +24,15 @@ import io.haifa.agent.runtime.api.RunEventPage;
 import io.haifa.agent.runtime.api.ToolCallView;
 import io.haifa.agent.sdk.api.AgentMetadata;
 import io.haifa.agent.sdk.api.HaifaAgent;
+import io.haifa.agent.sdk.api.HaifaAgentBuilder;
 import io.haifa.agent.sdk.api.HaifaAgents;
 import io.haifa.agent.sdk.api.RunInputCommand;
 import io.haifa.agent.sdk.api.RunInputResult;
 import io.haifa.agent.sdk.api.SdkCallerProvider;
 import io.haifa.agent.sdk.contribution.ModelContribution;
 import io.haifa.agent.sdk.contribution.PolicyPlatformContribution;
+import io.haifa.agent.sdk.contribution.SkillPlatformContribution;
+import io.haifa.agent.sdk.contribution.SkillToolContributions;
 import io.haifa.agent.sdk.conversation.ConversationRecord;
 import io.haifa.agent.sdk.conversation.ConversationTurnPage;
 import io.haifa.agent.sdk.conversation.ConversationTurnQuery;
@@ -39,10 +44,13 @@ import io.haifa.agent.sdk.product.ProductRunProfileRef;
 import io.haifa.agent.sdk.product.ProductVersion;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.starter.HaifaAgentStarter;
+import io.haifa.agent.starter.McpServerSpec;
+import io.haifa.agent.starter.McpToolPlatforms;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.time.Instant;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Adapter that exposes only public Haifa Agent SDK types to the HTTP boundary. */
@@ -50,6 +58,8 @@ final class HaifaRunBridge implements AutoCloseable {
     private final HaifaAgent agent;
     private final ModelBinding binding;
     private final boolean hasTools;
+    private final String mcpSignature;
+    private final String skillSignature;
     private final AtomicLong turnPageReads = new AtomicLong();
 
     HaifaRunBridge(ModelBinding binding) {
@@ -59,6 +69,8 @@ final class HaifaRunBridge implements AutoCloseable {
     HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools) {
         this.binding = binding;
         this.hasTools = !tools.isEmpty();
+        this.mcpSignature = "";
+        this.skillSignature = "";
         this.agent = HaifaAgentStarter.builder()
                 .name("Super Harness local compatibility agent")
                 .instructions("Return a concise answer to the local user's request.")
@@ -72,8 +84,34 @@ final class HaifaRunBridge implements AutoCloseable {
             ModelBinding binding,
             List<? extends JavaTool<?, ?>> tools,
             DurableHaifaFoundation foundation) {
+        this(binding, tools, foundation, McpRunTools.Projection.empty());
+    }
+
+    HaifaRunBridge(
+            ModelBinding binding,
+            List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation,
+            McpRunTools.Projection mcpProjection) {
+        this(binding, tools, foundation, mcpProjection, null);
+    }
+
+    HaifaRunBridge(
+            ModelBinding binding,
+            List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation,
+            McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection) {
+        List<McpServerSpec> mcpSpecs = mcpProjection.specs();
         this.binding = binding;
-        this.hasTools = !tools.isEmpty();
+        // MCP ToolLifecycle events are projected by the frozen transcript only when the
+        // bridge advertises tools; a bridge whose only tools come from MCP still does.
+        this.hasTools = !tools.isEmpty() || !mcpSpecs.isEmpty()
+                || (skillProjection != null && skillProjection.installTools());
+        // The canonical fingerprint covers every field that shaped the SDK declaration, so
+        // a header credential reference or timeout change forces a later Run to rebuild.
+        this.mcpSignature = mcpProjection.fingerprint();
+        this.skillSignature = skillProjection == null ? "" :
+                (skillProjection.recovery() ? "recovery:" : "") + skillProjection.fingerprint();
         ModelContribution models = new ModelContribution(
                 Map.of(ModelAdapterCoordinate.from(binding.snapshot()), binding.model()),
                 binding.snapshot(),
@@ -81,7 +119,13 @@ final class HaifaRunBridge implements AutoCloseable {
         Set<String> allowedTools = tools.stream()
                 .map(tool -> tool.spec().name().value())
                 .collect(java.util.stream.Collectors.toSet());
-        this.agent = HaifaAgents.builder(profile(binding.snapshot(), allowedTools))
+        if (skillProjection != null && skillProjection.installTools()) {
+            allowedTools.add("skill_load");
+            allowedTools.add("skill_resource_read");
+        }
+        HaifaAgentBuilder builder = HaifaAgents.builder(profile(
+                        binding.snapshot(), allowedTools,
+                        skillProjection == null ? Set.of() : skillProjection.allowedSkills()))
                 .metadata(new AgentMetadata("Super Harness local compatibility agent"))
                 .callerProvider(SdkCallerProvider.defaultPublicUser())
                 .model(models)
@@ -89,8 +133,41 @@ final class HaifaRunBridge implements AutoCloseable {
                 .conversation(foundation.conversation())
                 .tools(tools)
                 .policy(new PolicyPlatformContribution(
-                        PolicyPresets.standardApproval(), new DefaultPolicyDecisionService()))
-                .build();
+                        PolicyPresets.standardApproval(), new DefaultPolicyDecisionService()));
+        if (skillProjection != null && skillProjection.installTools()) {
+            builder.skillPlatform(new SkillPlatformContribution(
+                            skillProjection.catalog(), skillProjection.loader()))
+                    .toolRegistrations(SkillToolContributions.createRegistrations(
+                            foundation.persistence(), skillProjection.loader(), Instant::now));
+        }
+        McpToolPlatforms.McpToolPlatform platform = null;
+        if (!mcpSpecs.isEmpty()) {
+            // The SDK owns per-server connection isolation, discovery, naming, invocation
+            // and release; SH only declares the projections. applyTo sets the builder's
+            // credentials contribution, so SH must not set another one.
+            platform = McpToolPlatforms.connect(
+                    mcpSpecs,
+                    new TenantRef(McpRunTools.TENANT_ID),
+                    new PrincipalRef(McpRunTools.PRINCIPAL_ID, McpRunTools.PRINCIPAL_TYPE));
+            platform.applyTo(builder);
+        }
+        try {
+            this.agent = builder.build();
+        } catch (RuntimeException | Error failure) {
+            // The agent never took ownership, so the caller closes the connected platform.
+            if (platform != null) {
+                platform.close();
+            }
+            throw failure;
+        }
+    }
+
+    String mcpSignature() {
+        return mcpSignature;
+    }
+
+    String skillSignature() {
+        return skillSignature;
     }
 
     String bindingIdentity() {
@@ -193,7 +270,8 @@ final class HaifaRunBridge implements AutoCloseable {
 
     record StartedRun(AgentRunId runId, SessionState session) {}
 
-    private static ProductProfile profile(ResolvedModelSnapshot snapshot, Set<String> allowedTools) {
+    private static ProductProfile profile(
+            ResolvedModelSnapshot snapshot, Set<String> allowedTools, Set<String> allowedSkills) {
         return ProductProfile.create(
                 new ProductId("haifa-super-harness"),
                 new ProductVersion("1.0.0"),
@@ -201,10 +279,10 @@ final class HaifaRunBridge implements AutoCloseable {
                 new AgentDefinitionVersion(1, 0, 0),
                 "Return a concise answer to the local user's request.",
                 new ProductRunProfileRef(snapshot.modelId().value(), "1.0.0"),
-                new AgentRunBudget(65_536, 8_192, 65_536, 16, 16, 0, "USD", 100),
+                new AgentRunBudget(0, 8_192, 65_536, 16, 16, 0, "USD", 100),
                 new AgentRunLimits(16, 0, 1, 120_000, 60_000, 16, 16, 0),
                 allowedTools,
-                Set.of());
+                allowedSkills);
     }
 
     record ModelBinding(

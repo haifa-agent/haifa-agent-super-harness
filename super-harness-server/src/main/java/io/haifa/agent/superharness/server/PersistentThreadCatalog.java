@@ -21,12 +21,16 @@ import java.util.Optional;
 /**
  * Minimal DeerFlow thread catalog.
  *
- * <p>Messages, Run status/output and checkpoint payloads deliberately remain absent. Their sole
- * authority is the Haifa SQLite Runtime/Conversation store.
+ * <p>Complete messages, Run status/output and checkpoint payloads remain absent. Their sole
+ * authority is the Haifa SQLite Runtime/Conversation store. The bounded interaction displays
+ * below retain only SDK-confirmed safe card presentation and selected option for frozen UI
+ * history; they never authorize an approval or replay a tool.
  */
 final class PersistentThreadCatalog {
     private static final int FORMAT_VERSION = 1;
     private static final long MAXIMUM_CATALOG_BYTES = 4L * 1024 * 1024;
+    static final int MAX_INTERACTION_DISPLAYS_PER_THREAD = 64;
+    static final int MAX_INTERACTION_DISPLAYS_PER_RUN = 8;
 
     private final ObjectMapper json;
     private final Path catalog;
@@ -75,7 +79,8 @@ final class PersistentThreadCatalog {
                     Instant.parse(requiredText(item, "created_at")),
                     Instant.parse(requiredText(item, "updated_at")),
                     optionalText(item, "session_id").map(AgentSessionId::new),
-                    optionalText(item, "model_binding"));
+                    optionalText(item, "model_binding"),
+                    readInteractionDisplays(item.path("interaction_displays")));
             if (entries.putIfAbsent(entry.threadId(), entry) != null) {
                 throw new IOException("thread catalog contains a duplicate thread_id");
             }
@@ -96,6 +101,22 @@ final class PersistentThreadCatalog {
                     value -> item.put("session_id", value.value()), () -> item.putNull("session_id"));
             entry.modelBindingIdentity().ifPresentOrElse(
                     value -> item.put("model_binding", value), () -> item.putNull("model_binding"));
+            ArrayNode displays = item.putArray("interaction_displays");
+            for (InteractionDisplay display : entry.interactionDisplays()) {
+                ObjectNode encoded = displays.addObject();
+                encoded.put("runId", display.runId());
+                encoded.put("requestId", display.requestId());
+                encoded.put("requestSequence", display.requestSequence());
+                encoded.put("createdAt", display.createdAt().toString());
+                encoded.put("toolCallId", display.toolCallId());
+                encoded.put("title", display.title());
+                encoded.put("question", display.question());
+                encoded.put("context", display.context());
+                ArrayNode options = encoded.putArray("options");
+                display.options().forEach(options::add);
+                if (display.answeredOption() == null) encoded.putNull("answeredOption");
+                else encoded.put("answeredOption", display.answeredOption());
+            }
         }
         byte[] bytes = json.writerWithDefaultPrettyPrinter().writeValueAsBytes(root);
         if (bytes.length > MAXIMUM_CATALOG_BYTES) {
@@ -135,13 +156,107 @@ final class PersistentThreadCatalog {
         return new LinkedHashMap<>(json.convertValue(node, Map.class));
     }
 
+    private List<InteractionDisplay> readInteractionDisplays(JsonNode node) throws IOException {
+        if (node.isMissingNode()) return List.of();
+        if (!node.isArray() || node.size() > MAX_INTERACTION_DISPLAYS_PER_THREAD) {
+            throw new IOException("thread catalog interaction displays are invalid");
+        }
+        List<InteractionDisplay> displays = new ArrayList<>();
+        try {
+            for (JsonNode item : node) {
+                List<String> options = new ArrayList<>();
+                JsonNode rawOptions = item.path("options");
+                if (!rawOptions.isArray() || rawOptions.size() > 4) {
+                    throw new IllegalArgumentException("invalid options");
+                }
+                for (JsonNode option : rawOptions) {
+                    if (!option.isTextual()) throw new IllegalArgumentException("invalid option");
+                    options.add(option.asText());
+                }
+                displays.add(new InteractionDisplay(
+                        requiredText(item, "runId"),
+                        requiredText(item, "requestId"),
+                        item.path("requestSequence").asLong(-1),
+                        Instant.parse(requiredText(item, "createdAt")),
+                        requiredText(item, "toolCallId"),
+                        requiredText(item, "title"),
+                        requiredText(item, "question"),
+                        optionalText(item, "context").orElse(""),
+                        options,
+                        optionalText(item, "answeredOption").orElse(null)));
+            }
+            validateDisplays(displays);
+        } catch (IllegalArgumentException failure) {
+            throw new IOException("thread catalog interaction displays are invalid", failure);
+        }
+        return List.copyOf(displays);
+    }
+
+    static void validateDisplays(List<InteractionDisplay> displays) {
+        if (displays.size() > MAX_INTERACTION_DISPLAYS_PER_THREAD) {
+            throw new IllegalArgumentException("too many interaction displays");
+        }
+        Map<String, Integer> perRun = new LinkedHashMap<>();
+        java.util.Set<String> requestIds = new java.util.HashSet<>();
+        long previousSequence = 0;
+        for (InteractionDisplay display : displays) {
+            if (!requestIds.add(display.requestId()) || display.requestSequence() <= previousSequence) {
+                throw new IllegalArgumentException("interaction display IDs or order are invalid");
+            }
+            previousSequence = display.requestSequence();
+            if (perRun.merge(display.runId(), 1, Integer::sum) > MAX_INTERACTION_DISPLAYS_PER_RUN) {
+                throw new IllegalArgumentException("too many Run interaction displays");
+            }
+        }
+    }
+
+    record InteractionDisplay(
+            String runId,
+            String requestId,
+            long requestSequence,
+            Instant createdAt,
+            String toolCallId,
+            String title,
+            String question,
+            String context,
+            List<String> options,
+            String answeredOption) {
+        InteractionDisplay {
+            if (runId == null || runId.isBlank() || runId.length() > 200
+                    || requestId == null || requestId.isBlank() || requestId.length() > 200
+                    || requestSequence < 1 || createdAt == null
+                    || toolCallId == null || toolCallId.isBlank() || toolCallId.length() > 200
+                    || title == null || title.isBlank() || title.length() > 256
+                    || question == null || question.isBlank() || question.length() > 8192
+                    || context == null || context.length() > 2048
+                    || options == null || options.isEmpty() || options.size() > 4
+                    || options.stream().anyMatch(option -> option == null || option.isBlank()
+                            || option.length() > 100)
+                    || answeredOption != null && !options.contains(answeredOption)) {
+                throw new IllegalArgumentException("invalid interaction display");
+            }
+            options = List.copyOf(options);
+        }
+
+        InteractionDisplay answered(String option) {
+            return new InteractionDisplay(runId, requestId, requestSequence, createdAt,
+                    toolCallId, title, question, context, options, option);
+        }
+    }
+
     record Entry(
             String threadId,
             Map<String, Object> metadata,
             Instant createdAt,
             Instant updatedAt,
             Optional<AgentSessionId> sessionId,
-            Optional<String> modelBindingIdentity) {
+            Optional<String> modelBindingIdentity,
+            List<InteractionDisplay> interactionDisplays) {
+        Entry(String threadId, Map<String, Object> metadata, Instant createdAt, Instant updatedAt,
+                Optional<AgentSessionId> sessionId, Optional<String> modelBindingIdentity) {
+            this(threadId, metadata, createdAt, updatedAt, sessionId, modelBindingIdentity, List.of());
+        }
+
         Entry {
             if (threadId == null || threadId.isBlank()) throw new IllegalArgumentException("threadId must not be blank");
             metadata = Collections.unmodifiableMap(new LinkedHashMap<>(metadata));
@@ -149,6 +264,8 @@ final class PersistentThreadCatalog {
             if (updatedAt.isBefore(createdAt)) throw new IllegalArgumentException("updatedAt must not precede createdAt");
             sessionId = sessionId == null ? Optional.empty() : sessionId;
             modelBindingIdentity = modelBindingIdentity == null ? Optional.empty() : modelBindingIdentity;
+            interactionDisplays = List.copyOf(interactionDisplays);
+            validateDisplays(interactionDisplays);
         }
     }
 }

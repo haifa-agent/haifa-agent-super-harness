@@ -19,6 +19,8 @@ $ErrorActionPreference = 'Stop'
 #   5. Source index files exist and SHA-256 matches (snapshot + frontend + contracts).
 #   6. MCP and Skill collection semantics are not narrowed.
 #   7. consulting-analysis dependency review verdict is fail-closed.
+#   8. Human-ruled deferrals: exactly the approved set, each backed by a human
+#      ruling in the oracle, never PASS, and the oracle revision is recorded.
 # Negative self-tests deliberately corrupt a copy and require the corresponding
 # check to FAIL.
 # ---------------------------------------------------------------------------
@@ -47,6 +49,12 @@ $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ("w00-v2-oracle-" + [Guid]::New
 $ExpectedCsvSha = 'ec326b7d0cf68f660ed769f8eecf9b71b43137af4e9aa83de75aa75bc5302f00'
 $ExpectedPolicySha = '563e216fc77f87d968b3c34994746fa1f3368380ede30c97e03782c3895a9e9a'
 $FrozenCommit = 'e545c28ac301e6f9feae247c513d8ea8f83df294'
+
+# The only assertions a human has deferred out of the V2 denominator
+# (show-roadmap-2/README.md section 2.2, ruling 2026-09-29). Any other deferral
+# is an unapproved change of the denominator and must fail.
+$ApprovedDeferrals = @('V2-M1-04-N2', 'V2-M1-06', 'V2-M3-09')
+$PreviousOracleSha = '7dcfcb08806ed465e7475bb42ce824a58934d1234eb23f5d0e5816a8920e1191'
 
 function Assert-True([bool]$Condition, [string]$Message) {
     $script:Assertions++
@@ -432,6 +440,38 @@ function Test-ReferenceSourceTraceability {
     }
 }
 
+# -- 8. Human-ruled deferrals -------------------------------------------------
+function Get-OracleDeferrals($Oracle) {
+    $items = New-Object System.Collections.Generic.List[object]
+    foreach ($case in $Oracle.cases) {
+        if ($null -ne $case.PSObject.Properties['deferral']) { $items.Add([pscustomobject]@{ Id = [string]$case.id; Deferral = $case.deferral }) }
+        foreach ($neg in @($case.negativeCases)) {
+            if ($null -ne $neg.PSObject.Properties['deferral']) { $items.Add([pscustomobject]@{ Id = [string]$neg.id; Deferral = $neg.deferral }) }
+        }
+    }
+    return $items
+}
+
+function Test-OracleDeferrals {
+    param([string]$Path)
+    $oracle = Read-Json $Path
+    Assert-True ($null -ne $oracle.PSObject.Properties['revision']) "oracle with deferrals must record a revision"
+    Assert-True ([int]$oracle.revision.number -ge 2) "oracle revision number must be >= 2"
+    Assert-True ([string]$oracle.revision.previousSha256 -eq $PreviousOracleSha) "oracle revision must pin the previous oracle SHA-256"
+    $rulingIds = @($oracle.rulings | Where-Object { [string]$_.decidedBy -eq 'human' -and -not [string]::IsNullOrWhiteSpace([string]$_.source) } | ForEach-Object { [string]$_.id })
+    $deferrals = @(Get-OracleDeferrals $oracle)
+    $ids = @($deferrals | ForEach-Object { $_.Id })
+    Assert-True ((@($ids | Sort-Object) -join ',') -eq (@($ApprovedDeferrals | Sort-Object) -join ',')) "deferred set must be exactly the human-approved set ($($ApprovedDeferrals -join ', ')), got ($($ids -join ', '))"
+    foreach ($item in $deferrals) {
+        $d = $item.Deferral
+        Assert-True ($rulingIds -contains [string]$d.rulingRef) "deferral $($item.Id) must reference a human ruling recorded in the oracle"
+        foreach ($field in @('decidedAt', 'reason', 'restoreCondition')) {
+            Assert-True (-not [string]::IsNullOrWhiteSpace([string]$d.$field)) "deferral $($item.Id) needs a non-empty $field"
+        }
+        Assert-True ([string]$d.result -eq 'NOT_RUN') "deferral $($item.Id) must stay NOT_RUN, never PASS"
+    }
+}
+
 # -- Negative self-tests -----------------------------------------------------
 function Assert-Throws([scriptblock]$Action, [string]$Name) {
     $script:Assertions++
@@ -575,6 +615,42 @@ function Invoke-SelfTests {
     [IO.File]::WriteAllText($badOwner, (($u1 | ConvertTo-Json -Depth 64) + "`n"))
     Assert-Throws { Test-ReferenceSourceTraceability -Path $badOwner } 'uu-cites-owner-check'
 
+    # Deferral: an extra, unapproved deferral changes the denominator.
+    $badDef1 = Join-Path $TempRoot 'oracle-deferral-extra.json'
+    $d1 = Read-Json $OraclePath
+    ($d1.cases | Where-Object { $_.id -eq 'V2-M3-10' }) | Add-Member -NotePropertyName deferral -NotePropertyValue ($d1.cases | Where-Object { $_.id -eq 'V2-M1-06' }).deferral -Force
+    [IO.File]::WriteAllText($badDef1, (($d1 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-OracleDeferrals -Path $badDef1 } 'deferral-unapproved-extra'
+
+    # Deferral: a deferred assertion claimed as PASS.
+    $badDef2 = Join-Path $TempRoot 'oracle-deferral-pass.json'
+    $d2 = Read-Json $OraclePath
+    ($d2.cases | Where-Object { $_.id -eq 'V2-M1-06' }).deferral.result = 'PASS'
+    [IO.File]::WriteAllText($badDef2, (($d2 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-OracleDeferrals -Path $badDef2 } 'deferral-as-pass'
+
+    # Deferral: missing reason.
+    $badDef3 = Join-Path $TempRoot 'oracle-deferral-noreason.json'
+    $d3 = Read-Json $OraclePath
+    ($d3.cases | Where-Object { $_.id -eq 'V2-M3-09' }).deferral.reason = ''
+    [IO.File]::WriteAllText($badDef3, (($d3 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-OracleDeferrals -Path $badDef3 } 'deferral-missing-reason'
+
+    # Deferral: ruling reference not backed by a human ruling in the oracle.
+    $badDef4 = Join-Path $TempRoot 'oracle-deferral-noruling.json'
+    $d4 = Read-Json $OraclePath
+    $n4 = ($d4.cases | Where-Object { $_.id -eq 'V2-M1-04' }).negativeCases | Where-Object { $_.id -eq 'V2-M1-04-N2' }
+    $n4.deferral.rulingRef = 'self-declared-by-runner'
+    [IO.File]::WriteAllText($badDef4, (($d4 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-OracleDeferrals -Path $badDef4 } 'deferral-without-human-ruling'
+
+    # Deferral: an approved deferral silently removed (denominator drift the other way).
+    $badDef5 = Join-Path $TempRoot 'oracle-deferral-dropped.json'
+    $d5 = Read-Json $OraclePath
+    ($d5.cases | Where-Object { $_.id -eq 'V2-M3-09' }).PSObject.Properties.Remove('deferral')
+    [IO.File]::WriteAllText($badDef5, (($d5 | ConvertTo-Json -Depth 64) + "`n"))
+    Assert-Throws { Test-OracleDeferrals -Path $badDef5 } 'deferral-dropped'
+
     # R2 rule: a frozenConfigKeys mapping naming a key absent from the frozen
     # extensions_config.example.json must fail (only checkable with the snapshot).
     if (Test-Path -LiteralPath $SnapshotRoot -PathType Container) {
@@ -598,6 +674,7 @@ try {
     Test-McpContract -Path $McpPath
     Test-SkillContract -Path $SkillPath
     Test-DependencyReview -Path $DepReviewPath
+    Test-OracleDeferrals -Path $OraclePath
 
     # Negative self-tests.
     Invoke-SelfTests

@@ -9,7 +9,9 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
@@ -19,6 +21,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import io.haifa.agent.runtime.api.RuntimeApiErrorCode;
@@ -48,7 +51,7 @@ class DeerFlowInteractionHttpApiTest {
             .build();
     private final AtomicInteger toolInvocations = new AtomicInteger();
     private final SecretKey continuationKey = new SecretKeySpec(new byte[32], "AES");
-    private final HaifaPublicInteractionSpikeTest.ApprovalProbeModel model =
+    private HaifaPublicInteractionSpikeTest.ApprovalProbeModel model =
             new HaifaPublicInteractionSpikeTest.ApprovalProbeModel();
     @TempDir
     Path dataDirectory;
@@ -179,6 +182,169 @@ class DeerFlowInteractionHttpApiTest {
     }
 
     @Test
+    void twoSequentialApprovalsKeepDistinctCardsAndSurviveGatewayRestart() throws Exception {
+        api.close();
+        model = new HaifaPublicInteractionSpikeTest.ApprovalProbeModel(2);
+        startServer();
+        createThread("sequential-thread");
+
+        HttpResponse<String> firstStream = postJson(
+                "/api/threads/sequential-thread/runs/stream", ordinaryRunBody("approve two steps"));
+        assertThat(firstStream.statusCode()).as(firstStream.body()).isEqualTo(200);
+        String location = firstStream.headers().firstValue("content-location").orElseThrow();
+        String firstId = humanInputCard(firstStream.body())
+                .path("artifact").path("human_input").path("request_id").asText();
+        assertThat(toolInvocations).hasValue(0);
+
+        HttpResponse<String> secondStream = postJson(
+                "/api/threads/sequential-thread/runs/stream",
+                hiddenResponseBody(firstId, "approve", "approve"));
+        assertThat(secondStream.statusCode()).as(secondStream.body()).isEqualTo(200);
+        assertThat(secondStream.headers().firstValue("content-location")).contains(location);
+        String secondId = humanInputCard(secondStream.body())
+                .path("artifact").path("human_input").path("request_id").asText();
+        assertThat(secondId).isNotEqualTo(firstId);
+        assertThat(toolInvocations).hasValue(1);
+        assertThat(getJson(location).path("status").asText()).isEqualTo("interrupted");
+        JsonNode liveMessages = getJson("/api/threads/sequential-thread/state")
+                .path("values").path("messages");
+        assertThat(liveMessages.findValuesAsText("request_id"))
+                .containsExactly(firstId, firstId, secondId);
+        JsonNode livePage = getJson("/api/threads/sequential-thread/messages/page?limit=20")
+                .path("data");
+        assertThat(livePage.findValuesAsText("seq")).doesNotHaveDuplicates();
+        assertThat(livePage.findValuesAsText("request_id"))
+                .containsExactly(firstId, firstId, secondId);
+
+        api.close();
+        startServer();
+        JsonNode restoredMessages = getJson("/api/threads/sequential-thread/state")
+                .path("values").path("messages");
+        assertThat(restoredMessages.findValuesAsText("request_id"))
+                .containsExactly(firstId, firstId, secondId);
+        JsonNode restoredPage = getJson("/api/threads/sequential-thread/messages/page?limit=20")
+                .path("data");
+        assertThat(restoredPage.findValuesAsText("seq")).doesNotHaveDuplicates();
+        assertThat(restoredPage.findValuesAsText("request_id"))
+                .containsExactly(firstId, firstId, secondId);
+        assertThat(postJson("/api/threads/sequential-thread/runs/stream",
+                hiddenResponseBody(firstId, "approve", "approve")).statusCode()).isEqualTo(409);
+        assertThat(postJson("/api/threads/sequential-thread/runs/stream",
+                hiddenResponseBody("not-current", "approve", "approve")).statusCode()).isEqualTo(409);
+        assertThat(toolInvocations).hasValue(1);
+
+        HttpResponse<String> completed = postJson(
+                "/api/threads/sequential-thread/runs/stream",
+                hiddenResponseBody(secondId, "approve", "approve"));
+        assertThat(completed.statusCode()).as(completed.body()).isEqualTo(200);
+        assertThat(completed.headers().firstValue("content-location")).contains(location);
+        assertThat(completed.body()).contains("interaction resolved", "event: end");
+        assertThat(getJson(location).path("status").asText()).isEqualTo("success");
+        assertThat(toolInvocations).hasValue(2);
+        assertThat(postJson("/api/threads/sequential-thread/runs/stream",
+                hiddenResponseBody(secondId, "approve", "approve")).statusCode()).isEqualTo(409);
+        assertThat(toolInvocations).hasValue(2);
+        JsonNode finalPage = getJson("/api/threads/sequential-thread/messages/page?limit=20")
+                .path("data");
+        assertThat(finalPage.findValuesAsText("seq")).doesNotHaveDuplicates();
+        assertThat(finalPage.findValuesAsText("request_id"))
+                .containsExactly(firstId, firstId, secondId, secondId);
+        System.out.println("W16_SEQUENTIAL_INTERACTION_HTTP_EVIDENCE run="
+                + location.substring(location.lastIndexOf('/') + 1)
+                + " first=" + firstId + " second=" + secondId
+                + " side_effects=" + toolInvocations.get() + " restart=true");
+    }
+
+    @Test
+    void missingSavedCardAndCatalogFailureNeverSubmitTheApproval() throws Exception {
+        createThread("missing-card-thread");
+        HttpResponse<String> pending = postJson(
+                "/api/threads/missing-card-thread/runs/stream", ordinaryRunBody("approve once"));
+        String requestId = humanInputCard(pending.body())
+                .path("artifact").path("human_input").path("request_id").asText();
+        String location = pending.headers().firstValue("content-location").orElseThrow();
+        api.close();
+        Path catalog = dataDirectory.resolve("owners/default/threads.json");
+        ObjectNode catalogJson = (ObjectNode) json.readTree(catalog.toFile());
+        for (JsonNode thread : catalogJson.path("threads")) {
+            if ("missing-card-thread".equals(thread.path("thread_id").asText())) {
+                ((ObjectNode) thread).putArray("interaction_displays");
+            }
+        }
+        json.writerWithDefaultPrettyPrinter().writeValue(catalog.toFile(), catalogJson);
+        startServer();
+        Path backup = makeCatalogUnavailable(catalog);
+        try {
+            HttpResponse<String> blocked = postJson(
+                    "/api/threads/missing-card-thread/runs/stream",
+                    hiddenResponseBody(requestId, "approve", "approve"));
+            assertThat(blocked.statusCode()).as(blocked.body()).isEqualTo(503);
+            assertThat(blocked.body()).contains("approval was not submitted");
+            assertThat(toolInvocations).hasValue(0);
+            assertThat(getJson(location).path("status").asText()).isEqualTo("interrupted");
+        } finally {
+            restoreCatalog(catalog, backup);
+        }
+        HttpResponse<String> resumed = postJson(
+                "/api/threads/missing-card-thread/runs/stream",
+                hiddenResponseBody(requestId, "approve", "approve"));
+        assertThat(resumed.statusCode()).as(resumed.body()).isEqualTo(200);
+        assertThat(toolInvocations).hasValue(1);
+    }
+
+    @Test
+    void catalogFailureAfterSdkAcceptReportsAcceptedAndDoesNotReplaySideEffect() throws Exception {
+        createThread("accepted-with-display-fault");
+        HttpResponse<String> pending = postJson(
+                "/api/threads/accepted-with-display-fault/runs/stream",
+                ordinaryRunBody("approve once"));
+        String requestId = humanInputCard(pending.body())
+                .path("artifact").path("human_input").path("request_id").asText();
+        Path catalog = dataDirectory.resolve("owners/default/threads.json");
+        // Freeze the unanswered presentation before submitting approval; an
+        // asynchronous title observer may persist the answered state later.
+        Path staleCatalog = catalog.resolveSibling("threads.json.pre-response");
+        Files.copy(catalog, staleCatalog, StandardCopyOption.REPLACE_EXISTING);
+        Path backup = makeCatalogUnavailable(catalog);
+        try {
+            HttpResponse<String> accepted = postJson(
+                    "/api/threads/accepted-with-display-fault/runs/stream",
+                    hiddenResponseBody(requestId, "approve", "approve"));
+            assertThat(accepted.statusCode()).as(accepted.body()).isEqualTo(200);
+            assertThat(accepted.headers().firstValue("X-Haifa-Interaction-Presentation"))
+                    .contains("accepted-not-persisted");
+            assertThat(accepted.body()).contains("interaction resolved", "event: end");
+            assertThat(toolInvocations).hasValue(1);
+        } finally {
+            restoreCatalog(catalog, backup);
+        }
+        assertThat(postJson("/api/threads/accepted-with-display-fault/runs/stream",
+                hiddenResponseBody(requestId, "approve", "approve")).statusCode()).isEqualTo(409);
+        assertThat(toolInvocations).hasValue(1);
+        // Simulate the exact crash boundary: the SDK commit survived, while the
+        // catalog still contains the pre-response unanswered presentation.
+        api.close();
+        Files.copy(staleCatalog, catalog, StandardCopyOption.REPLACE_EXISTING);
+        startServer();
+        assertThat(getJson("/api/threads/accepted-with-display-fault/state")
+                .path("values").path("messages").findValuesAsText("request_id"))
+                .doesNotContain(requestId);
+        assertThat(toolInvocations).hasValue(1);
+    }
+
+    private Path makeCatalogUnavailable(Path catalog) throws Exception {
+        Path backup = catalog.resolveSibling("threads.json.fault-backup");
+        Files.move(catalog, backup, StandardCopyOption.REPLACE_EXISTING);
+        Files.createDirectory(catalog);
+        return backup;
+    }
+
+    private void restoreCatalog(Path catalog, Path backup) throws Exception {
+        Files.delete(catalog);
+        Files.move(backup, catalog, StandardCopyOption.REPLACE_EXISTING);
+    }
+
+    @Test
     void malformedMismatchedAndCrossThreadResponsesFailClosed() throws Exception {
         createThread("owner-thread");
         HttpResponse<String> requested =
@@ -228,7 +394,14 @@ class DeerFlowInteractionHttpApiTest {
         assertThat(rejected.statusCode()).isEqualTo(200);
         assertThat(rejected.body()).contains("event: end");
         assertThat(toolInvocations).hasValue(0);
-        assertThat(getJson(location).path("status").asText()).isEqualTo("success");
+        JsonNode rejectedRun = getJson(location);
+        assertThat(rejectedRun.path("status").asText()).isEqualTo("success");
+        assertThat(rejectedRun.path("diagnostics").path("interactions").findValuesAsText("request_id"))
+                .contains(requestId);
+        assertThat(rejectedRun.path("diagnostics").path("interactions").findValuesAsText("action"))
+                .contains("reject");
+        assertThat(rejectedRun.path("diagnostics").path("thread_run_id").asText())
+                .isEqualTo(rejectedRun.path("run_id").asText());
     }
 
     @Test

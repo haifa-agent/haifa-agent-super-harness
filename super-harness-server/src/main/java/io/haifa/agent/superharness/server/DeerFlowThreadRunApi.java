@@ -14,6 +14,7 @@ import io.haifa.agent.runtime.api.InteractionResponseReceiptStatus;
 import io.haifa.agent.runtime.api.InteractionResponseSubmission;
 import io.haifa.agent.runtime.api.InteractionState;
 import io.haifa.agent.runtime.api.InteractionView;
+import io.haifa.agent.runtime.api.RunEventCursor;
 import io.haifa.agent.runtime.api.RunEventPayloads;
 import io.haifa.agent.runtime.api.RuntimeContractException;
 import io.haifa.agent.runtime.api.ToolCallView;
@@ -58,6 +59,7 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -82,6 +84,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final Pattern THREAD_MESSAGES_PAGE =
             Pattern.compile("^/api/threads/([^/]+)/messages/page$");
     private static final Pattern THREAD_RUNS = Pattern.compile("^/api/threads/([^/]+)/runs$");
+    private static final Pattern THREAD_TOKEN_USAGE =
+            Pattern.compile("^/api/threads/([^/]+)/token-usage$");
     private static final Pattern STREAM = Pattern.compile("^/api/threads/([^/]+)/runs/stream$");
     private static final Pattern JOIN_STREAM =
             Pattern.compile("^/api/threads/([^/]+)/runs/([^/]+)/stream$");
@@ -95,6 +99,9 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final Pattern SSE_CURSOR = Pattern.compile("^(\\d+)-0$");
     private static final int EVENT_RETENTION_CAPACITY = 8;
     private static final int EVENT_PAGE_SIZE = 4;
+    private static final int DIAGNOSTIC_EVENT_PAGE_SIZE = 100;
+    private static final int RUN_DIAGNOSTIC_EVENT_PAGE_BUDGET = 20;
+    private static final int THREAD_USAGE_EVENT_PAGE_BUDGET = 50;
     static final Duration WORKSPACE_COMPLETION_OBSERVER_MAX_WAIT = Duration.ofHours(24);
     static final Duration WORKSPACE_COMPLETION_OBSERVER_INITIAL_POLL = Duration.ofMillis(25);
     static final Duration WORKSPACE_COMPLETION_OBSERVER_MAX_POLL = Duration.ofSeconds(1);
@@ -111,17 +118,32 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final java.time.Duration TERMINAL_EVENT_SETTLE_TIMEOUT =
             java.time.Duration.ofSeconds(2);
     static final Duration RUN_START_TIMEOUT = Duration.ofSeconds(5);
+    /**
+     * Thread metadata key holding the last MCP Run's {@code mcp_plugins} tri-state so an
+     * exact restart can recompute the same projection against the current configuration.
+     * Server-owned; stripped from client-supplied metadata.
+     */
+    static final String MCP_SELECTION_METADATA_KEY = "haifa_mcp_plugins";
 
     private final ObjectMapper json;
     private final Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver;
     private final Predicate<String> projectExists;
     private final PersistentProjectWorkspaceService workspaceChanges;
     private final Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread;
+    private final McpProjectionProvider mcpProjections;
+    private final SkillProjectionProvider skillProjections;
     private final DeerFlowUploadContext uploadContext;
     private final PersistentThreadCatalog threadCatalog;
     private final DurableHaifaFoundation foundation;
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
     private final Map<String, RunRecord> runs = new ConcurrentHashMap<>();
+    // A terminal Run can leave the hot cache while its bridge still owns SDK resources.
+    // Keep process-lifetime ownership separate from the bounded Run projection cache.
+    private final Set<HaifaRunBridge> ownedBridges = ConcurrentHashMap.newKeySet();
+    // Test/observability seam: how many bridges this process built (each MCP projection
+    // rebuild and restart-recovery bridge counts once).
+    private final java.util.concurrent.atomic.AtomicLong bridgeBuilds =
+            new java.util.concurrent.atomic.AtomicLong();
     private final Set<Thread> workspaceCompletionObservers = ConcurrentHashMap.newKeySet();
     private final Set<Thread> titleCompletionObservers = ConcurrentHashMap.newKeySet();
     private volatile DurableTurnScanner durableTurnScanner = this::scanPersistedUserTurns;
@@ -135,6 +157,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             Path dataDirectory,
             SecretKey continuationKey,
             Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread,
+            McpProjectionProvider mcpProjections,
+            SkillProjectionProvider skillProjections,
             DeerFlowUploadContext uploadContext)
             throws IOException {
         this.json = json;
@@ -142,6 +166,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         this.projectExists = projectExists;
         this.workspaceChanges = workspaceChanges;
         this.runToolsForThread = runToolsForThread;
+        this.mcpProjections = mcpProjections == null ? McpProjectionProvider.none() : mcpProjections;
+        this.skillProjections = skillProjections == null ? SkillProjectionProvider.none() : skillProjections;
         this.uploadContext = java.util.Objects.requireNonNull(uploadContext, "uploadContext");
         this.threadCatalog = new PersistentThreadCatalog(json, dataDirectory);
         this.foundation = new DurableHaifaFoundation(dataDirectory, continuationKey);
@@ -150,8 +176,58 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
     }
 
+    /**
+     * Resolves the MCP declaration for a Run body and, separately, for a persisted
+     * selection replayed against the current configuration after a restart. Keeping both
+     * in one seam makes the "current config + that selection" recovery explicit.
+     */
+    interface McpProjectionProvider {
+        McpRunTools.Projection forRun(JsonNode body);
+
+        McpRunTools.Projection forSelection(McpRunTools.Selection selection);
+
+        static McpProjectionProvider none() {
+            return new McpProjectionProvider() {
+                @Override
+                public McpRunTools.Projection forRun(JsonNode body) {
+                    return McpRunTools.Projection.empty();
+                }
+
+                @Override
+                public McpRunTools.Projection forSelection(McpRunTools.Selection selection) {
+                    return McpRunTools.Projection.empty();
+                }
+            };
+        }
+    }
+
+    interface SkillProjectionProvider {
+        SkillRunTools.Projection forRun(JsonNode body);
+
+        SkillRunTools.Projection forRecovery();
+
+        static SkillProjectionProvider none() {
+            return new SkillProjectionProvider() {
+                @Override
+                public SkillRunTools.Projection forRun(JsonNode body) {
+                    return null;
+                }
+
+                @Override
+                public SkillRunTools.Projection forRecovery() {
+                    return null;
+                }
+            };
+        }
+    }
+
     boolean hasThread(String threadId) {
         return threads.containsKey(threadId);
+    }
+
+    /** Package-private seam for rebuild assertions in the V2 MCP integration tests. */
+    long bridgeBuildCount() {
+        return bridgeBuilds.get();
     }
 
     @Override
@@ -214,6 +290,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 listRuns(exchange, match.group(1));
                 return;
             }
+            match = THREAD_TOKEN_USAGE.matcher(path);
+            if (match.matches() && exchange.getRequestMethod().equals("GET")) {
+                getThreadTokenUsage(exchange, match.group(1));
+                return;
+            }
             match = WORKSPACE_CHANGES.matcher(path);
             if (match.matches()) {
                 if (exchange.getRequestMethod().equals("GET")) {
@@ -257,6 +338,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         metadata.remove("user_id");
         metadata.remove("system_role");
         metadata.remove("deerflow_project_id");
+        // Server-owned: only a Run may record the MCP projection used for restart recovery.
+        metadata.remove(MCP_SELECTION_METADATA_KEY);
         if (body.has("project_id") && !body.get("project_id").isNull()) {
             if (!body.get("project_id").isTextual() || body.get("project_id").asText().isBlank()) {
                 sendJson(exchange, 422, Map.of("detail", "Invalid project_id"));
@@ -477,15 +560,15 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (isInFlightWithoutDurableHuman(run, durableHumanRuns)) {
                 eligible.add(messageRow(run, run.humanSequence, run.createdAt, pendingHumanMessage(run)));
             }
-            synchronized (run) {
-                if (run.interactionRequestMessage != null) {
-                    eligible.add(messageRow(run, run.interactionRequestSequence,
-                            run.createdAt, run.interactionRequestMessage));
-                }
-                if (run.acceptedInteractionResponse != null) {
-                    eligible.add(messageRow(run, run.interactionResponseSequence,
-                            run.bridge.snapshot(run.runId).updatedAt(),
-                            run.acceptedInteractionResponse.message()));
+        }
+        synchronized (thread) {
+            for (var display : thread.interactionDisplays) {
+                if (!isVisibleInteractionDisplay(thread, display)) continue;
+                eligible.add(messageRow(display.runId(), display.requestSequence(),
+                        display.createdAt(), requestMessage(display)));
+                if (display.answeredOption() != null) {
+                    eligible.add(messageRow(display.runId(), display.requestSequence() + 1,
+                            display.createdAt(), responseMessage(display)));
                 }
             }
         }
@@ -587,6 +670,20 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         String modelInput = runInput == null
                 ? uploadContext.modelInput(threadId, body.path("input").path("messages"), message)
                 : message;
+        // A Steer must never re-declare tools: it only feeds the active Run's own bridge.
+        McpRunTools.Projection mcpProjection = runInput == null
+                ? mcpProjections.forRun(body)
+                : McpRunTools.Projection.empty();
+        SkillRunTools.Projection skillProjection;
+        try {
+            skillProjection = runInput == null ? skillProjections.forRun(body) : null;
+        } catch (IllegalArgumentException invalid) {
+            sendJson(exchange, 422, Map.of("detail", invalid.getMessage()));
+            return;
+        } catch (IllegalStateException unavailable) {
+            sendJson(exchange, 409, Map.of("detail", "Trusted Skill configuration is unavailable"));
+            return;
+        }
 
         RunRecord run = null;
         RunRecord steerRun = null;
@@ -644,28 +741,26 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 return;
             }
             if (steerRun == null) {
+            boolean createdBridge = thread.bridge == null;
             if (thread.bridge == null) {
-                HaifaRunBridge bridge = new HaifaRunBridge(binding, toolsForThread(thread), foundation);
-                if (thread.modelBindingIdentity != null
-                        && !thread.modelBindingIdentity.equals(bridge.bindingIdentity())) {
-                    bridge.close();
-                    sendJson(
-                            exchange,
-                            409,
-                            Map.of(
-                                    "detail",
-                                    "Thread is already bound to a different model revision; create a new thread"));
-                    return;
-                }
-                attachBridge(thread, bridge);
-            } else if (!thread.modelBindingIdentity.equals(binding.name() + "@" + binding.revision())) {
-                sendJson(
-                        exchange,
-                        409,
-                        Map.of(
-                                "detail",
-                                "Thread is already bound to a different model revision; create a new thread"));
-                return;
+                HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection, skillProjection);
+                // Restoring the Conversation is read-only; claim the selected model only
+                // after the SDK has admitted the new Run successfully.
+                attachBridge(thread, bridge, false);
+            }
+            // A Conversation is durable across Turns, but the SDK freezes its model per Run.
+            // Keep the old Run's bridge for replay/Interaction; only the new Turn changes model.
+            HaifaRunBridge selectedBridge = thread.bridge;
+            boolean switchingModel = !selectedBridge.bindingIdentity()
+                    .equals(binding.name() + "@" + binding.revision());
+            // A configuration change only affects the tool snapshot of later Runs; a Turn whose
+            // MCP projection differs from the attached bridge rebuilds it rather than hot-editing
+            // the active Run.
+            boolean switchingMcp = !selectedBridge.mcpSignature().equals(mcpProjection.fingerprint());
+            boolean switchingSkills = !selectedBridge.skillSignature().equals(
+                    skillProjection == null ? "" : skillProjection.fingerprint());
+            if (switchingModel || switchingMcp || switchingSkills) {
+                selectedBridge = newBridge(binding, thread, mcpProjection, skillProjection);
             }
             // Frozen TitleMiddleware names the thread only from its first user Turn. The boundary is
             // the in-memory message sequence (seeded from durable turns when a persisted session is
@@ -683,12 +778,26 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
             HaifaRunBridge.StartedRun started;
             try {
-                started = thread.bridge.start(threadId, modelInput, Optional.ofNullable(thread.session));
+                started = selectedBridge.start(threadId, modelInput, Optional.ofNullable(thread.session));
             } catch (RuntimeException failure) {
+                // A newly attached bridge uses the requested binding, so createdBridge and
+                // switchingModel cannot both be true. On a failed switch the old bridge stays
+                // attached for durable history and a subsequent Turn; only the rejected new
+                // bridge is closed here.
+                if (switchingModel || switchingMcp || switchingSkills || createdBridge) {
+                    if (createdBridge) thread.bridge = null;
+                    ownedBridges.remove(selectedBridge);
+                    selectedBridge.close();
+                }
                 workspaceChanges.discardRunChanges(staged);
                 sendJson(exchange, 500, Map.of("detail", "Run could not start"));
                 return;
             }
+            if (switchingModel || switchingMcp || switchingSkills) {
+                thread.bridge = selectedBridge;
+                ownedBridges.add(selectedBridge);
+            }
+            thread.modelBindingIdentity = selectedBridge.bindingIdentity();
             boolean workspaceRecordingEnabled = false;
             if (staged != null) {
                 try {
@@ -703,6 +812,13 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             thread.updatedAt = Instant.now();
             thread.activeRunId = started.runId().value();
             thread.latestRunId = started.runId().value();
+            // The last Run's MCP selection is the recovery projection for a later restart.
+            // A Run that produced no MCP declaration clears any stale selection.
+            if (mcpProjection.specs().isEmpty()) {
+                thread.clearMcpSelection();
+            } else {
+                thread.setMcpSelection(mcpProjection.selection());
+            }
             long humanSequence = thread.nextMessageSequence;
             thread.nextMessageSequence += 2;
             run = new RunRecord(
@@ -710,7 +826,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     threadId,
                     text(body, "assistant_id").orElse(null),
                     message,
-                    thread.bridge,
+                    selectedBridge,
                     Instant.now(),
                     humanSequence,
                     workspaceRecordingEnabled,
@@ -784,6 +900,13 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 sendJson(exchange, 409, Map.of("detail", "Thread has no matching Interaction"));
                 return;
             }
+            // A read-only fallback bridge may expose the durable pending card, but must never
+            // admit its side effect if the original Run's model revision is unavailable.
+            if (thread.modelBindingIdentity != null
+                    && !thread.modelBindingIdentity.equals(run.bridge.bindingIdentity())) {
+                sendJson(exchange, 409, Map.of("detail", "Pending Run model is unavailable"));
+                return;
+            }
             synchronized (run) {
                 // A restored Run starts with an empty in-memory projector. Consume its
                 // pre-response durable events before accepting the reply, otherwise the
@@ -838,9 +961,17 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     }
                     Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
                     if (pending.isEmpty()
-                            || run.interactionRequestId == null
-                            || !run.interactionRequestId.equals(response.requestId())) {
+                            || !pending.orElseThrow().requestId().value().equals(response.requestId())) {
                         sendJson(exchange, 409, Map.of("detail", "Thread has no matching Interaction"));
+                        return;
+                    }
+                    try {
+                        // A legacy/restarted Run may have an SDK pending view but no saved
+                        // presentation yet. Never accept its side effect before the card is durable.
+                        ensureSavedPendingDisplay(thread, run, pending.orElseThrow());
+                    } catch (IOException | IllegalArgumentException unavailablePresentation) {
+                        sendJson(exchange, 503, Map.of(
+                                "detail", "Interaction card could not be saved; approval was not submitted"));
                         return;
                     }
                     InteractionResponseSubmission submission;
@@ -867,6 +998,36 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     Map<String, Object> responseMessage =
                             DeerFlowInteractionHttpProjection.responseMessage(
                                     response, submittedText, run.runId.value());
+                    List<PersistentThreadCatalog.InteractionDisplay> updated =
+                            new ArrayList<>(thread.interactionDisplays);
+                    boolean savedDisplay = false;
+                    for (int index = 0; index < updated.size(); index++) {
+                        var display = updated.get(index);
+                        if (display.runId().equals(run.runId.value())
+                                && display.requestId().equals(response.requestId())) {
+                            updated.set(index, display.answered(response.optionId()));
+                            savedDisplay = true;
+                            break;
+                        }
+                    }
+                    if (!savedDisplay) throw new IllegalStateException(
+                            "Saved Interaction card disappeared after SDK accepted the response");
+                    thread.interactionDisplays = List.copyOf(updated);
+                    try {
+                        persistThread(thread);
+                    } catch (IOException | RuntimeException failedPersistence) {
+                        // The SDK has already accepted this response. Keep the in-process
+                        // display answered, expose the degraded durability explicitly, and
+                        // continue the same Run. A restart filters the stale unaccepted card
+                        // against the SDK's current pending ID.
+                        exchange.getResponseHeaders().set(
+                                "X-Haifa-Interaction-Presentation", "accepted-not-persisted");
+                        INTERACTION_LOG.log(System.Logger.Level.ERROR,
+                                "INTERACTION_PRESENTATION_SAVE_AFTER_ACCEPT_FAILURE run="
+                                        + run.runId.value() + " request=" + response.requestId()
+                                        + " sdk_receipt=ACCEPTED cause="
+                                        + failedPersistence.getClass().getSimpleName());
+                    }
                     run.acceptedInteractionResponse = new AcceptedInteractionResponse(
                             response, submission, responseMessage);
                     thread.updatedAt = Instant.now();
@@ -960,18 +1121,35 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private HaifaRunBridge bridgeForPersistedThread(ThreadRecord thread) {
         synchronized (thread) {
             if (thread.bridge != null) return thread.bridge;
-            HaifaRunBridge.ModelBinding binding = runModelResolver.apply(json.createObjectNode());
+            HaifaRunBridge.ModelBinding binding = null;
+            String lastBinding = thread.modelBindingIdentity;
+            if (lastBinding != null && lastBinding.lastIndexOf('@') > 0) {
+                var resolverBody = json.createObjectNode();
+                resolverBody.putObject("context")
+                        .put("model_name", lastBinding.substring(0, lastBinding.lastIndexOf('@')));
+                try {
+                    binding = runModelResolver.apply(resolverBody);
+                } catch (IllegalArgumentException unavailable) {
+                    // Historical Conversation reads remain possible when a model is disabled.
+                    // Interaction admission below still requires the exact original binding.
+                }
+            }
+            if (binding == null) binding = runModelResolver.apply(json.createObjectNode());
             // The same published Tool registrations must be available when the SDK resumes
             // an approved Interaction after a process restart. The SDK still owns the
             // pending request and its side-effect admission; this bridge only restores it.
-            HaifaRunBridge bridge = new HaifaRunBridge(
-                    binding, toolsForThread(thread), foundation);
+            // The last Run's persisted mcp_plugins selection is recomputed against the
+            // current configuration; a thread with no recorded MCP Run restores no MCP.
+            McpRunTools.Selection selection = thread.mcpSelection();
+            McpRunTools.Projection mcpProjection = selection == null
+                    ? McpRunTools.Projection.empty()
+                    : mcpProjections.forSelection(selection);
+            HaifaRunBridge bridge = newBridge(
+                    binding, thread, mcpProjection, skillProjections.forRecovery());
             boolean claimBinding = thread.modelBindingIdentity == null
                     || thread.modelBindingIdentity.equals(bridge.bindingIdentity());
-            // Conversation and run reads are backed by the shared SQLite authority and do not
-            // execute the model. Preserve a historical binding across provider restarts so the
-            // transcript remains readable, while streamRun still rejects a new run whose current
-            // binding does not match the persisted identity.
+            // Conversation/run reads use shared SQLite. The last selected model is preferred
+            // so a pending Run resumes with its own model after a gateway restart.
             attachBridge(thread, bridge, claimBinding);
             return bridge;
         }
@@ -979,6 +1157,15 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private void attachBridge(ThreadRecord thread, HaifaRunBridge bridge) {
         attachBridge(thread, bridge, true);
+    }
+
+    private HaifaRunBridge newBridge(
+            HaifaRunBridge.ModelBinding binding,
+            ThreadRecord thread,
+            McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection) {
+        bridgeBuilds.incrementAndGet();
+        return new HaifaRunBridge(binding, toolsForThread(thread), foundation, mcpProjection, skillProjection);
     }
 
     private List<? extends JavaTool<?, ?>> toolsForThread(ThreadRecord thread) {
@@ -998,6 +1185,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             thread.bridge = bridge;
             if (claimBinding) thread.modelBindingIdentity = bridge.bindingIdentity();
             restoreSession(thread);
+            ownedBridges.add(bridge);
         } catch (RuntimeException | Error failure) {
             thread.bridge = previousBridge;
             thread.modelBindingIdentity = previousBinding;
@@ -1015,7 +1203,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 .orElseThrow(() -> new IllegalStateException("persisted thread conversation is unavailable"));
         long latestSequence = latestVisibleTurnSequence(thread, thread.bridge);
         thread.session = new HaifaRunBridge.SessionState(conversation.sessionId(), conversation.revision());
-        thread.nextMessageSequence = latestSequence + 1;
+        long latestDisplaySequence = thread.interactionDisplays.stream()
+                .mapToLong(display -> display.requestSequence() + 1)
+                .max().orElse(0);
+        thread.nextMessageSequence = Math.max(latestSequence, latestDisplaySequence) + 1;
     }
 
     private long latestVisibleTurnSequence(ThreadRecord thread, HaifaRunBridge bridge) {
@@ -1047,7 +1238,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     thread.createdAt,
                     thread.updatedAt,
                     Optional.ofNullable(thread.persistedSessionId),
-                    Optional.ofNullable(thread.modelBindingIdentity)));
+                    Optional.ofNullable(thread.modelBindingIdentity),
+                    thread.interactionDisplays));
         }
     }
 
@@ -1446,54 +1638,45 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         Map<String, Object> requestMessage;
         synchronized (thread) {
             synchronized (run) {
-                if (run.interactionRequestMessage == null) {
-                    Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
-                    if (pending.isEmpty()
-                            || !pending.orElseThrow()
-                                    .requestId()
-                                    .value()
-                                    .equals(projectedRequestId)) {
-                        writeSse(
-                                output,
-                                "error",
-                                Map.of(
-                                        "code", "interaction_view_unavailable",
-                                        "request_id", projectedRequestId,
-                                        "message", "Pending Interaction view is unavailable"),
-                                cursor);
-                        return true;
-                    }
-                    try {
-                        run.interactionRequestMessage =
-                                DeerFlowInteractionHttpProjection.requestMessage(
-                                        pending.orElseThrow(), run.runId.value());
-                    } catch (IllegalArgumentException unsupported) {
-                        writeSse(
-                                output,
-                                "error",
-                                Map.of(
-                                        "code", "unsupported_interaction_projection",
-                                        "request_id", projectedRequestId,
-                                        "message", unsupported.getMessage()),
-                                cursor);
-                        return true;
-                    }
-                    run.interactionRequestId = projectedRequestId;
-                    run.interactionRequestSequence = run.humanSequence + 1;
-                    run.interactionResponseSequence = run.humanSequence + 2;
-                    run.assistantSequence = run.humanSequence + 3;
-                    thread.nextMessageSequence += 2;
-                } else if (!projectedRequestId.equals(run.interactionRequestId)) {
+                Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
+                if (pending.isEmpty()
+                        || !pending.orElseThrow().requestId().value().equals(projectedRequestId)) {
                     writeSse(
                             output,
                             "error",
                             Map.of(
-                                    "code", "multiple_interactions_unsupported",
+                                    "code", "interaction_view_unavailable",
                                     "request_id", projectedRequestId,
-                                    "message", "Only one Interaction per Run is supported"),
+                                    "message", "Pending Interaction view is unavailable"),
                             cursor);
                     return true;
                 }
+                PersistentThreadCatalog.InteractionDisplay display;
+                try {
+                    display = ensureSavedPendingDisplay(thread, run, pending.orElseThrow());
+                } catch (IOException failedPersistence) {
+                    writeSse(output, "error", Map.of(
+                            "code", "interaction_projection_not_persisted",
+                            "request_id", projectedRequestId,
+                            "message", "Interaction card could not be saved"), cursor);
+                    return true;
+                } catch (IllegalArgumentException unsupported) {
+                    writeSse(output, "error", Map.of(
+                            "code", "unsupported_interaction_projection",
+                            "request_id", projectedRequestId,
+                            "message", "Pending Interaction cannot be projected"), cursor);
+                    return true;
+                }
+                if (!projectedRequestId.equals(run.interactionRequestId)) {
+                    run.acceptedInteractionResponse = null;
+                }
+                run.interactionRequestId = projectedRequestId;
+                run.interactionRequestSequence = display.requestSequence();
+                run.interactionResponseSequence = display.requestSequence() + 1;
+                run.assistantSequence = display.requestSequence() + 2;
+                thread.nextMessageSequence = Math.max(
+                        thread.nextMessageSequence, display.requestSequence() + 2);
+                run.interactionRequestMessage = requestMessage(display);
                 requestMessage = run.interactionRequestMessage;
             }
         }
@@ -1775,13 +1958,114 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return;
         }
         List<Map<String, Object>> response = durableRuns(thread).stream()
-                .map(this::runResponse)
+                .map(run -> runResponse(run, false))
                 .toList();
         sendJson(exchange, 200, response);
     }
 
+    /** The frozen UI treats a JSON null response as unavailable Usage, without displaying zero. */
+    private void getThreadTokenUsage(HttpExchange exchange, String threadId) throws IOException {
+        ThreadRecord thread = threads.get(threadId);
+        if (thread == null) {
+            sendJson(exchange, 404, Map.of("detail", "Thread not found"));
+            return;
+        }
+        if (queryValue(exchange, "include_active").filter(value -> !Set.of("false", "0").contains(value)).isPresent()) {
+            sendJson(exchange, 422, Map.of("detail", "Active Run Usage is outside this local profile"));
+            return;
+        }
+        long input = 0;
+        long output = 0;
+        int totalRuns = 0;
+        int remainingEventPages = THREAD_USAGE_EVENT_PAGE_BUDGET;
+        Map<String, long[]> byModel = new LinkedHashMap<>();
+        List<RunRecord> threadRuns = durableRuns(thread);
+        if (threadRuns.size() >= RUN_LIST_LIMIT) {
+            sendJson(exchange, 200, null); // A capped history cannot prove a complete thread total.
+            return;
+        }
+        for (RunRecord run : threadRuns) {
+            AgentRunSnapshot snapshot = run.bridge.snapshot(run.runId);
+            if (!snapshot.status().isTerminal()) continue;
+            if (remainingEventPages == 0) {
+                sendJson(exchange, 200, null);
+                return;
+            }
+            DiagnosticScan scan = runDiagnosticFacts(run, snapshot, remainingEventPages, false);
+            remainingEventPages -= scan.pagesRead();
+            RunDiagnosticProjection.Facts facts = scan.facts();
+            if (!facts.usageKnown()) {
+                sendJson(exchange, 200, null);
+                return;
+            }
+            input = Math.addExact(input, snapshot.usage().inputTokens());
+            output = Math.addExact(output, snapshot.usage().outputTokens());
+            totalRuns++;
+            facts.usageByModel().forEach((modelId, values) -> {
+                long[] aggregate = byModel.computeIfAbsent(modelId, ignored -> new long[2]);
+                aggregate[0] = Math.addExact(aggregate[0], Math.addExact(values[0], values[1]));
+                aggregate[1]++;
+            });
+        }
+        if (totalRuns == 0) {
+            sendJson(exchange, 200, null);
+            return;
+        }
+        Map<String, Object> modelBreakdown = new LinkedHashMap<>();
+        byModel.forEach((modelId, values) -> modelBreakdown.put(
+                modelId, Map.of("tokens", values[0], "runs", values[1])));
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("thread_id", threadId);
+        response.put("total_input_tokens", input);
+        response.put("total_output_tokens", output);
+        response.put("total_tokens", Math.addExact(input, output));
+        response.put("total_runs", totalRuns);
+        response.put("by_model", modelBreakdown);
+        response.put("by_caller", null); // The public Run Usage has no caller attribution.
+        response.put("context_usage", null);
+        sendJson(exchange, 200, response);
+    }
+
+    private DiagnosticScan runDiagnosticFacts(
+            RunRecord run, AgentRunSnapshot snapshot, int pageBudget, boolean includeRelatedFacts) {
+        List<AgentRunEvent> events = new ArrayList<>();
+        RunEventCursor cursor = run.bridge.beforeFirstEvent(run.runId);
+        for (int pageNumber = 0; pageNumber < pageBudget; pageNumber++) {
+            var page = run.bridge.events(run.runId, cursor, DIAGNOSTIC_EVENT_PAGE_SIZE);
+            events.addAll(page.items());
+            if (!page.hasMore()) {
+                return new DiagnosticScan(RunDiagnosticProjection.from(snapshot, events,
+                        includeRelatedFacts ? run.bridge.toolCalls(run.runId) : List.of(),
+                        includeRelatedFacts ? run.bridge.pendingInteraction(run.runId) : java.util.Optional.empty(),
+                        true, null),
+                        pageNumber + 1);
+            }
+            if (page.items().isEmpty() || page.nextCursor().equals(cursor)) {
+                return new DiagnosticScan(RunDiagnosticProjection.from(snapshot, events,
+                        includeRelatedFacts ? run.bridge.toolCalls(run.runId) : List.of(),
+                        includeRelatedFacts ? run.bridge.pendingInteraction(run.runId) : java.util.Optional.empty(),
+                        false,
+                        "event_cursor_stalled"), pageNumber + 1);
+            }
+            cursor = page.nextCursor();
+        }
+        return new DiagnosticScan(RunDiagnosticProjection.from(snapshot, events,
+                includeRelatedFacts ? run.bridge.toolCalls(run.runId) : List.of(),
+                includeRelatedFacts ? run.bridge.pendingInteraction(run.runId) : java.util.Optional.empty(), false,
+                "event_page_budget"), pageBudget);
+    }
+
     private Map<String, Object> runResponse(RunRecord run) {
+        return runResponse(run, true);
+    }
+
+    private Map<String, Object> runResponse(RunRecord run, boolean includeDiagnostics) {
         AgentRunSnapshot snapshot = run.bridge.snapshot(run.runId);
+        RunDiagnosticProjection.Facts facts = includeDiagnostics
+                ? runDiagnosticFacts(run, snapshot, RUN_DIAGNOSTIC_EVENT_PAGE_BUDGET, true).facts()
+                : RunDiagnosticProjection.from(snapshot, List.of(), List.of(), java.util.Optional.empty(),
+                        false, "run_list_summary");
+        boolean usageKnown = facts.usageKnown();
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("run_id", run.runId.value());
         response.put("thread_id", run.threadId);
@@ -1801,17 +2085,21 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         response.put("multitask_strategy", "reject");
         response.put("created_at", run.createdAt.toString());
         response.put("updated_at", snapshot.updatedAt().toString());
-        response.put("total_input_tokens", snapshot.usage().inputTokens());
-        response.put("total_output_tokens", snapshot.usage().outputTokens());
-        response.put("total_tokens", snapshot.usage().inputTokens() + snapshot.usage().outputTokens());
-        response.put("llm_call_count", snapshot.usage().modelCalls());
-        response.put("lead_agent_tokens", snapshot.usage().inputTokens() + snapshot.usage().outputTokens());
-        response.put("subagent_tokens", 0);
-        response.put("middleware_tokens", 0);
-        response.put("message_count", 0);
-        response.put("stop_reason", null);
+        response.put("total_input_tokens", usageKnown ? snapshot.usage().inputTokens() : null);
+        response.put("total_output_tokens", usageKnown ? snapshot.usage().outputTokens() : null);
+        response.put("total_tokens", usageKnown
+                ? Math.addExact(snapshot.usage().inputTokens(), snapshot.usage().outputTokens()) : null);
+        response.put("llm_call_count", usageKnown ? snapshot.usage().modelCalls() : null);
+        response.put("lead_agent_tokens", null);
+        response.put("subagent_tokens", null);
+        response.put("middleware_tokens", null);
+        response.put("message_count", null);
+        response.put("stop_reason", facts.values().get("stop_reason"));
+        response.put("diagnostics", facts.values());
         return response;
     }
+
+    private record DiagnosticScan(RunDiagnosticProjection.Facts facts, int pagesRead) {}
 
     private Map<String, Object> threadStateResponse(ThreadRecord thread) {
         List<ConversationTurn> turns = scanTurns(thread, 200);
@@ -1974,8 +2262,13 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private Map<String, Object> messageRow(
             RunRecord run, long sequence, Instant createdAt, Map<String, Object> content) {
+        return messageRow(run.runId.value(), sequence, createdAt, content);
+    }
+
+    private Map<String, Object> messageRow(
+            String runId, long sequence, Instant createdAt, Map<String, Object> content) {
         Map<String, Object> row = new LinkedHashMap<>();
-        row.put("run_id", run.runId.value());
+        row.put("run_id", runId);
         row.put("seq", sequence);
         row.put("content", content);
         row.put("metadata", Map.of("caller", "lead_agent"));
@@ -2048,7 +2341,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 ? bridgeForPersistedThread(thread).toolCalls(runId)
                 : cached.bridge.toolCalls(runId);
         calls.stream().map(DeerFlowToolTranscriptProjection::requestMessage).forEach(messages::add);
-        if (cached != null) addInteractionMessages(cached, messages);
+        addInteractionMessages(thread, runId.value(), cached, messages);
         calls.stream()
                 .map(DeerFlowToolTranscriptProjection::resultMessage)
                 .flatMap(Optional::stream)
@@ -2139,12 +2432,91 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         return message;
     }
 
-    private void addInteractionMessages(RunRecord run, List<Map<String, Object>> messages) {
-        synchronized (run) {
-            if (run.interactionRequestMessage != null) messages.add(run.interactionRequestMessage);
-            if (run.acceptedInteractionResponse != null) {
-                messages.add(run.acceptedInteractionResponse.message());
+    private void addInteractionMessages(
+            ThreadRecord thread, String runId, RunRecord run, List<Map<String, Object>> messages) {
+        synchronized (thread) {
+            for (var display : thread.interactionDisplays) {
+                if (!display.runId().equals(runId)) continue;
+                if (!isVisibleInteractionDisplay(thread, display)) continue;
+                messages.add(requestMessage(display));
+                if (display.answeredOption() != null) messages.add(responseMessage(display));
             }
+        }
+        if (run != null) {
+            synchronized (run) {
+                if (run.interactionRequestMessage != null
+                        && thread.interactionDisplays.stream().noneMatch(display ->
+                                display.runId().equals(runId)
+                                        && display.requestId().equals(run.interactionRequestId))) {
+                    messages.add(run.interactionRequestMessage);
+                }
+            }
+        }
+    }
+
+    private Map<String, Object> requestMessage(PersistentThreadCatalog.InteractionDisplay display) {
+        return DeerFlowInteractionHttpProjection.requestMessage(
+                display.runId(), display.requestId(), display.toolCallId(), display.title(),
+                display.question(), display.context(), display.options());
+    }
+
+    /** Persist only the SDK's safe card presentation before exposing or answering this request. */
+    private PersistentThreadCatalog.InteractionDisplay ensureSavedPendingDisplay(
+            ThreadRecord thread, RunRecord run, InteractionView view) throws IOException {
+        String requestId = view.requestId().value();
+        var saved = thread.interactionDisplays.stream()
+                .filter(candidate -> candidate.requestId().equals(requestId))
+                .findFirst();
+        if (saved.isPresent()) {
+            var display = saved.orElseThrow();
+            if (!display.runId().equals(run.runId.value()) || display.answeredOption() != null) {
+                throw new IllegalArgumentException("Pending Interaction conflicts with saved presentation");
+            }
+            return display;
+        }
+        DeerFlowInteractionHttpProjection.requestMessage(view, run.runId.value());
+        var display = new PersistentThreadCatalog.InteractionDisplay(
+                run.runId.value(), requestId,
+                Math.max(thread.nextMessageSequence, run.humanSequence + 1),
+                view.createdAt(), view.target().reference(), view.title(),
+                view.safePrompt(), view.target().safeSummary(),
+                view.allowedActions().stream().map(action -> action.value()).toList(), null);
+        List<PersistentThreadCatalog.InteractionDisplay> updated =
+                new ArrayList<>(thread.interactionDisplays);
+        updated.add(display);
+        PersistentThreadCatalog.validateDisplays(updated);
+        List<PersistentThreadCatalog.InteractionDisplay> previous = thread.interactionDisplays;
+        thread.interactionDisplays = List.copyOf(updated);
+        try {
+            persistThread(thread);
+        } catch (IOException | RuntimeException failedPersistence) {
+            thread.interactionDisplays = previous;
+            throw new IOException("Interaction card presentation could not be persisted", failedPersistence);
+        }
+        return display;
+    }
+
+    private Map<String, Object> responseMessage(PersistentThreadCatalog.InteractionDisplay display) {
+        String option = display.answeredOption();
+        if (option == null) throw new IllegalArgumentException("Interaction has no display response");
+        var response = new DeerFlowInteractionHttpProjection.FrozenResponse(
+                DeerFlowInteractionHttpProjection.SOURCE, display.requestId(), "option", option, option);
+        return DeerFlowInteractionHttpProjection.responseMessage(response, "", display.runId());
+    }
+
+    private boolean isVisibleInteractionDisplay(
+            ThreadRecord thread, PersistentThreadCatalog.InteractionDisplay display) {
+        if (display.answeredOption() != null) return true;
+        try {
+            RunRecord cached = runs.get(display.runId());
+            HaifaRunBridge bridge = cached != null && cached.threadId.equals(thread.threadId)
+                    ? cached.bridge : bridgeForPersistedThread(thread);
+            return bridge.pendingInteraction(new AgentRunId(display.runId()))
+                    .filter(view -> view.requestId().value().equals(display.requestId()))
+                    .isPresent();
+        } catch (RuntimeException unavailable) {
+            // A stale or unverifiable saved card must never look actionable after restart.
+            return false;
         }
     }
 
@@ -2269,12 +2641,20 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 false);
         bridge.pendingInteraction(requested).ifPresent(pending -> {
             try {
-                restored.interactionRequestMessage =
-                        DeerFlowInteractionHttpProjection.requestMessage(pending, requested.value());
+                var saved = thread.interactionDisplays.stream()
+                        .filter(display -> display.runId().equals(requested.value())
+                                && display.requestId().equals(pending.requestId().value())
+                                && display.answeredOption() == null)
+                        .findFirst();
+                restored.interactionRequestMessage = saved.isPresent()
+                        ? requestMessage(saved.orElseThrow())
+                        : DeerFlowInteractionHttpProjection.requestMessage(pending, requested.value());
                 restored.interactionRequestId = pending.requestId().value();
-                restored.interactionRequestSequence = restored.humanSequence + 1;
-                restored.interactionResponseSequence = restored.humanSequence + 2;
-                restored.assistantSequence = restored.humanSequence + 3;
+                restored.interactionRequestSequence = saved
+                        .map(PersistentThreadCatalog.InteractionDisplay::requestSequence)
+                        .orElse(restored.humanSequence + 1);
+                restored.interactionResponseSequence = restored.interactionRequestSequence + 1;
+                restored.assistantSequence = restored.interactionRequestSequence + 2;
             } catch (IllegalArgumentException unsupported) {
                 // The public SDK view is still authoritative. An unsupported card is
                 // reported by the SSE/response path, never manufactured in history.
@@ -3018,11 +3398,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         closed = true;
         workspaceCompletionObservers.forEach(Thread::interrupt);
         titleCompletionObservers.forEach(Thread::interrupt);
-        threads.values().stream()
-                .map(thread -> thread.bridge)
-                .filter(java.util.Objects::nonNull)
-                .distinct()
-                .forEach(HaifaRunBridge::close);
+        ownedBridges.forEach(HaifaRunBridge::close);
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
         List<Thread> observers = new ArrayList<>(workspaceCompletionObservers);
         observers.addAll(titleCompletionObservers);
@@ -3066,6 +3442,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private volatile String modelBindingIdentity;
         private volatile String activeRunId;
         private volatile String latestRunId;
+        /** Safe frozen-card presentation only; the SDK owns every pending/accepted decision. */
+        private volatile List<PersistentThreadCatalog.InteractionDisplay> interactionDisplays = List.of();
         private boolean admissionRecovered;
         private long nextMessageSequence = 1;
 
@@ -3084,6 +3462,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             this.updatedAt = entry.updatedAt();
             this.persistedSessionId = entry.sessionId().orElse(null);
             this.modelBindingIdentity = entry.modelBindingIdentity().orElse(null);
+            this.interactionDisplays = entry.interactionDisplays();
         }
 
         private String title() {
@@ -3096,6 +3475,54 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             Map<String, Object> updated = new LinkedHashMap<>(metadata);
             updated.put("title", title);
             this.metadata = Collections.unmodifiableMap(updated);
+        }
+
+        /** The last Run's MCP selection, or {@code null} when no MCP Run was recorded. */
+        private McpRunTools.Selection mcpSelection() {
+            return parseMcpSelection(metadata.get(MCP_SELECTION_METADATA_KEY));
+        }
+
+        private void setMcpSelection(McpRunTools.Selection selection) {
+            Map<String, Object> encoded = new LinkedHashMap<>();
+            if (selection.ids().isEmpty()) {
+                encoded.put("mode", "all");
+            } else if (selection.ids().orElseThrow().isEmpty()) {
+                encoded.put("mode", "none");
+            } else {
+                encoded.put("mode", "list");
+                encoded.put("ids", List.copyOf(selection.ids().orElseThrow()));
+            }
+            Map<String, Object> updated = new LinkedHashMap<>(metadata);
+            updated.put(MCP_SELECTION_METADATA_KEY, encoded);
+            this.metadata = Collections.unmodifiableMap(updated);
+        }
+
+        private void clearMcpSelection() {
+            if (!metadata.containsKey(MCP_SELECTION_METADATA_KEY)) return;
+            Map<String, Object> updated = new LinkedHashMap<>(metadata);
+            updated.remove(MCP_SELECTION_METADATA_KEY);
+            this.metadata = Collections.unmodifiableMap(updated);
+        }
+
+        private static McpRunTools.Selection parseMcpSelection(Object raw) {
+            if (raw == null) return null;
+            if (!(raw instanceof Map<?, ?> encoded)) {
+                throw new IllegalStateException("persisted MCP selection is invalid");
+            }
+            Object mode = encoded.get("mode");
+            if ("all".equals(mode)) return McpRunTools.Selection.all();
+            if ("none".equals(mode)) return McpRunTools.Selection.none();
+            if ("list".equals(mode) && encoded.get("ids") instanceof List<?> ids) {
+                Set<String> serverIds = new LinkedHashSet<>();
+                for (Object id : ids) {
+                    if (!(id instanceof String text) || text.isBlank()) {
+                        throw new IllegalStateException("persisted MCP selection is invalid");
+                    }
+                    serverIds.add(text);
+                }
+                return McpRunTools.Selection.of(serverIds);
+            }
+            throw new IllegalStateException("persisted MCP selection is invalid");
         }
     }
 

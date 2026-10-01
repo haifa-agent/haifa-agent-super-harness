@@ -151,18 +151,28 @@ public class HaifaPublicInteractionSpikeTest {
 
     static final class ApprovalProbeModel implements AgentChatModel {
         private final AtomicInteger calls = new AtomicInteger();
+        private final int sequentialToolCalls;
+
+        ApprovalProbeModel() {
+            this(1);
+        }
+
+        ApprovalProbeModel(int sequentialToolCalls) {
+            this.sequentialToolCalls = sequentialToolCalls;
+        }
 
         @Override
         public AgentChatResponse invoke(AgentChatRequest request) {
-            if (calls.getAndIncrement() == 0) {
+            int call = calls.getAndIncrement();
+            if (call < sequentialToolCalls) {
                 return new AgentChatResponse(
-                        "interaction-probe-tool-call",
+                        "interaction-probe-tool-call-" + call,
                         request.model().providerModelId(),
                         "",
                         List.of(new ModelToolCall(
-                                new ProviderToolCallCorrelationId("interaction-probe-call"),
+                                new ProviderToolCallCorrelationId("interaction-probe-call-" + call),
                                 "mutating_probe",
-                                Map.of("value", "approved-value"))),
+                                Map.of("value", call == 0 ? "approved-value" : "approved-value-" + call))),
                         ModelFinishReason.TOOL_CALLS,
                         ModelUsage.unpriced(1, 1),
                         "",

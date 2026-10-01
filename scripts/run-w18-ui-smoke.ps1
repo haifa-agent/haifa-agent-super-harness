@@ -13,7 +13,10 @@ param(
     [switch]$DemoArtifact,
     [switch]$TitleSuggestions,
     [switch]$InputPolish,
+    [switch]$V2ModelSwitch,
     [switch]$V2FileContext,
+    [switch]$V2Skill,
+    [switch]$V2Diagnostics,
     [switch]$LiveDeepSeek,
     [switch]$SkipBuild
 )
@@ -26,8 +29,8 @@ $expectedFrontendPort = 15618 + (10000 * $AgentSlot)
 if ($GatewayPort -ne $expectedGatewayPort -or $FrontendPort -ne $expectedFrontendPort -or $ProviderPort -ne 0) {
     throw "W18 slot $AgentSlot requires Gateway=$expectedGatewayPort and Frontend=$expectedFrontendPort; controlled Provider must use OS-assigned port 0."
 }
-if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2FileContext, $LiveDeepSeek).Where({ $_ }).Count -gt 1) {
-    throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, V2 file-context, and live DeepSeek profiles are mutually exclusive.'
+if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $LiveDeepSeek).Where({ $_ }).Count -gt 1) {
+    throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, V2 model-switch, V2 file-context, V2 Skill, V2 diagnostics, and live DeepSeek profiles are mutually exclusive.'
 }
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
@@ -42,8 +45,14 @@ if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
         "target/agent-slot-$AgentSlot-title-suggestions-data"
     } elseif ($InputPolish) {
         "target/agent-slot-$AgentSlot-input-polish-data"
+    } elseif ($V2ModelSwitch) {
+        "local-tmp/slot-$AgentSlot-w03-v2-model-switch/data/ui"
     } elseif ($V2FileContext) {
         "local-tmp/slot-$AgentSlot-w04-v2-file-context/ui-data"
+    } elseif ($V2Skill) {
+        "local-tmp/slot-$AgentSlot-w15-v2-skill/data/ui"
+    } elseif ($V2Diagnostics) {
+        "local-tmp/slot-$AgentSlot-w21/data/ui"
     } else {
         "target/agent-slot-$AgentSlot-data"
     })
@@ -78,13 +87,19 @@ $evidenceRootBase = Join-Path $root $(if ($LiveDeepSeek) {
     'target/w03-title-suggestions-evidence/playwright'
 } elseif ($InputPolish) {
     "local-tmp/slot-$AgentSlot-w03-input-polish-ui/evidence"
+} elseif ($V2ModelSwitch) {
+    "local-tmp/slot-$AgentSlot-w03-v2-model-switch/evidence/ui"
 } elseif ($V2FileContext) {
     "local-tmp/slot-$AgentSlot-w04-v2-file-context/evidence/ui"
+} elseif ($V2Skill) {
+    "local-tmp/slot-$AgentSlot-w15-v2-skill/evidence/ui"
+} elseif ($V2Diagnostics) {
+    "local-tmp/slot-$AgentSlot-w21/evidence/ui"
 } else {
     'target/w18-ui-smoke-evidence/playwright'
 })
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$evidenceRoot = if ($DemoArtifact -or $V2FileContext) { Join-Path $evidenceRootBase "run-$stamp" } else { $evidenceRootBase }
+$evidenceRoot = if ($DemoArtifact -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { Join-Path $evidenceRootBase "run-$stamp" } else { $evidenceRootBase }
 $null = New-Item -ItemType Directory -Force -Path $evidenceRoot
 $serverOut = Join-Path $evidenceRoot "server-$stamp.stdout.log"
 $serverErr = Join-Path $evidenceRoot "server-$stamp.stderr.log"
@@ -114,6 +129,7 @@ $managedEnvironment = @{
     E2E_FRONTEND_PORT = [string]$FrontendPort
     E2E_APP_URL = "http://127.0.0.1:$FrontendPort"
     W18_EVIDENCE_DIR = $evidenceRoot
+    COREPACK_ENABLE_NETWORK = '0'
     W18_PROVIDER_URL = $null
     W18_MODEL_NAME = $(if ($LiveDeepSeek) { 'w18-deepseek-live' } else { 'w18-controlled' })
     W18_PLAYWRIGHT_SPEC = $(if ($LiveDeepSeek) {
@@ -128,13 +144,19 @@ $managedEnvironment = @{
         'w03-title-suggestions.spec.cjs'
     } elseif ($InputPolish) {
         'w03-input-polish.spec.cjs'
+    } elseif ($V2ModelSwitch) {
+        'w03-v2-model-switch.spec.cjs'
     } elseif ($V2FileContext) {
         'w04-v2-file-context.spec.cjs'
+    } elseif ($V2Skill) {
+        'w15-v2-skill.spec.cjs'
+    } elseif ($V2Diagnostics) {
+        'w21-v2-diagnostics.spec.cjs'
     } else {
         'w18-ui-smoke.spec.cjs'
     })
-    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2FileContext) { '120000' } else { '60000' })
-    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2FileContext) { 'on' } else { 'retain-on-failure' })
+    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { '120000' } else { '60000' })
+    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { 'on' } else { 'retain-on-failure' })
     # Kept disabled through the ordinary build/test gate. The runner enables it
     # only immediately before launching the dedicated guarded test process.
     W05_INTERACTION_ACCEPTANCE = $null
@@ -172,7 +194,7 @@ try {
 
         Push-Location (Join-Path $root 'frontend')
         try {
-            & pnpm.cmd build
+            & corepack pnpm build
             if ($LASTEXITCODE -ne 0) {
                 throw "Frozen frontend build failed with exit code $LASTEXITCODE."
             }
@@ -294,7 +316,9 @@ try {
                 base_url = "$providerUrl/v1"
                 enabled = $true
                 supports_vision = $false
-                context_window = 8192
+                # The frozen consulting-analysis entry is ~8.2k tokens by itself.
+                # Its full activated body must fit alongside Run context and output.
+                context_window = $(if ($V2Skill) { 32768 } else { 8192 })
                 max_tokens = 1024
                 api_key = 'w18-loopback-only'
             }
@@ -328,6 +352,37 @@ try {
     $runCatalog = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/models" -TimeoutSec 3
     if (@($runCatalog.models.name) -notcontains $modelName) {
         throw 'Managed model did not enter the executable Run catalog.'
+    }
+    if ($V2ModelSwitch) {
+        $secondName = 'w18-controlled-b'
+        $currentManaged = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/managed-models" -TimeoutSec 3
+        $secondExisting = @($currentManaged.models) | Where-Object { $_.name -eq $secondName } | Select-Object -First 1
+        $secondEnvelope = [ordered]@{
+            config = [ordered]@{
+                name = $secondName
+                display_name = 'W18 Controlled Loopback B'
+                provider = 'openai-compatible'
+                model = 'w18-controlled-model-b'
+                base_url = "$providerUrl/v1"
+                enabled = $true
+                supports_vision = $false
+                context_window = 8192
+                max_tokens = 1024
+                api_key = 'w18-loopback-only'
+            }
+            expected_revision = $(if ($secondExisting) { $secondExisting.revision } else { $null })
+        }
+        $secondSaved = Invoke-RestMethod `
+            -Uri "http://127.0.0.1:$GatewayPort/api/managed-models" `
+            -Method Put -ContentType 'application/json' `
+            -Body ($secondEnvelope | ConvertTo-Json -Depth 6 -Compress) -TimeoutSec 5
+        if (-not $secondSaved.enabled -or -not $secondSaved.has_api_key) {
+            throw 'Second controlled model did not save correctly.'
+        }
+        $runCatalog = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/models" -TimeoutSec 3
+        if (@($runCatalog.models.name) -notcontains $secondName) {
+            throw 'Second controlled model did not enter the executable Run catalog.'
+        }
     }
     [ordered]@{
         name = $savedModel.name

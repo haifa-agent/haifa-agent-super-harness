@@ -5,7 +5,34 @@
   "type": "object",
   "required": ["schemaVersion", "demoId", "frozenUpstream", "fixtures", "csvOracle", "resultVocabulary", "stages", "cases"],
   "additionalProperties": true,
+  "$defs": {
+    "deferral": {
+      "type": "object",
+      "description": "A human-ruled deferral: the assertion stays in the oracle, is excluded from the GO denominator, and can never be PASS.",
+      "required": ["rulingRef", "decidedAt", "reason", "restoreCondition", "result"],
+      "properties": {
+        "rulingRef": {"type": "string", "minLength": 1},
+        "decidedAt": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+        "reason": {"type": "string", "minLength": 1},
+        "restoreCondition": {"type": "string", "minLength": 1},
+        "result": {"const": "NOT_RUN"}
+      }
+    }
+  },
   "properties": {
+    "revision": {
+      "type": "object",
+      "required": ["number", "date", "previousSha256", "change"],
+      "properties": {"number": {"type": "integer", "minimum": 2}, "previousSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+    },
+    "rulings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "decidedBy", "decidedAt", "source", "summary"],
+        "properties": {"decidedBy": {"const": "human"}}
+      }
+    },
     "schemaVersion": {"const": "haifa.customer-demo-v2.case-oracle/v1"},
     "demoId": {"const": "DEMO-V2"},
     "frozenUpstream": {
@@ -130,10 +157,11 @@
             }
           },
           "positiveOracle": {"type": "array", "minItems": 1, "items": {"type": "string"}},
-          "negativeCases": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["id", "assertion"]}},
+          "negativeCases": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["id", "assertion"], "properties": {"deferral": {"$ref": "#/$defs/deferral"}}}},
           "runner": {"type": "string"},
           "evidencePaths": {"type": "array", "minItems": 1, "items": {"type": "string"}},
-          "defaultResult": {"const": "NOT_RUN"}
+          "defaultResult": {"const": "NOT_RUN"},
+          "deferral": {"$ref": "#/$defs/deferral"}
         }
       }
     }

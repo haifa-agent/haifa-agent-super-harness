@@ -53,6 +53,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final ObjectMapper objectMapper;
     private final DeerFlowThreadRunApi threadRunApi;
     private final DeerFlowConfigurationApi configurationApi;
+    private final DeerFlowMcpApi mcpApi;
+    private final DeerFlowSkillsApi skillsApi;
     private final DeerFlowWorkspaceApi workspaceApi;
     private final DeerFlowProjectApi projectApi;
     private final DeerFlowTrashApi trashApi;
@@ -66,12 +68,20 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             SecretKey continuationKey,
             Function<JsonNode, HaifaRunBridge.ModelBinding> testRunModelResolver,
             List<? extends JavaTool<?, ?>> testRunTools,
-            DeerFlowSuggestionsApi.Settings suggestionsSettings)
+            DeerFlowSuggestionsApi.Settings suggestionsSettings,
+            SkillConfigStore testSkillStore)
             throws IOException {
         this.server = server;
         this.executor = executor;
         this.objectMapper = new ObjectMapper();
         this.configurationApi = new DeerFlowConfigurationApi(objectMapper, dataDirectory);
+        McpConfigStore mcpStore = new McpConfigStore(objectMapper, dataDirectory);
+        this.mcpApi = new DeerFlowMcpApi(objectMapper, mcpStore);
+        SkillConfigStore skillStore = testSkillStore == null
+                ? new SkillConfigStore(
+                        objectMapper, dataDirectory, SkillConfigStore.repositoryRootFromWorkingDirectory())
+                : testSkillStore;
+        this.skillsApi = new DeerFlowSkillsApi(objectMapper, skillStore);
         PersistentProjectWorkspaceService projects = new PersistentProjectWorkspaceService(
                 dataDirectory.resolve("workspace"), WorkspaceLimits.defaults(), WorkspaceChangeLimits.defaults());
         RestrictedWorkspaceService toolWorkspace = new RestrictedWorkspaceService(
@@ -95,6 +105,34 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                                                 scope.threadId(), scope.artifactProjectRef(), projects, toolWorkspace),
                                         new ProductionReadFileTool(scope.threadId(), projects, toolWorkspace))
                                 : List.of(),
+                new DeerFlowThreadRunApi.McpProjectionProvider() {
+                    @Override
+                    public McpRunTools.Projection forRun(JsonNode body) {
+                        return McpRunTools.projection(
+                                mcpStore.servers(),
+                                configurationApi.resolveMcpPluginSelection(body),
+                                new java.util.ArrayList<>());
+                    }
+
+                    @Override
+                    public McpRunTools.Projection forSelection(McpRunTools.Selection selection) {
+                        return McpRunTools.projection(
+                                mcpStore.servers(), selection, new java.util.ArrayList<>());
+                    }
+                },
+                testRunModelResolver != null && testSkillStore == null
+                        ? DeerFlowThreadRunApi.SkillProjectionProvider.none()
+                        : new DeerFlowThreadRunApi.SkillProjectionProvider() {
+                            @Override
+                            public SkillRunTools.Projection forRun(JsonNode body) {
+                                return skillStore.projection(configurationApi.resolveSkillSelection(body));
+                            }
+
+                            @Override
+                            public SkillRunTools.Projection forRecovery() {
+                                return skillStore.projection(SkillRunTools.Selection.all()).forRecovery();
+                            }
+                        },
                 new DeerFlowUploadContext(toolWorkspace));
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
@@ -148,7 +186,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         server.setExecutor(executor);
         return new DeerFlowBootstrapApi(
-                server, executor, dataDirectory, continuationKey, runModelResolver, List.of(), suggestionsSettings);
+                server, executor, dataDirectory, continuationKey, runModelResolver, List.of(),
+                suggestionsSettings, null);
     }
 
     static DeerFlowBootstrapApi createForTests(
@@ -201,7 +240,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 continuationKey,
                 runModelResolver,
                 tools,
-                DeerFlowSuggestionsApi.Settings.defaults());
+                DeerFlowSuggestionsApi.Settings.defaults(),
+                null);
     }
 
     static DeerFlowBootstrapApi createForTests(
@@ -216,6 +256,22 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 continuationKey,
                 runModelResolver,
                 DeerFlowSuggestionsApi.Settings.defaults());
+    }
+
+    static DeerFlowBootstrapApi createForSkillTests(
+            LocalServerConfiguration configuration,
+            Path dataDirectory,
+            SecretKey continuationKey,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            List<? extends JavaTool<?, ?>> tools,
+            SkillConfigStore skillStore)
+            throws IOException {
+        HttpServer server = HttpServer.create(configuration.socketAddress(), 0);
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        server.setExecutor(executor);
+        return new DeerFlowBootstrapApi(
+                server, executor, dataDirectory, continuationKey, runModelResolver, tools,
+                DeerFlowSuggestionsApi.Settings.defaults(), skillStore);
     }
 
     private static SecretKey continuationKey(Map<String, String> environment, Path dataDirectory) {
@@ -404,6 +460,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         server.createContext("/api/models", configurationApi);
         server.createContext("/api/managed-models", configurationApi);
         server.createContext("/api/agents", configurationApi);
+        server.createContext("/api/mcp", mcpApi);
+        server.createContext("/api/skills", skillsApi);
         server.createContext(DeerFlowInputPolishApi.PATH, inputPolishApi);
         server.createContext("/api/suggestions", suggestionsApi);
         server.createContext("/api/projects", projectApi);

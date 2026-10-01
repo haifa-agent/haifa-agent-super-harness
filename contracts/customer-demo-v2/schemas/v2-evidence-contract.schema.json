@@ -76,6 +76,7 @@
       "properties": {
         "source": {"const": "contracts/customer-demo-v2/v2-case-oracle.json"},
         "count": {"const": 48},
+        "deferredCaseIds": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^V2-M[1-6]-[0-9]{2}$"}},
         "stageDistribution": {
           "type": "object",
           "required": ["V2-M1", "V2-M2", "V2-M3", "V2-M4", "V2-M5", "V2-M6"],
@@ -139,7 +140,7 @@
     },
     "noGoConditions": {
       "type": "array",
-      "minItems": 21,
+      "minItems": 22,
       "items": {
         "type": "object",
         "required": ["id", "rule"],
@@ -162,7 +163,8 @@
           "level": {"enum": ["L1", "L2", "L3"]},
           "referenceSupport": {"enum": ["SUPPORTED", "PARTIAL", "UPSTREAM_UNSUPPORTED", "NOT_INVENTORIED", "NOT_APPLICABLE"]},
           "defaultResult": {"const": "NOT_RUN"},
-          "requiredForStagePass": {"const": true}
+          "requiredForStagePass": {"type": "boolean"},
+          "deferralRef": {"type": "string", "minLength": 1}
         }
       }
     }

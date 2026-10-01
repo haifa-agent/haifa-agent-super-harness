@@ -80,6 +80,52 @@ Gateway 通过 `GET /api/suggestions/config` 暴露冻结前端的后续建议�
 
 线程标题由 Gateway 在首个完成的 user+assistant 交换后按冻结 `TitleMiddleware` 的本地回退规则生成（首轮被取消时允许仅凭首个 user 消息生成），持久化到线程 metadata 与 `values.title`；显式重命名在 Run 运行期间返回 409，且不会被后续自动标题覆盖。
 
+同一 Conversation 可在前一个 Run 终止后的下一 Turn 选择另一模型；当前 Run 的模型保持冻结，历史中的 Tool 与待审批 Interaction 仍归原 Run。可在独立槽位 1 用冻结 UI 和两个本地受控模型复验（不调用真实模型）：
+
+```powershell
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 1 -GatewayPort 20618 -FrontendPort 25618 -V2ModelSwitch -DataDirectory local-tmp/slot-1-w03-v2-model-switch/data/ui-round-1
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 1 -GatewayPort 20618 -FrontendPort 25618 -V2ModelSwitch -DataDirectory local-tmp/slot-1-w03-v2-model-switch/data/ui-round-2 -SkipBuild
+```
+
+第二轮的 `-SkipBuild` 只能用于首轮已按同一 Gateway 代理目标构建的前端；每轮使用独立数据目录，trace、截图及前后端/Provider 日志写入 `local-tmp/slot-1-w03-v2-model-switch/evidence/ui/run-<时间戳>/`。该受控 UI 回归不代替 W18 双后端差分、真实模型链或 V2 阶段门禁。
+
+## W18 V2-M2 MCP 双后端差分
+
+`scripts/run-w18-v2-m2-mcp-rounds.ps1` 在 W18 独立 worktree 中按 reference 冷/暖、Haifa 冷/暖顺序运行同一套冻结 UI MCP 用例；每轮由 `scripts/run-w18-v2-m2-mcp.ps1` 管理独立 Gateway、Frontend、受控 Provider 和两个真实 Streamable HTTP MCP Server。槽位固定为 `20618/25618`，测试 MCP 使用 `20628/20629`，负例无监听端口为 `20630`，Provider 使用 `46618`。脚本会对整组端口查询 NAT 排除范围并实际绑定预检，保存每轮原始日志、trace、截图、Run 与配置证据，结束时只清理自己启动的进程。失败轮次保留 `FAIL`，不会暗中重试；MCP 切片通过也不自动提升 V2-M2 阶段。
+
+本切片的负例只在 W18 runner 中启用：区域 fixture 检查测试专用 `Authorization` 值，缺失或错误时返回真实 HTTP 401；报告 fixture 可在完成一次 `get_status` 调用后、发送响应头前断开连接。测试读取 fixture 的拒绝和调用计数，以核对失效凭据及“结果未知”时没有自动重放。普通 `scripts/start-v2-test-mcp-servers.ps1` 启动不启用这些控制点。
+
+运行前须在该 worktree 以离线 Maven 门禁生成 `super-harness-server/target/*-exec.jar`，并在 `frontend/` 用精确版本 Corepack `pnpm 10.26.2` 离线安装依赖。只有空闲物理内存超过 4 GB、其他 Maven 构建或发布已停止时才运行重型门禁和四轮脚本。完整命令和证据目录由 W18 任务报告记录。
+## W15 V2 最小 Skill 承载
+
+Gateway 从 `third-party/deerflow/skills/manifest.json` 读取受信、不可变的 Skill 版本目录，核对整包文件及来源许可哈希后，交由本地发布的 Haifa Agent `0.1.2-SNAPSHOT` 公开 Skill API 执行发现、激活与 Run Context 注入。当前生产 manifest 只登记冻结 DeerFlow `consulting-analysis`；`contracts/customer-demo-v2/fixtures/skills/v2-format-control/` 只供独立测试数据目录使用，不会在生产配置中启用。旧版本目录须随发行物保留，以便重启后的旧 Run 校验原 binding；不可原位覆盖。
+
+冻结前端使用 `GET /api/skills`、`GET/PUT /api/skills/{name}` 与 `POST /api/skills/reload`。启停状态按数据目录原子保存到 `skills_config.json`，只影响后续新 Run；`Agent.skills` 的 `null` 表示全部已启用 Skill，`[]` 表示不使用 Skill，名称列表为允许名单。启动 Gateway 时工作目录须为仓库根；模块测试可从 `super-harness-server/` 运行。缺包、哈希/许可漂移或无法读取 manifest 会拒绝接入，不会回落到 DeerFlow 后端。完整双 Skill HTTP/Run 断言与冻结 UI 两轮仍以 V2 W15/W18 验收记录为准。
+
+W15 冻结 UI 回归从独立槽位运行，先在该 worktree 的 `frontend/` 用 `COREPACK_ENABLE_NETWORK=0` 执行 `corepack pnpm install --offline --frozen-lockfile`，确认版本为 `10.26.2` 且 `downloaded 0`，再在仓库根执行同一脚本两轮：
+
+```powershell
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -V2Skill -DataDirectory local-tmp/slot-2-w15-v2-skill/data/ui-round-1
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -V2Skill -DataDirectory local-tmp/slot-2-w15-v2-skill/data/ui-round-2 -SkipBuild
+```
+
+第二轮 `-SkipBuild` 仅在首轮已按 Gateway `30618` 构建成功后使用。每轮脚本在结束时清理槽位进程，Playwright trace、截图及前后端/受控 Provider 日志写到 `local-tmp/slot-2-w15-v2-skill/evidence/ui/run-<时间戳>/`；测试需检查 `skill_load` ToolCall、启用后的模型 Context 和禁用后新 Run 的隔离。完整验收仍以开发报告的实际运行结果为准。
+
+## W21 V2 诊断投影
+
+`GET /api/threads/{thread_id}/runs/{run_id}` 的 `diagnostics` 只读投影使用公开 SDK 的 Run、ModelCall、ToolCall、Interaction 与 Artifact 事实；状态、稳定 ID、错误代码及停止原因均保留 SDK 来源。ToolCall 的实际 MCP/Native 来源、无法证实的 Artifact 路径或 SHA、精确 Run 起止时间，以及失败或缺失的模型 Usage（含 LLM 调用数）返回 `null`，不从当前配置猜测历史事实；SDK 最后更新时间另记 `last_updated_at`。单 Run 最多扫描 20 页、每页 100 条 SDK 事件；超限返回 `projection_complete=false` 与未知 Usage。Run 列表只读 SDK 快照摘要，不扫描每条 Run 的事件；其明细集合为 `null`，须按 ID 单独读取，不把未扫描误报为空集合。
+
+`GET /api/threads/{thread_id}/token-usage?include_active=false` 聚合同一 Thread 中已结束且可核对的 Run，整次请求最多扫描 50 页 SDK 事件；历史被截断或 Usage 无法完整核对时返回 JSON `null`，供冻结前端显示未知而不是 `0`。`by_model` 键采用 `<providerId 字符数>:<providerId><modelId>`，避免不同 Provider 的同名 Model 合并。该投影不创建新事件库，也不改变 Run、审批或 Artifact 权威。
+
+W21 冻结 UI 诊断用例使用独立槽位 3、受控 Provider 和两次相同脚本运行。首轮完成构建，次轮只在源码、前端依赖和 Gateway 代理目标完全一致时复用构建；两轮使用不同数据目录，原始日志、trace、截图和诊断 JSON 保存到 `local-tmp/slot-3-w21/evidence/ui/run-<时间戳>/`。执行前需按 `AGENTS.md` 检查整组端口、空闲内存和冻结来源：
+
+```powershell
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 3 -GatewayPort 40618 -FrontendPort 45618 -V2Diagnostics -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow -DataDirectory local-tmp/slot-3-w21/data/ui-cold
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 3 -GatewayPort 40618 -FrontendPort 45618 -V2Diagnostics -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow -DataDirectory local-tmp/slot-3-w21/data/ui-warm -SkipBuild
+```
+
+用例在真实冻结页面批准生产 `write_file`，核对同一 Run 的 ModelCall、ToolCall、Interaction、Artifact ID 和下载字节，并核对页面请求的 `/token-usage`。受控 Provider 另有真实省略 Usage SSE 帧的负例，要求 SDK 报 `PARTIAL_RESPONSE` 且诊断和 HTTP Usage 保持未知。冻结页面当前关闭可见 token badge，因此不把 badge 当作通过断言；跨身份隔离仍须另行执行。
+
 ## 启动主工作树供人工验收
 
 主工作树固定使用本地回环端口：Gateway `18018`、冻结前端 `33018`。重启时应保持数据目录不变；默认使用被 Git 忽略的 `local-tmp/main-service-data`，其中包含持久化 SQLite Runtime 和日志。重启时不要删除该目录或 Windows 凭据管理器中的 continuation key。

@@ -72,16 +72,18 @@ The W03 Run-binding slice now advertises only enabled, credential-configured and
 models from `GET /api/models`. A Run selects an explicit `context.model_name`, then a custom Agent model,
 then the first executable managed model. It freezes the selected model name and revision into a
 public Haifa SDK model snapshot and invokes the public OpenAI-compatible adapter through the same
-SDK Run/SSE/cancel path. Unknown, disabled, credential-less, non-loopback plain-HTTP, reasoning-mode,
-and revision-drift selections fail closed. Plain HTTP is accepted only for a literal loopback
+SDK Run/SSE/cancel path. Unknown, disabled, credential-less, non-loopback plain-HTTP, unsupported
+reasoning-mode selections and stale managed-model writes fail closed. Plain HTTP is accepted only for a literal loopback
 provider; other providers require HTTPS. The W02 local probe is available only through a
 package-private test bootstrap and is never exposed by the production server entry point.
 
-This is still an in-progress compatibility slice. A thread keeps its first model revision so its
-in-memory Haifa Conversation remains coherent; after a model revision changes, the caller must
-create a new thread. The controlled loopback provider remains L2 protocol evidence; real-provider
+This is still an in-progress compatibility slice. A new Turn may select a different enabled model
+or revision in the same durable Haifa Conversation. Each Run retains its selected model snapshot;
+an active Run still rejects a concurrent Turn. The thread catalog's `model_binding` records the
+last successfully admitted model for restart recovery, not an immutable thread constraint.
+The controlled loopback provider remains L2 protocol evidence; real-provider
 evidence must be reported separately from an explicitly enabled live test using an OS credential.
-Process-restart reconstruction, `updates` and `custom` event
+`updates` and `custom` event
 projection, production Tool wiring, full history, Project/archive/conversion/upload deletion,
 same-UI differential
 verification, and account authentication are **NOT_RUN**. Unsupported Interaction projection fails

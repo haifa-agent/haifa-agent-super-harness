@@ -3,3 +3,7 @@
 mvnw text eol=lf
 mvnw.cmd text eol=crlf
 .mvn/wrapper/maven-wrapper.properties text eol=lf
+# Frozen Skill package hashes refer to exact upstream bytes on every checkout.
+third-party/deerflow/skills/**/SKILL.md -text
+# The trusted Skill manifest hashes the pinned DeerFlow license's LF bytes.
+third-party/deerflow/LICENSES/deer-flow-MIT.txt text eol=lf

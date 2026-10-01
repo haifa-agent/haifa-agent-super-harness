@@ -8,16 +8,30 @@ models:
     model: w18-controlled-model
     api_key: w18-loopback-only
     base_url: $W18_PROVIDER_BASE_URL
+  # V2-M1: a second distinct provider model id on the same controlled loopback
+  # Provider, so a same-Thread Turn can switch A -> B and the provider request
+  # log proves which model served. Test profile only.
+  - name: w18-controlled-b
+    display_name: W18 Controlled Loopback B
+    use: langchain_openai:ChatOpenAI
+    model: w18-controlled-model-b
+    api_key: w18-loopback-only
+    base_url: $W18_PROVIDER_BASE_URL
 sandbox:
   use: deerflow.sandbox.local:LocalSandboxProvider
 skills:
   path: $W18_REFERENCE_SKILLS_ROOT
   container_path: /mnt/skills
-# Only the production file-writer the file Tool case needs; built-in
-# present_files/ask_clarification come from DeerFlow itself.
+# Local differential profile: enable only the frozen production file tools
+# exercised by these cases; built-in present_files/ask_clarification come
+# from DeerFlow itself.
 tool_groups:
+  - name: file:read
   - name: file:write
 tools:
+  - name: read_file
+    group: file:read
+    use: deerflow.sandbox.tools:read_file_tool
   - name: write_file
     group: file:write
     use: deerflow.sandbox.tools:write_file_tool
@@ -28,6 +42,12 @@ summarization:
   enabled: false
 agents_api:
   enabled: true
+# Test-only bound so the V2-M1-03-N3 oversized-upload negative can use a small
+# controlled fixture instead of a >50 MiB payload. The spec still reads the
+# backend's advertised /uploads/limits, so the case stays correct even if this
+# key is ignored (it would then use the frozen 50 MiB default).
+uploads:
+  max_file_size: 1048576
 database:
   backend: sqlite
   sqlite_dir: $W18_REFERENCE_DB_ROOT

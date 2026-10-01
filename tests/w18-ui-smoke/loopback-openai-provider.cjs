@@ -1,5 +1,6 @@
 const http = require("node:http");
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 
 const port = Number.parseInt(process.argv[2] ?? "0", 10);
 const readyFile = process.argv[3];
@@ -225,6 +226,18 @@ function v2CsvAnswer(toolText) {
   }
   const row17 = rows.length >= 17 ? rows[16][0] : "missing";
   return `row17=${row17} east=${totals.East ?? 0} west=${totals.West ?? 0} total=${total} high=${high} rows=${rows.length}`;
+}
+
+// Both backends return the CSV bytes through the production read_file Tool,
+// but only Haifa's Tool envelope advertises a sha256= field. Derive the same
+// digest from the CSV lines actually seen by the Provider on either backend;
+// never open the fixture or an upload path in this test Provider.
+function v2CsvToolResultSha256(toolText) {
+  const lines = toolText.split(/\r?\n/);
+  const header = lines.findIndex((line) => line.trim() === "customer_id,region,amount_cny");
+  if (header < 0) return null;
+  const csvLines = lines.slice(header).filter((line) => line.trim() !== "").map((line) => line.trim());
+  return crypto.createHash("sha256").update(`${csvLines.join("\n")}\n`, "utf8").digest("hex");
 }
 
 function firstUserMatch(body, pattern) {
@@ -465,7 +478,10 @@ const server = http.createServer((request, response) => {
     // with read_file and derive every value from the Tool result. The provider
     // never holds the CSV values; a missing reference or unreadable file yields
     // an explicit NO_FILE_CONTEXT / FILE_UNREADABLE answer instead.
-    const v2FilePrompt = /v2-file-context-[a-z]+-\d+/.exec(rawPrompt)?.[0];
+    // W04's `v2-file-context-<word>-<n>` and V2-M1's `v2-m1-file-<n>` share one
+    // bounded read_file -> answer path; every value still comes from the Tool
+    // result, never from a provider-side copy of the fixture.
+    const v2FilePrompt = /(?:v2-file-context-[a-z]+|v2-m1-file)-\d+/.exec(rawPrompt)?.[0];
     if (v2FilePrompt && offeredTools.includes("read_file")) {
       const id = `v2-file-context-${Date.now()}`;
       const last = Array.isArray(body.messages) ? body.messages.at(-1) : null;
@@ -474,7 +490,7 @@ const server = http.createServer((request, response) => {
         const answer = `${v2FilePrompt} ${v2CsvAnswer(toolText)}`;
         console.log(JSON.stringify({
           type: "v2_file_context", marker: v2FilePrompt, action: "answer", answer,
-          toolResultSha256: /sha256=([0-9a-f]{64})/.exec(toolText)?.[1] ?? null,
+          toolResultSha256: v2CsvToolResultSha256(toolText),
         }));
         finishWithText(response, id, answer);
       } else {
@@ -486,9 +502,75 @@ const server = http.createServer((request, response) => {
             path: target,
           });
         } else {
+          console.log(JSON.stringify({ type: "v2_file_context", marker: v2FilePrompt, action: "no_file_context" }));
           finishWithText(response, id, `${v2FilePrompt} NO_FILE_CONTEXT`);
         }
       }
+      return;
+    }
+
+    // W18 V2-M2: request a Tool only when the real backend offered its
+    // source-qualified name. The answer is derived solely from the Tool reply
+    // returned through the real MCP transport, never from the policy fixture.
+    const mcpPrompt = firstUserMatch(body, /w18-v2-m2-(?:disconnect|status-reporting|status-region|reporting|region)-\d+/);
+    if (mcpPrompt) {
+      const action = /^w18-v2-m2-(disconnect|status-reporting|status-region|reporting|region)-/.exec(mcpPrompt)?.[1];
+      const source = action === "disconnect" || action?.includes("reporting") ? "reporting" : "region";
+      const suffix = action === "disconnect" || action?.startsWith("status-") ? "get_status" :
+        source === "reporting" ? "get_reporting_policy" : "get_region_label";
+      const qualified = offeredTools.find((name) =>
+        name.endsWith(`_${suffix}`) && name.replace(/_/g, "-").includes(source));
+      const lastTool = [...(body.messages ?? [])].reverse().find((message) => message?.role === "tool");
+      const id = `w18-v2-m2-${Date.now()}`;
+      if (lastTool) {
+        const result = v2ToolText(lastTool.content);
+        const resultSha256 = crypto.createHash("sha256").update(result, "utf8").digest("hex");
+        console.log(JSON.stringify({
+          type: "v2_mcp", marker: mcpPrompt, action: "result", source,
+          tool: qualified ?? null, result, resultSha256,
+        }));
+        // A transport error may arrive as a Tool message. Never turn it into
+        // a claimed successful observation for the ambiguous-result case.
+        const prefix = action === "disconnect" && !result.includes('"state":"ready"')
+          ? "MCP_UNKNOWN" : "MCP_RESULT";
+        finishWithText(response, id, `${prefix} ${mcpPrompt} ${result}`);
+      } else if (qualified) {
+        const args = suffix === "get_region_label" ? { region: "East" } : {};
+        console.log(JSON.stringify({ type: "v2_mcp", marker: mcpPrompt, action: "call", source, tool: qualified, args }));
+        finishWithToolCall(response, id, `w18-v2-m2-${source}-${Date.now()}`, qualified, args);
+      } else {
+        console.log(JSON.stringify({ type: "v2_mcp", marker: mcpPrompt, action: "unavailable", source, offeredTools }));
+        finishWithText(response, id, `NO_MCP_TOOL ${mcpPrompt}`);
+      }
+      return;
+    }
+
+    // W15 Skill proof: the answer is derived from the SDK's offered Tool and
+    // the instructions visible in the resumed model request, not from a local
+    // copy of SKILL.md or a hard-coded successful response.
+    const skillMarker = firstUserMatch(body, /w15-skill-(?:enabled|disabled)-\d+/);
+    if (skillMarker) {
+      const id = `w15-skill-${Date.now()}`;
+      const hasSkillTool = offeredTools.includes("skill_load");
+      const skillBodyVisible = JSON.stringify(body.messages ?? []).includes("Data Authenticity Protocol");
+      const toolResults = toolResultCount(body);
+      let action;
+      if (skillMarker.includes("-enabled-") && toolResults === 0 && hasSkillTool) {
+        action = "skill_load";
+        finishWithToolCall(response, id, `w15-skill-load-${Date.now()}`, "skill_load", {
+          skill: "consulting-analysis",
+        });
+      } else {
+        action = "answer";
+        const answer = skillMarker.includes("-disabled-")
+          ? (!hasSkillTool && !skillBodyVisible ? "SKILL_DISABLED_NO_TOOL" : "SKILL_DISABLED_LEAK")
+          : (toolResults > 0 && skillBodyVisible ? "SKILL_ACTIVE_FROM_CONTEXT" : "SKILL_BODY_MISSING");
+        finishWithText(response, id, `${skillMarker} ${answer}`);
+      }
+      console.log(JSON.stringify({
+        type: "w15_skill_context", marker: skillMarker, action,
+        hasSkillTool, skillBodyVisible, toolResults,
+      }));
       return;
     }
 
@@ -619,6 +701,16 @@ const server = http.createServer((request, response) => {
         }
       }, prompt === "__slow_differential__" ? 100 : 25);
       response.on("close", () => clearInterval(timer));
+      return;
+    }
+
+    // W21 negative control: a real SSE completion without Provider Usage.
+    // Keep the raw frame in the Provider log for later source verification.
+    if (firstUserMatch(body, /w21-omit-usage-\d+/)) {
+      frame(response, completionChunk(id, `W21 usage omitted: ${prompt}`, "stop"));
+      frame(response, "[DONE]");
+      console.log(JSON.stringify({ type: "w21_usage_omitted", id, prompt, usage: null }));
+      response.end();
       return;
     }
 
