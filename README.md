@@ -111,6 +111,20 @@ pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 306
 
 第二轮 `-SkipBuild` 仅在首轮已按 Gateway `30618` 构建成功后使用。每轮脚本在结束时清理槽位进程，Playwright trace、截图及前后端/受控 Provider 日志写到 `local-tmp/slot-2-w15-v2-skill/evidence/ui/run-<时间戳>/`；测试需检查 `skill_load` ToolCall、启用后的模型 Context 和禁用后新 Run 的隔离。完整验收仍以开发报告的实际运行结果为准。
 
+## 默认 Web 工具的环境代理
+
+UX-V1 默认工具验收在独立工作树运行 `pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -UxV1DefaultTools -DeferUxV1Web -DataDirectory <本工作树内的新数据目录>`。`-DeferUxV1Web` 用于人工批准的 DDG 挑战延期：A 文件/Artifact、B 澄清继续执行，C 搜索依赖链显式记为 NOT_RUN；延期或局部通过不能记为 M1 全部通过。源码、前端依赖和构建时代理目标相同时，第二轮可加 `-SkipBuild`，仍须使用新的 data-root、Run 与证据。原始 SSE、Run diagnostics/Usage、trace、截图及 `flow-health.json` 外置到该槽位 `local-tmp`；保留失败与首次卡点。
+
+主控已经在同一源码运行全仓 `clean verify` 并留存 JAR 哈希、SDK 构件与原始门禁证据时，冷轮可加 `-SkipServerBuild` 复用该 JAR，仍按本槽位重新构建 Next；它不会执行 Java 门禁，不能用来替代或跳过失败的全仓验证。源码或 SDK 构件改变后必须重新构建、验证。
+
+默认 `web_search`、`image_search` 和 `web_fetch` 的 HTTP 客户端优先读取产品精确键 `HAIFA_SUPER_HARNESS_TOOL_HTTP_PROXY`：非空时它作为三种工具的 HTTP 代理，并通过 CONNECT 承载 HTTPS 目标，且优先于通用 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 和 JDK 默认 `ProxySelector`；该键为空或缺失时，才回退到通用环境映射。通用映射读取启动进程的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 和 `NO_PROXY`，小写同名变量优先；对应协议没有代理时使用 `ALL_PROXY`，仍未配置时保留 JDK 默认 `ProxySelector`。不修改 JVM 全局选择器、用户环境或 Windows 系统代理。
+
+代理地址支持 `http://host:port`（省略协议时按 HTTP 解释，缺省端口为 80）；HTTPS 目标通过 HTTP 代理的 CONNECT 转发。当前不支持 SOCKS、代理地址自身为 HTTPS、代理认证、`NO_PROXY` CIDR 或任意通配表达式；配置不支持时明确报错，错误不含代理凭据，也不会静默改成直连。
+
+`NO_PROXY` 用逗号分隔：裸域名匹配本身及点分隔的子域名，前导点域名只匹配子域名，IP 地址精确匹配；可添加端口或 `http://` / `https://` 来限制排除范围，`*` 表示全部直连。示例 `127.0.0.1,localhost,example.com:443` 会保留本地回环访问。只配置 `HTTPS_PROXY` 时，未配置的 HTTP 请求仍交给原 JDK 选择器。
+
+需在启动 Gateway 的同一个 PowerShell 进程显式注入代理变量，优先用产品键 `$env:HAIFA_SUPER_HARNESS_TOOL_HTTP_PROXY='http://<代理主机>:<端口>'`；若沿用通用变量，则设置 `$env:HTTP_PROXY='http://<代理主机>:<端口>'`、`$env:HTTPS_PROXY=$env:HTTP_PROXY`、`$env:NO_PROXY='127.0.0.1,localhost'`，然后执行启动脚本。产品键非空会覆盖通用变量与 `NO_PROXY`。Web 工具只消费这些变量；它不会自动读取 WinINET，也不改变 MCP、模型 Provider 或审批配置。代理接入不代表 DuckDuckGo 挑战页已解决：202/403 仍保留无结果语义与诊断日志，不重试或切换引擎。
+
 ## W21 V2 诊断投影
 
 `GET /api/threads/{thread_id}/runs/{run_id}` 的 `diagnostics` 只读投影使用公开 SDK 的 Run、ModelCall、ToolCall、Interaction 与 Artifact 事实；状态、稳定 ID、错误代码及停止原因均保留 SDK 来源。ToolCall 的实际 MCP/Native 来源、无法证实的 Artifact 路径或 SHA、精确 Run 起止时间，以及失败或缺失的模型 Usage（含 LLM 调用数）返回 `null`，不从当前配置猜测历史事实；SDK 最后更新时间另记 `last_updated_at`。单 Run 最多扫描 20 页、每页 100 条 SDK 事件；超限返回 `projection_complete=false` 与未知 Usage。Run 列表只读 SDK 快照摘要，不扫描每条 Run 的事件；其明细集合为 `null`，须按 ID 单独读取，不把未扫描误报为空集合。

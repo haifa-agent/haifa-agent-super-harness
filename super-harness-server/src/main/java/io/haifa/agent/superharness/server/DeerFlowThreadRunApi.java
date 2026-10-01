@@ -552,7 +552,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         Map<Long, Integer> ordinals = computeTurnOrdinals(thread);
         List<Map<String, Object>> eligible = new ArrayList<>(
                 durableTurns.stream()
-                        .map(turn -> messageRow(turn, ordinals.getOrDefault(turn.sequence(), 0)))
+                        .map(turn -> messageRow(thread, turn, ordinals.getOrDefault(turn.sequence(), 0)))
                         .toList());
         Set<String> durableHumanRuns = durableHumanRunIds(durableTurns);
         for (RunRecord run : runs.values()) {
@@ -645,18 +645,27 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             sendJson(exchange, 422, Map.of("detail", invalid.getMessage()));
             return;
         }
+        DeerFlowInteractionHttpProjection.FrozenResponse clarificationAck = null;
         if (interactionResponse.isPresent()) {
             if (runInput != null) {
                 sendJson(exchange, 422, Map.of("detail", "Haifa Run input mode cannot answer an Interaction"));
                 return;
             }
-            respondToInteraction(
-                    exchange,
-                    thread,
-                    interactionResponse.orElseThrow(),
-                    message,
-                    text(body, "on_disconnect").orElse("cancel"));
-            return;
+            DeerFlowInteractionHttpProjection.FrozenResponse response = interactionResponse.orElseThrow();
+            if (DeerFlowInteractionHttpProjection.CLARIFICATION_SOURCE.equals(response.source())) {
+                // Frozen has no server-side Interaction for ask_clarification: the hidden reply is a
+                // normal human message that opens the next Run. A forged or already answered
+                // request_id therefore never triggers an approval action; it just starts a Turn.
+                clarificationAck = response;
+            } else {
+                respondToInteraction(
+                        exchange,
+                        thread,
+                        response,
+                        message,
+                        text(body, "on_disconnect").orElse("cancel"));
+                return;
+            }
         }
         HaifaRunBridge.ModelBinding binding;
         try {
@@ -670,6 +679,12 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         String modelInput = runInput == null
                 ? uploadContext.modelInput(threadId, body.path("input").path("messages"), message)
                 : message;
+        if (runInput == null) {
+            // list_uploaded_files reports historical uploads only; the current Run's files are
+            // already surfaced through <current_uploads>.
+            thread.currentRunUploads.set(
+                    DeerFlowUploadContext.currentUploadFilenames(body.path("input").path("messages")));
+        }
         // A Steer must never re-declare tools: it only feeds the active Run's own bridge.
         McpRunTools.Projection mcpProjection = runInput == null
                 ? mcpProjections.forRun(body)
@@ -833,6 +848,9 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     requestedStreamModes(body),
                     titleCandidate);
             runs.put(run.runId.value(), run);
+            if (clarificationAck != null) {
+                markClarificationAnswered(thread, clarificationAck, run);
+            }
             persistThread(thread);
             }
         }
@@ -1173,7 +1191,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         Optional<String> project = projectId instanceof String value && !value.isBlank()
                 ? Optional.of(value)
                 : Optional.empty();
-        return runToolsForThread.apply(new ThreadToolScope(thread.threadId, project));
+        return runToolsForThread.apply(
+                new ThreadToolScope(thread.threadId, project, thread.currentRunUploads));
     }
 
     private void attachBridge(ThreadRecord thread, HaifaRunBridge bridge, boolean claimBinding) {
@@ -1206,7 +1225,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         long latestDisplaySequence = thread.interactionDisplays.stream()
                 .mapToLong(display -> display.requestSequence() + 1)
                 .max().orElse(0);
-        thread.nextMessageSequence = Math.max(latestSequence, latestDisplaySequence) + 1;
+        long latestClarificationSequence = thread.clarificationDisplays.stream()
+                .mapToLong(display -> display.requestSequence() + 1)
+                .max().orElse(0);
+        thread.nextMessageSequence = Math.max(
+                Math.max(latestSequence, latestDisplaySequence), latestClarificationSequence) + 1;
     }
 
     private long latestVisibleTurnSequence(ThreadRecord thread, HaifaRunBridge bridge) {
@@ -1239,8 +1262,170 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     thread.updatedAt,
                     Optional.ofNullable(thread.persistedSessionId),
                     Optional.ofNullable(thread.modelBindingIdentity),
-                    thread.interactionDisplays));
+                    thread.interactionDisplays,
+                    thread.clarificationDisplays));
         }
+    }
+
+    /**
+     * Detect the run's frozen clarification boundary from the durable SDK ToolCall view, persist the
+     * card presentation and best-effort cancel the model continuation. Correctness never depends on
+     * the cancel: the projection is bounded by the same durable ToolCall on every read.
+     */
+    private void observeClarificationBoundary(ThreadRecord thread, RunRecord run) {
+        if (run.clarificationObserved) {
+            return;
+        }
+        List<ToolCallView> calls;
+        try {
+            calls = run.bridge.toolCalls(run.runId);
+        } catch (RuntimeException unavailable) {
+            return;
+        }
+        int index = DeerFlowToolTranscriptProjection.clarificationBoundaryIndex(calls);
+        if (index < 0) {
+            return;
+        }
+        ToolCallView boundary = calls.get(index);
+        Map<String, Object> payload =
+                DeerFlowToolTranscriptProjection.clarificationPayload(boundary).orElse(null);
+        if (payload == null) {
+            return;
+        }
+        run.clarificationObserved = true;
+        synchronized (thread) {
+            try {
+                ensureSavedClarificationDisplay(thread, run, boundary, payload);
+            } catch (IOException | IllegalArgumentException failed) {
+                INTERACTION_LOG.log(
+                        System.Logger.Level.WARNING,
+                        "CLARIFICATION_DISPLAY_PERSIST_FAILURE run=" + run.runId.value() + " request="
+                                + DeerFlowToolTranscriptProjection.clarificationRequestId(boundary, payload)
+                                + " cause=" + failed.getClass().getSimpleName());
+            }
+        }
+        try {
+            if (!run.bridge.snapshot(run.runId).status().isTerminal()) {
+                run.bridge.cancel(run.runId);
+            }
+        } catch (RuntimeException ignored) {
+            // Best-effort: a failed/late cancel cannot affect the boundary projection.
+        }
+    }
+
+    private PersistentThreadCatalog.ClarificationDisplay ensureSavedClarificationDisplay(
+            ThreadRecord thread, RunRecord run, ToolCallView boundary, Map<String, Object> payload)
+            throws IOException {
+        String requestId = DeerFlowToolTranscriptProjection.clarificationRequestId(boundary, payload);
+        var saved = thread.clarificationDisplays.stream()
+                .filter(display -> display.requestId().equals(requestId))
+                .findFirst();
+        if (saved.isPresent()) {
+            return saved.orElseThrow();
+        }
+        long latest = thread.clarificationDisplays.stream()
+                .mapToLong(PersistentThreadCatalog.ClarificationDisplay::requestSequence)
+                .max()
+                .orElse(0);
+        long sequence = Math.max(Math.max(thread.nextMessageSequence, run.humanSequence + 1), latest + 1);
+        var display = new PersistentThreadCatalog.ClarificationDisplay(
+                run.runId.value(),
+                requestId,
+                sequence,
+                boundary.completedAt().orElseGet(Instant::now),
+                boundary.id().value(),
+                null,
+                null,
+                null,
+                null);
+        List<PersistentThreadCatalog.ClarificationDisplay> updated =
+                new ArrayList<>(thread.clarificationDisplays);
+        updated.add(display);
+        PersistentThreadCatalog.validateClarificationDisplays(updated);
+        List<PersistentThreadCatalog.ClarificationDisplay> previous = thread.clarificationDisplays;
+        thread.clarificationDisplays = List.copyOf(updated);
+        try {
+            persistThread(thread);
+        } catch (IOException | RuntimeException failedPersistence) {
+            thread.clarificationDisplays = previous;
+            throw new IOException("clarification card presentation could not be persisted", failedPersistence);
+        }
+        return display;
+    }
+
+    private void markClarificationAnswered(
+            ThreadRecord thread,
+            DeerFlowInteractionHttpProjection.FrozenResponse response,
+            RunRecord run) {
+        List<PersistentThreadCatalog.ClarificationDisplay> updated =
+                new ArrayList<>(thread.clarificationDisplays);
+        boolean changed = false;
+        for (int index = 0; index < updated.size(); index++) {
+            var display = updated.get(index);
+            if (display.answeredKind() == null && display.requestId().equals(response.requestId())) {
+                updated.set(index, display.answered(
+                        response.responseKind(), response.optionId(), response.value(), run.runId.value()));
+                changed = true;
+            }
+        }
+        if (!changed) {
+            return;
+        }
+        try {
+            PersistentThreadCatalog.validateClarificationDisplays(updated);
+            thread.clarificationDisplays = List.copyOf(updated);
+        } catch (IllegalArgumentException invalid) {
+            INTERACTION_LOG.log(
+                    System.Logger.Level.WARNING,
+                    "CLARIFICATION_ANSWER_PERSIST_FAILURE run=" + run.runId.value()
+                            + " request=" + response.requestId());
+        }
+    }
+
+    private boolean runHasClarificationBoundary(RunRecord run) {
+        try {
+            return DeerFlowToolTranscriptProjection.hasClarificationBoundary(run.bridge.toolCalls(run.runId));
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+    }
+
+    /**
+     * Marks the durable user turn that answered a clarification card as hidden and carries the
+     * frozen {@code additional_kwargs.human_input_response} so a reload derives the same answered
+     * state the card showed live.
+     */
+    private void applyClarificationAnswer(
+            ThreadRecord thread, ConversationTurn turn, Map<String, Object> message) {
+        if (turn.role() != io.haifa.agent.core.message.MessageRole.USER) {
+            return;
+        }
+        String runId = turn.runId().map(AgentRunId::value).orElse(null);
+        if (runId == null) {
+            return;
+        }
+        synchronized (thread) {
+            for (var display : thread.clarificationDisplays) {
+                if (runId.equals(display.answeredRunId()) && display.answeredKind() != null) {
+                    Map<String, Object> additional = new LinkedHashMap<>();
+                    additional.put("hide_from_ui", true);
+                    additional.put("human_input_response", clarificationAnswerWire(display));
+                    message.put("additional_kwargs", Map.copyOf(additional));
+                    return;
+                }
+            }
+        }
+    }
+
+    private static Map<String, Object> clarificationAnswerWire(
+            PersistentThreadCatalog.ClarificationDisplay display) {
+        var response = new DeerFlowInteractionHttpProjection.FrozenResponse(
+                DeerFlowInteractionHttpProjection.CLARIFICATION_SOURCE,
+                display.requestId(),
+                display.answeredKind(),
+                display.answeredOptionId(),
+                display.answeredValue());
+        return response.toWireValue();
     }
 
     private void joinRun(HttpExchange exchange, String threadId, String runId) throws IOException {
@@ -1336,6 +1521,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                         }
                     }
                     Optional<AppendResult.Gap> sourceGap = synchronizeOnePage(run);
+                    observeClarificationBoundary(thread, run);
                     if (sourceGap.isPresent()) {
                         AppendResult.Gap gap = sourceGap.orElseThrow();
                         writeReplayGap(output, run, gap.gap(), gap.authoritativeView(), delivered);
@@ -1409,12 +1595,16 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 run.bridge.cancel(run.runId);
             }
         } finally {
+            observeClarificationBoundary(thread, run);
             synchronized (thread) {
                 boolean terminal = isKnownTerminal(() -> Optional.of(run.bridge.snapshot(run.runId)));
                 if (terminal && run.runId.value().equals(thread.activeRunId)) {
                     thread.activeRunId = null;
                 }
                 thread.updatedAt = Instant.now();
+            }
+            if (isKnownTerminal(() -> run.bridge.findRun(run.runId))) {
+                ClarificationBoundaryRegistry.clear(run.runId.value());
             }
             persistThread(thread);
             trimRunCache();
@@ -1535,6 +1725,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return false;
         }
         if ("completion.deferred".equals(event.source().eventType())) {
+            // A clarification Run projects only up to its tool result: no later model text.
+            if (runHasClarificationBoundary(run)) {
+                return false;
+            }
             if (run.streamModes.contains("messages-tuple")) {
                 int ordinal = (int) run.deferredEventSequences.stream()
                         .filter(seq -> seq < event.source().sequence())
@@ -1594,7 +1788,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
         if (event.terminalKind() == RunTerminalKind.COMPLETED
                 && terminalSnapshot.output().isPresent()
-                && run.streamModes.contains("messages-tuple")) {
+                && run.streamModes.contains("messages-tuple")
+                && !runHasClarificationBoundary(run)) {
             int finalAssistantOrdinal = run.deferredEventSequences.size();
             writeMessageDelta(
                     output, run, terminalSnapshot.output().orElseThrow(), cursor, finalAssistantOrdinal);
@@ -1695,9 +1890,21 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private void writeToolLifecycle(OutputStream output, RunRecord run, String toolCallId, String cursor)
             throws IOException {
-        Optional<ToolCallView> selected = run.bridge.toolCalls(run.runId).stream()
-                .filter(call -> call.id().value().equals(toolCallId))
-                .findFirst();
+        List<ToolCallView> calls = run.bridge.toolCalls(run.runId);
+        int selectedIndex = -1;
+        for (int index = 0; index < calls.size(); index++) {
+            if (calls.get(index).id().value().equals(toolCallId)) {
+                selectedIndex = index;
+                break;
+            }
+        }
+        int boundary = DeerFlowToolTranscriptProjection.clarificationBoundaryIndex(calls);
+        if (boundary >= 0 && (selectedIndex < 0 || selectedIndex > boundary)) {
+            // A tool call that the model emitted after ask_clarification is never projected.
+            return;
+        }
+        Optional<ToolCallView> selected =
+                selectedIndex < 0 ? Optional.empty() : Optional.of(calls.get(selectedIndex));
         if (selected.isEmpty()) {
             writeSse(
                     output,
@@ -2070,7 +2277,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         response.put("run_id", run.runId.value());
         response.put("thread_id", run.threadId);
         response.put("assistant_id", run.assistantId);
-        response.put("status", deerFlowStatus(snapshot.status()));
+        response.put("status", runStatus(run, snapshot));
         response.put("metadata", Map.of());
         response.put(
                 "kwargs",
@@ -2235,7 +2442,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             ThreadRecord thread, int limit, Long exclusiveBeforeSequence) {
         if (thread.persistedSessionId == null) return List.of();
         HaifaRunBridge bridge = bridgeForPersistedThread(thread);
-        HistoryAccumulator accumulator = new HistoryAccumulator(limit, exclusiveBeforeSequence);
+        HistoryAccumulator accumulator =
+                new HistoryAccumulator(limit, exclusiveBeforeSequence, clarificationRunIds(thread));
         Optional<ConversationTurnCursor> cursor = Optional.empty();
         int pages = 0;
         while (true) {
@@ -2250,11 +2458,33 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
     }
 
-    private Map<String, Object> messageRow(ConversationTurn turn, int ordinal) {
+    /**
+     * Runs that ended at an {@code ask_clarification} boundary. Frozen DeerFlow checkpoints the human
+     * input and the tool result, so a clarification Run has a durable head even without a later
+     * assistant turn; the SDK's {@code history} read (and the frozen UI) needs that head to place the
+     * card after the human instead of leaving the submitted human optimistic. The boundary is read
+     * from the persisted card, with the durable ToolCall as a fallback for a persistence failure.
+     */
+    private Set<String> clarificationRunIds(ThreadRecord thread) {
+        Set<String> runIds = new HashSet<>();
+        synchronized (thread) {
+            for (var display : thread.clarificationDisplays) {
+                runIds.add(display.runId());
+            }
+        }
+        for (RunRecord run : runs.values()) {
+            if (run.threadId.equals(thread.threadId) && runHasClarificationBoundary(run)) {
+                runIds.add(run.runId.value());
+            }
+        }
+        return runIds;
+    }
+
+    private Map<String, Object> messageRow(ThreadRecord thread, ConversationTurn turn, int ordinal) {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("run_id", turn.runId().map(AgentRunId::value).orElse(null));
         row.put("seq", turn.sequence());
-        row.put("content", messageForTurn(turn, ordinal));
+        row.put("content", messageForTurn(thread, turn, ordinal));
         row.put("metadata", Map.of("caller", "lead_agent"));
         row.put("created_at", turn.createdAt().toString());
         return row;
@@ -2276,13 +2506,14 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         return row;
     }
 
-    private Map<String, Object> messageForTurn(ConversationTurn turn, int ordinal) {
+    private Map<String, Object> messageForTurn(ThreadRecord thread, ConversationTurn turn, int ordinal) {
         String type = turn.role() == io.haifa.agent.core.message.MessageRole.USER ? "human" : "ai";
         String id = turn.runId()
                 .map(runId -> wireMessageId(runId.value(), type, ordinal))
                 .orElseGet(turn::messageId);
         Map<String, Object> projected = message(id, type, turn.text());
         turn.runId().ifPresent(runId -> projected.put("run_id", runId.value()));
+        applyClarificationAnswer(thread, turn, projected);
         return projected;
     }
 
@@ -2312,7 +2543,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         List<Map<String, Object>> messages = new ArrayList<>();
         for (ConversationTurn turn : turns) {
             int ordinal = ordinals.getOrDefault(turn.sequence(), 0);
-            messages.add(messageForTurn(turn, ordinal));
+            messages.add(messageForTurn(thread, turn, ordinal));
             if (turn.role() == io.haifa.agent.core.message.MessageRole.USER
                     && turn.runId().isPresent()
                     && supportProjectedRuns.add(turn.runId().orElseThrow().value())) {
@@ -2337,9 +2568,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             AgentRunId runId,
             RunRecord cached,
             List<Map<String, Object>> messages) {
-        List<ToolCallView> calls = cached == null
-                ? bridgeForPersistedThread(thread).toolCalls(runId)
-                : cached.bridge.toolCalls(runId);
+        List<ToolCallView> calls = DeerFlowToolTranscriptProjection.upToClarificationBoundary(
+                cached == null
+                        ? bridgeForPersistedThread(thread).toolCalls(runId)
+                        : cached.bridge.toolCalls(runId));
         calls.stream().map(DeerFlowToolTranscriptProjection::requestMessage).forEach(messages::add);
         addInteractionMessages(thread, runId.value(), cached, messages);
         calls.stream()
@@ -3095,8 +3327,15 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             workspaceChanges.completeRunChanges(
                     DeerFlowBootstrapApi.DEFAULT_USER_ID, run.threadId, binding.workspaceId(), run.runId.value());
             return true;
-        } catch (RuntimeException ignored) {
-            // Recording is best-effort and must never replace the authoritative Run/SSE outcome.
+        } catch (RuntimeException failure) {
+            // Recording is best-effort; keep the Run outcome while exposing a bounded diagnostic.
+            if (!closed) INTERACTION_LOG.log(System.Logger.Level.WARNING,
+                    "Workspace completion failed for run " + run.runId.value()
+                            + " (" + failure.getClass().getSimpleName()
+                            + (failure instanceof WorkspaceException workspaceFailure
+                                    ? ":" + workspaceFailure.error().name() : "")
+                            + (failure.getCause() == null ? "" : ":" + failure.getCause().getClass().getSimpleName())
+                            + ")");
             return false;
         }
     }
@@ -3123,8 +3362,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                         }
                     } catch (InterruptedException interrupted) {
                         Thread.currentThread().interrupt();
-                    } catch (RuntimeException ignored) {
+                    } catch (RuntimeException failure) {
                         // A recorder or snapshot fault cannot mutate the Run result.
+                        if (!closed) INTERACTION_LOG.log(System.Logger.Level.WARNING,
+                                "Workspace observer stopped for run " + run.runId.value()
+                                        + " (" + failure.getClass().getSimpleName() + ")");
                     } finally {
                         workspaceCompletionObservers.remove(Thread.currentThread());
                     }
@@ -3372,6 +3614,18 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 && exchange.getRemoteAddress().getAddress().isLoopbackAddress();
     }
 
+    /**
+     * Frozen ends a clarification Run cleanly (its middleware returns {@code Command(goto=END)}), so
+     * SH's best-effort cancel of the model continuation must be reported as {@code success}, never as
+     * a user cancellation. The durable ToolCall boundary makes this identical after a restart.
+     */
+    private String runStatus(RunRecord run, AgentRunSnapshot snapshot) {
+        if (snapshot.status() == AgentRunStatus.CANCELLED && runHasClarificationBoundary(run)) {
+            return "success";
+        }
+        return deerFlowStatus(snapshot.status());
+    }
+
     private String deerFlowStatus(AgentRunStatus status) {
         return switch (status) {
             case PENDING, QUEUED -> "pending";
@@ -3442,8 +3696,12 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private volatile String modelBindingIdentity;
         private volatile String activeRunId;
         private volatile String latestRunId;
+        /** Files referenced by the newest Run input; {@code list_uploaded_files} excludes them. */
+        private final CurrentRunUploads currentRunUploads = new CurrentRunUploads();
         /** Safe frozen-card presentation only; the SDK owns every pending/accepted decision. */
         private volatile List<PersistentThreadCatalog.InteractionDisplay> interactionDisplays = List.of();
+        /** Durable clarification card boundary and answered state for restart-safe projection. */
+        private volatile List<PersistentThreadCatalog.ClarificationDisplay> clarificationDisplays = List.of();
         private boolean admissionRecovered;
         private long nextMessageSequence = 1;
 
@@ -3463,6 +3721,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             this.persistedSessionId = entry.sessionId().orElse(null);
             this.modelBindingIdentity = entry.modelBindingIdentity().orElse(null);
             this.interactionDisplays = entry.interactionDisplays();
+            this.clarificationDisplays = entry.clarificationDisplays();
         }
 
         private String title() {
@@ -3544,6 +3803,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private AcceptedInteractionResponse acceptedInteractionResponse;
         private final Set<String> streamModes;
         private final boolean titleCandidate;
+        private volatile boolean clarificationObserved;
         private io.haifa.agent.runtime.api.RunEventCursor sdkCursor;
         private final Set<Long> deferredEventSequences = ConcurrentHashMap.newKeySet();
         private final Set<String> projectedToolMessageIds = ConcurrentHashMap.newKeySet();
@@ -3583,10 +3843,11 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             InteractionResponseSubmission submission,
             Map<String, Object> message) {}
 
-    record ThreadToolScope(String threadId, Optional<String> projectId) {
+    record ThreadToolScope(String threadId, Optional<String> projectId, CurrentRunUploads currentRunUploads) {
         ThreadToolScope {
             java.util.Objects.requireNonNull(threadId, "threadId");
             java.util.Objects.requireNonNull(projectId, "projectId");
+            java.util.Objects.requireNonNull(currentRunUploads, "currentRunUploads");
         }
 
         String artifactProjectRef() {
@@ -3601,13 +3862,19 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     static final class HistoryAccumulator {
         private final int limit;
         private final Long exclusiveBeforeSequence;
+        private final Set<String> clarificationRunIds;
         private final Deque<ConversationTurn> messages = new ArrayDeque<>();
         private final Deque<HistoryProjection> checkpoints = new ArrayDeque<>();
         private Long parentSequence;
 
         HistoryAccumulator(int limit, Long exclusiveBeforeSequence) {
+            this(limit, exclusiveBeforeSequence, Set.of());
+        }
+
+        HistoryAccumulator(int limit, Long exclusiveBeforeSequence, Set<String> clarificationRunIds) {
             this.limit = limit;
             this.exclusiveBeforeSequence = exclusiveBeforeSequence;
+            this.clarificationRunIds = clarificationRunIds;
         }
 
         void accept(ConversationTurn turn) {
@@ -3618,7 +3885,15 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (exclusiveBeforeSequence != null && turn.sequence() >= exclusiveBeforeSequence) return;
             messages.addLast(turn);
             while (messages.size() > HISTORY_MESSAGE_RETENTION) messages.removeFirst();
-            if (turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT) {
+            // Frozen checkpoints the human input before the agent runs, so a clarification Run has a
+            // durable head even though it produced no assistant turn.
+            boolean checkpoint = turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT
+                    || (turn.role() == io.haifa.agent.core.message.MessageRole.USER
+                            && turn.runId()
+                                    .map(AgentRunId::value)
+                                    .filter(clarificationRunIds::contains)
+                                    .isPresent());
+            if (checkpoint) {
                 checkpoints.addLast(new HistoryProjection(turn, List.copyOf(messages), parentSequence));
                 while (checkpoints.size() > limit) checkpoints.removeFirst();
                 parentSequence = turn.sequence();

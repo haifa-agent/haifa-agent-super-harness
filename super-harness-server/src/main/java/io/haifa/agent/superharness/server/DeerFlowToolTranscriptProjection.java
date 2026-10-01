@@ -1,5 +1,7 @@
 package io.haifa.agent.superharness.server;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.haifa.agent.core.tool.ToolCallStatus;
 import io.haifa.agent.runtime.api.ToolCallView;
 import io.haifa.agent.runtime.api.ToolResultView;
@@ -11,11 +13,42 @@ import java.util.Optional;
 
 /** Frozen LangGraph message projection over the caller-authorized SDK ToolCall view. */
 final class DeerFlowToolTranscriptProjection {
+    static final String ASK_CLARIFICATION = "ask_clarification";
+    private static final ObjectMapper JSON = new ObjectMapper();
+
     private DeerFlowToolTranscriptProjection() {}
+
+    /**
+     * The completed {@code ask_clarification} call ends the Run in frozen DeerFlow (its middleware
+     * returns {@code Command(goto=END)}). SH only projects the Run up to that tool result: later
+     * model text and tool calls are never shown, whether the Run ends COMPLETED or CANCELLED. The
+     * boundary is derived from the durable SDK ToolCall view, so it is identical after a refresh or a
+     * gateway restart.
+     */
+    static int clarificationBoundaryIndex(List<ToolCallView> calls) {
+        for (int index = 0; index < calls.size(); index++) {
+            ToolCallView call = calls.get(index);
+            if (ASK_CLARIFICATION.equals(call.toolName())
+                    && call.status() == ToolCallStatus.COMPLETED
+                    && call.result().isPresent()) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    static boolean hasClarificationBoundary(List<ToolCallView> calls) {
+        return clarificationBoundaryIndex(calls) >= 0;
+    }
+
+    static List<ToolCallView> upToClarificationBoundary(List<ToolCallView> calls) {
+        int boundary = clarificationBoundaryIndex(calls);
+        return boundary < 0 ? calls : List.copyOf(calls.subList(0, boundary + 1));
+    }
 
     static List<Map<String, Object>> messages(List<ToolCallView> calls) {
         List<Map<String, Object>> messages = new ArrayList<>();
-        for (ToolCallView call : calls) {
+        for (ToolCallView call : upToClarificationBoundary(calls)) {
             messages.add(requestMessage(call));
             resultMessage(call).ifPresent(messages::add);
         }
@@ -39,6 +72,11 @@ final class DeerFlowToolTranscriptProjection {
     static Optional<Map<String, Object>> resultMessage(ToolCallView call) {
         if (call.result().isEmpty() && !terminal(call.status())) {
             return Optional.empty();
+        }
+        if (ASK_CLARIFICATION.equals(call.toolName())
+                && call.status() == ToolCallStatus.COMPLETED
+                && call.result().isPresent()) {
+            return clarificationCard(call);
         }
         Map<String, Object> message = baseMessage(call, "result", "tool");
         message.put("name", call.toolName());
@@ -71,18 +109,78 @@ final class DeerFlowToolTranscriptProjection {
     }
 
     static List<String> artifactPaths(List<ToolCallView> calls) {
-        return calls.stream()
-                .filter(call -> call.status() == ToolCallStatus.COMPLETED)
-                .filter(call -> "write_file".equals(call.toolName()))
-                .flatMap(call -> call.result().stream())
-                .map(result -> result.structuredData().values())
-                .filter(values -> values.get("artifactId") instanceof String id && !id.isBlank())
-                .map(values -> values.get("path"))
-                .filter(String.class::isInstance)
-                .map(String.class::cast)
+        return upToClarificationBoundary(calls).stream()
+                .flatMap(call -> presentedPaths(call).stream())
                 .filter(path -> path.startsWith("/mnt/user-data/"))
                 .distinct()
                 .toList();
+    }
+
+    /**
+     * Frozen {@code ClarificationMiddleware} ToolMessage: the readable fallback is the content and
+     * the structured request payload is {@code artifact.human_input}. The tool already normalized the
+     * payload; SH only re-serializes the exact frozen shape, sharing the wire builder with the
+     * approval card.
+     */
+    static Optional<Map<String, Object>> clarificationCard(ToolCallView call) {
+        Map<String, Object> payload = clarificationPayload(call).orElse(null);
+        if (payload == null) {
+            return Optional.empty();
+        }
+        String messageId = clarificationRequestId(call, payload);
+        return Optional.of(DeerFlowInteractionHttpProjection.humanInputMessage(
+                call.runId().value(), messageId, call.id().value(),
+                call.result().orElseThrow().summary().text(), payload));
+    }
+
+    /** The normalized {@code artifact.human_input} payload of a completed clarification call. */
+    static Optional<Map<String, Object>> clarificationPayload(ToolCallView call) {
+        if (call.result().isEmpty()) {
+            return Optional.empty();
+        }
+        Object raw = call.result().orElseThrow().structuredData().values().get("humanInput");
+        if (!(raw instanceof String humanInput) || humanInput.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            Map<String, Object> payload =
+                    JSON.readValue(humanInput, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+            return Optional.ofNullable(payload);
+        } catch (JsonProcessingException invalid) {
+            return Optional.empty();
+        }
+    }
+
+    static String clarificationRequestId(ToolCallView call, Map<String, Object> payload) {
+        Object requestId = payload.get("request_id");
+        return requestId instanceof String text && !text.isBlank()
+                ? text
+                : "clarification:" + call.id().value();
+    }
+
+    /**
+     * The output paths of one completed file tool call. {@code write_file}/{@code str_replace}
+     * publish an Artifact with a durable id, and {@code present_files} returns the normalized
+     * outputs paths it validated (it publishes any that were not already listed), so both keep the
+     * frozen UI's automatic artifact list complete without duplicating a path.
+     */
+    private static List<String> presentedPaths(ToolCallView call) {
+        if (call.status() != ToolCallStatus.COMPLETED || call.result().isEmpty()) {
+            return List.of();
+        }
+        Map<String, Object> values = call.result().orElseThrow().structuredData().values();
+        if ("present_files".equals(call.toolName())) {
+            return values.get("paths") instanceof List<?> paths
+                    ? paths.stream().filter(String.class::isInstance).map(String.class::cast).toList()
+                    : List.of();
+        }
+        if ("write_file".equals(call.toolName()) || "str_replace".equals(call.toolName())) {
+            if (values.get("artifactId") instanceof String id && !id.isBlank()
+                    && values.get("path") instanceof String path) {
+                return List.of(path);
+            }
+        }
+        return List.of();
     }
 
     private static Map<String, Object> baseMessage(ToolCallView call, String suffix, String type) {

@@ -18,11 +18,25 @@ param(
     [switch]$V2Skill,
     [switch]$V2Diagnostics,
     [switch]$LiveDeepSeek,
+    # UX-V1 joint acceptance: the live DeepSeek model with the DeerFlow default tool chains.
+    [switch]$UxV1DefaultTools,
+    # Human-authorized DDG deferral; leaves the required Web case visibly NOT_RUN.
+    [switch]$DeferUxV1Web,
+    # Reuse the same-source reactor JAR after the controller's full gate; still build Next cold.
+    [switch]$SkipServerBuild,
     [switch]$SkipBuild
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$flowWatch = [Diagnostics.Stopwatch]::StartNew()
+$flowTimes = [ordered]@{}
+if ($DeferUxV1Web -and -not $UxV1DefaultTools) {
+    throw 'DeferUxV1Web requires the UX-V1 default-tools profile.'
+}
+if ($SkipServerBuild -and -not $UxV1DefaultTools) {
+    throw 'SkipServerBuild requires the UX-V1 default-tools profile and a verified same-source JAR.'
+}
 
 $expectedGatewayPort = 10618 + (10000 * $AgentSlot)
 $expectedFrontendPort = 15618 + (10000 * $AgentSlot)
@@ -32,10 +46,19 @@ if ($GatewayPort -ne $expectedGatewayPort -or $FrontendPort -ne $expectedFronten
 if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $LiveDeepSeek).Where({ $_ }).Count -gt 1) {
     throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, V2 model-switch, V2 file-context, V2 Skill, V2 diagnostics, and live DeepSeek profiles are mutually exclusive.'
 }
+if ($UxV1DefaultTools) {
+    if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $LiveDeepSeek).Where({ $_ }).Count -gt 0) {
+        throw 'The UX-V1 default-tools profile is mutually exclusive with the other profiles.'
+    }
+    # Reuses the live DeepSeek managed model and skips the controlled loopback provider.
+    $LiveDeepSeek = $true
+}
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
-    $DataDirectory = Join-Path $root $(if ($LiveDeepSeek) {
+    $DataDirectory = Join-Path $root $(if ($UxV1DefaultTools) {
+        "local-tmp/slot-$AgentSlot-ux-v1/data"
+    } elseif ($LiveDeepSeek) {
         "target/agent-slot-$AgentSlot-deepseek-data"
     } elseif ($Interaction) {
         "target/agent-slot-$AgentSlot-interaction-data"
@@ -75,7 +98,9 @@ foreach ($port in @($GatewayPort, $FrontendPort)) {
 }
 
 $null = New-Item -ItemType Directory -Force -Path $dataRoot
-$evidenceRootBase = Join-Path $root $(if ($LiveDeepSeek) {
+$evidenceRootBase = Join-Path $root $(if ($UxV1DefaultTools) {
+    "local-tmp/slot-$AgentSlot-ux-v1/evidence"
+} elseif ($LiveDeepSeek) {
     'target/w18-deepseek-web-l3/playwright'
 } elseif ($ActiveReconnect) {
     'target/w05-active-reconnect-evidence/playwright'
@@ -99,7 +124,7 @@ $evidenceRootBase = Join-Path $root $(if ($LiveDeepSeek) {
     'target/w18-ui-smoke-evidence/playwright'
 })
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$evidenceRoot = if ($DemoArtifact -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { Join-Path $evidenceRootBase "run-$stamp" } else { $evidenceRootBase }
+$evidenceRoot = if ($UxV1DefaultTools -or $DemoArtifact -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { Join-Path $evidenceRootBase "run-$stamp" } else { $evidenceRootBase }
 $null = New-Item -ItemType Directory -Force -Path $evidenceRoot
 $serverOut = Join-Path $evidenceRoot "server-$stamp.stdout.log"
 $serverErr = Join-Path $evidenceRoot "server-$stamp.stderr.log"
@@ -131,8 +156,11 @@ $managedEnvironment = @{
     W18_EVIDENCE_DIR = $evidenceRoot
     COREPACK_ENABLE_NETWORK = '0'
     W18_PROVIDER_URL = $null
+    UXV1_DEFER_WEB = $(if ($DeferUxV1Web) { '1' } else { $null })
     W18_MODEL_NAME = $(if ($LiveDeepSeek) { 'w18-deepseek-live' } else { 'w18-controlled' })
-    W18_PLAYWRIGHT_SPEC = $(if ($LiveDeepSeek) {
+    W18_PLAYWRIGHT_SPEC = $(if ($UxV1DefaultTools) {
+        'ux-v1-default-tools-live.spec.cjs'
+    } elseif ($LiveDeepSeek) {
         'w18-deepseek-live.spec.cjs'
     } elseif ($ActiveReconnect) {
         'w05-active-reconnect.spec.cjs'
@@ -155,7 +183,7 @@ $managedEnvironment = @{
     } else {
         'w18-ui-smoke.spec.cjs'
     })
-    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { '120000' } else { '60000' })
+    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($UxV1DefaultTools) { '360000' } elseif ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { '120000' } else { '60000' })
     W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { 'on' } else { 'retain-on-failure' })
     # Kept disabled through the ordinary build/test gate. The runner enables it
     # only immediately before launching the dedicated guarded test process.
@@ -179,8 +207,11 @@ try {
         throw 'W18 Haifa frontend profile verification failed.'
     }
     $profile | Set-Content -LiteralPath (Join-Path $evidenceRoot "profile-$stamp.json") -Encoding utf8
+    $flowTimes.preparationMs = $flowWatch.ElapsedMilliseconds
+    $buildStartedMs = $flowWatch.ElapsedMilliseconds
 
     if (-not $SkipBuild) {
+        if (-not $SkipServerBuild) {
         Push-Location $root
         try {
             & mvn.cmd -o -ntp -pl super-harness-server -am package
@@ -190,6 +221,7 @@ try {
         }
         finally {
             Pop-Location
+        }
         }
 
         Push-Location (Join-Path $root 'frontend')
@@ -203,6 +235,8 @@ try {
             Pop-Location
         }
     }
+    $flowTimes.buildMs = $flowWatch.ElapsedMilliseconds - $buildStartedMs
+    $readinessStartedMs = $flowWatch.ElapsedMilliseconds
 
     $jar = Join-Path $root 'super-harness-server/target/super-harness-server-0.1.0-SNAPSHOT-exec.jar'
     $next = Join-Path $root 'frontend/node_modules/next/dist/bin/next'
@@ -421,6 +455,7 @@ try {
     if ($null -eq $page -or $page.StatusCode -ne 200) {
         throw "Frozen frontend failed readiness (PID $($frontendProcess.Id))."
     }
+    $flowTimes.readinessMs = $flowWatch.ElapsedMilliseconds - $readinessStartedMs
 
     [ordered]@{
         gateway = "http://127.0.0.1:$GatewayPort"
@@ -435,15 +470,18 @@ try {
 
     Push-Location $root
     try {
+        $assertionsStartedMs = $flowWatch.ElapsedMilliseconds
         & node.exe frontend/node_modules/@playwright/test/cli.js test `
             --config tests/w18-ui-smoke/playwright.config.cjs
         $testExitCode = $LASTEXITCODE
+        $flowTimes.assertionsMs = $flowWatch.ElapsedMilliseconds - $assertionsStartedMs
     }
     finally {
         Pop-Location
     }
 }
 finally {
+    $cleanupStartedMs = $flowWatch.ElapsedMilliseconds
     foreach ($process in @($frontendProcess, $gatewayProcess, $providerProcess)) {
         if ($null -ne $process -and -not $process.HasExited) {
             $descendants = @{}
@@ -467,6 +505,31 @@ finally {
     }
     foreach ($name in $savedEnvironment.Keys) {
         [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
+    }
+    if ($UxV1DefaultTools) {
+        $portFacts = foreach ($port in @($GatewayPort, $FrontendPort)) {
+            $remaining = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+            [ordered]@{ port = $port; released = $remaining.Count -eq 0; pids = @($remaining | ForEach-Object { $_.OwningProcess }) }
+        }
+        $flowTimes.cleanupMs = $flowWatch.ElapsedMilliseconds - $cleanupStartedMs
+        [ordered]@{
+            sourceSha = (& git -C $root rev-parse HEAD)
+            sourceDirty = [bool](& git -C $root status --porcelain)
+            buildMode = $(if ($SkipBuild) { 'warm-reuse' } else { 'cold-build' })
+            serverBuildReused = [bool]($SkipBuild -or $SkipServerBuild)
+            webDeferred = [bool]$DeferUxV1Web
+            testExitCode = $testExitCode
+            retryCount = 0
+            timings = $flowTimes
+            totalMs = $flowWatch.ElapsedMilliseconds
+            ports = @($portFacts)
+            remainingWorktreeProcesses = @(Get-CimInstance Win32_Process | Where-Object {
+                $_.Name -match '^(java|node)\.exe$' -and $_.CommandLine -and
+                $_.CommandLine.Contains($root, [StringComparison]::OrdinalIgnoreCase)
+            } | Select-Object ProcessId, ParentProcessId, Name, CommandLine)
+            logs = @($serverOut, $serverErr, $frontendOut, $frontendErr)
+            evidenceRoot = $evidenceRoot
+        } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'flow-health.json') -Encoding utf8
     }
 }
 

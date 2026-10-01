@@ -100,10 +100,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 scope -> !testRunTools.isEmpty()
                         ? testRunTools
                         : testRunModelResolver == null
-                                ? List.of(
-                                        new ProductionWriteFileTool(
-                                                scope.threadId(), scope.artifactProjectRef(), projects, toolWorkspace),
-                                        new ProductionReadFileTool(scope.threadId(), projects, toolWorkspace))
+                                ? fileTools(scope, projects, toolWorkspace)
                                 : List.of(),
                 new DeerFlowThreadRunApi.McpProjectionProvider() {
                     @Override
@@ -142,6 +139,40 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.suggestionsApi = new DeerFlowSuggestionsApi(
                 objectMapper, modelResolver, threadRunApi::hasThread, suggestionsSettings);
         registerRoutes();
+    }
+
+    /**
+     * The frozen DeerFlow default tool set for one Thread: the eight frozen default file tools
+     * ({@code read_file}, {@code write_file}, {@code str_replace}, {@code ls}, {@code glob},
+     * {@code grep}, {@code list_uploaded_files}, {@code present_files}) plus the side-effect-free
+     * {@code ask_clarification} and the three frozen default web tools ({@code web_search},
+     * {@code web_fetch}, {@code image_search}). The read/write/str_replace trio shares one
+     * READ-BEFORE-WRITE session so a {@code read_file} mark is visible to the write tools; the web
+     * tools share one {@link WebToolConfig} whose endpoint defaults are the real public providers.
+     */
+    private static List<? extends JavaTool<?, ?>> fileTools(
+            DeerFlowThreadRunApi.ThreadToolScope scope,
+            PersistentProjectWorkspaceService projects,
+            RestrictedWorkspaceService workspace) {
+        FileToolSession session = new FileToolSession();
+        WebToolConfig web = WebToolConfig.fromEnvironment(System.getenv());
+        return List.of(
+                new ProductionWriteFileTool(
+                        scope.threadId(), scope.artifactProjectRef(), projects, workspace, session),
+                new ProductionReadFileTool(scope.threadId(), projects, workspace, session),
+                new ProductionStrReplaceTool(
+                        scope.threadId(), scope.artifactProjectRef(), projects, workspace, session),
+                new ProductionLsTool(scope.threadId(), projects, workspace),
+                new ProductionGlobTool(scope.threadId(), projects, workspace),
+                new ProductionGrepTool(scope.threadId(), projects, workspace),
+                new ProductionListUploadedFilesTool(
+                        scope.threadId(), projects, workspace, scope.currentRunUploads()),
+                new ProductionPresentFilesTool(
+                        scope.threadId(), scope.artifactProjectRef(), projects, workspace),
+                new ProductionAskClarificationTool(),
+                new ProductionWebSearchTool(web),
+                new ProductionWebFetchTool(web),
+                new ProductionImageSearchTool(web));
     }
 
     public static DeerFlowBootstrapApi create(LocalServerConfiguration configuration)

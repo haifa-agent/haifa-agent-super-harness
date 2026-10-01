@@ -31,6 +31,7 @@ final class PersistentThreadCatalog {
     private static final long MAXIMUM_CATALOG_BYTES = 4L * 1024 * 1024;
     static final int MAX_INTERACTION_DISPLAYS_PER_THREAD = 64;
     static final int MAX_INTERACTION_DISPLAYS_PER_RUN = 8;
+    static final int MAX_CLARIFICATION_DISPLAYS_PER_THREAD = 64;
 
     private final ObjectMapper json;
     private final Path catalog;
@@ -80,7 +81,8 @@ final class PersistentThreadCatalog {
                     Instant.parse(requiredText(item, "updated_at")),
                     optionalText(item, "session_id").map(AgentSessionId::new),
                     optionalText(item, "model_binding"),
-                    readInteractionDisplays(item.path("interaction_displays")));
+                    readInteractionDisplays(item.path("interaction_displays")),
+                    readClarificationDisplays(item.path("clarification_displays")));
             if (entries.putIfAbsent(entry.threadId(), entry) != null) {
                 throw new IOException("thread catalog contains a duplicate thread_id");
             }
@@ -117,6 +119,19 @@ final class PersistentThreadCatalog {
                 if (display.answeredOption() == null) encoded.putNull("answeredOption");
                 else encoded.put("answeredOption", display.answeredOption());
             }
+            ArrayNode clarifications = item.putArray("clarification_displays");
+            for (ClarificationDisplay display : entry.clarificationDisplays()) {
+                ObjectNode encoded = clarifications.addObject();
+                encoded.put("runId", display.runId());
+                encoded.put("requestId", display.requestId());
+                encoded.put("requestSequence", display.requestSequence());
+                encoded.put("createdAt", display.createdAt().toString());
+                encoded.put("toolCallId", display.toolCallId());
+                putNullable(encoded, "answeredKind", display.answeredKind());
+                putNullable(encoded, "answeredOptionId", display.answeredOptionId());
+                putNullable(encoded, "answeredValue", display.answeredValue());
+                putNullable(encoded, "answeredRunId", display.answeredRunId());
+            }
         }
         byte[] bytes = json.writerWithDefaultPrettyPrinter().writeValueAsBytes(root);
         if (bytes.length > MAXIMUM_CATALOG_BYTES) {
@@ -141,6 +156,11 @@ final class PersistentThreadCatalog {
 
     private String requiredText(JsonNode node, String name) throws IOException {
         return optionalText(node, name).orElseThrow(() -> new IOException("thread catalog field is missing: " + name));
+    }
+
+    private static void putNullable(ObjectNode object, String name, String value) {
+        if (value == null) object.putNull(name);
+        else object.put(name, value);
     }
 
     private Optional<String> optionalText(JsonNode node, String name) {
@@ -190,6 +210,82 @@ final class PersistentThreadCatalog {
             throw new IOException("thread catalog interaction displays are invalid", failure);
         }
         return List.copyOf(displays);
+    }
+
+    private List<ClarificationDisplay> readClarificationDisplays(JsonNode node) throws IOException {
+        if (node.isMissingNode()) return List.of();
+        if (!node.isArray() || node.size() > MAX_CLARIFICATION_DISPLAYS_PER_THREAD) {
+            throw new IOException("thread catalog clarification displays are invalid");
+        }
+        List<ClarificationDisplay> displays = new ArrayList<>();
+        try {
+            for (JsonNode item : node) {
+                displays.add(new ClarificationDisplay(
+                        requiredText(item, "runId"),
+                        requiredText(item, "requestId"),
+                        item.path("requestSequence").asLong(-1),
+                        Instant.parse(requiredText(item, "createdAt")),
+                        requiredText(item, "toolCallId"),
+                        optionalText(item, "answeredKind").orElse(null),
+                        optionalText(item, "answeredOptionId").orElse(null),
+                        optionalText(item, "answeredValue").orElse(null),
+                        optionalText(item, "answeredRunId").orElse(null)));
+            }
+            validateClarificationDisplays(displays);
+        } catch (IllegalArgumentException failure) {
+            throw new IOException("thread catalog clarification displays are invalid", failure);
+        }
+        return List.copyOf(displays);
+    }
+
+    static void validateClarificationDisplays(List<ClarificationDisplay> displays) {
+        if (displays.size() > MAX_CLARIFICATION_DISPLAYS_PER_THREAD) {
+            throw new IllegalArgumentException("too many clarification displays");
+        }
+        java.util.Set<String> requestIds = new java.util.HashSet<>();
+        long previousSequence = 0;
+        for (ClarificationDisplay display : displays) {
+            if (!requestIds.add(display.requestId()) || display.requestSequence() <= previousSequence) {
+                throw new IllegalArgumentException("clarification display IDs or order are invalid");
+            }
+            previousSequence = display.requestSequence();
+        }
+    }
+
+    record ClarificationDisplay(
+            String runId,
+            String requestId,
+            long requestSequence,
+            Instant createdAt,
+            String toolCallId,
+            String answeredKind,
+            String answeredOptionId,
+            String answeredValue,
+            String answeredRunId) {
+        ClarificationDisplay {
+            if (runId == null || runId.isBlank() || runId.length() > 200
+                    || requestId == null || requestId.isBlank() || requestId.length() > 200
+                    || requestSequence < 1 || createdAt == null
+                    || toolCallId == null || toolCallId.isBlank() || toolCallId.length() > 200) {
+                throw new IllegalArgumentException("invalid clarification display");
+            }
+            boolean unanswered = answeredKind == null;
+            if (!unanswered && (!"text".equals(answeredKind) && !"option".equals(answeredKind)
+                    || answeredValue == null || answeredValue.isBlank() || answeredValue.length() > 8192
+                    || answeredRunId == null || answeredRunId.isBlank() || answeredRunId.length() > 200)) {
+                throw new IllegalArgumentException("invalid clarification display response");
+            }
+            if ("option".equals(answeredKind)
+                    && (answeredOptionId == null || answeredOptionId.isBlank()
+                            || answeredOptionId.length() > 200)) {
+                throw new IllegalArgumentException("invalid clarification display option");
+            }
+        }
+
+        ClarificationDisplay answered(String kind, String optionId, String value, String runId) {
+            return new ClarificationDisplay(runId(), requestId(), requestSequence(), createdAt(),
+                    toolCallId(), kind, optionId, value, runId);
+        }
     }
 
     static void validateDisplays(List<InteractionDisplay> displays) {
@@ -251,10 +347,12 @@ final class PersistentThreadCatalog {
             Instant updatedAt,
             Optional<AgentSessionId> sessionId,
             Optional<String> modelBindingIdentity,
-            List<InteractionDisplay> interactionDisplays) {
+            List<InteractionDisplay> interactionDisplays,
+            List<ClarificationDisplay> clarificationDisplays) {
         Entry(String threadId, Map<String, Object> metadata, Instant createdAt, Instant updatedAt,
                 Optional<AgentSessionId> sessionId, Optional<String> modelBindingIdentity) {
-            this(threadId, metadata, createdAt, updatedAt, sessionId, modelBindingIdentity, List.of());
+            this(threadId, metadata, createdAt, updatedAt, sessionId, modelBindingIdentity,
+                    List.of(), List.of());
         }
 
         Entry {
@@ -266,6 +364,8 @@ final class PersistentThreadCatalog {
             modelBindingIdentity = modelBindingIdentity == null ? Optional.empty() : modelBindingIdentity;
             interactionDisplays = List.copyOf(interactionDisplays);
             validateDisplays(interactionDisplays);
+            clarificationDisplays = List.copyOf(clarificationDisplays);
+            validateClarificationDisplays(clarificationDisplays);
         }
     }
 }

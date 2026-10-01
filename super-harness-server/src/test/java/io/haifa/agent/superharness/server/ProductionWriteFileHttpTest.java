@@ -312,7 +312,7 @@ class ProductionWriteFileHttpTest {
             assertThat(pending.body()).contains("tool-call-" + pendingToolCallId + "-request");
             assertThat(providerRequests).hasSize(1);
             assertThat(providerRequests.getFirst().path("tools").findValuesAsText("name"))
-                    .contains("write_file").doesNotContain("ask_clarification");
+                    .contains("write_file", "ask_clarification");
             URI artifact = base.resolve("/api/threads/production-file/artifacts" + path);
             assertThat(client.send(HttpRequest.newBuilder(artifact).GET().build(),
                     HttpResponse.BodyHandlers.ofByteArray()).statusCode()).isEqualTo(404);
