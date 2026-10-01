@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 
 /** Oracle 2-9: rendering, escaping, determinism, length limit and the tool-name reconciliation. */
 class LeadPromptComposerTest {
-    private static final Set<String> BASE_TOOLS = Set.of("read_file", "write_file");
+    private static final Set<String> BASE_TOOLS = Set.of("read_file", "write_file", "str_replace", "present_files", "list_uploaded_files", "grep", "web_search", "web_fetch", "ask_clarification");
     private final LeadPromptComposer composer = new LeadPromptComposer(LeadPromptTemplate.load());
 
     @Test
@@ -25,12 +25,14 @@ class LeadPromptComposerTest {
                 "<working_directory existed=\"true\">",
                 "<critical_reminders>",
                 "--- BEGIN USER INPUT ---");
-        assertThat(text).doesNotContain(
-                "present_files", "skill_manage", "str_replace", "append=True",
-                "list_uploaded_files", "web_search", "web_fetch", "grep",
-                "<citations>", "{agent_name}");
+        assertThat(text).doesNotContain("skill_manage", "{agent_name}");
+        assertThat(text).contains("present_files", "str_replace", "append=True", "list_uploaded_files", "grep",
+                "<citations>", "web_search", "web_fetch", "<clarification_system>",
+                "Clarification First", "PRIORITY CHECK", "{title, url, snippet}");
         assertThat(composition.signature()).matches("[0-9a-f]{64}");
-        assertThat(composition.mentionedToolNames()).containsExactlyInAnyOrder("read_file", "write_file");
+        assertThat(composition.mentionedToolNames()).containsExactlyInAnyOrderElementsOf(BASE_TOOLS);
+        System.out.println("M2_TOOL_RECONCILIATION=PASS mentioned=" + composition.mentionedToolNames()
+                + " registered=" + BASE_TOOLS);
         System.out.println("W03_PROMPT_DEFAULT_SIGNATURE=" + composition.signature()
                 + " trimmed_chars=" + composition.instructions().trim().length());
     }
@@ -53,7 +55,8 @@ class LeadPromptComposerTest {
 
     @Test
     void skillsSectionListsSkillsAndUsesTheSdkTools() {
-        Set<String> registered = Set.of("read_file", "write_file", "skill_load", "skill_resource_read");
+        Set<String> registered = new java.util.LinkedHashSet<>(BASE_TOOLS);
+        registered.addAll(Set.of("skill_load", "skill_resource_read"));
         var composition = composer.compose(
                 new LeadPromptInputs(null, null, false,
                         List.of(new LeadPromptInputs.Skill("consulting-analysis", "Analyze <market>"))),
@@ -92,9 +95,30 @@ class LeadPromptComposerTest {
                 + "\"reason\":\"r\",\"unlock_condition\":\"u\",\"owner_wp\":\"W03\"}]";
         LeadPromptTemplate synthetic = LeadPromptTemplate.parse(raw, adaptations, LeadPromptTemplate.sha256(raw));
         var syntheticComposer = new LeadPromptComposer(synthetic);
-        assertThatThrownBy(() -> syntheticComposer.compose(emptyInputs(), BASE_TOOLS))
+        assertThatThrownBy(() -> syntheticComposer.compose(emptyInputs(), Set.of("read_file", "write_file")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("web_search");
+    }
+
+    @Test
+    void missingWebToolFailsClosedWithRecordedReconciliationEvidence() {
+        Set<String> missingWeb = new java.util.LinkedHashSet<>(BASE_TOOLS);
+        missingWeb.remove("web_search");
+        try {
+            composer.compose(emptyInputs(), missingWeb);
+            throw new AssertionError("expected the reconciliation gate to reject missing web_search");
+        } catch (IllegalStateException rejected) {
+            assertThat(rejected).hasMessageContaining("unregistered tools: [web_search]");
+            System.out.println("M2_TOOL_RECONCILIATION=FAIL " + rejected.getMessage());
+        }
+    }
+
+    @Test
+    void absentClarificationToolRendersAllThreeInteractiveSectionsEmpty() {
+        Set<String> tools = new java.util.LinkedHashSet<>(BASE_TOOLS);
+        tools.remove("ask_clarification");
+        var composition = composer.compose(emptyInputs(), tools);
+        assertThat(composition.instructions()).doesNotContain("<clarification_system>", "PRIORITY CHECK", "Clarification First", "ask_clarification");
     }
 
     @Test

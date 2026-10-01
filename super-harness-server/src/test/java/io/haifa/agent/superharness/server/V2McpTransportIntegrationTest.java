@@ -133,6 +133,54 @@ class V2McpTransportIntegrationTest {
     }
 
     @Test
+    @Order(0)
+    void defaultWebExemptionsDoNotAutoApproveMcpTool() throws Exception {
+        assumeTrue(Boolean.getBoolean("v2.mcp.negative.controls"), "MCP fixture call counter required");
+        api.close();
+        WebToolConfig web = WebToolConfig.defaults();
+        api = DeerFlowBootstrapApi.createForInteractionTests(
+                new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0), dataDirectory,
+                continuationKey, ignored -> binding,
+                List.of(new ProductionWebSearchTool(web), new ProductionWebFetchTool(web), new ProductionImageSearchTool(web)));
+        api.start();
+        baseUri = URI.create("http://127.0.0.1:" + api.address().getPort());
+        configureBothServers();
+        assertThat(run("network-manifest-list", null, "list tools"))
+                .contains("web_search", "web_fetch", "image_search", "reporting_get_status");
+        URI state = URI.create(REPORTING_URL).resolve("/__test/state");
+        int before = json.readTree(client.send(HttpRequest.newBuilder(state).GET().build(),
+                HttpResponse.BodyHandlers.ofString()).body()).path("get_status_calls").asInt();
+        createThread("network-manifest-mcp");
+        HttpResponse<String> pending = postJson("/api/threads/network-manifest-mcp/runs/stream",
+                buildRunBody("call reporting_get_status {}", null));
+        assertThat(pending.statusCode()).as(pending.body()).isEqualTo(200);
+        String location = pending.headers().firstValue("content-location").orElseThrow();
+        String requestId = humanInputRequestId(pending.body()).orElseThrow();
+        assertThat(countToolResults(pending.body(), "reporting_get_status")).isZero();
+        int waiting = json.readTree(client.send(HttpRequest.newBuilder(state).GET().build(),
+                HttpResponse.BodyHandlers.ofString()).body()).path("get_status_calls").asInt();
+        assertThat(waiting).as("unlisted MCP must not execute before approval").isEqualTo(before);
+        HttpResponse<String> approved = postJson("/api/threads/network-manifest-mcp/runs/stream", approvalBody(requestId));
+        assertThat(approved.statusCode()).as(approved.body()).isEqualTo(200);
+        assertThat(approved.headers().firstValue("content-location")).contains(location);
+        assertThat(approved.body()).contains("event: end", "v2-reporting");
+        assertThat(countToolResults(approved.body(), "reporting_get_status")).isEqualTo(1);
+        int after = json.readTree(client.send(HttpRequest.newBuilder(state).GET().build(),
+                HttpResponse.BodyHandlers.ofString()).body()).path("get_status_calls").asInt();
+        assertThat(after).isEqualTo(before + 1);
+        String raw = System.getProperty("uxv1.network.evidence.dir");
+        if (raw != null) {
+            Path directory = java.nio.file.Files.createDirectories(Path.of(raw));
+            java.nio.file.Files.writeString(directory.resolve("mcp-pending.sse"), pending.body());
+            java.nio.file.Files.writeString(directory.resolve("mcp-approved.sse"), approved.body());
+            java.nio.file.Files.writeString(directory.resolve("mcp-run.json"), client.send(
+                    HttpRequest.newBuilder(baseUri.resolve(location)).GET().build(), HttpResponse.BodyHandlers.ofString()).body());
+            java.nio.file.Files.writeString(directory.resolve("mcp-counters.json"),
+                    json.writeValueAsString(Map.of("before", before, "waiting", waiting, "after", after)));
+        }
+    }
+
+    @Test
     @Order(2)
     void disablingAServerRevokesOnlyThatServerOnLaterRuns() throws Exception {
         configureBothServers();
@@ -589,7 +637,7 @@ class V2McpTransportIntegrationTest {
                 new CredentialRef("env://SUPER_HARNESS_V2_MCP_PROBE"),
                 false,
                 Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING),
-                8_192,
+                32_768,
                 1_024,
                 Map.of(),
                 Map.of());

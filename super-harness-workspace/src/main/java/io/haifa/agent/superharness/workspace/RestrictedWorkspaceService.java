@@ -303,6 +303,17 @@ public final class RestrictedWorkspaceService {
         return new OwnerBoundWorkspaceFileService(binding.workspaceId(), registry.userDataRoot(workspaceId), limits);
     }
 
+    /**
+     * Normalize one logical virtual path (for example {@code /mnt/user-data/workspace/a.txt})
+     * to its canonical root-relative form ({@code workspace/a.txt}).
+     *
+     * <p>Read tools use the same key as write tools so the READ-BEFORE-WRITE gate cannot be
+     * bypassed by spelling the same path differently. Validation is identical to the write path.
+     */
+    public static String normalizeLogicalPath(String logicalPath) {
+        return LogicalWorkspacePath.normalize(logicalPath);
+    }
+
     private static UploadReceipt receipt(String logical, String original, String hash, long count,
                                          String mediaType, boolean deduplicated) {
         return new UploadReceipt(LogicalWorkspacePath.upstream(logical), original, hash, count, mediaType,

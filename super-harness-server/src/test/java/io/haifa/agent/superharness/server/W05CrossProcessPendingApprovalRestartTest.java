@@ -55,6 +55,11 @@ class W05CrossProcessPendingApprovalRestartTest {
 
     @BeforeEach
     void startServer() throws Exception {
+        String externalEvidence = System.getProperty("w05.restart.evidence.dir");
+        if (api == null && externalEvidence != null && !externalEvidence.isBlank()) {
+            dataDirectory = Files.createDirectories(Path.of(externalEvidence)
+                    .resolve("run-" + java.util.UUID.randomUUID()));
+        }
         api = openApi();
     }
 
@@ -196,15 +201,14 @@ class W05CrossProcessPendingApprovalRestartTest {
         ProcessBuilder builder = new ProcessBuilder(javaExecutable, "@" + argumentFile.toString());
         builder.environment().putAll(environment);
         builder.redirectErrorStream(true);
+        Path childLog = evidence.resolveSibling(evidence.getFileName() + ".child.log");
+        builder.redirectOutput(childLog.toFile());
         Process process = builder.start();
-        String output;
-        try (var stream = process.getInputStream()) {
-            output = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
-        }
         if (!process.waitFor(90, TimeUnit.SECONDS)) {
             process.destroyForcibly();
-            throw new AssertionError("child restart process timed out: " + output);
+            throw new AssertionError("child restart process timed out; original log: " + childLog);
         }
+        String output = Files.readString(childLog, StandardCharsets.UTF_8);
         return new ProcessResult(process.exitValue(), output);
     }
 

@@ -46,7 +46,8 @@ class LeadPromptTemplateResourceTest {
     @Test
     void everyAdaptationMatchesExactlyOnceAndTemplateParses() {
         LeadPromptTemplate template = LeadPromptTemplate.load();
-        assertThat(template.adaptedTemplate()).doesNotContain("{{", "}}");
+        assertThat(template.adaptedTemplate()).contains("{{title, url, snippet}}");
+        assertThat(template.interactiveClarification()).contains("ask_clarification");
     }
 
     @Test
@@ -76,6 +77,24 @@ class LeadPromptTemplateResourceTest {
         assertThatThrownBy(() -> LeadPromptTemplate.parse(template, twice, EXPECTED_LOCAL_SHA256))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("more than once");
+    }
+
+    @Test
+    void invalidResourcesNeverExposeSourceTextInExceptionChains() {
+        byte[] raw = "{PRIVATE_SENTINEL}".getBytes(StandardCharsets.UTF_8);
+        String noop = "[{\"id\":\"n\",\"find\":\"SENTINEL\",\"replace\":\"SENTINEL\","
+                + "\"reason\":\"r\",\"unlock_condition\":\"u\",\"owner_wp\":\"W03\"}]";
+        assertThatThrownBy(() -> LeadPromptTemplate.parse(raw, noop, sha256Unchecked(raw)))
+                .hasMessageContaining("unknown placeholder")
+                .hasMessageNotContaining("PRIVATE_SENTINEL")
+                .hasNoCause();
+        assertThatThrownBy(() -> LeadPromptTemplate.parse(raw, "PRIVATE_SENTINEL invalid JSON", sha256Unchecked(raw)))
+                .hasMessageNotContaining("PRIVATE_SENTINEL")
+                .hasNoCause();
+    }
+
+    private static String sha256Unchecked(byte[] bytes) {
+        return LeadPromptTemplate.sha256(bytes);
     }
 
     private static byte[] resource(String path) throws Exception {

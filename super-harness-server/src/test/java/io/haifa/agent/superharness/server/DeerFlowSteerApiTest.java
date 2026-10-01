@@ -678,6 +678,16 @@ public class DeerFlowSteerApiTest {
         assertThat(aiMessageContents.get(1)).contains("France's capital is Paris, and Germany's capital is Berlin");
         assertThat(receivedEvents).contains("end");
 
+        // Observe the actual second Provider request, not only the product state projection.
+        // Both the original turn and accepted Steer input must retain their trust frames.
+        assertThat(requests).hasSize(2);
+        List<String> secondCallUsers = requests.get(1).messages().stream()
+                .filter(message -> message.role().name().equals("USER"))
+                .map(message -> message.content()).toList();
+        assertThat(secondCallUsers).containsExactly(
+                "--- BEGIN USER INPUT ---\nWhat is the capital of France?\n--- END USER INPUT ---",
+                "--- BEGIN USER INPUT ---\nAlso tell me Germany's capital\n--- END USER INPUT ---");
+
         // 7. Read Authoritative Thread State after Run Completion
         JsonNode state = getJson("/api/threads/" + threadId + "/state");
         JsonNode messages = state.path("values").path("messages");
@@ -707,6 +717,8 @@ public class DeerFlowSteerApiTest {
         assertThat(histMessages.get(1).path("id").asText()).isEqualTo(runId + "-ai-0");
         assertThat(histMessages.get(2).path("id").asText()).isEqualTo(runId + "-human-1");
         assertThat(histMessages.get(3).path("id").asText()).isEqualTo(runId + "-ai-1");
+        assertThat(histMessages.get(0).path("content").asText()).isEqualTo("What is the capital of France?");
+        assertThat(histMessages.get(2).path("content").asText()).isEqualTo("Also tell me Germany's capital");
 
         // 9. Read messages/page
         JsonNode page = getJson("/api/threads/" + threadId + "/messages/page?limit=10");
@@ -728,6 +740,8 @@ public class DeerFlowSteerApiTest {
         assertThat(recoveredMessages.get(1).path("id").asText()).isEqualTo(runId + "-ai-0");
         assertThat(recoveredMessages.get(2).path("id").asText()).isEqualTo(runId + "-human-1");
         assertThat(recoveredMessages.get(3).path("id").asText()).isEqualTo(runId + "-ai-1");
+        assertThat(recoveredMessages.get(0).path("content").asText()).isEqualTo("What is the capital of France?");
+        assertThat(recoveredMessages.get(2).path("content").asText()).isEqualTo("Also tell me Germany's capital");
         assertThat(postRun(threadId, steerBody, "steer").statusCode()).isEqualTo(409);
     }
 

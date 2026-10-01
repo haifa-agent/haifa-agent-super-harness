@@ -1,0 +1,90 @@
+{
+  "schema": "sh.deerflow-tool-descriptions/v1",
+  "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+  "descriptions": [
+    {
+      "tool": "read_file",
+      "source_file": "deerflow/sandbox/tools.py",
+      "source_function": "read_file_tool",
+      "source_lineno": 2515,
+      "description_sha256": "25a7864c7b184658529dac363a7a280cb9db5409c258c73458060e5d2956ded6"
+    },
+    {
+      "tool": "write_file",
+      "source_file": "deerflow/sandbox/tools.py",
+      "source_function": "write_file_tool",
+      "source_lineno": 2616,
+      "description_sha256": "597513659a54be01381846e0df1263404891f5441a761f911b7e831c7284ae84"
+    },
+    {
+      "tool": "str_replace",
+      "source_file": "deerflow/sandbox/tools.py",
+      "source_function": "str_replace_tool",
+      "source_lineno": 2715,
+      "description_sha256": "3f8c3c627ca79cc056cefd81dea2d113e289f5384afc38682827567e9595357c"
+    },
+    {
+      "tool": "ls",
+      "source_file": "deerflow/sandbox/tools.py",
+      "source_function": "ls_tool",
+      "source_lineno": 2225,
+      "description_sha256": "ffd5dc8ff5815ef38b7ef5c9db466da8f9a9d00a62ce90cc8b3689e22bb918f9"
+    },
+    {
+      "tool": "glob",
+      "source_file": "deerflow/sandbox/tools.py",
+      "source_function": "glob_tool",
+      "source_lineno": 2293,
+      "description_sha256": "de97d2978e391127cdef646fc6940e5b7885f009ec7cac28a37e7c1e837d2728"
+    },
+    {
+      "tool": "grep",
+      "source_file": "deerflow/sandbox/tools.py",
+      "source_function": "grep_tool",
+      "source_lineno": 2373,
+      "description_sha256": "6e0e393f75e318abf891fb5ccd457db71dcc8e87dbfd07b77b660b2301f6464e"
+    },
+    {
+      "tool": "list_uploaded_files",
+      "source_file": "deerflow/tools/builtins/list_uploaded_files_tool.py",
+      "source_function": "list_uploaded_files",
+      "source_lineno": 246,
+      "description_sha256": "cb9f23ff0d2bf34e304a1ae1f3599635970202ff1534a490db47700dfc6f9f38"
+    },
+    {
+      "tool": "present_files",
+      "source_file": "deerflow/tools/builtins/present_file_tool.py",
+      "source_function": "present_file_tool",
+      "source_lineno": 83,
+      "description_sha256": "fbdbace96657db352aa3f37b30e8659ea53c4e6d956946de0fd83ea294ec1a25"
+    },
+    {
+      "tool": "ask_clarification",
+      "source_file": "deerflow/tools/builtins/clarification_tool.py",
+      "source_function": "ask_clarification_tool",
+      "source_lineno": 23,
+      "description_sha256": "6ce2c648b3f9b1080ea855c4b8f9d701d416982b33d4ad14a92a48282302451a"
+    },
+    {
+      "tool": "web_search",
+      "source_file": "deerflow/community/ddg_search/tools.py",
+      "source_function": "web_search_tool",
+      "source_lineno": 156,
+      "description_sha256": "a6562af615f8d8c5375588a6c0a233703b3c6ee628288438f61d75205bc597f4"
+    },
+    {
+      "tool": "web_fetch",
+      "source_file": "deerflow/community/jina_ai/tools.py",
+      "source_function": "web_fetch_tool",
+      "source_lineno": 44,
+      "description_sha256": "9c6a5d6465549b7ab69a9f9425e4d39415714679dfec509c86603870894c5820"
+    },
+    {
+      "tool": "image_search",
+      "source_file": "deerflow/community/image_search/tools.py",
+      "source_function": "image_search_tool",
+      "source_lineno": 77,
+      "description_sha256": "3398f1de8ce20f78de3cb3d3eda85db4262fc3ed4a40180cad1a87c479844d8d"
+    }
+  ]
+}

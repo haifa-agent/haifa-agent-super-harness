@@ -49,7 +49,9 @@ final class LocalProbeModelTestSupport {
                 new CredentialRef("env://SUPER_HARNESS_LOCAL_PROBE"),
                 false,
                 Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING),
-                8_192,
+                // The full frozen Lead prompt plus M1's default catalog must fit the fixture.
+                // This does not change the production managed-model default or Run budget.
+                32_768,
                 1_024,
                 Map.of(),
                 Map.of());

@@ -108,7 +108,9 @@ public class LeadPromptPreflightProbeTest {
     }
 
     private static List<? extends JavaTool<?, ?>> promptTools() {
-        return List.of(namedTool("read_file"), namedTool("write_file"));
+        return java.util.stream.Stream.of("read_file", "write_file", "str_replace", "present_files",
+                        "list_uploaded_files", "grep", "web_search", "web_fetch", "ask_clarification")
+                .map(LeadPromptPreflightProbeTest::namedTool).toList();
     }
 
     private static JavaTool<Empty, Empty> namedTool(String name) {

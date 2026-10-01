@@ -1,0 +1,5 @@
+Replace a substring in a file with another substring.
+If `replace_all` is False (default), the substring to replace must appear **exactly once** in the file.
+
+READ-BEFORE-WRITE (issue #3857): you must have read the file's CURRENT
+version with read_file first; any write invalidates earlier reads.

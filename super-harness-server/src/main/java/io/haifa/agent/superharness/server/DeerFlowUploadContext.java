@@ -100,6 +100,25 @@ final class DeerFlowUploadContext {
         return block + "\n\n" + userText;
     }
 
+    /**
+     * Filenames referenced by the newest human message's {@code additional_kwargs.files}.
+     * {@code list_uploaded_files} uses this to exclude the current Run's uploads.
+     */
+    static Set<String> currentUploadFilenames(JsonNode messages) {
+        Set<String> filenames = new LinkedHashSet<>();
+        JsonNode files = lastHumanFiles(messages);
+        if (files == null || !files.isArray()) {
+            return filenames;
+        }
+        for (JsonNode file : files) {
+            JsonNode filename = file.path("filename");
+            if (filename.isTextual() && validFilename(filename.textValue())) {
+                filenames.add(filename.textValue());
+            }
+        }
+        return filenames;
+    }
+
     private static JsonNode lastHumanFiles(JsonNode messages) {
         if (messages == null || !messages.isArray()) {
             return null;

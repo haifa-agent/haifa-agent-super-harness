@@ -1,0 +1,1 @@
+Search for matching lines inside a text file or files under a root directory.

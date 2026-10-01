@@ -121,6 +121,8 @@ public final class W05RestartResumeProcess {
                     evidence.put("receipt_status", receipt.status().name());
                     var terminal = agent.runs().await(runId, Duration.ofSeconds(20)).orElseThrow();
                     evidence.put("final_status", terminal.status().name());
+                    terminal.error().ifPresent(error -> evidence.put("run_error", error.toString()));
+                    terminal.terminationReason().ifPresent(reason -> evidence.put("termination_reason", reason.toString()));
                     long markerLines = Files.exists(markerFile)
                             ? Files.readAllLines(markerFile).size()
                             : 0L;
@@ -157,19 +159,24 @@ public final class W05RestartResumeProcess {
                 dataRoot.resolve("workspace"), WorkspaceLimits.defaults(), WorkspaceChangeLimits.defaults());
         RestrictedWorkspaceService toolWorkspace = new RestrictedWorkspaceService(
                 dataRoot.resolve("workspace"), WorkspaceLimits.defaults());
-        JavaTool<?, ?> readTool = new ProductionReadFileTool("w05-cross-process", projects, toolWorkspace);
-        JavaTool<?, ?> writeTool =
-                new ProductionWriteFileTool("w05-cross-process", "w05-cross-process", projects, toolWorkspace);
+        List<JavaTool<?, ?>> tools = new java.util.ArrayList<>();
+        tools.add(tool);
+        tools.addAll(DeerFlowBootstrapApi.fileTools(new DeerFlowThreadRunApi.ThreadToolScope(
+                "w05-cross-process", Optional.empty(), new CurrentRunUploads()), projects, toolWorkspace));
+        Set<String> names = tools.stream().map(item -> item.spec().name().value())
+                .collect(java.util.stream.Collectors.toSet());
         ProductProfile profile = ProductProfile.create(
                 new ProductId("haifa-super-harness"),
                 new ProductVersion("1.0.0"),
                 new AgentDefinitionId("haifa-super-harness-agent"),
                 new AgentDefinitionVersion(1, 0, 0),
-                "Return a concise answer to the local user's request.",
+                io.haifa.agent.superharness.server.prompt.LeadPromptComposer.classpath().compose(
+                        new io.haifa.agent.superharness.server.prompt.LeadPromptInputs(null, null, false, List.of()),
+                        names).instructions(),
                 new ProductRunProfileRef(snapshot.modelId().value(), "1.0.0"),
                 new AgentRunBudget(65_536, 8_192, 65_536, 16, 16, 0, "USD", 100),
                 new AgentRunLimits(16, 0, 1, 120_000, 60_000, 16, 16, 0),
-                Set.of(tool.spec().name().value(), "read_file", "write_file"),
+                names,
                 Set.of());
         return HaifaAgents.builder(profile)
                 .metadata(new AgentMetadata("W05 cross-process restart probe"))
@@ -177,7 +184,12 @@ public final class W05RestartResumeProcess {
                 .model(models)
                 .persistence(sqlite.borrowedPersistence())
                 .conversation(() -> sqlite.conversation().conversationStore())
-                .tools(List.<JavaTool<?, ?>>of(tool, readTool, writeTool))
+                .tools(tools)
+                .autoApproveReadOnlyNetworkTools(tools.stream()
+                        .filter(item -> item instanceof ProductionWebSearchTool
+                                || item instanceof ProductionWebFetchTool || item instanceof ProductionImageSearchTool)
+                        .map(item -> item.spec().name())
+                        .collect(java.util.stream.Collectors.toSet()))
                 .policy(new PolicyPlatformContribution(
                         PolicyPresets.standardApproval(), new DefaultPolicyDecisionService()))
                 .build();

@@ -1,0 +1,16 @@
+Discover historical uploaded files available in this thread.
+
+Returns files that were uploaded in PREVIOUS turns — files uploaded in the
+current run are excluded (they are already listed in <current_uploads>).
+
+Use this tool when:
+- The user refers to previously uploaded files without naming them (e.g. "analyze those PDFs I uploaded before")
+- You need to check what files are available in this thread
+- You are starting work on a thread and want an overview of available data
+
+Skip this tool when:
+- The user names a specific file — use read_file or grep directly with the path
+- The file was uploaded in the current run — it's already in <current_uploads>
+
+Optional filters (`query`, `extensions`) run before the max_results cap, so
+older matching files are not displaced by newer unrelated uploads.

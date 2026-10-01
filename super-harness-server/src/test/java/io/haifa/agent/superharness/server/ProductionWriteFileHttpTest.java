@@ -92,7 +92,7 @@ class ProductionWriteFileHttpTest {
                         {"config":{"name":"demo-model","display_name":"Demo Model",
                         "provider":"openai-compatible","model":"demo-provider-id",
                         "base_url":"http://127.0.0.1:%s/v1","enabled":true,"supports_vision":false,
-                        "context_window":8192,"max_tokens":1024,"api_key":"controlled-key"},
+                        "context_window":32768,"max_tokens":1024,"api_key":"controlled-key"},
                         "expected_revision":null}
                         """.formatted(provider.getAddress().getPort());
                 assertThat(request(base, "PUT", "/api/managed-models", model).statusCode()).isEqualTo(200);
@@ -285,7 +285,7 @@ class ProductionWriteFileHttpTest {
                     {"config":{"name":"demo-model","display_name":"Demo Model",
                     "provider":"openai-compatible","model":"demo-provider-id",
                     "base_url":"%s","enabled":true,"supports_vision":false,
-                    "context_window":8192,"max_tokens":1024,"api_key":"controlled-key"},
+                    "context_window":32768,"max_tokens":1024,"api_key":"controlled-key"},
                     "expected_revision":null}
                     """.formatted(endpoint);
             assertThat(request(base, "PUT", "/api/managed-models", model).statusCode()).isEqualTo(200);
@@ -312,7 +312,7 @@ class ProductionWriteFileHttpTest {
             assertThat(pending.body()).contains("tool-call-" + pendingToolCallId + "-request");
             assertThat(providerRequests).hasSize(1);
             assertThat(providerRequests.getFirst().path("tools").findValuesAsText("name"))
-                    .contains("write_file").doesNotContain("ask_clarification");
+                    .contains("write_file", "ask_clarification");
             URI artifact = base.resolve("/api/threads/production-file/artifacts" + path);
             assertThat(client.send(HttpRequest.newBuilder(artifact).GET().build(),
                     HttpResponse.BodyHandlers.ofByteArray()).statusCode()).isEqualTo(404);

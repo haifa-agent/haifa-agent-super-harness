@@ -180,7 +180,7 @@
       "id": "deerflow.prompt.lead-agent-adaptations",
       "kind": "prompt-adaptation",
       "intended_local_path": "resources/upstream/deerflow/prompts/lead-agent-adaptations.json",
-      "local_sha256": "8dd8e7201acbe5150f4859259254c6fe50b2e3d2c1e1b43fdf8b9eab025768d8",
+      "local_sha256": "74a26bbb69a564ebfc4401cc03681998d91dc19388707cdd2f2b9611d326f7a2",
       "authored": true,
       "import_status": "IMPORTED",
       "license_assessment": "Super Harness authored adaptation data derived from the frozen template positions; no upstream text is copied. Not a legal review.",
@@ -192,7 +192,7 @@
       "source_path": "backend/packages/harness/deerflow/agents/lead_agent/agent.py",
       "sha256": "241782497d229ab3e4e2e07ecc84403dcfac62a49b45fc319fc41932862238ad",
       "intended_local_path": "resources/upstream/deerflow/prompts/lead-agent-assembly.md",
-      "local_sha256": "526405eb4c5a38172c3ecce7ba7281aa478df8d10dafd0b81d814a2c2b742ff6",
+      "local_sha256": "6c928c343970ad9d8d6580f0b1881e74ef4205dc2b3daf571af46fdeb18fd40f",
       "authored": true,
       "import_status": "IMPORTED",
       "license_assessment": "Super Harness authored assembly ledger describing upstream variables, branches and injection points; no upstream text is copied. Not a legal review.",
@@ -205,6 +205,25 @@
       "sha256": "ac3839d1470da4d838c5d86f37586a56a947e9c4b0f536316c0427c25dd2ded5",
       "import_status": "NOT_RUN",
       "license_assessment": "Only the boundary marker constants and the neutralization rule originate from this frozen file; they are reimplemented in Java (InputTrustBoundary) without copying the file. Not a legal review.",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.prompt.interactive-clarification-system",
+      "kind": "prompt",
+      "source_path": "backend/packages/harness/deerflow/agents/interaction_policy.py",
+      "sha256": "a4d861afd13c39dbfbc7b81deaecaacad9148d36bcd11cd928214381467b040b",
+      "intended_local_path": "resources/upstream/deerflow/prompts/interactive-clarification-system.txt",
+      "local_sha256": "7f4f6f230f6c62d33dc207da920c8ae777730a3100ce4e3988292a5f24cd4bba",
+      "extraction": {
+        "kind": "python-double-quoted-literal-region",
+        "start_anchor": "_INTERACTIVE_CLARIFICATION_SYSTEM = \"\"\"",
+        "end_anchor": "\"\"\"",
+        "encoding": "utf-8",
+        "fail_on_backslash": true,
+        "rule": "Raw bytes inside the frozen interactive clarification literal, no Python evaluation."
+      },
+      "import_status": "IMPORTED",
+      "license_assessment": "Original frozen DeerFlow text under root MIT; attribution retained. Not a legal review.",
       "status": "SOURCE_VERIFIED"
     }
   ],

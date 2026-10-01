@@ -200,6 +200,9 @@ function Read-EvidenceManifest([string]$Root) {
 }
 
 try {
+    # A stage/assignment without details_json yields an empty object; property lookup must not throw under StrictMode.
+    Assert-True ($null -eq (Get-ShpmProp ([pscustomobject]@{}) 'proof')) "Get-ShpmProp must tolerate an empty details object"
+    Assert-True ((Get-ShpmProp ([pscustomobject]@{ proof = 'x' }) 'proof') -eq 'x') "Get-ShpmProp must read an existing property"
     $null = New-Item -ItemType Directory -Force -Path $TempRoot
     # Fixtures mutate a copy of the live SHPM export; the live database is never written.
     $null = Export-ShpmSnapshot -Database $env:SHPM_DB -OutputPath $BaseSnapshot
@@ -266,7 +269,7 @@ try {
         'missing-prerequisite' = @({ param($s) Add-Relation $s 'work_package' 'W00' 'work_package' 'W99' 'requires' }, 'references missing prerequisite W99')
         'self-reference' = @({ param($s) Add-Relation $s 'work_package' 'W00' 'work_package' 'W00' 'requires' }, 'cannot reference itself')
         'cycle' = @({ param($s) Add-Relation $s 'work_package' 'W00' 'work_package' 'W01' 'requires' }, 'prerequisite cycle detected')
-        'too-many-tasks' = @({ param($s) $base = Get-Row $s 'task' 'W05-task-1'; $existing = @($s.tables.task | Where-Object work_package_id -eq 'W05').Count; $extras = @(($existing + 1)..9 | ForEach-Object { $t = $base.PSObject.Copy(); $t.id = "W05-task-$_"; $t }); $s.tables.task = @($s.tables.task) + $extras }, 'must have at most 8 tasks')
+        'too-many-tasks' = @({ param($s) $base = Get-Row $s 'task' 'W05-task-1'; $existing = @($s.tables.task | Where-Object work_package_id -eq 'W05').Count; $extras = @(1..(17 - $existing) | ForEach-Object { $t = $base.PSObject.Copy(); $t.id = "W05-cap-fixture-$_"; $t }); $s.tables.task = @($s.tables.task) + $extras }, 'must have at most 16 tasks')
         'developing-without-assignment' = @({ param($s) $t = Get-Row $s 'task' 'W04-task-2'; $t.state = 'developing'; $t.prompt_path = 'private-docs/prompts/test.md' }, 'developing without exactly one running assignment')
         'started-without-prompt' = @({ param($s) $t = Get-Row $s 'task' 'W04-task-2'; $t.state = 'blocked'; $t.started_at = '2026-09-28T10:00:00+08:00' }, 'left pending without a prompt_path')
         'old-slot-ports' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '38018/53018' 'D:/workspace/test/a' }, 'slot and child port group do not match')

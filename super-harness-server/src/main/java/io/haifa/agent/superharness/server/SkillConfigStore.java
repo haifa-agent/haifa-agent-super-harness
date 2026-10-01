@@ -96,6 +96,15 @@ final class SkillConfigStore {
         return SkillRunTools.projection(current.packages(), current.enabled(), selection);
     }
 
+    SkillRunTools.Projection recoveryProjection(SkillRunTools.Selection selection) {
+        State current = state;
+        // Restore the admitted product declaration, irrespective of later UI enable toggles.
+        // Immutable package sources and the retained loader remain SDK inputs.
+        Map<String, Boolean> original = new LinkedHashMap<>();
+        current.packages().forEach(pkg -> original.put(pkg.name(), selection.admits(pkg.name())));
+        return SkillRunTools.projection(current.packages(), original, selection).forRecovery();
+    }
+
     List<Map<String, Object>> list() {
         State current = state;
         List<Map<String, Object>> response = new ArrayList<>();

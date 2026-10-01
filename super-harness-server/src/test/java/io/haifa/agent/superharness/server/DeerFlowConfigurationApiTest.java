@@ -450,7 +450,7 @@ class DeerFlowConfigurationApiTest {
         try {
             String endpoint = "http://127.0.0.1:" + provider.getAddress().getPort() + "/v1";
             HttpResponse<String> saved =
-                    request("PUT", "/api/managed-models", saveModelAt(null, "controlled-secret", endpoint));
+                    request("PUT", "/api/managed-models", saveModelForRunAt(null, "controlled-secret", endpoint));
             assertThat(saved.statusCode()).isEqualTo(200);
             JsonNode savedModel = json.readTree(saved.body());
             String revision = savedModel.path("revision").asText();
@@ -462,7 +462,7 @@ class DeerFlowConfigurationApiTest {
             assertThat(catalog.toString()).doesNotContain("controlled-secret", endpoint);
 
             HttpResponse<String> probe = request(
-                    "POST", "/api/managed-models/test", saveModelAt(revision, null, endpoint));
+                    "POST", "/api/managed-models/test", saveModelForRunAt(revision, null, endpoint));
             assertThat(probe.statusCode()).isEqualTo(200);
             assertThat(json.readTree(probe.body()))
                     .isEqualTo(json.readTree("{\"message\":\"success\",\"ok\":true}"));
@@ -515,7 +515,7 @@ class DeerFlowConfigurationApiTest {
                     .isEqualTo(404);
 
             HttpResponse<String> updated = request(
-                    "PUT", "/api/managed-models", saveModelAt(revision, null, endpoint));
+                    "PUT", "/api/managed-models", saveModelForRunAt(revision, null, endpoint));
             assertThat(updated.statusCode()).isEqualTo(200);
             HttpResponse<String> drifted =
                     request("POST", "/api/threads/managed-run/runs/stream", runBody);
@@ -523,7 +523,7 @@ class DeerFlowConfigurationApiTest {
             assertThat(drifted.body()).contains("controlled provider response", "event: end");
             assertThat(drifted.headers().firstValue("content-location")).isNotEqualTo(runLocation);
 
-            String secondModelConfig = saveModelAt(null, "controlled-secret", endpoint)
+            String secondModelConfig = saveModelForRunAt(null, "controlled-secret", endpoint)
                     .replace("\"name\":\"demo-model\"", "\"name\":\"second-model\"")
                     .replace("\"model\":\"demo-provider-id\"", "\"model\":\"second-provider-id\"");
             assertThat(request("PUT", "/api/managed-models", secondModelConfig).statusCode())
@@ -610,7 +610,7 @@ class DeerFlowConfigurationApiTest {
         provider.start();
         try {
             String endpoint = "http://127.0.0.1:" + provider.getAddress().getPort() + "/v1";
-            assertThat(request("PUT", "/api/managed-models", saveModelAt(null, "controlled-secret", endpoint))
+            assertThat(request("PUT", "/api/managed-models", saveModelForRunAt(null, "controlled-secret", endpoint))
                             .statusCode())
                     .isEqualTo(200);
             for (String threadId : List.of("usage-omitted", "usage-explicit-zero")) {
@@ -741,6 +741,11 @@ class DeerFlowConfigurationApiTest {
                 .formatted(endpoint, key, revisionJson);
     }
 
+    /** Full lead prompt/default catalog need an explicit adequate controlled Run window. */
+    private static String saveModelForRunAt(String revision, String apiKey, String endpoint) {
+        return saveModelAt(revision, apiKey, endpoint)
+                .replace("\"context_window\":8192", "\"context_window\":32768");
+    }
     private static String saveModelWithApiKeyLiteral(String revision, String apiKeyLiteral) {
         return saveModel(revision, null).replace(
                 "\"max_tokens\":1024", "\"max_tokens\":1024,\"api_key\":" + apiKeyLiteral);

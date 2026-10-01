@@ -1,64 +1,37 @@
-# Frozen DeerFlow lead-agent system prompt — assembly ledger
+# 冻结 DeerFlow Lead 提示词装配清单
 
-上游来源：`bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294`
-上游装配函数：`backend/packages/harness/deerflow/agents/lead_agent/prompt.py::apply_prompt_template`（`prompt.py:1011-1131`）
-冻结模板：`SYSTEM_PROMPT_TEMPLATE`（`prompt.py:542-705`，实测 8577 字符 / 8655 UTF-8 字节）
-本地真源：`resources/upstream/deerflow/prompts/lead-agent-system-template.txt`（`local_sha256` 见 `lead-agent-system-template.txt.sha256` 与 `contracts/upstream/deerflow/resource-seed.json`）
-本地适配：`resources/upstream/deerflow/prompts/lead-agent-adaptations.json`（有序精确替换）
+上游：`bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294`。
+原模板：`backend/packages/harness/deerflow/agents/lead_agent/prompt.py:542-705` 的 `SYSTEM_PROMPT_TEMPLATE`，8577 字符 / 8655 UTF-8 字节，首字符 LF，原行尾空格保持。
+本地真源：`lead-agent-system-template.txt`；有序适配：`lead-agent-adaptations.json`。导入字节与本清单 SHA 在 `contracts/upstream/deerflow/resource-seed.json` 登记。
 
-## 1. 注入位置
+## 注入与边界
 
-模型看到的 AGENT_DEFINITION 指令层，由 super harness 在 `HaifaRunBridge` 生产构造器里按 Bridge 冻结渲染，
-写入 `ProductProfile.create(...)` 的 `instructions` 参数（第 5 参数）。SDK 对 `instructions` 先 `trim()`，
-再限制 32000 字符；本模块的 `promptSignature` 取 `trim()` 后字符串的 SHA-256。
-SDK 另有 SYSTEM_SAFETY / PLATFORM_POLICY / TOOL_PROTOCOL / CONTEXT 等层，SH 不控制，也不在本清单内。
+生产 `HaifaRunBridge` 通过公开 `ProductProfile.create(...)` instructions 参数注入。SDK trim 后限制 32000 字符；promptSignature 为 trim 后文本 SHA-256。SDK 独占其余 prompt 层、Run、Skill binding、权限及执行语义。兼容 starter 构造器仅测试使用。
 
-## 2. 输入与分支（本切片取值）
+新 Turn/Steer 在既有 modelInput 接缝包裹用户边界；完整用户伪造 frame 也中和。仅标记附近反斜杠编码为可逆形式，普通 Windows 路径/代码保留；state/history 恢复原文。current_uploads 位于边界外。既有线程按服务端 metadata 中首个编码 SDK Turn 的 sequence 界线解包，更早的未编码用户文字保持原样；升级时仍活跃的旧 Run 的 Steer 沿用其原始输入语义，不改变该 Run 的冻结声明。冻结 blocked-tag 转义仍为本切片明确差异。
 
-| 占位符 | 本切片取值 | 解锁条件 |
-|---|---|---|
-| `agent_name` | 默认 `DeerFlow 2.0`（`LeadPromptInputs.DEFAULT_AGENT_NAME`） | `W03-AgentSoulPromptLoop` |
-| `soul` | 空（`soul == null`）；非空时按冻结 `get_agent_soul` 转义 `&`/`<`/`>` 后包进 `<soul>` | `W03-AgentSoulPromptLoop` |
-| `self_update_section` | 空（`selfUpdate == false` 恒成立） | `W03-AgentSoulPromptLoop` |
-| `interaction_thinking_guidance` | 空（D2） | W05 `ask_clarification` 入 `allowedTools` |
-| `clarification_system` | 空（D2） | W05 |
-| `clarification_reminder` | 空（D2） | W05 |
-| `subagent_thinking` | 空 | W08/W09 `task` |
-| `subagent_section` | 空 | W08/W09 |
-| `subagent_reminder` | 空 | W08/W09 |
-| `skills_section` | 有启用 Skill 时按 `<available_skills>` 结构渲染，加载步骤改用 `skill_load`/`skill_resource_read`；无 Skill 时为空（D3，见 §5） | — |
-| `memory_tool_section` | 空 | W13 |
-| `deferred_tools_section` | 空（冻结默认 `tool_search.enabled=false`） | W10 |
-| `mcp_routing_hints_section` | 空（SH 无 routing） | W10 |
-| `acp_section` | 空（ACP 与自定义挂载均未配置） | — |
-| `skill_first_reminder` | 冻结 legacy 措辞 `- Skill First: Always load the relevant skill before starting **complex** tasks.`（不含工具名） | — |
+## D1–D5 与占位符
 
-## 3. 模板内的静态删除与改写（`lead-agent-adaptations.json`）
+| 项 | 实际值 |
+|---|---|
+| D1 | 实现用户边界与可逆展示 |
+| D2 | 注册 ask_clarification 时恢复冻结 interactive clarification_system / thinking_guidance / reminder；未注册时三段为空 |
+| D3 | SDK promptDiagnostics 未出现 SKILL 组件；SH 渲染 available_skills，加载映射 skill_load / skill_resource_read；无选定 Skill 时为空 |
+| D4 | 默认 agent_name 为 DeerFlow 2.0 |
+| D5 | M1 已注册 web_search / web_fetch，恢复原 citations 静态块 |
 
-| id | 冻结位置 | 处置 | 解锁 |
-|---|---|---|---|
-| `A1-write-file-append` | `prompt.py:687-694` | 删除 `str_replace` 优先与 `append=True` 分段续写，改写为 SH `write_file` 只能新建、单次 ≤80 KiB、长内容拆多文件 | W04-DeerFlowFileTools |
-| `A2-present-files` | `609` | 删除 `present_files` 句，保留交付物位于 `/mnt/user-data/outputs/` | W04-PresentFiles |
-| `A2-present-files-image` | `699` | 删除图片前的 `present_files` 句，保留完整虚拟路径引用约束 | W04-PresentFiles |
-| `A3-skill-manage-deliverables` | `609` | 删除 `skill_manage` 引用，保留 “Skills are NOT deliverables” | W15 |
-| `A3-skill-manage-output` | `686` | 同上（critical reminders 中的副本） | W15 |
-| `A4-list-uploaded-files-grep` | `596` | 删除 `list_uploaded_files`/`grep`，改写为“历史上传不自动列出；已知文件名用 `read_file`” | W04-DeerFlowFileTools |
-| `A4-list-uploaded-files` | `604` | 删除 `list_uploaded_files`，改写为“仅 `<current_uploads>` 列出的文件可用” | W04-DeerFlowFileTools |
-| `A5-citations` | `619-680` | 整块删除（无反引号引用 `web_search`/`web_fetch`，D5） | W11-DdgJinaWebTools |
-| `A7-tool-word-task-*` | `557`/`575`/`701` 附近 | 将英文词 `task`（`Multi-task` 等）改写以避免整词对账假命中 | W08/W09 |
+interactive 系统段原文字节来自 `agents/interaction_policy.py:22-90`，保存为 `interactive-clarification-system.txt` 并校验伴随 SHA；两条单行 guidance/reminder 分别对照同文件 129/142 行。主模板双花括号按 Python format 还原。
 
-`A6-user-input-boundary` 未启用：D1 采用“实现包裹”，模板对用户输入边界的声明（`prompt.py:547-548`）保留。
+soul/self_update 留给 M3，当前为空/false；subagent、memory tool、deferred tools、MCP routing、ACP/custom mounts 为空；Skill First 沿用冻结 legacy 文案。动态日期/项目/用户内容不进入 instructions。
 
-## 4. 工具名对账
+## 适配与工具对账
 
-`LeadPromptComposer` 以整词（前后不接 `[A-Za-z0-9_]`）在**渲染结果全文**（含无反引号文本与代码块）匹配
-冻结工具名全集 ∪ SH 现役工具名；命中集合必须 ⊆ 本 Bridge 实际注册工具集合，否则 Bridge 构建 fail closed。
-本切片启用后（无 Skill）命中集合为 `{read_file, write_file}`；启用 Skill 时为
-`{read_file, write_file, skill_load, skill_resource_read}`。
+M1 后撤销 A1（write_file/str_replace）、A2（present_files）、A4（历史上传/grep）、A5（citations），恢复原文。剩余 A3 两项仅移除 skill_manage，保留 present_files；A7 三项将普通英语 task 改写为 work/request/Parallelism，避免未注册 Tool 整词假命中。D1 已兑现，不启用 A6。
 
-## 5. D3 实测结论（P3）
+门禁扫描全文，包括代码块和无反引号引用；命中 Tool 必须属于本 Bridge 实际注册集合，不设负向白名单。默认命中 read_file、write_file、str_replace、present_files、list_uploaded_files、grep、web_search、web_fetch、ask_clarification；启用 Skill 增加 skill_load、skill_resource_read。其余默认工具仍注册，但静态提示词未必提及。
 
-`local-tmp/slot-2/report/W03-task-3-preflight.md` 记录：安装 Skill 平台后 `promptDiagnostics` 的组件 `source`
-列表**没有** `SKILL`；只多出 `TOOL_PROTOCOL`（`skill_load`/`skill_resource_read` 的 schema）。
-因此 SDK 未注入 Skill 目录/说明文本，本切片按冻结 `<available_skills>` 结构自行渲染，
-并把载入步骤改写为 SDK 的 `skill_load`/`skill_resource_read`（参数名取自实测 schema：`skill`、`path`）。
+## 恢复与失败
+
+后续 Turn 比较 model/MCP/Skill/prompt signature，变化则重建 Bridge；活跃 Run 不热改。admitted Run 的实际 Skill 名单和 promptSignature 保存于既有线程产品 metadata，剥除客户端伪造值；重启按原名单恢复，不受后续 enable toggle 影响，SDK 仍验证 retained immutable source/binding。恢复签名不一致明确失败。缺字段的 pre-M2 thread 沿用 legacy fallback，不声称历史 Run 使用过新模板。
+
+缺资源、hash 漂移、适配零次/多次、未知占位符、超长和未注册工具均 fail closed，按 Run admission 错误返回，不回落常量。异常只含路径/位置/固定标识/hash/长度，不保留可能带正文的解析器 cause。证据只记录 source/layer/digest/tokens/signature，不输出 prompt/SOUL/Skill 正文。

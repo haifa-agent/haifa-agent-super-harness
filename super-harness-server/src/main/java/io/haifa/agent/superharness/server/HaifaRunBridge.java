@@ -141,6 +141,13 @@ final class HaifaRunBridge implements AutoCloseable {
                 .tools(tools)
                 .policy(new PolicyPlatformContribution(
                         PolicyPresets.standardApproval(), new DefaultPolicyDecisionService()));
+        // Human B1 decision: only these production read-only network tools skip the
+        // standard network ASK. All other network/MCP and writing tools retain their policy.
+        builder.autoApproveReadOnlyNetworkTools(tools.stream()
+                .filter(tool -> tool instanceof ProductionWebSearchTool
+                        || tool instanceof ProductionWebFetchTool || tool instanceof ProductionImageSearchTool)
+                .map(tool -> tool.spec().name())
+                .collect(java.util.stream.Collectors.toSet()));
         if (skillProjection != null && skillProjection.installTools()) {
             builder.skillPlatform(new SkillPlatformContribution(
                             skillProjection.catalog(), skillProjection.loader()))

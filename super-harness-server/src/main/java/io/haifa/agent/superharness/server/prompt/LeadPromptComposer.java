@@ -82,7 +82,7 @@ public final class LeadPromptComposer {
     }
 
     public static LeadPromptComposer classpath() {
-        return Holder.INSTANCE;
+        return new LeadPromptComposer(LeadPromptTemplate.load());
     }
 
     public Composition compose(LeadPromptInputs inputs, Set<String> registeredToolNames) {
@@ -92,16 +92,21 @@ public final class LeadPromptComposer {
         values.put("agent_name", inputs.agentNameOrDefault());
         values.put("soul", renderSoul(inputs.soul()));
         values.put("self_update_section", renderSelfUpdate(inputs));
-        values.put("interaction_thinking_guidance", "");
+        boolean interactive = registeredToolNames.contains("ask_clarification");
+        values.put("interaction_thinking_guidance", interactive
+                ? "- **PRIORITY CHECK: If anything is unclear, missing, or has multiple interpretations, you MUST ask for clarification FIRST - do NOT proceed with work**"
+                : "");
         values.put("subagent_thinking", "");
-        values.put("clarification_system", "");
+        values.put("clarification_system", interactive ? template.interactiveClarification() : "");
         values.put("skills_section", renderSkills(inputs.skills()));
         values.put("memory_tool_section", "");
         values.put("deferred_tools_section", "");
         values.put("mcp_routing_hints_section", "");
         values.put("subagent_section", "");
         values.put("acp_section", "");
-        values.put("clarification_reminder", "");
+        values.put("clarification_reminder", interactive
+                ? "- **Clarification First**: ALWAYS clarify unclear/missing/ambiguous requirements BEFORE starting work - never assume or guess"
+                : "");
         values.put("subagent_reminder", "");
         values.put("skill_first_reminder", LEGACY_SKILL_FIRST_REMINDER);
 
@@ -138,7 +143,7 @@ public final class LeadPromptComposer {
                 String name = template.substring(index + 1, close);
                 String value = values.get(name);
                 if (value == null) {
-                    throw new IllegalStateException("no value supplied for lead-agent placeholder '{" + name + "}'");
+                    throw new IllegalStateException("no value supplied for lead-agent placeholder at index " + index);
                 }
                 out.append(value);
                 index = close + 1;
@@ -207,7 +212,4 @@ public final class LeadPromptComposer {
     /** Rendered instructions, the SHA-256 of the SDK-trimmed text, and the tool names mentioned. */
     public record Composition(String instructions, String signature, Set<String> mentionedToolNames) {}
 
-    private static final class Holder {
-        private static final LeadPromptComposer INSTANCE = new LeadPromptComposer(LeadPromptTemplate.load());
-    }
 }

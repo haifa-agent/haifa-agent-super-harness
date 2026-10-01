@@ -214,7 +214,7 @@ class W05ExactGatewayProcessRestartApprovalTest {
                 {"config":{"name":"demo-model","display_name":"Demo Model",
                 "provider":"openai-compatible","model":"demo-provider-id",
                 "base_url":"%s","enabled":true,"supports_vision":false,
-                "context_window":8192,"max_tokens":1024,"api_key":"controlled-key"},
+                "context_window":32768,"max_tokens":1024,"api_key":"controlled-key"},
                 "expected_revision":null}
                 """.formatted(endpoint);
         HttpResponse<String> saved = put(base, "/api/managed-models", model);

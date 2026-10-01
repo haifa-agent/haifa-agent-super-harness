@@ -25,6 +25,7 @@ import java.util.Set;
 public final class LeadPromptTemplate {
     static final String TEMPLATE_RESOURCE = "/upstream/deerflow/prompts/lead-agent-system-template.txt";
     static final String HASH_RESOURCE = TEMPLATE_RESOURCE + ".sha256";
+    static final String INTERACTIVE_RESOURCE = "/upstream/deerflow/prompts/interactive-clarification-system.txt";
     static final String ADAPTATIONS_RESOURCE = "/upstream/deerflow/prompts/lead-agent-adaptations.json";
 
     static final Set<String> KNOWN_PLACEHOLDERS = Set.of(
@@ -48,17 +49,26 @@ public final class LeadPromptTemplate {
 
     private final String adaptedTemplate;
     private final String localSha256;
+    private final String interactiveClarification;
 
-    private LeadPromptTemplate(String adaptedTemplate, String localSha256) {
+    private LeadPromptTemplate(String adaptedTemplate, String localSha256, String interactiveClarification) {
         this.adaptedTemplate = adaptedTemplate;
         this.localSha256 = localSha256;
+        this.interactiveClarification = interactiveClarification;
     }
 
     public static LeadPromptTemplate load() {
         byte[] template = readResource(TEMPLATE_RESOURCE);
         String declaredHash = new String(readResource(HASH_RESOURCE), StandardCharsets.US_ASCII).trim();
         String adaptationsJson = new String(readResource(ADAPTATIONS_RESOURCE), StandardCharsets.UTF_8);
-        return parse(template, adaptationsJson, declaredHash);
+        LeadPromptTemplate parsed = parse(template, adaptationsJson, declaredHash);
+        byte[] interactive = readResource(INTERACTIVE_RESOURCE);
+        String expected = new String(readResource(INTERACTIVE_RESOURCE + ".sha256"), StandardCharsets.US_ASCII).trim();
+        if (!sha256(interactive).equals(expected)) {
+            throw new IllegalStateException("interactive clarification resource hash mismatch at " + INTERACTIVE_RESOURCE);
+        }
+        return new LeadPromptTemplate(parsed.adaptedTemplate, parsed.localSha256,
+                new String(interactive, StandardCharsets.UTF_8));
     }
 
     /** Single validation path used by tests for positive and negative cases. */
@@ -86,11 +96,15 @@ public final class LeadPromptTemplate {
             text = text.substring(0, first) + adaptation.replace() + text.substring(first + adaptation.find().length());
         }
         validatePlaceholders(text);
-        return new LeadPromptTemplate(text, actualHash);
+        return new LeadPromptTemplate(text, actualHash, "");
     }
 
     String adaptedTemplate() {
         return adaptedTemplate;
+    }
+
+    String interactiveClarification() {
+        return interactiveClarification;
     }
 
     String localSha256() {
@@ -102,7 +116,7 @@ public final class LeadPromptTemplate {
         try {
             root = JSON.readTree(adaptationsJson);
         } catch (IOException invalid) {
-            throw new IllegalStateException("lead-agent adaptations are not valid JSON", invalid);
+            throw new IllegalStateException("lead-agent adaptations are not valid JSON");
         }
         if (root == null || !root.isArray() || root.isEmpty()) {
             throw new IllegalStateException("lead-agent adaptations must be a non-empty ordered array");
@@ -148,7 +162,7 @@ public final class LeadPromptTemplate {
                 }
                 String name = text.substring(index + 1, close);
                 if (!KNOWN_PLACEHOLDERS.contains(name)) {
-                    throw new IllegalStateException("lead-agent template has an unknown placeholder '{" + name + "}'");
+                    throw new IllegalStateException("lead-agent template has an unknown placeholder at index " + index);
                 }
                 index = close + 1;
             } else if (character == '}') {

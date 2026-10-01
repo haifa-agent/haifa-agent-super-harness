@@ -311,7 +311,11 @@ class W05SqliteInteractionPrecisionTest {
                         waiting.countDown();
                     }
                 })) {
-            assertThat(waiting.await(10, TimeUnit.SECONDS)).as("Run must reach WAITING_APPROVAL").isTrue();
+            boolean observedWaiting = waiting.await(10, TimeUnit.SECONDS);
+            var snapshot = agent.runs().find(runId).orElseThrow();
+            assertThat(observedWaiting).as("Run must reach WAITING_APPROVAL; run=%s status=%s error=%s data=%s",
+                    runId.value(), snapshot.status(), snapshot.error(), System.getProperty("w05.fault.dataRoot", "JUnit TempDir"))
+                    .isTrue();
         }
         var pending = agent.runs().pendingInteraction(runId).orElseThrow();
         assertThat(pending.state()).isEqualTo(InteractionState.PENDING);

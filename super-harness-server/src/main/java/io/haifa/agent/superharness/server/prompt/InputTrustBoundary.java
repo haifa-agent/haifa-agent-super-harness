@@ -1,5 +1,8 @@
 package io.haifa.agent.superharness.server.prompt;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 /**
  * Pure request-scope user-input framing, the same boundary the adapted lead-agent template declares.
  *
@@ -13,18 +16,18 @@ public final class InputTrustBoundary {
     static final String END = "--- END USER INPUT ---";
     static final String NEUTRALIZED_BEGIN = "[BEGIN USER INPUT]";
     static final String NEUTRALIZED_END = "[END USER INPUT]";
+    private static final Pattern RAW_TOKEN = Pattern.compile("(\\\\*)(" + Pattern.quote(BEGIN) + "|"
+            + Pattern.quote(END) + "|" + Pattern.quote(NEUTRALIZED_BEGIN) + "|"
+            + Pattern.quote(NEUTRALIZED_END) + ")");
+    private static final Pattern DISPLAY_TOKEN = Pattern.compile("(\\\\*)(" + Pattern.quote(NEUTRALIZED_BEGIN)
+            + "|" + Pattern.quote(NEUTRALIZED_END) + ")");
 
     private InputTrustBoundary() {}
 
-    /** Neutralize forged markers and wrap non-blank text; already-wrapped text is returned stable. */
+    /** Frame raw user text; even a complete user-supplied frame is untrusted. */
     public static String wrap(String text) {
         if (text == null || text.isBlank()) {
             return text;
-        }
-        if (text.startsWith(BEGIN) && text.endsWith(END)) {
-            String inner = text.substring(BEGIN.length(), text.length() - END.length());
-            String neutralized = neutralize(inner);
-            return neutralized.equals(inner) ? text : BEGIN + neutralized + END;
         }
         return BEGIN + "\n" + neutralize(text) + "\n" + END;
     }
@@ -37,7 +40,9 @@ public final class InputTrustBoundary {
         if (text == null) {
             return null;
         }
-        int begin = text.indexOf(BEGIN);
+        // An upload filename in the trusted prefix may itself contain a marker. Raw user
+        // markers are neutralized, so the final BEGIN is the actual outer frame.
+        int begin = text.lastIndexOf(BEGIN);
         if (begin < 0) {
             return text;
         }
@@ -52,11 +57,39 @@ public final class InputTrustBoundary {
         if (inner.endsWith("\n")) {
             inner = inner.substring(0, inner.length() - 1);
         }
-        inner = inner.replace(NEUTRALIZED_BEGIN, BEGIN).replace(NEUTRALIZED_END, END);
+        inner = restore(inner);
         return text.substring(0, begin) + inner + text.substring(end + END.length());
     }
 
     private static String neutralize(String text) {
-        return text.replace(BEGIN, NEUTRALIZED_BEGIN).replace(END, NEUTRALIZED_END);
+        // Only token-adjacent backslashes are encoded. Ordinary paths and code stay byte-faithful.
+        Matcher matcher = RAW_TOKEN.matcher(text);
+        StringBuilder out = new StringBuilder(text.length());
+        int previous = 0;
+        while (matcher.find()) {
+            out.append(text, previous, matcher.start());
+            String token = matcher.group(2);
+            boolean forged = token.equals(BEGIN) || token.equals(END);
+            int slashes = matcher.group(1).length() * 2 + (forged ? 0 : 1);
+            out.append("\\".repeat(slashes));
+            out.append(token.equals(BEGIN) ? NEUTRALIZED_BEGIN : token.equals(END) ? NEUTRALIZED_END : token);
+            previous = matcher.end();
+        }
+        return out.append(text, previous, text.length()).toString();
+    }
+
+    private static String restore(String text) {
+        Matcher matcher = DISPLAY_TOKEN.matcher(text);
+        StringBuilder out = new StringBuilder(text.length());
+        int previous = 0;
+        while (matcher.find()) {
+            out.append(text, previous, matcher.start());
+            int slashes = matcher.group(1).length();
+            out.append("\\".repeat(slashes / 2));
+            String token = matcher.group(2);
+            out.append(slashes % 2 == 1 ? token : token.equals(NEUTRALIZED_BEGIN) ? BEGIN : END);
+            previous = matcher.end();
+        }
+        return out.append(text, previous, text.length()).toString();
     }
 }

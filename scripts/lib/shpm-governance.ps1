@@ -8,8 +8,8 @@ $script:ShpmWorkPackageKinds = @('delivery', 'cross_cutting')
 $script:ShpmTaskStates = @('pending', 'developing', 'ready_for_acceptance', 'blocked', 'finished')
 $script:ShpmStageStatuses = @('pending', 'in_progress', 'blocked', 'finished')
 $script:ShpmStageResults = @('PASS', 'FAIL', 'NOT_RUN', 'BLOCKED_EXTERNAL', 'UPSTREAM_UNSUPPORTED')
-# Human scope decision 2026-09-28 (mirrors SHPM MAX_DELIVERY_TASKS).
-$script:ShpmMaxDeliveryTasks = 8
+# Human scope decision 2026-10-01, superseding 2026-09-28's 8 (mirrors SHPM MAX_DELIVERY_TASKS).
+$script:ShpmMaxDeliveryTasks = 16
 $script:ShpmSlotPorts = @{ 1 = '20618/25618'; 2 = '30618/35618'; 3 = '40618/45618' }
 $script:ShpmRequiredTables = @('work_package', 'task', 'sprint', 'sprint_stage', 'relation', 'assignment', 'verification', 'issue', 'todo', 'event')
 
@@ -21,7 +21,8 @@ function Assert-ShpmCondition {
 function Get-ShpmProp {
     param([object]$Object, [string]$Name)
     if ($null -eq $Object) { return $null }
-    if ($Object.PSObject.Properties.Name -contains $Name) { return $Object.$Name }
+    # StrictMode throws on `.Name` of an empty property collection (e.g. a stage without details_json).
+    if (@($Object.PSObject.Properties | ForEach-Object { $_.Name }) -contains $Name) { return $Object.$Name }
     return $null
 }
 

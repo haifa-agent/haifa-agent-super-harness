@@ -133,7 +133,7 @@ class DeerFlowUploadRunContextHttpTest {
                 {"config":{"name":"v2-second-model","display_name":"V2 Second Controlled",
                 "provider":"openai-compatible","model":"v2-second-provider",
                 "base_url":"%s","enabled":true,"supports_vision":false,
-                "context_window":8192,"max_tokens":1024,"api_key":"controlled-key"},
+                "context_window":32768,"max_tokens":1024,"api_key":"controlled-key"},
                 "expected_revision":null}
                 """.formatted(endpoint);
         assertThat(request("PUT", "/api/managed-models", secondConfig).statusCode()).isEqualTo(200);
@@ -205,6 +205,28 @@ class DeerFlowUploadRunContextHttpTest {
         System.out.println("W04_V2_EXISTING_THREAD_EVIDENCE thread=" + threadId + " run=" + run.runId()
                 + " saved=" + saved + " sha256=" + FIXTURE_SHA256 + " toolCall=" + run.readFileToolCallId()
                 + " answer=" + run.answer());
+    }
+
+    /**
+     * W04-task-7/8, W05-task-8, W11-task-1: the Bridge must register the eight frozen default file
+     * tools plus {@code ask_clarification} and the three frozen default web tools ({@code web_search},
+     * {@code web_fetch}, {@code image_search}). Reaching the model proves the whole tool set
+     * (including the {@code glob}/{@code grep} {@code pattern} schemas, {@code present_files}
+     * {@code filepaths}, the {@code ask_clarification} form schema and the web tool schemas) passed
+     * SDK definition validation and was advertised to the provider.
+     */
+    @Test
+    void bridgeRegistersAllFrozenDefaultTools() throws Exception {
+        String threadId = "v2-file-tools";
+        assertThat(request("POST", "/api/threads", "{\"thread_id\":\"" + threadId + "\"}").statusCode())
+                .isEqualTo(200);
+        int before = providerRequests.size();
+        RunResult run = runWithFiles(threadId, "v2-file-context tool registry", List.of());
+        assertThat(run.status()).isEqualTo("success");
+        List<String> tools = providerRequests.get(before).path("tools").findValuesAsText("name");
+        assertThat(tools).contains(
+                "read_file", "write_file", "str_replace", "ls", "glob", "grep", "list_uploaded_files",
+                "present_files", "ask_clarification", "web_search", "web_fetch", "image_search");
     }
 
     @Test
@@ -496,11 +518,15 @@ class DeerFlowUploadRunContextHttpTest {
             if ("v2-model".equals(model.path("name").asText())) revision = model.path("revision").asText();
         }
         String endpoint = "http://127.0.0.1:" + provider.getAddress().getPort() + "/v1";
+        // W05-task-8 registers the frozen ask_clarification tool, whose schema plus description
+        // (~2KB) no longer fits a second model call under the old 8192-token window used by this
+        // large tool-result fixture; 32768 covers the whole frozen default tool set while staying
+        // bounded. The bounded-read assertions below are unchanged.
         String body = """
                 {"config":{"name":"v2-model","display_name":"V2 Controlled",
                 "provider":"openai-compatible","model":"v2-controlled",
                 "base_url":"%s","enabled":true,"supports_vision":false,
-                "context_window":8192,"max_tokens":1024,"api_key":"controlled-key"},
+                "context_window":32768,"max_tokens":1024,"api_key":"controlled-key"},
                 "expected_revision":%s}
                 """.formatted(endpoint, revision == null ? "null" : "\"" + revision + "\"");
         if (revision != null) {

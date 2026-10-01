@@ -2,9 +2,9 @@
 
 本仓库是冻结 DeerFlow 对齐项目的独立 Java 21 产品工程。项目只通过 Maven 仓库中已发布的 `io.haifa:haifa-agent-bom:0.1.2-SNAPSHOT` 及公开 JAR 消费 Haifa Agent，不依赖 Haifa Agent 源码目录。
 
-## Run 输入预算
+## 架构边界
 
-生产持久 Run 的 `AgentRunBudget.maxInputTokens` 为 `0`，使用 Haifa SDK 的公开语义，不设置整 Run 累计输入 token 上限。模型自身的上下文窗口仍按模型配置生效；累计输出、缓存输入、成本、Tool/模型调用次数和时间限制继续按现有 Run profile 执行。此设置只影响新建 Run，既有失败记录保留。
+Super Harness 是产品、兼容与集成层，不是第二套 Agent Runtime。可复用的 Runtime 能力（Run/Loop、Memory、Tool/Skill、MCP、Sandbox、Approval、Artifact、Checkpoint、Parent/Child 等）归 Haifa Agent；Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业务集成与控制面展示。新增基础能力前须按 [Runtime / Product Boundary](docs/runtime-product-boundary.md) 做归属判断；如果缺的是通用 Runtime 能力，应先补 Haifa Agent 公开 API/SPI，再由本项目消费。
 
 ## 客户演示与项目看板
 
@@ -40,7 +40,11 @@ mvn -o -ntp verify
 
 冒烟测试会输出 `W01_SDK_EVIDENCE`，其中包含真实 Run ID、Tool 别名、Artifact ID、Artifact SHA-256 和字节数。测试报告位于各模块的 `target/surefire-reports`。
 
+验收采用“先核对测试要证明什么，再运行完整门禁”的顺序：开发期间可用定向测试快速排障；正式验收前须核对 Oracle 与实际断言、环境和槽位配置，最终仍要完成全仓验证、真实 smoke、规定的 UI 重复轮次及主控独立复验。同一源码和代理配置下的暖轮可复用已验证的前端构建，但每轮的运行状态、原始证据和失败记录必须独立保留；详细执行规则见 `AGENTS.md` 的“验收提速（不降低门禁）”。
+
 ## W18 冻结前端本地配置
+
+客户 V2 验收按“演示主链优先、独立用例批量执行、问题集中修复”推进。局部失败留档后继续无依赖用例，批次结束按根因统一处理；高级路径先记录风险，必需门禁仍按真实结果结算。人工操作见 [简要测试说明](private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-2/V2-Manual-Test-Guide.md)，批次划分和结果记录见 [剩余测试用例](private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-2/V2-Remaining-Test-Cases.md)。
 
 以下命令只校验冻结前端、已记录的最小 BFF 补丁、仅连接 Haifa 的 loopback 配置，以及固定的 Node/pnpm 启动工具链，不启动服务：
 
@@ -96,6 +100,12 @@ pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 1 -GatewayPort 206
 本切片的负例只在 W18 runner 中启用：区域 fixture 检查测试专用 `Authorization` 值，缺失或错误时返回真实 HTTP 401；报告 fixture 可在完成一次 `get_status` 调用后、发送响应头前断开连接。测试读取 fixture 的拒绝和调用计数，以核对失效凭据及“结果未知”时没有自动重放。普通 `scripts/start-v2-test-mcp-servers.ps1` 启动不启用这些控制点。
 
 运行前须在该 worktree 以离线 Maven 门禁生成 `super-harness-server/target/*-exec.jar`，并在 `frontend/` 用精确版本 Corepack `pnpm 10.26.2` 离线安装依赖。只有空闲物理内存超过 4 GB、其他 Maven 构建或发布已停止时才运行重型门禁和四轮脚本。完整命令和证据目录由 W18 任务报告记录。
+## Lead 系统提示词装配
+
+Gateway 从 `resources/upstream/deerflow/prompts/` 读取冻结 DeerFlow 原文和有序适配清单，校验资源 SHA，并通过 Haifa SDK 公开 `ProductProfile` 装配每个 Bridge 的系统指令。默认文件、Web、澄清工具已对应恢复原提示；Skill 加载说明映射为 `skill_load` / `skill_resource_read`。渲染中提及未注册工具、资源漂移或超长时拒绝创建 Run，错误不含提示词正文。
+
+后续 Turn 的提示词变化会重建 Bridge，活跃 Run 保持原声明。线程产品元数据保留已准入 Run 的 Skill 选择和提示词签名，重启恢复不受后续 Skill 启停影响；恢复签名不一致时明确失败。用户边界只用于模型输入，state/history 保持用户原文。SOUL 读写仍按后续任务单独验收。资源来源与适配说明见 `resources/upstream/deerflow/prompts/lead-agent-assembly.md`。
+
 ## W15 V2 最小 Skill 承载
 
 Gateway 从 `third-party/deerflow/skills/manifest.json` 读取受信、不可变的 Skill 版本目录，核对整包文件及来源许可哈希后，交由本地发布的 Haifa Agent `0.1.2-SNAPSHOT` 公开 Skill API 执行发现、激活与 Run Context 注入。当前生产 manifest 只登记冻结 DeerFlow `consulting-analysis`；`contracts/customer-demo-v2/fixtures/skills/v2-format-control/` 只供独立测试数据目录使用，不会在生产配置中启用。旧版本目录须随发行物保留，以便重启后的旧 Run 校验原 binding；不可原位覆盖。
@@ -110,6 +120,22 @@ pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 306
 ```
 
 第二轮 `-SkipBuild` 仅在首轮已按 Gateway `30618` 构建成功后使用。每轮脚本在结束时清理槽位进程，Playwright trace、截图及前后端/受控 Provider 日志写到 `local-tmp/slot-2-w15-v2-skill/evidence/ui/run-<时间戳>/`；测试需检查 `skill_load` ToolCall、启用后的模型 Context 和禁用后新 Run 的隔离。完整验收仍以开发报告的实际运行结果为准。
+
+## 默认 Web 工具的环境代理
+
+三个生产 Web 工具通过公开 SDK 的 `JavaToolSpec.networkAccess(hosts)` 声明 `NETWORK_ACCESS` 与逻辑服务主机；覆盖 endpoint 时主机元数据随实例配置变化，代理地址不进入逻辑服务名单。Bridge 仅对这三个生产工具显式配置 `autoApproveReadOnlyNetworkTools`，复用原策略 evaluator 并保留其它 MCP、文件写入、自定义 ASK/DENY 和危险工具的审批。主机元数据参与冻结 Catalog/Policy digest，SDK 不拦截工具自建 HTTP 客户端。上游交付与人工审查入口见 [SDK 消费记录](docs/todo.md)。
+
+UX-V1 默认工具验收在独立工作树运行 `pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -UxV1DefaultTools -DataDirectory <本工作树内的新数据目录>`。DDG 挑战仍在时，按人工指示追加 `-DeferUxV1Web`：A 文件/Artifact、B 澄清继续执行，C 搜索依赖链显式记为 NOT_RUN；延期或局部通过不能记为 M1 全部通过。源码、前端依赖和构建时代理目标相同时，第二轮可加 `-SkipBuild`，仍须使用新的 data-root、Run 与证据。原始 SSE、Run diagnostics/Usage、trace、截图及 `flow-health.json` 外置到该槽位 `local-tmp`；保留失败与首次卡点。
+
+主控已经在同一源码运行全仓 `clean verify` 并留存 JAR 哈希、SDK 构件与原始门禁证据时，冷轮可加 `-SkipServerBuild` 复用该 JAR，仍按本槽位重新构建 Next；它不会执行 Java 门禁，不能用来替代或跳过失败的全仓验证。源码或 SDK 构件改变后必须重新构建、验证。
+
+默认 `web_search`、`image_search` 和 `web_fetch` 的 HTTP 客户端优先读取产品精确键 `HAIFA_SUPER_HARNESS_TOOL_HTTP_PROXY`：非空时它作为三种工具的 HTTP 代理，并通过 CONNECT 承载 HTTPS 目标，且优先于通用 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 和 JDK 默认 `ProxySelector`；该键为空或缺失时，才回退到通用环境映射。通用映射读取启动进程的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 和 `NO_PROXY`，小写同名变量优先；对应协议没有代理时使用 `ALL_PROXY`，仍未配置时保留 JDK 默认 `ProxySelector`。不修改 JVM 全局选择器、用户环境或 Windows 系统代理。
+
+代理地址支持 `http://host:port`（省略协议时按 HTTP 解释，缺省端口为 80）；HTTPS 目标通过 HTTP 代理的 CONNECT 转发。当前不支持 SOCKS、代理地址自身为 HTTPS、代理认证、`NO_PROXY` CIDR 或任意通配表达式；配置不支持时明确报错，错误不含代理凭据，也不会静默改成直连。
+
+`NO_PROXY` 用逗号分隔：裸域名匹配本身及点分隔的子域名，前导点域名只匹配子域名，IP 地址精确匹配；可添加端口或 `http://` / `https://` 来限制排除范围，`*` 表示全部直连。示例 `127.0.0.1,localhost,example.com:443` 会保留本地回环访问。只配置 `HTTPS_PROXY` 时，未配置的 HTTP 请求仍交给原 JDK 选择器。
+
+需在启动 Gateway 的同一个 PowerShell 进程显式注入代理变量，优先用产品键 `$env:HAIFA_SUPER_HARNESS_TOOL_HTTP_PROXY='http://<代理主机>:<端口>'`；若沿用通用变量，则设置 `$env:HTTP_PROXY='http://<代理主机>:<端口>'`、`$env:HTTPS_PROXY=$env:HTTP_PROXY`、`$env:NO_PROXY='127.0.0.1,localhost'`，然后执行启动脚本。产品键非空会覆盖通用变量与 `NO_PROXY`。Web 工具只消费这些变量；它不会自动读取 WinINET，也不改变 MCP、模型 Provider 或审批配置。代理接入不代表 DuckDuckGo 挑战页已解决：202/403 仍保留无结果语义与诊断日志，不重试或切换引擎。
 
 ## W21 V2 诊断投影
 
@@ -177,3 +203,9 @@ pwsh -NoProfile -File tests/customer-demo/verify-customer-demo-evidence.ps1
 ```
 
 校验会拒绝缺轮次、重复 ID、两轮 SHA 或配置不一致、隐藏 retry、缺失首次失败、只报最佳轮、Artifact 无 provenance/下载 hash、缺失或漂移的真实下载字节（文件不存在、SHA 不符、字节数不符）、`fileSha256` 与 `downloadSha256` 或真实下载字节不一致、provenance 原件未绑定 Oracle tool/artifact 或 `downloadSha256`/`downloadByteCount`、provenance 原件 SHA 漂移、无参考回落证据、跳阶段、M4 无人工验收、自报 GO、GO 与 M4 SHA 不一致以及敏感值；结果严格区分 `PASS`/`FAIL`/`NOT_RUN`/`BLOCKED_EXTERNAL`/`UPSTREAM_UNSUPPORTED`：任一 stage 或 round `FAIL` 都会使 `customerDemo.status` 与 `overallStatus` 变为 `FAIL`，`BLOCKED_EXTERNAL`/`UPSTREAM_UNSUPPORTED` 在机器摘要中单独列出，绝不折叠成 `NOT_RUN`。当前 bundle 为全阶段 `NOT_RUN`、演示决策 `NO_GO`，只有当 M0–M4 全部 PASS、两轮在同一主线 SHA、同一模型/配置/数据根上连续完成且有人工验收时才会接受 `GO`；可用 `-RequireGo` 把“尚未 GO”升级为失败，供 M4 最终门禁使用。
+
+### 当前主工作区 Utility MCP 体验（2026-09-30）
+
+主 Gateway `18018` 已部署 main@530dfb2 的验收 JAR，冻结前端仍为 `33018`。已启用 `haifa-utility`，连接 `http://127.0.0.1:8091/mcp`，19 个工具来自实际 MCP 发现，协议 `2025-06-18`；在能力中心的 Plugins 页面可查看，在 Agent 的 MCP 选择中可启用。新会话可输入「请实际调用 MCP calculate 计算 23 * 19」，出现审批后点击 Approve。
+
+Utility 使用另一项目 `D:/workspace/haifa-ai-deerflow/utility-mcp-server` 的已有编译产物和离线 runtime classpath，以单 Java 进程运行（`-Xmx384m -XX:+UseSerialGC`，loopback 8091），避免常驻 Maven。运行清单、启动/停止脚本和部署原件在 `local-tmp/main-utility-preview-20260930/`。仅停止此 Utility 服务可运行 `pwsh -NoProfile -File local-tmp/main-utility-preview-20260930/start-utility.ps1 -Stop`；之后用同脚本不带 `-Stop` 恢复。脚本依赖已生成的 classpath 与 Utility target/classes，不删除这些文件。主服务数据及 continuation key 保持原样，本次连接不代表 V2 阶段通过。

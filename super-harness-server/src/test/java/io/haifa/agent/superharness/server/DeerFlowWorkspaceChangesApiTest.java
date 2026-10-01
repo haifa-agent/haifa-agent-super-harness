@@ -18,7 +18,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
+import java.security.MessageDigest;
 import java.util.Base64;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -285,11 +287,15 @@ class DeerFlowWorkspaceChangesApiTest {
     }
 
     private void awaitCompletedSnapshot(Path changesRoot, String runId) throws Exception {
+        // Walking the unpublished .completed-* directory holds Windows directory handles and can
+        // deny the recorder's atomic rename. Observe this exact Run without opening its staging tree.
+        String runHash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                .digest(runId.getBytes(StandardCharsets.UTF_8))).substring(0, 32);
+        Path completed = changesRoot.resolve(onlyUserData().getParent().getFileName())
+                .resolve("run-" + runHash).resolve("completed/baseline.properties");
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
         while (System.nanoTime() < deadline) {
-            try (var paths = Files.walk(changesRoot)) {
-                if (paths.anyMatch(path -> path.getFileName().toString().equals("completed"))) return;
-            }
+            if (Files.isRegularFile(completed)) return;
             Thread.sleep(25);
         }
         HttpResponse<String> run = get("/api/threads/thread-background-completion/runs/" + runId);

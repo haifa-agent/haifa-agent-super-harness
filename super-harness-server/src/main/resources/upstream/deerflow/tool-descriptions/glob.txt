@@ -1,0 +1,1 @@
+Find files or directories that match a glob pattern under a root directory.

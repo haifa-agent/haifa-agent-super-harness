@@ -143,7 +143,8 @@ public class HaifaPublicInteractionSpikeTest {
                 new CredentialRef("env://SUPER_HARNESS_INTERACTION_PROBE"),
                 false,
                 Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING),
-                8_192,
+                // Shared controlled fixture also exercises Bootstrap's full Lead/default catalog.
+                32_768,
                 1_024,
                 Map.of(),
                 Map.of());

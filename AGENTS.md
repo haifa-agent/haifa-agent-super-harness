@@ -7,6 +7,7 @@
 - DeerFlow 前后端固定为 `bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294`，禁止随 `main` 漂移。
 - 直接复用冻结的 DeerFlow 前端并由 Haifa 后端兼容其真实 REST/SSE/WS/文件/auth 协议，禁止自研平行 UI 或回落 DeerFlow 后端。
 - 仅通过本地 Maven 仓库消费 Haifa Agent 公开 JAR/BOM `0.1.2-SNAPSHOT`（HA 0.1.2 开发线专门承接本项目 SDK 功能缺口，见 `private-docs/prompts/038-*`），禁止源码路径依赖、复制 SDK 或依赖产品 JAR。
+- 新增或修改能力前必须先按 `docs/runtime-product-boundary.md` 判断其归属：可复用的 Agent Runtime 语义必须上游到 Haifa Agent，并通过公开 API/SPI 与已发布 JAR/BOM 消费；Super Harness 只拥有 DeerFlow 兼容、产品语义、UI/BFF、业务集成与窄适配层，禁止实现第二套 Run/Loop/Memory/Tool/Skill/MCP/Sandbox/Artifact/Checkpoint/Permission/Multi-Agent Runtime。若归属不清，在新增领域对象、状态机或持久化表之前停止并进行架构裁决。
 - 如验收过程中确认必须完善上游 Haifa Agent SDK，只能在 `D:\workspace\haifa-agent` 仓库以 `dev`（HA `0.1.2-SNAPSHOT`，不设 baseline 分支）为起点，为每个功能创建独立 worktree 和新的 `feat-*` 开发分支；禁止直接修改或提交到 `dev`。完成后须将公开 JAR/BOM 发布到本地 Maven 仓库并由本项目继续按 `0.1.2-SNAPSHOT` 坐标消费，同时记录 SDK commit、发布与回归证据；随后从该 `feat-*` 分支向 `dev` 发起 GitHub PR，由主控在 SHPM 登记对应任务与 PR/验证状态（`shpm verify add`/`shpm issue add`），并明确提醒人工审查合并。任何智能体不得自行合并该 PR，除非人工针对该具体 PR 另行书面授权。
 - 为同一功能引入的领域模型复杂度必须与冻结 DeerFlow 的对应实现保持平衡或更低，禁止为了协议兼容复制、叠加或扩张不必要的领域对象、状态机、持久化概念和抽象层。若有证据表明只有更高的领域复杂度才能实现验收范围，执行智能体必须在编码前提交包含 DeerFlow 对照、复杂度增量、不可替代原因、风险与简化备选的设计说明，先经主控 Agent 评审，再等待人工裁决，未获人工明确同意不得实施或合入。
 
@@ -16,6 +17,18 @@
 - 提交前须运行范围内定向测试、可执行的全仓门禁、`git diff --check`、secret scan 与真实 smoke，并保留真实 Run/Tool/Artifact 证据；失败项和未运行项分别记录为 `FAIL`/`NOT_RUN`，不得用静态验证替代运行证据，不得放宽断言或删除失败测试换取绿灯。
 - Playwright 验收除功能断言外还必须报告流程健康度：cold/warm 启动与总耗时、是否重试、首个超时或卡点、Next 动态编译时间、trace/screenshot/日志位置，以及结束后端口和子进程是否清理；至少做一次同脚本重复运行以区分稳定问题与偶发问题。不得用无界等待掩盖启动或断言失败；等待必须有明确对象、超时和失败证据。
 - 原始证据外置：运行任何 `mvn clean` 或重跑前，须把需保留的 Playwright trace、截图及前后端/Provider 原始日志复制到该工作包的外置独立证据目录（例如 worktree 的 `local-tmp/<slot>/evidence`，不能是另一个 `target`），并记录原始与复制路径。原始日志已消失时，只能明确标注为从先前终端输出重建的摘要，不得冒充原始证据。首次失败的证据同样保留，不得改记为 `NOT_RUN`。
+
+### 验收提速（不降低门禁）
+
+- 2026-09-30 人工批准批量验收：先跑客户演示正向主链，按依赖拆分独立用例，通常每批 10–15 项。执行前标明前置、依赖和影响范围。局部失败先保存原始证据、登记问题并继续不受影响的用例；批次中不边测边改产品。共享服务/身份/数据/端口等前置失效时只停止受影响批次，主链失败后的依赖用例记 NOT_RUN，其他独立组继续。
+- 批次结束按根因归并问题，一次修复后重跑受影响用例及必要回归；代码与断言稳定后才运行昂贵正式门禁。演示范围外的高级/偏门缺陷先挂 issue 和风险，不阻断无依赖的演示验证；必需 Oracle 失败仍保留 FAIL/NO_GO，演示触及故障路径时作为阻断处理，不缩改 Oracle，不把延期记 PASS。
+- 节约上下文：复用明确的路径、SHA 和断言表；回报优先给逐 case 结果、首个失败签名、依赖影响及原始证据路径，按需读日志片段。主控保持可见进展输出，子智能体每 15 分钟 checkpoint；重型构建/UI 及共享 Provider 由主控排队，避免内存和槽位冲突。
+
+- 昂贵的全仓构建或双后端 UI 轮次开始前，先由执行者列出本任务的 Oracle case → 实际断言 → 必需前置条件 → 预期原始证据对应表，主控复核关键正反例；尤其不能用“不存在资源”的 404 冒充“已存在但跨身份不可访问”的隔离证据。映射不完整时先修测试，不启动正式轮次。
+- 开发内环先运行受影响模块的定向测试、合同/语法检查和必要的单 case UI 排障；这些结果只用于快速定位，不能替代提交前全仓门禁、真实 smoke、同脚本重复运行或主控独立验收。代码或断言修改后，先保存首次 FAIL 原件，再按变更范围重跑；不得靠反复整套重跑碰运气。
+- 正式 UI 前一次性核对冻结来源、SDK 实际落盘构件、前端依赖与浏览器、完整槽位端口绑定、独立 data-root/凭据引用、Provider、Gateway 和前端代理目标。预检失败先修环境或如实记 `NOT_RUN`/`BLOCKED_EXTERNAL`，不要等长轮次超时后才发现配置错误。
+- 同一源码 SHA、前端依赖和构建时代理目标完全一致时，可在同一独立 worktree 内复用已验证的构建产物完成后续暖轮；变更代码、依赖、代理目标或槽位后必须重建并重新验证。复用构建不等于复用 Run、Thread、数据目录或测试结果，不得跳过规定的 cold/warm、双后端、连续两轮与最终主线 SHA 门禁。
+- 每轮分别记录准备/构建、服务就绪、功能断言、证据归档、复审及返工耗时和首次卡点；证据目录与 SHPM 记录可由脚本汇总，但原始日志、首次 FAIL、`NOT_RUN` 和人工裁决须保留，脚本不得自动提升阶段 `PASS`/`GO`。仅并行执行真正独立且资源、端口、数据目录隔离的检查；本机内存不足时不要并发重型 Maven/Next/Java 任务。
 
 ## 环境与排障记录
 
@@ -34,12 +47,24 @@
 
 - 2026-09-28 实测：主工作树 `super-harness-server/target/classes` 可能被外部构建（IDE 后台编译或他人在主树的运行）改写成不一致状态。症状：同一提交在干净 worktree `mvn -o -ntp clean verify` 通过，但主树 `mvn -o -ntp -pl super-harness-server -am package -DskipTests` 在测试编译阶段报大量 `cannot find symbol`（如 `List.getFirst()`、record 访问器），`target/classes` 的时间戳晚于主控最后一次构建。影响：主控在主树重新打包并重启主端口 Gateway 会失败，期间主服务已停。检查：`Get-ChildItem super-harness-server/target/classes/... | Select LastWriteTime` 对比主控构建时间，并用 `Get-CimInstance Win32_Process` 查主树相关 java/mvn 进程。最小修复：先用原 exec JAR 立即恢复主服务；再从已通过 `clean verify` 的同提交临时 worktree 取 `super-harness-server/target/*-exec.jar`，按端口核对 PID 停止主 Gateway、备份旧 JAR 后覆盖并以 `scripts/start-main-super-harness.ps1 -GatewayOnly` 重启；不得在主服务运行时对主树执行 `mvn clean`，不得用放宽编译或跳过测试编译掩盖。修复后验证 health、`/api/v1/auth/me`、前端与本次改动的 smoke。
 
+### 默认 Web 工具环境代理
+
+- 2026-10-01 发现：Windows 的 WinINET 代理可用，不代表自建 JDK `HttpClient` 已获得同一路由；原默认 Web 客户端未映射 `HTTP_PROXY`/`HTTPS_PROXY`，请求可能仍直连。修复后的 `WebHttpClients` 只消费启动进程的环境变量并保留未配置协议的原 JDK `ProxySelector`，不自动读取 WinINET、不修改系统或 JVM 全局代理。产品显式键 `HAIFA_SUPER_HARNESS_TOOL_HTTP_PROXY` 非空时作为三种 Web 工具的 HTTP 代理并通过 CONNECT 承载 HTTPS 目标，优先于通用 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` 与 JDK 默认选择器；该键为空或缺失才回退通用环境映射。诊断时先确认这个精确大写键是否生效（只有全大写键名被读取，不参与小写优先的环境约定）。检查仅输出变量存在性，禁止打印代理值（可能带 userinfo）：`@('HAIFA_SUPER_HARNESS_TOOL_HTTP_PROXY','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy') | ForEach-Object { [pscustomobject]@{ name=$_; configured=-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) } }`。最小配置：在同一启动 PowerShell 中优先设置进程级 `HAIFA_SUPER_HARNESS_TOOL_HTTP_PROXY`（否则设置 `HTTP_PROXY`/`HTTPS_PROXY`）及 `NO_PROXY=127.0.0.1,localhost`，再启动 Gateway；不修改用户环境或硬编码本机代理端口。支持普通 HTTP 代理及 HTTPS 目标 CONNECT；SOCKS、TLS-to-proxy、userinfo 认证和 CIDR 暂不支持，必须明确失败、不静默直连。修复后先用 `WebHttpClientsTest` 的实际 loopback 计数/CONNECT 验证，再由主控运行真实网络 smoke；代理路由证明不能代替 DuckDuckGo 202/403 外部挑战解除证据。
+
 ### MCP 承载（Haifa SDK 0.1.2）
 
 - 2026-09-29 实测：公开 `io.haifa.agent.starter.McpServerSpec.streamableHttp` 默认协议版本为 `2025-11-25`，而 `scripts/start-v2-test-mcp-servers.ps1` 起的本地 fixture 只协商到 `2025-06-18`。症状：`McpToolPlatforms.connect` 成功返回（不抛异常），但 SDK `optional()` 会静默降级成 0 个 Tool，模型侧 `request.tools()` 为空，表现为“桥接成功却没有 MCP 工具”。检查：对照 fixture `initialize` 的 `protocolVersion` 与 spec 的 `protocolVersion()`。最小修复：映射时显式 `.protocolVersion("2025-06-18")`（协议常量，非服务器/Tool 名称硬编码）。
 - 2026-09-29 实测：只读 MCP Tool（`McpServerSpec.readOnly()`）仍会命中 `PolicyPresets.standardApproval()` 的 `NETWORK_ACCESS` 规则并进入 APPROVAL。症状：Run 首次请求工具后停在 `WAITING_APPROVAL`，不会自动执行。检查：SSE 里出现 `artifact.human_input.request_id` 卡片。集成测试须以冻结隐藏回复（`additional_kwargs.human_input_response`，`option_id=approve`）批准后 join 同一 Run 的 stream，才能拿到真实 Tool 结果。
 - 2026-09-29 实测：仅由 MCP 提供 Tool 的 `HaifaRunBridge` 必须让 `hasTools()` 为真，否则 SDK 的 `tool.call.requested` 在冻结 transcript 投影里无法映射，SSE 直接报 `unsupported_event_projection` 并提前结束。最小修复：`hasTools = !tools.isEmpty() || !mcpSpecs.isEmpty()`。
 - 2026-09-29 实测（本机 FreeCommit 曾低至约 0.4GB）：低内存时 `mvn` 与 fixture JVM 会报 `Could not reserve enough space` / `Native memory allocation (mmap) failed ... G1 virtual space`。规避：fixture 用 `JAVA_TOOL_OPTIONS=-Xmx96m -XX:+UseSerialGC`，Maven 用 `MAVEN_OPTS=-Xmx512m -XX:+UseSerialGC`，surefire 用 `-DargLine=-Xmx768m -XX:+UseSerialGC`；不要用默认堆（默认约为物理内存的 1/4，会预留数百 MB 虚拟空间）。
+
+### 真实模型诊断
+
+- 2026-09-30 实测：managed model 的 `base_url` 会影响 SDK 方言；`DeerFlowConfigurationApi.binding` 仅在 endpoint 精确为 `https://api.deepseek.com` 时使用 DeepSeek 方言并固定 `thinking=disabled`。把真实模型临时改到本地 `/w16-live` 代理，实际落盘 SDK 的 standard 方言会在发 HTTP 前拒绝（`provider endpoint path must be /v1`，Run 为 `MODEL_CALL_FAILED`）；改 `/v1` 虽可发出本地请求，standard 请求缺少原 DeepSeek thinking 选项，不能视为同语义采集。检查：核对实际 model config、SDK bytecode `validateSnapshot`、原 `model.call.failed` 与 Provider 是否收到 HTTP；本地无真实凭据定向证明见 W16 `local-tmp/slot-2-w16/evidence/phase2-scheme-b-preflight-20260930-144134/a-only-capture-diagnostic/sdk-local-endpoint-proof/`。最小处理：恢复直接 HTTPS 配置并把采集前置 FAIL 单独保留，不从它解释此前 `PARTIAL_RESPONSE`，不以代理改写请求或更换方言掩盖差异；后续采集须先证明保持原请求语义。
+
+### Windows 快照目录观察
+
+- 2026-10-01 实测：Windows 上 `Files.walk` 进入正在写入的 `.completed-*` 快照目录会持有目录句柄，阻止 recorder 将其原子重命名为 `completed`（`AccessDeniedException`）；关闭遍历后同一次 rename 成功。验收观察器禁止递归扫描未发布目录，须按真实 workspace/Run 定位确切 `completed/baseline.properties` 并检查存在，再验证重启后读取；保留原有有界等待、无 lazy-read 要求与内容断言。复现：`java local-tmp/<slot>/evidence/windows-directory-probe/DirectoryMoveProbe.java <该证据目录>`，输出 `openWalkMove=AccessDeniedException`、`closedWalkMove=SUCCEEDED`；用例 `DeerFlowWorkspaceChangesApiTest.continueDisconnectCompletesInBackgroundAndSurvivesRestartWithoutLazyRead` 的首次 FAIL 仍保留，不能延长超时或靠重跑掩盖。
 
 ### PowerShell 7
 
