@@ -101,11 +101,32 @@ final class DeerFlowToolTranscriptProjection {
                             .toList());
         } else {
             String error = call.error().map(value -> value.wireCode()).orElse("tool_call_failed");
-            message.put("content", error);
+            message.put("content", agentArgumentNotice(call)
+                    .map(notice -> "Error: " + error + ". " + notice)
+                    .orElse(error));
             additional.put("haifa_tool_error", error);
         }
         message.put("additional_kwargs", Map.copyOf(additional));
         return Optional.of(message);
+    }
+
+    /**
+     * Display-only notice for the two product field contracts. This is reached only for a
+     * terminal call without a result; it does not validate types or required fields, control
+     * execution, or infer why the SDK stopped the call. Unknown keys and all values remain
+     * unprinted, including keys that themselves contain user-authored text.
+     */
+    private static Optional<String> agentArgumentNotice(ToolCallView call) {
+        List<String> allowed = switch (call.toolName()) {
+            case "setup_agent" -> List.of("soul", "description", "skills");
+            case "update_agent" -> List.of("soul", "description", "display_name");
+            default -> List.of();
+        };
+        if (allowed.isEmpty() || call.arguments().values().keySet().stream().allMatch(allowed::contains)) {
+            return Optional.empty();
+        }
+        return Optional.of("Recorded arguments include unsupported, undeclared parameters; allowed fields for "
+                + call.toolName() + ": " + String.join(", ", allowed) + ".");
     }
 
     static List<String> artifactPaths(List<ToolCallView> calls) {

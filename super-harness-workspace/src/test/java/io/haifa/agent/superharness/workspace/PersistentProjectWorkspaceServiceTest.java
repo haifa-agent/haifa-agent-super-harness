@@ -242,7 +242,9 @@ class PersistentProjectWorkspaceServiceTest {
 
         changes.beginRunChanges("owner-a", "thread-sensitive", binding.workspaceId(), "run-sensitive");
         Path runRoot = baseline(binding, "run-sensitive").getParent();
-        assertThat(Files.list(runRoot.resolve("payloads"))).isEmpty();
+        try (var payloads = Files.list(runRoot.resolve("payloads"))) {
+            assertThat(payloads).isEmpty();
+        }
         String baseline = Files.readString(runRoot.resolve("baseline.properties"));
         assertThat(baseline)
                 .doesNotContain(new String(before, StandardCharsets.UTF_8))
@@ -260,7 +262,9 @@ class PersistentProjectWorkspaceServiceTest {
         assertThat(result.diff().unifiedDiff()).isEmpty();
         assertThat(result.lineCounts().get(ProjectPath.of("workspace/secrets/config.json")))
                 .isEqualTo(new WorkspaceLineCounts(0, 0));
-        assertThat(Files.list(runRoot.resolve("completed/payloads"))).isEmpty();
+        try (var payloads = Files.list(runRoot.resolve("completed/payloads"))) {
+            assertThat(payloads).isEmpty();
+        }
         String completed = Files.readString(runRoot.resolve("completed/baseline.properties"));
         assertThat(completed)
                 .doesNotContain(new String(after, StandardCharsets.UTF_8))

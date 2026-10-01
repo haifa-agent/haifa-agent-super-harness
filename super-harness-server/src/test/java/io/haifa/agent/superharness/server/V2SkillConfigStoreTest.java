@@ -9,6 +9,8 @@ import io.haifa.agent.core.reference.PrincipalRef;
 import io.haifa.agent.core.reference.TenantRef;
 import io.haifa.agent.skill.api.SkillScope;
 import io.haifa.agent.skill.api.SkillVisibilityContext;
+import io.haifa.agent.superharness.server.prompt.LeadPromptComposer;
+import io.haifa.agent.superharness.server.prompt.LeadPromptInputs;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -52,6 +54,53 @@ class V2SkillConfigStoreTest {
                 new PrincipalRef(McpRunTools.PRINCIPAL_ID, McpRunTools.PRINCIPAL_TYPE),
                 Optional.empty(), false, Set.of(SkillScope.PRODUCT));
         assertThat(disabled.loader().load(oldBinding, visibility).instructions())
+                .contains("Data Authenticity Protocol");
+    }
+
+    @Test
+    void explicitlyEmptyRecoveryKeepsTheOriginalDeclarationAndPrompt() throws Exception {
+        Path repository = SkillConfigStore.repositoryRootFromWorkingDirectory();
+        var store = new SkillConfigStore(json, dataDirectory, repository);
+        var admitted = store.projection(SkillRunTools.Selection.none());
+        assertThat(admitted.installTools()).isFalse();
+        var composer = LeadPromptComposer.classpath();
+        String originalPrompt = composer.compose(AgentPromptContext.defaults().promptInputs(
+                admitted.selectedPackages().stream()
+                        .map(pkg -> new LeadPromptInputs.Skill(pkg.name(), pkg.description())).toList()),
+                AgentSoulTestSupport.BASE_TOOLS).signature();
+
+        var restarted = new SkillConfigStore(json, dataDirectory, repository);
+        var recovered = restarted.recoveryProjection(SkillRunTools.Selection.none());
+        assertThat(recovered.allowedSkills()).isEmpty();
+        assertThat(recovered.catalog().snapshot().bindings()).isEmpty();
+        assertThat(recovered.installTools()).isFalse();
+        assertThat(composer.compose(AgentPromptContext.defaults().promptInputs(
+                recovered.selectedPackages().stream()
+                        .map(pkg -> new LeadPromptInputs.Skill(pkg.name(), pkg.description())).toList()),
+                AgentSoulTestSupport.BASE_TOOLS).signature()).isEqualTo(originalPrompt);
+    }
+
+    @Test
+    void previouslySelectedRecoveryRetainsBindingAfterDisableAndReload() throws Exception {
+        Path repository = SkillConfigStore.repositoryRootFromWorkingDirectory();
+        var store = new SkillConfigStore(json, dataDirectory, repository);
+        var admitted = store.projection(SkillRunTools.Selection.of(Set.of("consulting-analysis")));
+        assertThat(admitted.installTools()).isTrue();
+        var originalBinding = admitted.catalog().snapshot().bindings().getFirst();
+        var actualSelection = SkillRunTools.Selection.of(admitted.allowedSkills());
+        store.setEnabled("consulting-analysis", false);
+
+        var restarted = new SkillConfigStore(json, dataDirectory, repository);
+        assertThat(restarted.projection(actualSelection).allowedSkills()).isEmpty();
+        var recovered = restarted.recoveryProjection(actualSelection);
+        assertThat(recovered.installTools()).isTrue();
+        assertThat(recovered.allowedSkills()).containsExactly("consulting-analysis");
+        assertThat(recovered.catalog().snapshot().bindings()).containsExactly(originalBinding);
+        var visibility = new SkillVisibilityContext(
+                new TenantRef(McpRunTools.TENANT_ID),
+                new PrincipalRef(McpRunTools.PRINCIPAL_ID, McpRunTools.PRINCIPAL_TYPE),
+                Optional.empty(), false, Set.of(SkillScope.PRODUCT));
+        assertThat(recovered.loader().load(originalBinding, visibility).instructions())
                 .contains("Data Authenticity Protocol");
     }
 

@@ -64,6 +64,8 @@
 
 ### Windows 快照目录观察
 
+- 2026-10-01 实测：Windows/JDK 21 的 `BasicFileAttributes.fileKey()` 可返回 null，不能据此把配置零写入反例退化为只比内容 hash。检查命名配置文件：`fsutil file queryfileid <data-root>/owners/default/configuration.json`，只读返回非零 128 位文件 ID。本机无需提权即可运行；测试先使用非空 JDK fileKey，缺失时仅 Windows 可用此原生观察器（有界 5 秒、exit 0、输出上限 4096 bytes、严格一个非零 32 位 hex ID）。同值 REST 更新的正控制必须实际原子替换并改变文件 ID；拒绝反例同时断言文件 ID、mtime、size 和 bytes/hash 不变。不能添加生产 Store/写计数器、忽略观察器失败、推断没有临时写尝试，或以 hash-only 冒充没有配置发布。M3 `UpdateAgentToolTest.blankSoulCannotReplaceExistingConfiguration` 已通过真实 HTTP/SDK 正反控制，首次 fileKey 前置 FAIL 仍外置保留。
+
 - 2026-10-01 实测：Windows 上 `Files.walk` 进入正在写入的 `.completed-*` 快照目录会持有目录句柄，阻止 recorder 将其原子重命名为 `completed`（`AccessDeniedException`）；关闭遍历后同一次 rename 成功。验收观察器禁止递归扫描未发布目录，须按真实 workspace/Run 定位确切 `completed/baseline.properties` 并检查存在，再验证重启后读取；保留原有有界等待、无 lazy-read 要求与内容断言。复现：`java local-tmp/<slot>/evidence/windows-directory-probe/DirectoryMoveProbe.java <该证据目录>`，输出 `openWalkMove=AccessDeniedException`、`closedWalkMove=SUCCEEDED`；用例 `DeerFlowWorkspaceChangesApiTest.continueDisconnectCompletesInBackgroundAndSurvivesRestartWithoutLazyRead` 的首次 FAIL 仍保留，不能延长超时或靠重跑掩盖。
 
 ### PowerShell 7
@@ -81,6 +83,7 @@
 
 ### 端口
 
+- 2026-10-01 实测：Windows 子进程 `waitFor` 完成且 `isAlive=false` 后，TCP 栈仍可能短暂保留该已退出 PID 的 `LISTEN`，同端口即时 `ServerSocket.bind` 会失败。真实 Gateway 的失败现场由现有 JNA `GetExtendedTcpTable` 在失败后 1 微秒启动采集确认；不能把约数秒后的空表或客户端 `TIME_WAIT` 倒推成失败瞬间的唯一原因。验收停止阶段须在原有共享停止 deadline 内等待**同一精确端口的默认 loopback bind 实际成功**，记录首次 bind 错误、原生安全 TCP 状态、探测次数和释放耗时；超时仍 FAIL。不得延长原停止预算、启用 `SO_REUSEADDR` 掩盖占用、换端口、跳过绑定断言或把资源释放探测冒充功能重试。诊断只记录状态、PID 与端口，不记录请求、凭据或内容。
 - Windows 的 Hyper-V/WSL/NAT（`winnat`）会动态排除 TCP 端口（本机动态范围从 `49152` 起，曾有排除段覆盖旧端口导致 Next.js `listen EACCES`）；现行子槽位均低于 `49152`，但排除范围仍可能变化。每次派工和启动前先执行 `netsh interface ipv4 show dynamicport tcp`、`netsh interface ipv4 show excludedportrange protocol=tcp`，并对分配的全部端口逐个用 loopback `TcpListener.Start()` 做实际绑定预检；`Get-NetTCPConnection` 只能发现监听者，不能排除 NAT 保留。预检失败时保留端口/进程/排除段证据，由主控重新裁决整组槽位或把 UI 标为 `NOT_RUN`；不得私自重启 NAT、提权、随意改单个脚本端口或停止主服务。修复后按同一完整端口组重复预检、服务就绪和 Playwright，并核实端口释放。
 
 ### 凭据与数据目录

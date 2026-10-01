@@ -1,0 +1,33 @@
+{
+  "schema": "sh.deerflow-tool-adaptations/v1",
+  "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+  "owner_wp": "W03",
+  "adaptations": [
+    {
+      "id": "M3-S2-update-supported-fields",
+      "tool": "update_agent",
+      "source_description": "update_agent.txt",
+      "description_policy": "Preserve the frozen parsed description verbatim; the strict actual input schema declares this slice's supported fields.",
+      "supported_fields": ["soul", "description", "display_name"],
+      "unsupported_fields": ["skills", "tool_groups", "model", "mcp_plugins", "allowed_subagents", "model_settings", "thinking_enabled", "reasoning_effort", "knowledge_scope", "name"],
+      "behavior": "The public SDK rejects undeclared fields before invocation. Product self-update cannot modify capability or permission configuration. For terminal setup/update calls without a result whose recorded arguments contain undeclared keys, the product transcript appends a fixed supported-field notice while preserving the original SDK status and error code. The notice echoes neither keys nor values and does not infer the cancellation cause or control execution.",
+      "unlock_condition": "A later approved product scope may expand explicit fields without creating a second permission runtime."
+    },
+    {
+      "id": "M3-S3-atomic-current-owner-configuration",
+      "tools": ["setup_agent", "update_agent"],
+      "behavior": "Use the existing local owner's ConfigurationStore atomic JSON replacement, current admitted agent identity, and public SDK FILE_WRITE auto-approval restricted to these production tool implementations. Preserve unmodified fields; estimate the complete M2-rendered prompt before writing. No separate SOUL file, per-Run prompt body or new persistence store.",
+      "unlock_condition": "Multi-owner or server authentication is outside the frozen local product profile."
+    },
+    {
+      "id": "M3-bootstrap-no-imported-skill",
+      "behavior": "Bootstrap bypasses the absent agent record in model, MCP and Skill selection. MCP and Skill selection are none; this product does not import DeerFlow's bootstrap agent-creator Skill. The bootstrap prompt remains the default prompt and exposes setup_agent; a validated current agent identity is required for writing. Missing agent_name returns an error without writing a global SOUL file.",
+      "unlock_condition": "Import an approved bootstrap Skill when its runtime and product dependencies are delivered."
+    },
+    {
+      "id": "M3-old-thread-read-only",
+      "behavior": "Existing pre-M3 Threads retain historical reads. Missing or invalid server-owned identity, bootstrap or signature metadata cannot admit another Turn or resume pending execution. New admissions explicitly record an empty default identity and bootstrap=false. Pending execution checks the public SDK's sha256-prefixed frozen instruction diagnostic against the recorded hash; current SOUL edits take effect on the next Turn.",
+      "unlock_condition": "A separately reviewed migration would be needed for legacy pending Runs; no implicit profile migration is performed."
+    }
+  ]
+}

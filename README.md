@@ -12,6 +12,10 @@ Super Harness 是产品、兼容与集成层，不是第二套 Agent Runtime。�
 
 原 `work-packages.js`、`docs/todo.md`、`dashboard.html` 与 `work-package-dag.html` 已删除，进度只看 SHPM。W24 证据门禁与主控派工审计直接读取 SHPM 快照（数据库缺失时 fail closed，不会新建空库）：
 
+`requires` 支持工作包前置依赖和阶段到既有任务或工作包的依赖。工作包仍检查存在性、自引用、重复和环；阶段依赖检查合法来源与目标。阶段 `PASS` 时，所有 `required` 的 `requires` 和 `delivers` 任务必须已由主控验收为 `finished`，合法关系不自动提升阶段结果。
+
+聚合器校验 `IMPORTED` 资源时优先使用已声明的 `local_sha256`，缺失时才回退原 `sha256`；本地哈希无效或内容不符会失败。来源文件的 SHA 和完整冻结来源仍由 `verify-deerflow-contracts.ps1` 校验。在没有 `private-docs` 的独立 worktree 运行 verifier 单元脚本时，用 `-RepositoryRoot D:\workspace\haifa-agent-super-harness` 提供真实 prompt fixture 输入；被测工具仍来自该脚本自身的 checkout，不能用另一分支脚本替代。
+
 ```powershell
 $env:SHPM_DB='C:\Users\wangr\.shpm\data\project.db'
 pwsh -NoProfile -File scripts/audit-work-package-delivery.ps1
@@ -104,7 +108,24 @@ pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 1 -GatewayPort 206
 
 Gateway 从 `resources/upstream/deerflow/prompts/` 读取冻结 DeerFlow 原文和有序适配清单，校验资源 SHA，并通过 Haifa SDK 公开 `ProductProfile` 装配每个 Bridge 的系统指令。默认文件、Web、澄清工具已对应恢复原提示；Skill 加载说明映射为 `skill_load` / `skill_resource_read`。渲染中提及未注册工具、资源漂移或超长时拒绝创建 Run，错误不含提示词正文。
 
-后续 Turn 的提示词变化会重建 Bridge，活跃 Run 保持原声明。线程产品元数据保留已准入 Run 的 Skill 选择和提示词签名，重启恢复不受后续 Skill 启停影响；恢复签名不一致时明确失败。用户边界只用于模型输入，state/history 保持用户原文。SOUL 读写仍按后续任务单独验收。资源来源与适配说明见 `resources/upstream/deerflow/prompts/lead-agent-assembly.md`。
+后续 Turn 的提示词变化会重建 Bridge，活跃 Run 保持原声明。线程产品元数据保留已准入 Run 的 Skill 选择、agent 身份、bootstrap 标志和提示词签名；pending Run 重启恢复通过公开 SDK 的 `frozenInstructionDiagnostic` 核对原冻结指令摘要，允许当前配置已更新，缺失或不一致则拒绝继续执行。用户边界只用于模型输入，state/history 保持用户原文。资源来源与适配说明见 `resources/upstream/deerflow/prompts/lead-agent-assembly.md`。
+
+## Agent SOUL 与冻结新建页
+
+有身份的 agent 将已保存 SOUL 转义后装配到 Lead 指令，并声明 `update_agent`；更新只影响下一 Turn。bootstrap 跳过不存在的 agent 配置，使用默认指令和基础工具加 `setup_agent`，不接入 MCP 或普通 Skill。两个工具通过既有配置存储原子写入当前 agent，实际声明 `FILE_WRITE`；Bridge 使用公开 `autoApproveStandardFileWriteTools` 仅豁免这两个生产工具的标准写审批，普通 `write_file` 等仍需审批。缺少身份、空 SOUL 或完整渲染超过 32000 字符时不写入、不截断。
+
+本切片 `update_agent` 只支持 `soul`、`description`、`display_name`，能力字段明确报错；省略字段保持原值，冻结 OptionalText 的 `null`/`none`/`undefined` 字符串视为未传。SOUL 使用现有 agent 配置 JSON 保存，不另建 SOUL 文件；bootstrap Skill、全局 SOUL 和 legacy pending Run 自动迁移为已登记差异。旧 Thread 保留历史读取；旧 Run 全部结束后可按当前配置准入新 Turn，成功后记录新 Run 的身份与签名。缺少原身份或签名的活跃 Run 不能恢复执行或 Steer。
+
+M3 消费本地公开 `0.1.2-SNAPSHOT` JAR，SDK 来源与构件 hash 见 [集成报告](private-docs/ai-coding-report/39-deerflow-parity-delivery/W03/W03-AgentSoulSdkIntegration.md)。人工暂缓 PR266 合并；SDK 主线合并状态和产品验收结果分别登记在 SHPM。
+
+冻结 UI 的正式验收由主控在独立 worktree 运行，使用真实模型和合成 SOUL，验证“对话 → 保存 → setup_agent → 已创建 → 刷新可见”。第一轮 cold，第二轮在相同源码、依赖和构建时代理目标下 warm 复用构建，每轮使用新数据目录：
+
+```powershell
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -UxV1AgentSoul -SkipServerBuild -DataDirectory local-tmp/slot-2-ux-v1-soul/data/ui-cold
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -UxV1AgentSoul -SkipBuild -DataDirectory local-tmp/slot-2-ux-v1-soul/data/ui-warm
+```
+
+`-SkipServerBuild` 只在本轮源码已经完成全仓门禁、exec JAR 已生成时使用。脚本固定 retries=0，将 trace、截图、前后端原始日志和 `flow-health.json` 保存到 `local-tmp/slot-2-ux-v1-soul/evidence/run-<时间戳>/`，结束后核对端口和子进程清理。trace 包含实际合成 SOUL 的浏览器流量；派生 JSON 只记录 hash、长度与 ID。命令和局部测试通过不自动结算阶段 PASS。
 
 ## W15 V2 最小 Skill 承载
 

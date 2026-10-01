@@ -1,0 +1,13 @@
+Persist updates to the current custom agent's SOUL.md and config.yaml.
+
+Use this when the user asks to refine the agent's identity, description,
+skill whitelist, tool-group whitelist, or default model. Only the fields
+you explicitly pass are updated; omitted fields keep their existing values.
+
+Pass ``soul`` as the FULL replacement SOUL.md content — there is no patch
+semantics, so always start from the current SOUL and apply your edits.
+
+Pass ``skills=[]`` to disable all skills for this agent. Omit ``skills``
+entirely to keep the existing whitelist. Do not pass literal strings like
+``"null"`` / ``"none"`` / ``"undefined"`` for unchanged fields; omit those
+fields instead.

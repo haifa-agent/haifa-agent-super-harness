@@ -102,7 +102,12 @@ final class SkillConfigStore {
         // Immutable package sources and the retained loader remain SDK inputs.
         Map<String, Boolean> original = new LinkedHashMap<>();
         current.packages().forEach(pkg -> original.put(pkg.name(), selection.admits(pkg.name())));
-        return SkillRunTools.projection(current.packages(), original, selection).forRecovery();
+        SkillRunTools.Projection restored = SkillRunTools.projection(current.packages(), original, selection);
+        // Thread metadata records the actually admitted Skill names. An explicit empty list means
+        // no Skill Tools were registered: adding them changes every frozen Tool's catalog digest.
+        // Nonempty and legacy-unknown declarations retain the historical recovery registrations.
+        if (selection.names().isPresent() && selection.names().orElseThrow().isEmpty()) return restored;
+        return restored.forRecovery();
     }
 
     List<Map<String, Object>> list() {

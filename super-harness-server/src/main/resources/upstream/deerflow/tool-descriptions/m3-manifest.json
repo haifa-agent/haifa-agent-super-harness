@@ -1,0 +1,20 @@
+{
+  "schema": "sh.deerflow-tool-descriptions/v1",
+  "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+  "descriptions": [
+    {
+      "tool": "setup_agent",
+      "source_file": "deerflow/tools/builtins/setup_agent_tool.py",
+      "source_function": "setup_agent",
+      "source_lineno": 18,
+      "description_sha256": "6aed4ca0d136f4f49735ffa4f5635b85e7468d5b59491eba89520b216f67baa2"
+    },
+    {
+      "tool": "update_agent",
+      "source_file": "deerflow/tools/builtins/update_agent_tool.py",
+      "source_function": "update_agent",
+      "source_lineno": 77,
+      "description_sha256": "3d3272e8751023e7cd76cc60261ff7dc669ddce5cd04f9b5a294614b14a7a62e"
+    }
+  ]
+}

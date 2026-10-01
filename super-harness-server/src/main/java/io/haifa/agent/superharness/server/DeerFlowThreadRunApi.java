@@ -8,6 +8,7 @@ import io.haifa.agent.core.run.AgentRunId;
 import io.haifa.agent.core.run.AgentRunStatus;
 import io.haifa.agent.core.session.AgentSessionId;
 import io.haifa.agent.runtime.api.AgentRunEvent;
+import io.haifa.agent.runtime.api.FrozenInstructionDiagnostic;
 import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
 import io.haifa.agent.runtime.api.AgentRunSnapshot;
 import io.haifa.agent.runtime.api.InteractionResponseReceiptStatus;
@@ -68,6 +69,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.function.BiFunction;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
@@ -126,11 +128,15 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
      */
     static final String SKILL_SELECTION_METADATA_KEY = "haifa_skill_names";
     static final String LEAD_SIGNATURE_METADATA_KEY = "haifa_lead_prompt_signature";
+    static final String AGENT_NAME_METADATA_KEY = "haifa_agent_name";
+    static final String AGENT_BOOTSTRAP_METADATA_KEY = "haifa_agent_bootstrap";
     static final String USER_INPUT_FRAMING_METADATA_KEY = "haifa_user_input_framing_from_sequence";
     static final String MCP_SELECTION_METADATA_KEY = "haifa_mcp_plugins";
 
     private final ObjectMapper json;
     private final Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver;
+    private final Function<JsonNode, AgentPromptContext> agentPromptResolver;
+    private final BiFunction<HaifaRunBridge, AgentRunId, Optional<FrozenInstructionDiagnostic>> instructionDiagnostics;
     private final Predicate<String> projectExists;
     private final PersistentProjectWorkspaceService workspaceChanges;
     private final Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread;
@@ -165,8 +171,48 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             SkillProjectionProvider skillProjections,
             DeerFlowUploadContext uploadContext)
             throws IOException {
+        this(json, runModelResolver, projectExists, workspaceChanges, dataDirectory, continuationKey,
+                runToolsForThread, mcpProjections, skillProjections, uploadContext,
+                ignored -> AgentPromptContext.defaults(), HaifaRunBridge::frozenInstructionDiagnostic);
+    }
+
+    /** Test-only diagnostic delegation; production always queries the public SDK typed diagnostic. */
+    DeerFlowThreadRunApi(
+            ObjectMapper json,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            Predicate<String> projectExists,
+            PersistentProjectWorkspaceService workspaceChanges,
+            Path dataDirectory,
+            SecretKey continuationKey,
+            Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread,
+            McpProjectionProvider mcpProjections,
+            SkillProjectionProvider skillProjections,
+            DeerFlowUploadContext uploadContext,
+            BiFunction<HaifaRunBridge, AgentRunId, Optional<FrozenInstructionDiagnostic>> instructionDiagnostics)
+            throws IOException {
+        this(json, runModelResolver, projectExists, workspaceChanges, dataDirectory, continuationKey,
+                runToolsForThread, mcpProjections, skillProjections, uploadContext,
+                ignored -> AgentPromptContext.defaults(), instructionDiagnostics);
+    }
+
+    DeerFlowThreadRunApi(
+            ObjectMapper json,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            Predicate<String> projectExists,
+            PersistentProjectWorkspaceService workspaceChanges,
+            Path dataDirectory,
+            SecretKey continuationKey,
+            Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread,
+            McpProjectionProvider mcpProjections,
+            SkillProjectionProvider skillProjections,
+            DeerFlowUploadContext uploadContext,
+            Function<JsonNode, AgentPromptContext> agentPromptResolver,
+            BiFunction<HaifaRunBridge, AgentRunId, Optional<FrozenInstructionDiagnostic>> instructionDiagnostics)
+            throws IOException {
         this.json = json;
         this.runModelResolver = runModelResolver;
+        this.agentPromptResolver = java.util.Objects.requireNonNull(agentPromptResolver, "agentPromptResolver");
+        this.instructionDiagnostics = java.util.Objects.requireNonNull(instructionDiagnostics, "instructionDiagnostics");
         this.projectExists = projectExists;
         this.workspaceChanges = workspaceChanges;
         this.runToolsForThread = runToolsForThread;
@@ -346,6 +392,8 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         metadata.remove(MCP_SELECTION_METADATA_KEY);
         metadata.remove(SKILL_SELECTION_METADATA_KEY);
         metadata.remove(LEAD_SIGNATURE_METADATA_KEY);
+        metadata.remove(AGENT_NAME_METADATA_KEY);
+        metadata.remove(AGENT_BOOTSTRAP_METADATA_KEY);
         metadata.remove(USER_INPUT_FRAMING_METADATA_KEY);
         if (body.has("project_id") && !body.get("project_id").isNull()) {
             if (!body.get("project_id").isTextual() || body.get("project_id").asText().isBlank()) {
@@ -675,8 +723,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
         }
         HaifaRunBridge.ModelBinding binding;
+        AgentPromptContext agentPrompt;
         try {
             binding = runModelResolver.apply(body);
+            agentPrompt = agentPromptResolver.apply(body);
         } catch (IllegalArgumentException exception) {
             sendJson(exchange, 422, Map.of("detail", exception.getMessage()));
             return;
@@ -723,6 +773,12 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 if (active != null && !active.bridge.snapshot(active.runId).status().isTerminal()) {
                     if (runInput == null) {
                         sendJson(exchange, 409, Map.of("detail", "Thread already has an active run"));
+                        return;
+                    }
+                    // Steer continues an existing declaration; terminal history may admit a fresh
+                    // Turn from trusted current configuration without migrating its old Runs.
+                    if (!pendingPromptAvailable(thread, active)) {
+                        sendJson(exchange, 409, Map.of("detail", "Pending Run prompt or agent identity is unavailable"));
                         return;
                     }
                     ProjectionCursor requestedCursor;
@@ -779,7 +835,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             boolean switchingPrompt;
             try {
                 if (thread.bridge == null) {
-                    HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection, skillProjection);
+                    HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt);
                     // Restoring the Conversation is read-only; claim the selected model only
                     // after the SDK has admitted the new Run successfully.
                     attachBridge(thread, bridge, false);
@@ -795,12 +851,13 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 switchingMcp = !selectedBridge.mcpSignature().equals(mcpProjection.fingerprint());
                 switchingSkills = !selectedBridge.skillSignature().equals(
                         skillProjection == null ? "" : skillProjection.fingerprint());
-                // The rendered lead prompt is a pure function of the tool/Skill declaration, so a
-                // prompt change is detected without building the new Bridge.
-                switchingPrompt = !selectedBridge.promptSignature().equals(
-                        HaifaRunBridge.promptSignatureFor(toolsForThread(thread), skillProjection));
+                // The prompt detects SOUL changes; identity also governs the retained Tool callbacks
+                // and must rebuild independently when bootstrap/default prompts have identical text.
+                switchingPrompt = !selectedBridge.matchesAgentIdentity(agentPrompt)
+                        || !selectedBridge.promptSignature().equals(
+                                HaifaRunBridge.promptSignatureFor(toolsForThread(thread, agentPrompt), skillProjection, agentPrompt));
                 if (switchingModel || switchingMcp || switchingSkills || switchingPrompt) {
-                    selectedBridge = newBridge(binding, thread, mcpProjection, skillProjection);
+                    selectedBridge = newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt);
                 }
             } catch (RuntimeException failure) {
                 if (createdBridge && thread.bridge != null) {
@@ -876,7 +933,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 thread.setMcpSelection(mcpProjection.selection());
             }
             // Product prompt inputs of the admitted Turn; the SDK owns frozen Skill execution.
-            thread.setLeadPromptSelection(skillProjection, selectedBridge.promptSignature());
+            thread.setLeadPromptSelection(skillProjection, selectedBridge.promptSignature(), agentPrompt);
             thread.setFramingFromSequence(framingFromSequence);
             long humanSequence = thread.nextMessageSequence;
             thread.nextMessageSequence += 2;
@@ -960,6 +1017,10 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
             if (run == null || !run.threadId.equals(thread.threadId)) {
                 sendJson(exchange, 409, Map.of("detail", "Thread has no matching Interaction"));
+                return;
+            }
+            if (!pendingPromptAvailable(thread, run)) {
+                sendJson(exchange, 409, Map.of("detail", "Pending Run prompt or agent identity is unavailable"));
                 return;
             }
             // A read-only fallback bridge may expose the durable pending card, but must never
@@ -1120,6 +1181,7 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 System.Logger.Level.WARNING,
                 "Interaction response failed at " + phase + ": " + interactionFailureReason(failure)
                         + " causes=" + interactionFailureCauses(failure)
+                        + " sourceSite=" + interactionFailureSourceSite(failure)
                         + " durable=" + interactionDurableState(run));
         String detail = switch (status) {
             case 403 -> "Interaction response is forbidden";
@@ -1171,6 +1233,30 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         return String.join(">", causes);
     }
 
+    /** Safe location only: no exception message, arguments, filename, or stack dump. */
+    static String interactionFailureSourceSite(Throwable failure) {
+        Set<Throwable> seen = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        Throwable deepest = failure;
+        for (int depth = 0; deepest != null && depth < 32; depth++) {
+            if (!seen.add(deepest)) return "unavailable";
+            Throwable next = deepest.getCause();
+            if (next != null) {
+                deepest = next;
+                continue;
+            }
+            for (StackTraceElement frame : deepest.getStackTrace()) {
+                String type = frame.getClassName();
+                String method = frame.getMethodName();
+                if (type.matches("io\\.haifa\\.[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)*")
+                        && method.matches("[A-Za-z_$][A-Za-z0-9_$]*|<init>|<clinit>")) {
+                    return type + "#" + method + ":" + frame.getLineNumber();
+                }
+            }
+            return "unavailable";
+        }
+        return "unavailable";
+    }
+
     private String interactionDurableState(RunRecord run) {
         try {
             return "run=" + run.bridge.snapshot(run.runId).status().name()
@@ -1206,13 +1292,23 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             McpRunTools.Projection mcpProjection = selection == null
                     ? McpRunTools.Projection.empty()
                     : mcpProjections.forSelection(selection);
-            HaifaRunBridge bridge = newBridge(
-                    binding, thread, mcpProjection, skillProjections.forRecovery(thread.skillSelection()));
-            Object expectedPrompt = thread.metadata.get(LEAD_SIGNATURE_METADATA_KEY);
-            if (expectedPrompt instanceof String expected && !expected.equals(bridge.promptSignature())) {
-                bridge.close();
-                throw new IllegalStateException("persisted lead prompt signature differs from recovery inputs");
+            // The current profile may be B while the SDK's pending Run owns snapshot A.
+            // Historical reads remain available; execution checks A's hash below before respond.
+            AgentPromptContext restored = AgentPromptContext.defaults();
+            if (validAgentMetadata(thread)) {
+                var resolverBody = json.createObjectNode();
+                var context = resolverBody.putObject("context");
+                String name = (String) thread.metadata.get(AGENT_NAME_METADATA_KEY);
+                if (!name.isEmpty()) context.put("agent_name", name);
+                context.put("is_bootstrap", (Boolean) thread.metadata.get(AGENT_BOOTSTRAP_METADATA_KEY));
+                try {
+                    restored = agentPromptResolver.apply(resolverBody);
+                } catch (IllegalArgumentException unavailable) {
+                    // A deleted agent does not prevent read-only historical access.
+                }
             }
+            HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection,
+                    skillProjections.forRecovery(thread.skillSelection()), restored);
             boolean claimBinding = thread.modelBindingIdentity == null
                     || thread.modelBindingIdentity.equals(bridge.bindingIdentity());
             // Conversation/run reads use shared SQLite. The last selected model is preferred
@@ -1230,18 +1326,51 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             HaifaRunBridge.ModelBinding binding,
             ThreadRecord thread,
             McpRunTools.Projection mcpProjection,
-            SkillRunTools.Projection skillProjection) {
+            SkillRunTools.Projection skillProjection,
+            AgentPromptContext agentPrompt) {
         bridgeBuilds.incrementAndGet();
-        return new HaifaRunBridge(binding, toolsForThread(thread), foundation, mcpProjection, skillProjection);
+        return new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt), foundation, mcpProjection, skillProjection, agentPrompt);
     }
 
-    private List<? extends JavaTool<?, ?>> toolsForThread(ThreadRecord thread) {
+    private List<? extends JavaTool<?, ?>> toolsForThread(ThreadRecord thread, AgentPromptContext agentPrompt) {
         Object projectId = thread.metadata.get("deerflow_project_id");
         Optional<String> project = projectId instanceof String value && !value.isBlank()
                 ? Optional.of(value)
                 : Optional.empty();
         return runToolsForThread.apply(
-                new ThreadToolScope(thread.threadId, project, thread.currentRunUploads));
+                new ThreadToolScope(thread.threadId, project, thread.currentRunUploads, agentPrompt));
+    }
+
+    private static boolean validAgentMetadata(ThreadRecord thread) {
+        Object name = thread.metadata.get(AGENT_NAME_METADATA_KEY);
+        return name instanceof String value
+                && (value.isEmpty() || value.matches("[a-z0-9-]+"))
+                && thread.metadata.get(AGENT_BOOTSTRAP_METADATA_KEY) instanceof Boolean;
+    }
+
+    private boolean pendingPromptAvailable(ThreadRecord thread, RunRecord run) {
+        if (!validPromptMetadata(thread)) return false;
+        String expected = (String) thread.metadata.get(LEAD_SIGNATURE_METADATA_KEY);
+        try {
+            var body = json.createObjectNode();
+            var context = body.putObject("context");
+            String name = (String) thread.metadata.get(AGENT_NAME_METADATA_KEY);
+            if (!name.isEmpty()) context.put("agent_name", name);
+            context.put("is_bootstrap", (Boolean) thread.metadata.get(AGENT_BOOTSTRAP_METADATA_KEY));
+            agentPromptResolver.apply(body);
+            return instructionDiagnostics.apply(run.bridge, run.runId)
+                    .filter(diagnostic -> diagnostic.runId().equals(run.runId)
+                            && diagnostic.instructionContentHash().equals("sha256:" + expected))
+                    .isPresent();
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+    }
+
+    private static boolean validPromptMetadata(ThreadRecord thread) {
+        return validAgentMetadata(thread)
+                && thread.metadata.get(LEAD_SIGNATURE_METADATA_KEY) instanceof String signature
+                && signature.matches("[0-9a-f]{64}");
     }
 
     private void attachBridge(ThreadRecord thread, HaifaRunBridge bridge, boolean claimBinding) {
@@ -3826,11 +3955,13 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             this.metadata = Collections.unmodifiableMap(updated);
         }
 
-        private void setLeadPromptSelection(SkillRunTools.Projection projection, String signature) {
+        private void setLeadPromptSelection(SkillRunTools.Projection projection, String signature, AgentPromptContext agentPrompt) {
             Map<String, Object> updated = new LinkedHashMap<>(metadata);
             updated.put(SKILL_SELECTION_METADATA_KEY, projection == null ? List.of()
                     : projection.selectedPackages().stream().map(SkillRunTools.Package::name).toList());
             updated.put(LEAD_SIGNATURE_METADATA_KEY, signature);
+            updated.put(AGENT_NAME_METADATA_KEY, agentPrompt.agentName() == null ? "" : agentPrompt.agentName());
+            updated.put(AGENT_BOOTSTRAP_METADATA_KEY, agentPrompt.bootstrap());
             this.metadata = Collections.unmodifiableMap(updated);
         }
 
@@ -3941,11 +4072,16 @@ final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             InteractionResponseSubmission submission,
             Map<String, Object> message) {}
 
-    record ThreadToolScope(String threadId, Optional<String> projectId, CurrentRunUploads currentRunUploads) {
+    record ThreadToolScope(String threadId, Optional<String> projectId, CurrentRunUploads currentRunUploads,
+            AgentPromptContext agentPrompt) {
+        ThreadToolScope(String threadId, Optional<String> projectId, CurrentRunUploads currentRunUploads) {
+            this(threadId, projectId, currentRunUploads, AgentPromptContext.defaults());
+        }
         ThreadToolScope {
             java.util.Objects.requireNonNull(threadId, "threadId");
             java.util.Objects.requireNonNull(projectId, "projectId");
             java.util.Objects.requireNonNull(currentRunUploads, "currentRunUploads");
+            java.util.Objects.requireNonNull(agentPrompt, "agentPrompt");
         }
 
         String artifactProjectRef() {

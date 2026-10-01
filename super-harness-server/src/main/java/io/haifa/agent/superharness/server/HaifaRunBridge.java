@@ -19,6 +19,7 @@ import io.haifa.agent.runtime.api.AgentRunSnapshot;
 import io.haifa.agent.runtime.api.InteractionResponseReceipt;
 import io.haifa.agent.runtime.api.InteractionResponseSubmission;
 import io.haifa.agent.runtime.api.InteractionView;
+import io.haifa.agent.runtime.api.FrozenInstructionDiagnostic;
 import io.haifa.agent.runtime.api.RunEventCursor;
 import io.haifa.agent.runtime.api.RunEventPage;
 import io.haifa.agent.runtime.api.ToolCallView;
@@ -68,6 +69,7 @@ final class HaifaRunBridge implements AutoCloseable {
     private final String mcpSignature;
     private final String skillSignature;
     private final String promptSignature;
+    private final AgentPromptContext agentContext;
     private final AtomicLong turnPageReads = new AtomicLong();
 
     HaifaRunBridge(ModelBinding binding) {
@@ -80,6 +82,7 @@ final class HaifaRunBridge implements AutoCloseable {
         this.mcpSignature = "";
         this.skillSignature = "";
         this.promptSignature = "";
+        this.agentContext = AgentPromptContext.defaults();
         this.agent = HaifaAgentStarter.builder()
                 .name("Super Harness local compatibility agent")
                 .instructions(STARTER_INSTRUCTIONS)
@@ -110,6 +113,17 @@ final class HaifaRunBridge implements AutoCloseable {
             DurableHaifaFoundation foundation,
             McpRunTools.Projection mcpProjection,
             SkillRunTools.Projection skillProjection) {
+        this(binding, tools, foundation, mcpProjection, skillProjection, AgentPromptContext.defaults());
+    }
+
+    HaifaRunBridge(
+            ModelBinding binding,
+            List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation,
+            McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection,
+            AgentPromptContext agentContext) {
+        this.agentContext = java.util.Objects.requireNonNull(agentContext, "agent context must not be null");
         List<McpServerSpec> mcpSpecs = mcpProjection.specs();
         this.binding = binding;
         // MCP ToolLifecycle events are projected by the frozen transcript only when the
@@ -128,7 +142,7 @@ final class HaifaRunBridge implements AutoCloseable {
         Set<String> allowedTools = registeredToolNames(tools, skillProjection);
         // The frozen lead prompt is rendered once per Bridge; its signature drives the later-Run
         // rebuild criterion in DeerFlowThreadRunApi, exactly like the MCP/Skill fingerprints.
-        LeadPromptComposer.Composition prompt = composePrompt(allowedTools, skillProjection);
+        LeadPromptComposer.Composition prompt = composePrompt(allowedTools, skillProjection, agentContext);
         this.promptSignature = prompt.signature();
         HaifaAgentBuilder builder = HaifaAgents.builder(profile(
                         binding.snapshot(), prompt.instructions(), allowedTools,
@@ -146,6 +160,10 @@ final class HaifaRunBridge implements AutoCloseable {
         builder.autoApproveReadOnlyNetworkTools(tools.stream()
                 .filter(tool -> tool instanceof ProductionWebSearchTool
                         || tool instanceof ProductionWebFetchTool || tool instanceof ProductionImageSearchTool)
+                .map(tool -> tool.spec().name())
+                .collect(java.util.stream.Collectors.toSet()));
+        builder.autoApproveStandardFileWriteTools(tools.stream()
+                .filter(tool -> tool instanceof ProductionSetupAgentTool || tool instanceof ProductionUpdateAgentTool)
                 .map(tool -> tool.spec().name())
                 .collect(java.util.stream.Collectors.toSet()));
         if (skillProjection != null && skillProjection.installTools()) {
@@ -188,10 +206,21 @@ final class HaifaRunBridge implements AutoCloseable {
         return promptSignature;
     }
 
+    /** Tool callbacks retain the admitted identity even when two identities render the same prompt. */
+    boolean matchesAgentIdentity(AgentPromptContext candidate) {
+        return java.util.Objects.equals(agentContext.agentName(), candidate.agentName())
+                && agentContext.bootstrap() == candidate.bootstrap();
+    }
+
     /** The rendered lead-agent prompt signature for a candidate declaration, without building it. */
     static String promptSignatureFor(
             List<? extends JavaTool<?, ?>> tools, SkillRunTools.Projection skillProjection) {
-        return composePrompt(registeredToolNames(tools, skillProjection), skillProjection).signature();
+        return promptSignatureFor(tools, skillProjection, AgentPromptContext.defaults());
+    }
+
+    static String promptSignatureFor(List<? extends JavaTool<?, ?>> tools,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext) {
+        return composePrompt(registeredToolNames(tools, skillProjection), skillProjection, agentContext).signature();
     }
 
     private static Set<String> registeredToolNames(
@@ -207,14 +236,13 @@ final class HaifaRunBridge implements AutoCloseable {
     }
 
     private static LeadPromptComposer.Composition composePrompt(
-            Set<String> registeredTools, SkillRunTools.Projection skillProjection) {
+            Set<String> registeredTools, SkillRunTools.Projection skillProjection, AgentPromptContext agentContext) {
         List<LeadPromptInputs.Skill> skills = skillProjection == null
                 ? List.of()
                 : skillProjection.selectedPackages().stream()
                         .map(pkg -> new LeadPromptInputs.Skill(pkg.name(), pkg.description()))
                         .toList();
-        // This slice has no agent identity yet, so soul/selfUpdate are always empty.
-        LeadPromptInputs inputs = new LeadPromptInputs(null, null, false, skills);
+        LeadPromptInputs inputs = agentContext.promptInputs(skills);
         return LeadPromptComposer.classpath().compose(inputs, registeredTools);
     }
 
@@ -291,6 +319,10 @@ final class HaifaRunBridge implements AutoCloseable {
     /** Read-only SDK prompt-layer diagnostics; never contains prompt text. */
     PromptDiagnostics promptDiagnostics(AgentRunId runId) {
         return agent.runs().promptDiagnostics(runId);
+    }
+
+    Optional<FrozenInstructionDiagnostic> frozenInstructionDiagnostic(AgentRunId runId) {
+        return agent.runs().frozenInstructionDiagnostic(runId);
     }
 
     List<ToolCallView> toolCalls(AgentRunId runId) {

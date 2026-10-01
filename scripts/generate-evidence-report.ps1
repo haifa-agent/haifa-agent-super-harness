@@ -136,7 +136,13 @@ function Get-DeerFlowEvidence {
             $local = Join-Path $Root ([string]$resource.intended_local_path)
             Assert-Condition (Test-Path -LiteralPath $local -PathType Leaf) `
                 "imported resource '$($resource.id)' is missing its local file"
-            Assert-Condition ((Get-Sha256 $local) -eq [string]$resource.sha256) `
+            # Extracted/adapted imports have a local byte hash distinct from source provenance.
+            # A present but invalid local hash must fail, never fall back to the source hash.
+            $hashField = if ($resource.PSObject.Properties.Name -contains 'local_sha256') { 'local_sha256' } else { 'sha256' }
+            $localHash = [string](Get-ShpmProp $resource $hashField)
+            Assert-Condition ($localHash -cmatch '^[0-9a-f]{64}$') `
+                "imported resource '$($resource.id)' has invalid $hashField"
+            Assert-Condition ((Get-Sha256 $local) -eq $localHash) `
                 "imported resource '$($resource.id)' hash mismatch"
         }
     }

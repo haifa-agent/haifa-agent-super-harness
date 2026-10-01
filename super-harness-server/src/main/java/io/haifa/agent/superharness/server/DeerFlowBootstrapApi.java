@@ -97,7 +97,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 projects,
                 dataDirectory,
                 continuationKey,
-                scope -> promptReadyTools(testRunTools, projects, toolWorkspace, scope),
+                scope -> promptReadyTools(testRunTools, projects, toolWorkspace, scope, configurationApi, skillStore),
                 new DeerFlowThreadRunApi.McpProjectionProvider() {
                     @Override
                     public McpRunTools.Projection forRun(JsonNode body) {
@@ -126,7 +126,9 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                                 return skillStore.recoveryProjection(selection);
                             }
                         },
-                new DeerFlowUploadContext(toolWorkspace));
+                new DeerFlowUploadContext(toolWorkspace),
+                configurationApi::resolveAgentPromptContext,
+                HaifaRunBridge::frozenInstructionDiagnostic);
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
         this.projectApi = new DeerFlowProjectApi(objectMapper, projects, threadRunApi, workspaceApi);
@@ -145,12 +147,43 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             List<? extends JavaTool<?, ?>> configured,
             PersistentProjectWorkspaceService projects,
             RestrictedWorkspaceService toolWorkspace,
-            DeerFlowThreadRunApi.ThreadToolScope scope) {
+            DeerFlowThreadRunApi.ThreadToolScope scope,
+            DeerFlowConfigurationApi configuration,
+            SkillConfigStore skills) {
         List<JavaTool<?, ?>> tools = new java.util.ArrayList<>(configured);
         for (JavaTool<?, ?> tool : fileTools(scope, projects, toolWorkspace)) {
             if (tools.stream().noneMatch(existing -> existing.spec().name().equals(tool.spec().name()))) {
                 tools.add(tool);
             }
+        }
+        AgentPromptContext agent = scope.agentPrompt();
+        java.util.function.Consumer<com.fasterxml.jackson.databind.node.ObjectNode> validateCandidate = candidate -> {
+            SkillRunTools.Selection selectedSkills = SkillRunTools.Selection.fromJson(candidate.get("skills"));
+            selectedSkills.names().ifPresent(names -> names.forEach(name -> {
+                if (skills.detail(name).isEmpty()) throw new IllegalArgumentException("Skill is not installed");
+            }));
+            AgentPromptContext nextAgent = new AgentPromptContext(
+                    candidate.path("name").asText(), false, candidate.path("soul").asText());
+            var nextScope = new DeerFlowThreadRunApi.ThreadToolScope(
+                    scope.threadId(), scope.projectId(), scope.currentRunUploads(), nextAgent);
+            // Pure M2 composition checks the complete registered catalog and SDK instruction limit
+            // before the existing ConfigurationStore performs its single atomic replacement.
+            HaifaRunBridge.promptSignatureFor(
+                    promptReadyTools(configured, projects, toolWorkspace, nextScope, configuration, skills),
+                    skills.projection(selectedSkills), nextAgent);
+        };
+        if (agent.bootstrap()) {
+            tools.add(new ProductionSetupAgentTool(agent.agentName(), input -> {
+                configuration.setupAgentForTool(agent.agentName(), input, validateCandidate);
+                return new ProductionSetupAgentTool.Output(true,
+                        "Agent '" + agent.agentName() + "' created successfully!");
+            }));
+        } else if (agent.agentName() != null) {
+            tools.add(new ProductionUpdateAgentTool(agent.agentName(), input -> {
+                configuration.updateAgentForTool(agent.agentName(), input, validateCandidate);
+                return new ProductionUpdateAgentTool.Output(true,
+                        "Agent '" + agent.agentName() + "' updated successfully!");
+            }));
         }
         return tools;
     }

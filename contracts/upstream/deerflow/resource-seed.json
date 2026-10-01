@@ -225,6 +225,52 @@
       "import_status": "IMPORTED",
       "license_assessment": "Original frozen DeerFlow text under root MIT; attribution retained. Not a legal review.",
       "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.tool.setup-agent-description",
+      "kind": "tool-description",
+      "source_path": "backend/packages/harness/deerflow/tools/builtins/setup_agent_tool.py",
+      "sha256": "6715df618c69578badbf7426b260f456cd283aefa62afb848df931df3c46c080",
+      "intended_local_path": "super-harness-server/src/main/resources/upstream/deerflow/tool-descriptions/setup_agent.txt",
+      "local_sha256": "6aed4ca0d136f4f49735ffa4f5635b85e7468d5b59491eba89520b216f67baa2",
+      "authored": false,
+      "verification": "Frozen whole Python source and local bytes are hash-checked by the resource gate. M3 JUnit verifies the Google parsed description and actual JavaTool spec against m3-manifest.json; this is not a python-double-quoted-literal-region extraction gate.",
+      "import_status": "IMPORTED",
+      "license_assessment": "Original frozen DeerFlow parsed tool description under root MIT; attribution retained at third-party/deerflow/LICENSES/deer-flow-MIT.txt. Not a legal review.",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.tool.update-agent-description",
+      "kind": "tool-description",
+      "source_path": "backend/packages/harness/deerflow/tools/builtins/update_agent_tool.py",
+      "sha256": "17a143e2a5c137020bd8dcec7e79d137cae2b5856abe86a11caa9d1655cbd76f",
+      "intended_local_path": "super-harness-server/src/main/resources/upstream/deerflow/tool-descriptions/update_agent.txt",
+      "local_sha256": "3d3272e8751023e7cd76cc60261ff7dc669ddce5cd04f9b5a294614b14a7a62e",
+      "authored": false,
+      "verification": "Frozen whole Python source and local bytes are hash-checked by the resource gate. M3 JUnit verifies the Google parsed description and actual JavaTool spec against m3-manifest.json; this is not a python-double-quoted-literal-region extraction gate.",
+      "import_status": "IMPORTED",
+      "license_assessment": "Original frozen DeerFlow parsed tool description under root MIT; attribution retained at third-party/deerflow/LICENSES/deer-flow-MIT.txt. Not a legal review.",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.tool.m3-description-manifest",
+      "kind": "tool-description-manifest",
+      "intended_local_path": "super-harness-server/src/main/resources/upstream/deerflow/tool-descriptions/m3-manifest.json",
+      "local_sha256": "2669ab085337806c9e853841f1b369d6e69448bc5eac919793ae16fd5950029e",
+      "authored": true,
+      "import_status": "IMPORTED",
+      "license_assessment": "Super Harness authored provenance ledger recording the frozen source SHA, function locations and imported description hashes; no upstream description text is copied in this ledger. Not a legal review.",
+      "status": "SOURCE_VERIFIED"
+    },
+    {
+      "id": "deerflow.tool.m3-adaptations",
+      "kind": "tool-adaptation",
+      "intended_local_path": "super-harness-server/src/main/resources/upstream/deerflow/tool-descriptions/m3-adaptations.json",
+      "local_sha256": "9f66313b7a4900ddef799e313ecd51e1d21b8d7f83b7b535e6194683e48d1382",
+      "authored": true,
+      "import_status": "IMPORTED",
+      "license_assessment": "Super Harness authored adaptation ledger describing this slice's supported fields, existing atomic configuration store, bootstrap difference and legacy Thread recovery boundary; no upstream text is copied. Not a legal review.",
+      "status": "SOURCE_VERIFIED"
     }
   ],
   "required_license_resource_ids": [

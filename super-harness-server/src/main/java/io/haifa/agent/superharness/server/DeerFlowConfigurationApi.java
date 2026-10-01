@@ -113,6 +113,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
 
     HaifaRunBridge.ModelBinding resolveRunModel(JsonNode body) {
         JsonNode context = body.path("context");
+        boolean bootstrap = isBootstrap(body);
         if (!context.isMissingNode() && !context.isNull() && !context.isObject()) {
             throw new IllegalArgumentException("context must be an object");
         }
@@ -138,7 +139,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         String requestedModel = optionalNonBlankText(context.get("model_name"), "context.model_name");
         String agentName = selectedAgentName(body);
         String agentModel = null;
-        if (agentName != null) {
+        if (agentName != null && !bootstrap) {
             String selectedAgentName = agentName.toLowerCase(java.util.Locale.ROOT);
             ObjectNode agent = store.agent(selectedAgentName)
                     .orElseThrow(
@@ -162,6 +163,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
      */
     McpRunTools.Selection resolveMcpPluginSelection(JsonNode body) {
         String agentName = selectedAgentName(body);
+        if (isBootstrap(body)) return McpRunTools.Selection.none();
         if (agentName == null) {
             return McpRunTools.Selection.all();
         }
@@ -174,11 +176,68 @@ final class DeerFlowConfigurationApi implements HttpHandler {
     /** Frozen Agent.skills: null selects all enabled packages, [] selects none. */
     SkillRunTools.Selection resolveSkillSelection(JsonNode body) {
         String agentName = selectedAgentName(body);
+        if (isBootstrap(body)) return SkillRunTools.Selection.none();
         if (agentName == null) return SkillRunTools.Selection.all();
         String selected = agentName.toLowerCase(java.util.Locale.ROOT);
         ObjectNode agent = store.agent(selected)
                 .orElseThrow(() -> new IllegalArgumentException("Agent '" + selected + "' not found"));
         return SkillRunTools.Selection.fromJson(agent.get("skills"));
+    }
+
+    static boolean isBootstrap(JsonNode body) {
+        JsonNode context = body.path("context");
+        if (!context.isMissingNode() && !context.isNull() && !context.isObject()) {
+            throw new IllegalArgumentException("context must be an object");
+        }
+        JsonNode value = context.get("is_bootstrap");
+        if (value == null || value.isNull()) return false;
+        if (!value.isBoolean()) throw new IllegalArgumentException("context.is_bootstrap must be boolean");
+        return value.booleanValue();
+    }
+
+    AgentPromptContext resolveAgentPromptContext(JsonNode body) {
+        return restoreAgentPromptContext(selectedAgentName(body), isBootstrap(body));
+    }
+
+    AgentPromptContext restoreAgentPromptContext(String agentName, boolean bootstrap) {
+        if (agentName == null || agentName.isEmpty()) return new AgentPromptContext(null, bootstrap, null);
+        if (!AGENT_NAME.matcher(agentName).matches()) throw new IllegalArgumentException("Invalid selected agent identity");
+        String normalized = agentName.toLowerCase(java.util.Locale.ROOT);
+        if (bootstrap) return new AgentPromptContext(normalized, true, null);
+        ObjectNode agent = store.agent(normalized)
+                .orElseThrow(() -> new IllegalArgumentException("Selected agent is unavailable"));
+        return new AgentPromptContext(normalized, false, agent.path("soul").asText(""));
+    }
+
+    ObjectNode setupAgentForTool(String agentName, ProductionSetupAgentTool.Input input,
+            java.util.function.Consumer<ObjectNode> candidateValidator) {
+        validateAgentName(agentName);
+        if (agentName == null || agentName.isBlank() || input.soul() == null || input.soul().isBlank()) {
+            throw new IllegalArgumentException("setup_agent requires a current identity and nonempty soul");
+        }
+        ObjectNode patch = json.createObjectNode();
+        patch.put("soul", input.soul());
+        if (input.description() != null && !input.description().isEmpty()) patch.put("description", input.description());
+        input.skills().ifPresent(names -> patch.set("skills", json.valueToTree(names)));
+        validateAgentFields(patch, false);
+        String normalized = agentName.toLowerCase(java.util.Locale.ROOT);
+        return store.writeAgentForTool(normalized, normalizeAgent(normalized, patch), patch, candidateValidator);
+    }
+
+    ObjectNode updateAgentForTool(String agentName, ProductionUpdateAgentTool.Input input,
+            java.util.function.Consumer<ObjectNode> candidateValidator) {
+        validateAgentName(agentName);
+        if (agentName == null || agentName.isBlank()) throw new IllegalArgumentException("update_agent requires a current identity");
+        ObjectNode patch = json.createObjectNode();
+        input.soul().ifPresent(value -> {
+            if (value.isBlank()) throw new IllegalArgumentException("soul must not be empty");
+            patch.put("soul", value);
+        });
+        input.description().ifPresent(value -> patch.put("description", value));
+        input.display_name().ifPresent(value -> patch.put("display_name", value));
+        if (patch.isEmpty()) throw new IllegalArgumentException("no supported agent update fields");
+        validateAgentFields(patch, false);
+        return store.writeAgentForTool(agentName.toLowerCase(java.util.Locale.ROOT), null, patch, candidateValidator);
     }
 
     private static String selectedAgentName(JsonNode body) {
@@ -189,9 +248,9 @@ final class DeerFlowConfigurationApi implements HttpHandler {
             agentName = assistantId.toLowerCase(java.util.Locale.ROOT).replace('_', '-');
         }
         if (agentName != null) {
-            validateAgentName(agentName);
+            if (!AGENT_NAME.matcher(agentName).matches()) throw new IllegalArgumentException("Invalid selected agent identity");
         }
-        return agentName;
+        return agentName == null ? null : agentName.toLowerCase(java.util.Locale.ROOT);
     }
 
     @Override
@@ -996,6 +1055,26 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                 }
                 write(root);
                 return existing.deepCopy();
+            }
+        }
+
+        ObjectNode writeAgentForTool(String name, ObjectNode createDefaults, ObjectNode patch,
+                java.util.function.Consumer<ObjectNode> validator) {
+            synchronized (lock) {
+                ObjectNode root = read();
+                ArrayNode agents = root.withArrayProperty("agents");
+                Optional<ObjectNode> found = find(agents, name);
+                if (found.isEmpty() && createDefaults == null) {
+                    throw new IllegalArgumentException("current agent is unavailable");
+                }
+                ObjectNode candidate = found.map(ObjectNode::deepCopy).orElseGet(() -> createDefaults.deepCopy());
+                patch.properties().forEach(field -> candidate.set(field.getKey(), field.getValue().deepCopy()));
+                // Validation and publication share the existing store lock. No partial patch writes.
+                validator.accept(candidate.deepCopy());
+                if (found.isPresent()) replace(agents, found.orElseThrow(), candidate);
+                else agents.add(candidate);
+                write(root);
+                return candidate.deepCopy();
             }
         }
 

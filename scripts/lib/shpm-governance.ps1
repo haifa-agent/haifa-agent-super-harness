@@ -146,14 +146,28 @@ function Test-ShpmGovernance {
         }
     }
 
-    # Work-package prerequisites (relation kind=requires): existence, no self edge, no cycle.
+    # `requires` supports work-package prerequisites and stage-to-task/package dependencies.
+    # Keep work-package existence, self-edge, duplicate and cycle checks separate from stage links.
     $requires = @($relations | Where-Object { $_.kind -eq 'requires' })
     $edges = @{}
     foreach ($relation in $requires) {
         $source = [string]$relation.source_id
         $target = [string]$relation.target_id
+        if ($relation.source_type -eq 'sprint_stage') {
+            $sourceStages = @($t.sprint_stage | Where-Object id -eq $source)
+            Assert-ShpmCondition ($sourceStages.Count -eq 1) "requires relation references missing or duplicate sprint stage $source"
+            Assert-ShpmCondition (@($t.sprint | Where-Object id -eq $sourceStages[0].sprint_id).Count -eq 1) `
+                "$source references missing or duplicate sprint $($sourceStages[0].sprint_id)"
+            Assert-ShpmCondition ($relation.target_type -in @('task', 'work_package')) `
+                "stage requires relation $($relation.id) must target a task or work package"
+            if ($relation.target_type -eq 'task') {
+                Assert-ShpmCondition (@($tasks | Where-Object id -eq $target).Count -eq 1) "$source maps to missing or duplicate task $target"
+            }
+            else { Assert-ShpmCondition $byId.ContainsKey($target) "$source maps to missing work package $target" }
+            continue
+        }
         Assert-ShpmCondition ($relation.source_type -eq 'work_package' -and $relation.target_type -eq 'work_package') `
-            "requires relation $($relation.id) must link work packages"
+            "requires relation $($relation.id) must link work packages or a sprint stage to a task or work package"
         Assert-ShpmCondition $byId.ContainsKey($source) "requires relation references missing work package $source"
         Assert-ShpmCondition $byId.ContainsKey($target) "$source references missing prerequisite $target"
         Assert-ShpmCondition ($source -ne $target) "$source cannot reference itself as a prerequisite"
@@ -303,7 +317,8 @@ function Test-ShpmGovernance {
                     $null -ne (Get-ShpmProp $details 'acceptedAt')
                 Assert-ShpmCondition ($recordedProof -or $stagePassRecords.Count -gt 0) `
                     "$stageId PASS requires independent gate evidence"
-                foreach ($required in @($links | Where-Object { $_.target_type -eq 'task' -and $_.kind -eq 'delivers' -and $_.required })) {
+                foreach ($required in @($links | Where-Object {
+                    $_.target_type -eq 'task' -and $_.kind -in @('delivers', 'requires') -and $_.required })) {
                     Assert-ShpmCondition ([string]$taskById[[string]$required.target_id].state -eq 'finished') `
                         "$stageId PASS requires task $($required.target_id) finished"
                 }

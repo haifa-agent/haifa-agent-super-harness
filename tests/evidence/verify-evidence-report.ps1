@@ -5,12 +5,14 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$Generator = Join-Path $RepositoryRoot 'scripts/generate-evidence-report.ps1'
+# RepositoryRoot supplies fixture inputs; always execute the tools from this test's checkout.
+$ToolRepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+$Generator = Join-Path $ToolRepositoryRoot 'scripts/generate-evidence-report.ps1'
 $TempParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')
 $TempRoot = Join-Path $TempParent ("w24-evidence-test-" + [Guid]::NewGuid().ToString('N'))
 $Assertions = 0
 $BaseSnapshot = Join-Path $TempRoot 'base-shpm-snapshot.json'
-. (Join-Path $RepositoryRoot 'scripts/lib/shpm-governance.ps1')
+. (Join-Path $ToolRepositoryRoot 'scripts/lib/shpm-governance.ps1')
 
 function Assert-True([bool]$Condition, [string]$Message) {
     $script:Assertions++
@@ -259,6 +261,29 @@ try {
         ConvertFrom-Json -DateKind String
     Assert-True ($failedManifest.mavenSurefire.status -eq 'FAIL') "failing tests must remain FAIL in emitted evidence"
 
+    # A real developing task can be a required prerequisite of an unfinished stage.
+    # This is a dependency declaration, not stage acceptance or a replacement for its evidence.
+    $stagePrerequisite = New-Fixture 'stage-required-developing-task'
+    $snap = Read-Snap $stagePrerequisite
+    Set-DevelopingTask $snap 'W04-task-2' 'asg-test-prerequisite' 2 '30618/35618' 'D:/workspace/test/prerequisite'
+    $stage = Get-Row $snap 'sprint_stage' 'UX-V1/M3'
+    $stage.work_status = 'in_progress'
+    $stage.result = 'NOT_RUN'
+    Add-Relation $snap 'sprint_stage' $stage.id 'task' 'W04-task-2' 'requires' 1
+    Add-Relation $snap 'sprint_stage' $stage.id 'work_package' 'W01' 'requires' 1
+    Write-Snap $stagePrerequisite $snap
+    $prerequisiteResult = Invoke-Generator $stagePrerequisite
+    Assert-True ($prerequisiteResult.ExitCode -eq 0) "unfinished stage may require a developing task and existing work package: $($prerequisiteResult.Output)"
+    Assert-True ((Read-EvidenceManifest $stagePrerequisite).governance.status -eq 'PASS') 'legal stage prerequisites must pass governance'
+    Assert-True ((Get-Row (Read-Snap $stagePrerequisite) 'sprint_stage' 'UX-V1/M3').result -eq 'NOT_RUN') 'prerequisite validation must not upgrade stage NOT_RUN'
+
+    $finishedPrerequisite = New-Fixture 'stage-required-finished-task'
+    $snap = Read-Snap $finishedPrerequisite
+    Add-Relation $snap 'sprint_stage' 'DEMO-V0/M0' 'task' 'W05-task-2' 'requires' 1
+    Write-Snap $finishedPrerequisite $snap
+    $finishedResult = Invoke-Generator $finishedPrerequisite
+    Assert-True ($finishedResult.ExitCode -eq 0) "PASS stage may require an accepted finished task: $($finishedResult.Output)"
+
     # Each SHPM governance rule must fail closed on a single targeted mutation.
     $cases = [ordered]@{
         'bad-schema' = @({ param($s) $s.schema_version = 2 }, 'schema_version must be 1')
@@ -269,6 +294,15 @@ try {
         'missing-prerequisite' = @({ param($s) Add-Relation $s 'work_package' 'W00' 'work_package' 'W99' 'requires' }, 'references missing prerequisite W99')
         'self-reference' = @({ param($s) Add-Relation $s 'work_package' 'W00' 'work_package' 'W00' 'requires' }, 'cannot reference itself')
         'cycle' = @({ param($s) Add-Relation $s 'work_package' 'W00' 'work_package' 'W01' 'requires' }, 'prerequisite cycle detected')
+        'duplicate-prerequisite' = @({ param($s) $r = @($s.tables.relation | Where-Object { $_.kind -eq 'requires' -and $_.source_type -eq 'work_package' })[0]; Add-Relation $s 'work_package' $r.source_id 'work_package' $r.target_id 'requires' }, 'contains duplicate prerequisite')
+        'stage-requires-missing-stage' = @({ param($s) Add-Relation $s 'sprint_stage' 'UX-V1/M99' 'task' 'W04-task-2' 'requires' 1 }, 'references missing or duplicate sprint stage UX-V1/M99')
+        'stage-requires-missing-sprint' = @({ param($s) (Get-Row $s 'sprint_stage' 'UX-V1/M3').sprint_id = 'UNKNOWN'; Add-Relation $s 'sprint_stage' 'UX-V1/M3' 'task' 'W04-task-2' 'requires' 1 }, 'references missing or duplicate sprint UNKNOWN')
+        'stage-requires-missing-task' = @({ param($s) Add-Relation $s 'sprint_stage' 'UX-V1/M3' 'task' 'W99-task-1' 'requires' 1 }, 'maps to missing or duplicate task W99-task-1')
+        'stage-requires-missing-package' = @({ param($s) Add-Relation $s 'sprint_stage' 'UX-V1/M3' 'work_package' 'W99' 'requires' 1 }, 'maps to missing work package W99')
+        'stage-requires-invalid-target' = @({ param($s) Add-Relation $s 'sprint_stage' 'UX-V1/M3' 'sprint_stage' 'UX-V1/M4' 'requires' 1 }, 'must target a task or work package')
+        'requires-invalid-source' = @({ param($s) Add-Relation $s 'unknown' 'UX-V1/M3' 'task' 'W04-task-2' 'requires' 1 }, 'must link work packages or a sprint stage')
+        'requires-task-source' = @({ param($s) Add-Relation $s 'task' 'W04-task-2' 'work_package' 'W01' 'requires' 1 }, 'must link work packages or a sprint stage')
+        'package-requires-invalid-target' = @({ param($s) Add-Relation $s 'work_package' 'W00' 'task' 'W04-task-2' 'requires' 1 }, 'must link work packages or a sprint stage')
         'too-many-tasks' = @({ param($s) $base = Get-Row $s 'task' 'W05-task-1'; $existing = @($s.tables.task | Where-Object work_package_id -eq 'W05').Count; $extras = @(1..(17 - $existing) | ForEach-Object { $t = $base.PSObject.Copy(); $t.id = "W05-cap-fixture-$_"; $t }); $s.tables.task = @($s.tables.task) + $extras }, 'must have at most 16 tasks')
         'developing-without-assignment' = @({ param($s) $t = Get-Row $s 'task' 'W04-task-2'; $t.state = 'developing'; $t.prompt_path = 'private-docs/prompts/test.md' }, 'developing without exactly one running assignment')
         'started-without-prompt' = @({ param($s) $t = Get-Row $s 'task' 'W04-task-2'; $t.state = 'blocked'; $t.started_at = '2026-09-28T10:00:00+08:00' }, 'left pending without a prompt_path')
@@ -294,6 +328,17 @@ try {
             $s.tables.task = @($s.tables.task) + $task
             Add-Relation $s 'sprint_stage' 'DEMO-V0/M0' 'task' $task.id 'delivers' 1
         }, 'DEMO-V0/M0 PASS requires task W03-task-8 finished')
+        'stage-pass-required-unfinished-prerequisite' = @({
+            param($s)
+            $task = (Get-Row $s 'task' 'W03-task-1').PSObject.Copy()
+            $task.id = 'W03-task-8'
+            $task.number = 'task-8'
+            $task.state = 'pending'
+            $task.started_at = $null
+            $task.completed_at = $null
+            $s.tables.task = @($s.tables.task) + $task
+            Add-Relation $s 'sprint_stage' 'DEMO-V0/M0' 'task' $task.id 'requires' 1
+        }, 'DEMO-V0/M0 PASS requires task W03-task-8 finished')
         'self-certified-go' = @({ param($s) (Get-Row $s 'sprint' 'DEMO-V2').decision = 'GO' }, 'DEMO-V2 GO requires all stage gates PASS')
         'go-without-human' = @({ param($s) Set-Details (Get-Row $s 'sprint' 'DEMO-V0') { param($d) $d.humanAcceptance = $null } }, 'DEMO-V0 GO requires explicit human acceptance')
         'go-stale-stage-sha' = @({ param($s) Set-Details (Get-Row $s 'sprint_stage' 'DEMO-V0/M2') { param($d) $d.mainCommit = '1234567' } }, 'DEMO-V0 GO requires DEMO-V0/M2 to be revalidated')
@@ -318,6 +363,38 @@ try {
     $badImportedHash = New-Fixture 'bad-imported-hash'
     Add-Content -LiteralPath (Join-Path $badImportedHash 'frontend/package.json') -Value 'tamper'
     Assert-Fails $badImportedHash 'hash mismatch'
+
+    $extractedResource = New-Fixture 'extracted-local-resource'
+    $seedPath = Join-Path $extractedResource 'contracts/upstream/deerflow/resource-seed.json'
+    $seed = Get-Content -LiteralPath $seedPath -Raw | ConvertFrom-Json -Depth 30 -DateKind String
+    $extracted = @($seed.resources | Where-Object id -eq 'deerflow.prompt.lead-agent-system-template')[0]
+    Assert-True ($extracted.sha256 -ne $extracted.local_sha256) 'extracted local hash must differ from the frozen source file hash'
+    $extractedResult = Invoke-Generator $extractedResource
+    Assert-True ($extractedResult.ExitCode -eq 0) "extracted resource with its original local hash must pass: $($extractedResult.Output)"
+    $seedAfter = Get-Content -LiteralPath $seedPath -Raw | ConvertFrom-Json -Depth 30 -DateKind String
+    Assert-True ((@($seedAfter.resources | Where-Object id -eq $extracted.id)[0]).sha256 -eq $extracted.sha256) 'local verification must preserve frozen source provenance'
+
+    foreach ($localHashCase in @('bad-value', 'bad-format', 'empty-value', 'missing-local-hash')) {
+        $fixture = New-Fixture "extracted-$localHashCase"
+        $seedPath = Join-Path $fixture 'contracts/upstream/deerflow/resource-seed.json'
+        $seed = Get-Content -LiteralPath $seedPath -Raw | ConvertFrom-Json -Depth 30 -DateKind String
+        $resource = @($seed.resources | Where-Object id -eq 'deerflow.prompt.lead-agent-system-template')[0]
+        switch ($localHashCase) {
+            'bad-value' { $resource.local_sha256 = '0' * 64 }
+            'bad-format' { $resource.local_sha256 = 'bad-hash' }
+            'empty-value' { $resource.local_sha256 = '' }
+            'missing-local-hash' { $resource.PSObject.Properties.Remove('local_sha256') }
+        }
+        [IO.File]::WriteAllText($seedPath, ($seed | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+        $expected = if ($localHashCase -in @('bad-format', 'empty-value')) { 'invalid local_sha256' } else { 'hash mismatch' }
+        Assert-Fails $fixture $expected
+    }
+    $extractedByteTamper = New-Fixture 'extracted-single-byte-tamper'
+    $resourcePath = Join-Path $extractedByteTamper 'resources/upstream/deerflow/prompts/lead-agent-system-template.txt'
+    $resourceBytes = [IO.File]::ReadAllBytes($resourcePath)
+    $resourceBytes[0] = $resourceBytes[0] -bxor 1
+    [IO.File]::WriteAllBytes($resourcePath, $resourceBytes)
+    Assert-Fails $extractedByteTamper 'hash mismatch'
 
     $demoStageFail = New-DemoEvidenceFixture 'demo-stage-fail'
     $demoBundle = Read-DemoBundle $demoStageFail
