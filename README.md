@@ -2,9 +2,9 @@
 
 本仓库是冻结 DeerFlow 对齐项目的独立 Java 21 产品工程。项目只通过 Maven 仓库中已发布的 `io.haifa:haifa-agent-bom:0.1.2-SNAPSHOT` 及公开 JAR 消费 Haifa Agent，不依赖 Haifa Agent 源码目录。
 
-## Run 输入预算
+## 架构边界
 
-生产持久 Run 的 `AgentRunBudget.maxInputTokens` 为 `0`，使用 Haifa SDK 的公开语义，不设置整 Run 累计输入 token 上限。模型自身的上下文窗口仍按模型配置生效；累计输出、缓存输入、成本、Tool/模型调用次数和时间限制继续按现有 Run profile 执行。此设置只影响新建 Run，既有失败记录保留。
+Super Harness 是产品、兼容与集成层，不是第二套 Agent Runtime。可复用的 Runtime 能力（Run/Loop、Memory、Tool/Skill、MCP、Sandbox、Approval、Artifact、Checkpoint、Parent/Child 等）归 Haifa Agent；Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业务集成与控制面展示。新增基础能力前须按 [Runtime / Product Boundary](docs/runtime-product-boundary.md) 做归属判断；如果缺的是通用 Runtime 能力，应先补 Haifa Agent 公开 API/SPI，再由本项目消费。
 
 ## 客户演示与项目看板
 
@@ -40,7 +40,11 @@ mvn -o -ntp verify
 
 冒烟测试会输出 `W01_SDK_EVIDENCE`，其中包含真实 Run ID、Tool 别名、Artifact ID、Artifact SHA-256 和字节数。测试报告位于各模块的 `target/surefire-reports`。
 
+验收采用“先核对测试要证明什么，再运行完整门禁”的顺序：开发期间可用定向测试快速排障；正式验收前须核对 Oracle 与实际断言、环境和槽位配置，最终仍要完成全仓验证、真实 smoke、规定的 UI 重复轮次及主控独立复验。同一源码和代理配置下的暖轮可复用已验证的前端构建，但每轮的运行状态、原始证据和失败记录必须独立保留；详细执行规则见 `AGENTS.md` 的“验收提速（不降低门禁）”。
+
 ## W18 冻结前端本地配置
+
+客户 V2 验收按“演示主链优先、独立用例批量执行、问题集中修复”推进。局部失败留档后继续无依赖用例，批次结束按根因统一处理；高级路径先记录风险，必需门禁仍按真实结果结算。人工操作见 [简要测试说明](private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-2/V2-Manual-Test-Guide.md)，批次划分和结果记录见 [剩余测试用例](private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-2/V2-Remaining-Test-Cases.md)。
 
 以下命令只校验冻结前端、已记录的最小 BFF 补丁、仅连接 Haifa 的 loopback 配置，以及固定的 Node/pnpm 启动工具链，不启动服务：
 
@@ -191,3 +195,9 @@ pwsh -NoProfile -File tests/customer-demo/verify-customer-demo-evidence.ps1
 ```
 
 校验会拒绝缺轮次、重复 ID、两轮 SHA 或配置不一致、隐藏 retry、缺失首次失败、只报最佳轮、Artifact 无 provenance/下载 hash、缺失或漂移的真实下载字节（文件不存在、SHA 不符、字节数不符）、`fileSha256` 与 `downloadSha256` 或真实下载字节不一致、provenance 原件未绑定 Oracle tool/artifact 或 `downloadSha256`/`downloadByteCount`、provenance 原件 SHA 漂移、无参考回落证据、跳阶段、M4 无人工验收、自报 GO、GO 与 M4 SHA 不一致以及敏感值；结果严格区分 `PASS`/`FAIL`/`NOT_RUN`/`BLOCKED_EXTERNAL`/`UPSTREAM_UNSUPPORTED`：任一 stage 或 round `FAIL` 都会使 `customerDemo.status` 与 `overallStatus` 变为 `FAIL`，`BLOCKED_EXTERNAL`/`UPSTREAM_UNSUPPORTED` 在机器摘要中单独列出，绝不折叠成 `NOT_RUN`。当前 bundle 为全阶段 `NOT_RUN`、演示决策 `NO_GO`，只有当 M0–M4 全部 PASS、两轮在同一主线 SHA、同一模型/配置/数据根上连续完成且有人工验收时才会接受 `GO`；可用 `-RequireGo` 把“尚未 GO”升级为失败，供 M4 最终门禁使用。
+
+### 当前主工作区 Utility MCP 体验（2026-09-30）
+
+主 Gateway `18018` 已部署 main@530dfb2 的验收 JAR，冻结前端仍为 `33018`。已启用 `haifa-utility`，连接 `http://127.0.0.1:8091/mcp`，19 个工具来自实际 MCP 发现，协议 `2025-06-18`；在能力中心的 Plugins 页面可查看，在 Agent 的 MCP 选择中可启用。新会话可输入「请实际调用 MCP calculate 计算 23 * 19」，出现审批后点击 Approve。
+
+Utility 使用另一项目 `D:/workspace/haifa-ai-deerflow/utility-mcp-server` 的已有编译产物和离线 runtime classpath，以单 Java 进程运行（`-Xmx384m -XX:+UseSerialGC`，loopback 8091），避免常驻 Maven。运行清单、启动/停止脚本和部署原件在 `local-tmp/main-utility-preview-20260930/`。仅停止此 Utility 服务可运行 `pwsh -NoProfile -File local-tmp/main-utility-preview-20260930/start-utility.ps1 -Stop`；之后用同脚本不带 `-Stop` 恢复。脚本依赖已生成的 classpath 与 Utility target/classes，不删除这些文件。主服务数据及 continuation key 保持原样，本次连接不代表 V2 阶段通过。

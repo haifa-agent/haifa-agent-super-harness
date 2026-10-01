@@ -319,8 +319,8 @@ test.describe("UX-V1 DeerFlow default tools with live DeepSeek", () => {
     await input.press("Enter");
     const stream = await firstStream;
     expect(stream.status(), await stream.text()).toBe(200);
-    const identity = runIdentity(stream);
-    const { status, approvals } = await driveToTerminal(page, context, identity, { timeoutMs: 240_000 });
+    const identity = await captureStream(page, stream, testInfo);
+    const { status, approvals } = await driveToTerminal(page, context, identity, { timeoutMs: 240_000, testInfo });
     const state = await threadState(context.request, identity.threadId);
     const sequence = toolCallNames(state);
     const search = toolResults(state, "web_search").map((m) => String(m.content));
@@ -352,5 +352,25 @@ test.describe("UX-V1 DeerFlow default tools with live DeepSeek", () => {
     expect(sequence).toContain("web_fetch");
     expect(fetchBlocked, "web_fetch must return actual content").toBe(false);
     expect(fetched.join("\n").length).toBeGreaterThan(50);
+    const results = JSON.parse(search.at(-1));
+    expect(Array.isArray(results)).toBe(true);
+    expect(results.length).toBeGreaterThan(0);
+    const fetchCall = state.values.messages.flatMap((message) => message.tool_calls ?? [])
+      .findLast((call) => call.name === "web_fetch");
+    expect(results.map((item) => item.url), "fetch must consume an actual search result URL")
+      .toContain(fetchCall.args.url);
+    const moreSteps = page.getByRole("button", { name: /^\d+ more steps?$/ });
+    for (const button of await moreSteps.all()) await button.click();
+    for (const item of results) {
+      const link = page.locator("#chat").getByRole("link", { name: item.title, exact: true }).first();
+      await expect(link, "frozen search result card exposes the actual safe URL").toBeVisible();
+      await expect(link).toHaveAttribute("href", item.url);
+      await expect(link).toHaveAttribute("target", "_blank");
+      await expect(link).toHaveAttribute("rel", /noopener/);
+    }
+    expect(await page.locator("#chat a").evaluateAll((links) => links.every((link) =>
+      !/^\s*(javascript|data|vbscript):/i.test(link.getAttribute("href") ?? ""))))
+      .toBe(true);
+    await screenshot(page, testInfo, "ux-v1-C-web-cards");
   });
 });
