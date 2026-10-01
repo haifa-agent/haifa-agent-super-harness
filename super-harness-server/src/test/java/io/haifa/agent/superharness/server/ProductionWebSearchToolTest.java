@@ -4,17 +4,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.haifa.agent.sdk.tool.JavaRecordSchemaGenerator;
 import java.io.IOException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.ResourceBundle;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,6 +31,7 @@ import org.junit.jupiter.api.Test;
 class ProductionWebSearchToolTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private final List<Map<String, String>> requests = java.util.Collections.synchronizedList(new ArrayList<>());
+    private final List<Headers> requestHeaders = java.util.Collections.synchronizedList(new ArrayList<>());
     private HttpServer server;
     private ProductionWebSearchTool tool;
 
@@ -86,6 +91,34 @@ class ProductionWebSearchToolTest {
     }
 
     @Test
+    void challengePageReturnsNoResultsAndLogsDiagnostic() throws Exception {
+        List<String> logs = new CopyOnWriteArrayList<>();
+        tool = new ProductionWebSearchTool(WebToolTestSupport.config(server, "/reader"), captor(logs));
+
+        JsonNode output = run("challenge", Optional.empty(), Optional.empty());
+
+        assertThat(output.path("error").asText()).isEqualTo("No results found");
+        assertThat(output.path("query").asText()).isEqualTo("challenge");
+        assertThat(logs).anySatisfy(record -> assertThat(record)
+                .contains("engine=duckduckgo")
+                .contains("stage=text")
+                .contains("status=202")
+                .contains("query=challenge"));
+    }
+
+    @Test
+    void requestsUseABrowserUserAgentWithoutProductIdentifier() throws Exception {
+        run("haifa", Optional.empty(), Optional.empty());
+        Headers headers = requestHeaders.get(0);
+        assertThat(header(headers, "User-Agent"))
+                .startsWith("Mozilla/5.0")
+                .doesNotContain("HaifaSuperHarness");
+        assertThat(header(headers, "Accept")).contains("text/html");
+        assertThat(header(headers, "Accept-Language")).contains("en-US");
+        assertThat(header(headers, "Content-Type")).contains("application/x-www-form-urlencoded");
+    }
+
+    @Test
     void schemaMatchesTheFrozenParameterContract() {
         Map<String, Object> document = new JavaRecordSchemaGenerator()
                 .generate("web_search", "1.0.0", ProductionWebSearchTool.Input.class)
@@ -119,6 +152,7 @@ class ProductionWebSearchToolTest {
     }
 
     private void handle(HttpExchange exchange) throws IOException {
+        requestHeaders.add(exchange.getRequestHeaders());
         String form = WebToolTestSupport.bodyText(exchange);
         requests.add(parse(form));
         String query = requests.get(requests.size() - 1).getOrDefault("q", "");
@@ -146,6 +180,13 @@ class ProductionWebSearchToolTest {
                 status = 403;
                 html = "forbidden";
             }
+            // Shape of the real 202 anomaly/bot challenge recorded by the controller in
+            // local-tmp/slot-1/controller-gates/ddg-probe/sh-ua.html; reduced to the marker text.
+            case "challenge" -> {
+                status = 202;
+                html = "<html><head><title>DuckDuckGo</title></head>"
+                        + "<body><div id=\"anomaly-modal\">Unfortunately, bots use DuckDuckGo too.</div></body></html>";
+            }
             default -> html = "<html><body></body></html>";
         }
         byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
@@ -165,5 +206,39 @@ class ProductionWebSearchToolTest {
             fields.put(URLDecoder.decode(key, StandardCharsets.UTF_8), URLDecoder.decode(value, StandardCharsets.UTF_8));
         }
         return fields;
+    }
+
+    private static String header(Headers headers, String name) {
+        for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(name) && !entry.getValue().isEmpty()) {
+                return entry.getValue().get(0);
+            }
+        }
+        return "";
+    }
+
+    private static System.Logger captor(List<String> records) {
+        return new System.Logger() {
+            @Override
+            public String getName() {
+                return "web-search-test-captor";
+            }
+
+            @Override
+            public boolean isLoggable(System.Logger.Level level) {
+                return true;
+            }
+
+            @Override
+            public void log(System.Logger.Level level, ResourceBundle bundle, String msg, Throwable thrown) {
+                records.add(msg);
+            }
+
+            @Override
+            public void log(
+                    System.Logger.Level level, ResourceBundle bundle, String format, Object... params) {
+                records.add(MessageFormat.format(format, params));
+            }
+        };
     }
 }

@@ -26,16 +26,35 @@ import org.jsoup.nodes.Element;
  * {@code backend=auto} aggregation and Wikipedia region inference are a registered known difference.
  */
 final class DuckDuckGoClient {
+    // Frozen ddgs impersonates a real browser (primp) and never sends a product token; an
+    // identifying UA made the HTML endpoint answer with a 202 bot challenge (see W11-task-2).
     private static final String USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) HaifaSuperHarness/1.0";
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)"
+                    + " Chrome/131.0.0.0 Safari/537.36";
+    private static final String BROWSER_ACCEPT =
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
+    private static final String BROWSER_ACCEPT_LANGUAGE = "en-US,en;q=0.5";
+    private static final String ENGINE = "duckduckgo";
     private static final String AD_PREFIX = "https://duckduckgo.com/y.js?";
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final System.Logger DEFAULT_LOG =
+            System.getLogger(DuckDuckGoClient.class.getName() + ".web");
 
     private final WebToolConfig config;
     private final HttpClient http;
+    private final System.Logger webLog;
+
+    static System.Logger defaultLog() {
+        return DEFAULT_LOG;
+    }
 
     DuckDuckGoClient(WebToolConfig config) {
+        this(config, DEFAULT_LOG);
+    }
+
+    DuckDuckGoClient(WebToolConfig config, System.Logger webLog) {
         this.config = Objects.requireNonNull(config, "config");
+        this.webLog = Objects.requireNonNull(webLog, "webLog");
         this.http = HttpClient.newBuilder()
                 .connectTimeout(config.timeout())
                 .followRedirects(HttpClient.Redirect.NORMAL)
@@ -56,6 +75,8 @@ final class DuckDuckGoClient {
         HttpRequest request = HttpRequest.newBuilder(URI.create(config.duckduckgoHtmlUrl()))
                 .timeout(config.timeout())
                 .header("Content-Type", "application/x-www-form-urlencoded")
+                .header("Accept", BROWSER_ACCEPT)
+                .header("Accept-Language", BROWSER_ACCEPT_LANGUAGE)
                 .header("User-Agent", USER_AGENT)
                 .POST(HttpRequest.BodyPublishers.ofString(form.toString(), UTF_8))
                 .build();
@@ -63,6 +84,7 @@ final class DuckDuckGoClient {
         try {
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(UTF_8));
             if (response.statusCode() != 200) {
+                logNon200("text", response.statusCode(), query);
                 throw new WebToolException("DuckDuckGo HTML endpoint returned status " + response.statusCode());
             }
             document = Jsoup.parse(response.body());
@@ -128,6 +150,7 @@ final class DuckDuckGoClient {
         try {
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(UTF_8));
             if (response.statusCode() != 200) {
+                logNon200("images", response.statusCode(), query);
                 throw new WebToolException("DuckDuckGo image endpoint returned status " + response.statusCode());
             }
             payload = JSON.readTree(response.body());
@@ -152,6 +175,8 @@ final class DuckDuckGoClient {
         HttpRequest request = HttpRequest.newBuilder(
                         URI.create(config.duckduckgoHomeUrl() + "/?q=" + encode(query)))
                 .timeout(config.timeout())
+                .header("Accept", BROWSER_ACCEPT)
+                .header("Accept-Language", BROWSER_ACCEPT_LANGUAGE)
                 .header("User-Agent", USER_AGENT)
                 .GET()
                 .build();
@@ -159,6 +184,7 @@ final class DuckDuckGoClient {
         try {
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(UTF_8));
             if (response.statusCode() != 200) {
+                logNon200("vqd", response.statusCode(), query);
                 throw new WebToolException("DuckDuckGo vqd handshake returned status " + response.statusCode());
             }
             body = response.body();
@@ -177,6 +203,21 @@ final class DuckDuckGoClient {
             if (end >= 0) return body.substring(from, end);
         }
         throw new WebToolException("Could not extract vqd from DuckDuckGo response");
+    }
+
+    /**
+     * Diagnostic for a non-200 DuckDuckGo reply: the frozen contract still maps it to the
+     * no-result payload, so without this record an external challenge (202/403) is indistinguishable
+     * from an empty/parse result. The query is the only caller data included.
+     */
+    private void logNon200(String stage, int status, String query) {
+        webLog.log(
+                System.Logger.Level.WARNING,
+                "DuckDuckGo non-200 reply: engine={0} stage={1} status={2} query={3}",
+                ENGINE,
+                stage,
+                status,
+                query);
     }
 
     private String safeSearchCode() {

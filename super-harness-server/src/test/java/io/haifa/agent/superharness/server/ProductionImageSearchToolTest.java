@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.haifa.agent.sdk.tool.JavaRecordSchemaGenerator;
@@ -32,6 +33,7 @@ class ProductionImageSearchToolTest {
     private final AtomicInteger homeCalls = new AtomicInteger();
     private final List<Map<String, String>> imageRequests =
             java.util.Collections.synchronizedList(new ArrayList<>());
+    private final List<Headers> requestHeaders = java.util.Collections.synchronizedList(new ArrayList<>());
     private HttpServer server;
     private ProductionImageSearchTool tool;
     private volatile boolean returnResults = true;
@@ -72,6 +74,18 @@ class ProductionImageSearchToolTest {
         assertThat(first.path("image_url").asText()).isEqualTo("https://img.example/1.jpg");
         assertThat(first.path("thumbnail_url").asText()).isEqualTo("https://thumb.example/1.jpg");
         assertThat(output.path("usage_hint").asText()).isEqualTo(ProductionImageSearchTool.USAGE_HINT);
+    }
+
+    @Test
+    void vqdAndImageRequestsUseABrowserUserAgentWithoutProductIdentifier() throws Exception {
+        run("cats", Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
+        assertThat(requestHeaders).hasSize(2);
+        for (Headers headers : requestHeaders) {
+            assertThat(header(headers, "User-Agent"))
+                    .startsWith("Mozilla/5.0")
+                    .doesNotContain("HaifaSuperHarness");
+            assertThat(header(headers, "Accept-Language")).contains("en-US");
+        }
     }
 
     @Test
@@ -124,6 +138,7 @@ class ProductionImageSearchToolTest {
 
     private void handleHome(HttpExchange exchange) throws IOException {
         homeCalls.incrementAndGet();
+        requestHeaders.add(exchange.getRequestHeaders());
         String html = includeVqd
                 ? "<html><body><script>var x = 'vqd=\"" + VQD + "\"';</script></body></html>"
                 : "<html><body>no token here</body></html>";
@@ -131,6 +146,7 @@ class ProductionImageSearchToolTest {
     }
 
     private void handleImages(HttpExchange exchange) throws IOException {
+        requestHeaders.add(exchange.getRequestHeaders());
         imageRequests.add(parse(exchange.getRequestURI().getRawQuery()));
         String body = returnResults
                 ? "{\"results\":[{\"title\":\"Cat\",\"image\":\"https://img.example/1.jpg\","
@@ -160,5 +176,14 @@ class ProductionImageSearchToolTest {
             fields.put(URLDecoder.decode(key, StandardCharsets.UTF_8), URLDecoder.decode(value, StandardCharsets.UTF_8));
         }
         return fields;
+    }
+
+    private static String header(Headers headers, String name) {
+        for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(name) && !entry.getValue().isEmpty()) {
+                return entry.getValue().get(0);
+            }
+        }
+        return "";
     }
 }

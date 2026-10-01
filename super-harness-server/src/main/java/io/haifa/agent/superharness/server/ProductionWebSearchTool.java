@@ -42,8 +42,12 @@ public final class ProductionWebSearchTool
     private final DuckDuckGoClient client;
 
     ProductionWebSearchTool(WebToolConfig config) {
+        this(config, DuckDuckGoClient.defaultLog());
+    }
+
+    ProductionWebSearchTool(WebToolConfig config, System.Logger webLog) {
         this.config = Objects.requireNonNull(config, "config");
-        this.client = new DuckDuckGoClient(config);
+        this.client = new DuckDuckGoClient(config, webLog);
     }
 
     @Override
