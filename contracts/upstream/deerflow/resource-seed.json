@@ -256,7 +256,7 @@
       "id": "deerflow.tool.m3-description-manifest",
       "kind": "tool-description-manifest",
       "intended_local_path": "super-harness-server/src/main/resources/upstream/deerflow/tool-descriptions/m3-manifest.json",
-      "local_sha256": "2669ab085337806c9e853841f1b369d6e69448bc5eac919793ae16fd5950029e",
+      "local_sha256": "f91e9d79ccd57f9da13107c9c92439a9703f2db5ff5e23f0ac94a16011613e80",
       "authored": true,
       "import_status": "IMPORTED",
       "license_assessment": "Super Harness authored provenance ledger recording the frozen source SHA, function locations and imported description hashes; no upstream description text is copied in this ledger. Not a legal review.",

@@ -13,3 +13,5 @@ resources/upstream/deerflow/prompts/*.txt -text whitespace=-trailing-space
 resources/upstream/deerflow/prompts/*.sha256 text eol=lf
 resources/upstream/deerflow/prompts/*.json text eol=lf
 resources/upstream/deerflow/prompts/*.md text eol=lf
+# Tool description and manifest ledger hashes use the same LF bytes on every checkout.
+super-harness-server/src/main/resources/upstream/deerflow/tool-descriptions/* text eol=lf
