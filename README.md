@@ -61,6 +61,8 @@ pwsh -NoProfile -File tests/frontend/verify-haifa-frontend-profile.ps1
 
 受保护的主工作树拓扑与正式启动流程见下文“启动主工作树供人工验收”；历史 W18 配置设计与验收记录已归档至 `private-docs/prompts/39-deerflow-parity-delivery/W18-Developing/references/`。仅通过上述配置检查，不代表聊天功能或双后端差分验收通过。
 
+验收 `.cjs` 脚本（`tests/**`，含 Playwright 用例、受控 Provider 与 Steer 契约断言）的功能与运行方法见 [验收 .cjs 脚本功能与运行说明](docs/engineering/001-cjs-scripts.md)；相关前端 `.mjs` 脚本见该文附录 A。
+
 ## W05 客户演示 M2 Artifact UI 验收
 
 W05 的受控 L2 验收使用子槽位 1（Gateway `20618`、Frontend `25618`）、生产 Super Harness JAR、冻结 DeerFlow UI 和本地受控 Provider，验证 `write_file → Approval → Artifact → Reload/Reconnect → UI 下载`。它不会调用真实模型；真实模型整链属于后续 M4。
