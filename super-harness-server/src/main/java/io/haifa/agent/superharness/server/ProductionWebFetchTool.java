@@ -35,13 +35,7 @@ public final class ProductionWebFetchTool
     static final int MAX_CONTENT_CHARACTERS = 4096;
     static final String API_KEY_CREDENTIAL = "JINA_API_KEY";
     static final String INVALID_URL_ERROR = "Error: URL must be an absolute http(s) URL";
-    // See ProductionWebSearchTool: the SDK JavaTool builder rejects NETWORK_ACCESS, so this tool
-    // cannot declare its real network side effect from the public JavaTool API.
-    private static final JavaToolSpec<Input, Output> SPEC =
-            JavaToolSpec.builder("web_fetch", Input.class, Output.class)
-                    .title("Fetch a web page")
-                    .description(ToolDescriptions.load("web_fetch"))
-                    .build();
+    private final JavaToolSpec<Input, Output> spec;
 
     private final WebToolConfig config;
     private final HttpClient http;
@@ -53,11 +47,16 @@ public final class ProductionWebFetchTool
     ProductionWebFetchTool(WebToolConfig config, HttpClient http) {
         this.config = Objects.requireNonNull(config, "config");
         this.http = Objects.requireNonNull(http, "http");
+        this.spec = JavaToolSpec.builder("web_fetch", Input.class, Output.class)
+                .title("Fetch a web page")
+                .description(ToolDescriptions.load("web_fetch"))
+                .networkAccess(WebToolConfig.endpointHost(config.jinaReaderUrl()))
+                .build();
     }
 
     @Override
     public JavaToolSpec<Input, Output> spec() {
-        return SPEC;
+        return spec;
     }
 
     @Override

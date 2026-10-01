@@ -27,13 +27,7 @@ public final class ProductionImageSearchTool
     static final String USAGE_HINT =
             "Use the 'image_url' values as reference images in image generation. Download them first if needed.";
     private static final ObjectMapper JSON = new ObjectMapper();
-    // See ProductionWebSearchTool: the SDK JavaTool builder rejects NETWORK_ACCESS, so this tool
-    // cannot declare its real network side effect from the public JavaTool API.
-    private static final JavaToolSpec<Input, Output> SPEC =
-            JavaToolSpec.builder("image_search", Input.class, Output.class)
-                    .title("Search for images")
-                    .description(ToolDescriptions.load("image_search"))
-                    .build();
+    private final JavaToolSpec<Input, Output> spec;
 
     private final WebToolConfig config;
     private final DuckDuckGoClient client;
@@ -45,11 +39,17 @@ public final class ProductionImageSearchTool
     ProductionImageSearchTool(WebToolConfig config, DuckDuckGoClient client) {
         this.config = Objects.requireNonNull(config, "config");
         this.client = Objects.requireNonNull(client, "client");
+        this.spec = JavaToolSpec.builder("image_search", Input.class, Output.class)
+                .title("Search for images")
+                .description(ToolDescriptions.load("image_search"))
+                .networkAccess(WebToolConfig.endpointHost(config.duckduckgoHomeUrl()),
+                        WebToolConfig.endpointHost(config.duckduckgoImagesUrl()))
+                .build();
     }
 
     @Override
     public JavaToolSpec<Input, Output> spec() {
-        return SPEC;
+        return spec;
     }
 
     @Override

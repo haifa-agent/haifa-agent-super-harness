@@ -28,15 +28,7 @@ public final class ProductionWebSearchTool
         implements JavaTool<ProductionWebSearchTool.Input, ProductionWebSearchTool.Output> {
     static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
     private static final ObjectMapper JSON = new ObjectMapper();
-    // The SDK JavaTool builder rejects ToolSideEffect.NETWORK_ACCESS ("register through the Tool API
-    // with constrained hosts"), so this public JavaTool cannot declare its real network side effect;
-    // see the W11 report for the open SDK gap. It therefore has no side-effect rule and no approval
-    // prompt, matching the human decision (2026-09-30) that the default web tools do not need one.
-    private static final JavaToolSpec<Input, Output> SPEC =
-            JavaToolSpec.builder("web_search", Input.class, Output.class)
-                    .title("Search the web")
-                    .description(ToolDescriptions.load("web_search"))
-                    .build();
+    private final JavaToolSpec<Input, Output> spec;
 
     private final WebToolConfig config;
     private final DuckDuckGoClient client;
@@ -52,11 +44,16 @@ public final class ProductionWebSearchTool
     ProductionWebSearchTool(WebToolConfig config, DuckDuckGoClient client) {
         this.config = Objects.requireNonNull(config, "config");
         this.client = Objects.requireNonNull(client, "client");
+        this.spec = JavaToolSpec.builder("web_search", Input.class, Output.class)
+                .title("Search the web")
+                .description(ToolDescriptions.load("web_search"))
+                .networkAccess(WebToolConfig.endpointHost(config.duckduckgoHtmlUrl()))
+                .build();
     }
 
     @Override
     public JavaToolSpec<Input, Output> spec() {
-        return SPEC;
+        return spec;
     }
 
     @Override

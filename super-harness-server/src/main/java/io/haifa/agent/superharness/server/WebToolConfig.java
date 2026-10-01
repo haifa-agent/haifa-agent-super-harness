@@ -1,6 +1,7 @@
 package io.haifa.agent.superharness.server;
 
 import java.time.Duration;
+import java.net.URI;
 import java.util.Map;
 import java.util.Objects;
 
@@ -60,6 +61,17 @@ record WebToolConfig(
                 DEFAULT_MAX_RESULTS,
                 DEFAULT_REGION,
                 DEFAULT_SAFE_SEARCH);
+    }
+
+    /** Logical service host for catalog metadata; a transport proxy is not the service host. */
+    static String endpointHost(String endpoint) {
+        URI uri = URI.create(endpoint);
+        String host = uri.getHost();
+        if (host == null || host.isBlank() || uri.getUserInfo() != null
+                || !("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))) {
+            throw new IllegalArgumentException("Web tool endpoint must be an absolute http(s) service URL");
+        }
+        return host;
     }
 
     /** Test/production override seam: every endpoint and default can be replaced without code changes. */

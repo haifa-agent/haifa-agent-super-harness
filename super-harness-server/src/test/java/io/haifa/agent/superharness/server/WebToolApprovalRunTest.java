@@ -37,6 +37,8 @@ import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * W11-task-1 approval behaviour end-to-end through a real Run: the frozen default web tools execute
@@ -107,6 +109,57 @@ class WebToolApprovalRunTest {
             assertThat(run.path("diagnostics").path("interactions").findValuesAsText("request_id")).isNotEmpty();
             assertThat(Files.exists(dataRoot.resolve("workspace").resolve("workspaces"))).isTrue();
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"web_fetch", "image_search"})
+    void remainingDefaultNetworkToolsExecuteOnceWithoutApproval(String toolName) throws Exception {
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        HttpServer service = WebToolTestSupport.loopbackServer();
+        service.createContext("/reader", exchange -> {
+            calls.incrementAndGet();
+            serveBody(exchange, "# Public fixture page");
+        });
+        service.createContext("/i.js", exchange -> {
+            calls.incrementAndGet();
+            serveBody(exchange, "{\"results\":[{\"title\":\"Fixture image\",\"image\":\"https://example.com/image.png\",\"thumbnail\":\"https://example.com/thumb.png\"}]}");
+        });
+        service.createContext("/", exchange -> serveBody(exchange, "<script>vqd='123456';</script>"));
+        service.start();
+        try {
+            var web = WebToolTestSupport.config(service, "/reader");
+            List<? extends JavaTool<?, ?>> tools = List.of(new ProductionWebFetchTool(web), new ProductionImageSearchTool(web));
+            Map<String, Object> arguments = toolName.equals("web_fetch")
+                    ? Map.of("url", "https://example.com") : Map.of("query", "public fixture");
+            try (var api = startApi(new ToolCallingModel(toolName, arguments), tools)) {
+                URI base = URI.create("http://127.0.0.1:" + api.address().getPort());
+                createThread(base, toolName);
+                var stream = postRun(base, toolName, "lead_agent");
+                assertThat(stream.statusCode()).isEqualTo(200);
+                assertThat(stream.body()).contains("event: end").doesNotContain("human_input", "request_id");
+                JsonNode run = JSON.readTree(request(base, "GET", stream.headers().firstValue("content-location").orElseThrow(), null).body());
+                assertThat(run.path("diagnostics").path("sdk_status").asText()).isEqualTo("COMPLETED");
+                assertThat(run.path("diagnostics").path("tool_calls").findValuesAsText("name")).containsExactly(toolName);
+                assertThat(run.path("diagnostics").path("tool_calls").findValuesAsText("status")).containsExactly("COMPLETED");
+                assertThat(run.path("diagnostics").path("interactions")).isEmpty();
+                assertThat(calls).hasValue(1);
+                String raw = System.getProperty("uxv1.network.evidence.dir");
+                if (raw != null) {
+                    Path directory = Files.createDirectories(Path.of(raw));
+                    Files.writeString(directory.resolve(toolName + ".sse"), stream.body());
+                    Files.writeString(directory.resolve(toolName + "-run.json"), run.toPrettyString());
+                }
+            }
+        } finally {
+            service.stop(0);
+        }
+    }
+
+    private static void serveBody(HttpExchange exchange, String body) throws IOException {
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        exchange.sendResponseHeaders(200, bytes.length);
+        exchange.getResponseBody().write(bytes);
+        exchange.close();
     }
 
     private DeerFlowBootstrapApi startApi(AgentChatModel model, List<? extends JavaTool<?, ?>> tools)

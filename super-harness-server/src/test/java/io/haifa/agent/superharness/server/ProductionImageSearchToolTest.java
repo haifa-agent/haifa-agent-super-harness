@@ -120,8 +120,10 @@ class ProductionImageSearchToolTest {
         }
         assertThat(tool.spec().description()).isEqualTo(resource);
         assertThat(tool.spec().sideEffects())
-                .as("SDK forbids JavaTool NETWORK_ACCESS; see the W11 report")
-                .isEmpty();
+                .as("published SDK declares the actual logical network side effect")
+                .containsExactly(io.haifa.agent.tool.api.ToolSideEffect.NETWORK_ACCESS);
+        assertThat(tool.spec().networkHosts()).containsExactly("127.0.0.1");
+        assertThat(tool.spec().pure()).isFalse();
     }
 
     private JsonNode run(

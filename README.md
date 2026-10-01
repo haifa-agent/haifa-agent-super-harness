@@ -117,7 +117,9 @@ pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 306
 
 ## 默认 Web 工具的环境代理
 
-UX-V1 默认工具验收在独立工作树运行 `pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -UxV1DefaultTools -DeferUxV1Web -DataDirectory <本工作树内的新数据目录>`。`-DeferUxV1Web` 用于人工批准的 DDG 挑战延期：A 文件/Artifact、B 澄清继续执行，C 搜索依赖链显式记为 NOT_RUN；延期或局部通过不能记为 M1 全部通过。源码、前端依赖和构建时代理目标相同时，第二轮可加 `-SkipBuild`，仍须使用新的 data-root、Run 与证据。原始 SSE、Run diagnostics/Usage、trace、截图及 `flow-health.json` 外置到该槽位 `local-tmp`；保留失败与首次卡点。
+三个生产 Web 工具通过公开 SDK 的 `JavaToolSpec.networkAccess(hosts)` 声明 `NETWORK_ACCESS` 与逻辑服务主机；覆盖 endpoint 时主机元数据随实例配置变化，代理地址不进入逻辑服务名单。Bridge 仅对这三个生产工具显式配置 `autoApproveReadOnlyNetworkTools`，复用原策略 evaluator 并保留其它 MCP、文件写入、自定义 ASK/DENY 和危险工具的审批。主机元数据参与冻结 Catalog/Policy digest，SDK 不拦截工具自建 HTTP 客户端。上游交付与人工审查入口见 [SDK 消费记录](docs/todo.md)。
+
+UX-V1 默认工具验收在独立工作树运行 `pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -UxV1DefaultTools -DataDirectory <本工作树内的新数据目录>`。DDG 挑战仍在时，按人工指示追加 `-DeferUxV1Web`：A 文件/Artifact、B 澄清继续执行，C 搜索依赖链显式记为 NOT_RUN；延期或局部通过不能记为 M1 全部通过。源码、前端依赖和构建时代理目标相同时，第二轮可加 `-SkipBuild`，仍须使用新的 data-root、Run 与证据。原始 SSE、Run diagnostics/Usage、trace、截图及 `flow-health.json` 外置到该槽位 `local-tmp`；保留失败与首次卡点。
 
 主控已经在同一源码运行全仓 `clean verify` 并留存 JAR 哈希、SDK 构件与原始门禁证据时，冷轮可加 `-SkipServerBuild` 复用该 JAR，仍按本槽位重新构建 Next；它不会执行 Java 门禁，不能用来替代或跳过失败的全仓验证。源码或 SDK 构件改变后必须重新构建、验证。
 
