@@ -44,6 +44,34 @@ mvn -o -ntp verify
 
 冒烟测试会输出 `W01_SDK_EVIDENCE`，其中包含真实 Run ID、Tool 别名、Artifact ID、Artifact SHA-256 和字节数。测试报告位于各模块的 `target/surefire-reports`。
 
+### 定向测试与 SDK 版本选择
+
+开发内环的定向测试统一使用：
+
+```powershell
+pwsh -NoProfile -File scripts/test-targeted.ps1 -Test LocalServerConfigurationTest
+pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'AgentSoulPromptTest,UpdateAgentToolTest' -LowMemory
+```
+
+它固定带 `-o -ntp -pl super-harness-server -am`（`-Module` 可换模块），Maven 输出写到 `local-tmp/test-targeted/`，stdout 只输出一份 JSON 汇总（实际命令、退出码、tests/failures/errors/skipped、耗时、日志路径）。匹配 0 个测试算失败；不接受 `clean`、`install`、`-DskipTests`、`-Dhaifa.version` 等额外参数。
+
+SDK 版本规则见 `AGENTS.md`「范围与依赖」。工作包 worktree 消费带标识的 SDK 版本时，在该 worktree 写入不被跟踪的 `local-tmp/sdk-selection.json`：
+
+```json
+{ "haifaVersion": "0.1.2-012-02a-delegation-SNAPSHOT" }
+```
+
+`scripts/test-targeted.ps1`、`scripts/run-w18-ui-smoke.ps1` 和 `scripts/run-w04-frozen-ui-files.ps1` 会读取它并传 `-Dhaifa.version`；文件不存在时使用基线并输出 `sdkSelection=ABSENT`。直接运行 `mvn` 不会读取该文件，仍使用基线。
+
+UI runner 在构建成功后写入构建戳（`frontend/.next/haifa-build-stamp.json`、`super-harness-server/target/haifa-build-stamp.json`），`-SkipBuild`/`-SkipServerBuild` 复用构建产物前先核对源码 SHA、前端 lockfile、构建时代理目标和 Haifa 版本；不一致时在启动任何进程前失败并点名字段，不会自动重建，需去掉 `-SkipBuild` 重跑。
+
+这些入口的回归与提交前的 SDK 基线门禁：
+
+```powershell
+pwsh -NoProfile -File tests/build/verify-build-entry.ps1 -Maven
+pwsh -NoProfile -File tests/build/verify-haifa-version-baseline.ps1
+```
+
 验收采用“先核对测试要证明什么，再运行完整门禁”的顺序：开发期间可用定向测试快速排障；正式验收前须核对 Oracle 与实际断言、环境和槽位配置，最终仍要完成全仓验证、真实 smoke、规定的 UI 重复轮次及主控独立复验。同一源码和代理配置下的暖轮可复用已验证的前端构建，但每轮的运行状态、原始证据和失败记录必须独立保留；详细执行规则见 `AGENTS.md` 的“验收提速（不降低门禁）”。
 
 ## W18 冻结前端本地配置

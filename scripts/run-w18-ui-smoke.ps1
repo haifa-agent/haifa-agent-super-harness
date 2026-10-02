@@ -60,6 +60,10 @@ if ($UxV1DefaultTools -or $UxV1AgentSoul) {
 }
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
+. (Join-Path $PSScriptRoot 'lib/sdk-selection.ps1')
+. (Join-Path $PSScriptRoot 'lib/build-stamp.ps1')
+$sdk = Resolve-HaifaSdkSelection -RepositoryRoot $root
+$internalGatewayBaseUrl = "http://127.0.0.1:$GatewayPort"
 if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
     $DataDirectory = Join-Path $root $(if ($UxV1AgentSoul) {
         "local-tmp/slot-$AgentSlot-ux-v1-soul/data"
@@ -151,7 +155,7 @@ $managedEnvironment = @{
     SUPER_HARNESS_DATA_ROOT = $dataRoot
     SUPER_HARNESS_DATA_DIR = $dataRoot
     SUPER_HARNESS_ENVIRONMENT = 'development'
-    DEER_FLOW_INTERNAL_GATEWAY_BASE_URL = "http://127.0.0.1:$GatewayPort"
+    DEER_FLOW_INTERNAL_GATEWAY_BASE_URL = $internalGatewayBaseUrl
     DEER_FLOW_AUTH_DISABLED = '1'
     DEER_FLOW_ENV = 'development'
     ENVIRONMENT = 'development'
@@ -221,11 +225,20 @@ try {
     $flowTimes.preparationMs = $flowWatch.ElapsedMilliseconds
     $buildStartedMs = $flowWatch.ElapsedMilliseconds
 
+    # The Interaction profile runs the Gateway from the test classpath, not the exec JAR.
+    $reuseServerBuild = ($SkipBuild -or $SkipServerBuild) -and -not $Interaction
+    if ($reuseServerBuild) {
+        Assert-ServerBuildStamp -RepositoryRoot $root -HaifaVersion $sdk.HaifaVersion
+    }
+    if ($SkipBuild) {
+        Assert-FrontendBuildStamp -RepositoryRoot $root -InternalGatewayBaseUrl $internalGatewayBaseUrl
+    }
     if (-not $SkipBuild) {
         if (-not $SkipServerBuild) {
+        Remove-BuildStamp (Get-ServerBuildStampPath $root)
         Push-Location $root
         try {
-            & mvn.cmd -o -ntp -pl super-harness-server -am package
+            & mvn.cmd -o -ntp -pl super-harness-server -am @(@($sdk.MavenArgument) -ne $null) package
             if ($LASTEXITCODE -ne 0) {
                 throw "Maven package failed with exit code $LASTEXITCODE."
             }
@@ -233,8 +246,10 @@ try {
         finally {
             Pop-Location
         }
+        Write-ServerBuildStamp -RepositoryRoot $root -HaifaVersion $sdk.HaifaVersion
         }
 
+        Remove-BuildStamp (Get-FrontendBuildStampPath $root)
         Push-Location (Join-Path $root 'frontend')
         try {
             & corepack pnpm build
@@ -245,6 +260,7 @@ try {
         finally {
             Pop-Location
         }
+        Write-FrontendBuildStamp -RepositoryRoot $root -InternalGatewayBaseUrl $internalGatewayBaseUrl
     }
     $flowTimes.buildMs = $flowWatch.ElapsedMilliseconds - $buildStartedMs
     $readinessStartedMs = $flowWatch.ElapsedMilliseconds
@@ -304,7 +320,7 @@ try {
         # Maven JVM so the process tree remains attributable to this runner.
         [Environment]::SetEnvironmentVariable('W05_INTERACTION_ACCEPTANCE', '1', 'Process')
         $gatewayProcess = Start-Process -FilePath (Get-Command mvn.cmd).Source `
-            -ArgumentList @('-o', '-ntp', '-pl', 'super-harness-server', '-am', '-Dtest=InteractionAcceptanceServerTest', '-Dsurefire.failIfNoSpecifiedTests=false', '-DforkCount=0', 'test') `
+            -ArgumentList (@('-o', '-ntp', '-pl', 'super-harness-server', '-am', '-Dtest=InteractionAcceptanceServerTest', '-Dsurefire.failIfNoSpecifiedTests=false', '-DforkCount=0') + @(@($sdk.MavenArgument) -ne $null) + @('test')) `
             -WorkingDirectory $root `
             -RedirectStandardOutput $serverOut `
             -RedirectStandardError $serverErr `
@@ -529,6 +545,8 @@ finally {
             acceptanceProfile = $(if ($UxV1AgentSoul) { 'ux-v1-agent-soul' } else { 'ux-v1-default-tools' })
             buildMode = $(if ($SkipBuild) { 'warm-reuse' } else { 'cold-build' })
             serverBuildReused = [bool]($SkipBuild -or $SkipServerBuild)
+            sdkSelection = $sdk.Status
+            haifaVersion = $sdk.HaifaVersion
             webDeferred = [bool]$DeferUxV1Web
             testExitCode = $testExitCode
             retryCount = 0

@@ -109,10 +109,17 @@ try {
         throw 'Frozen DeerFlow frontend verification failed.'
     }
 
-    if (-not $SkipBuild) {
+    . (Join-Path $PSScriptRoot 'lib/sdk-selection.ps1')
+    . (Join-Path $PSScriptRoot 'lib/build-stamp.ps1')
+    $sdk = Resolve-HaifaSdkSelection -RepositoryRoot $root
+    if ($SkipBuild) {
+        Assert-ServerBuildStamp -RepositoryRoot $root -HaifaVersion $sdk.HaifaVersion
+    }
+    else {
+        Remove-BuildStamp (Get-ServerBuildStampPath $root)
         Push-Location $root
         try {
-            & mvn.cmd -o -ntp -DskipTests package
+            & mvn.cmd -o -ntp -DskipTests @(@($sdk.MavenArgument) -ne $null) package
             if ($LASTEXITCODE -ne 0) {
                 throw "Maven package failed with exit code $LASTEXITCODE."
             }
@@ -120,6 +127,7 @@ try {
         finally {
             Pop-Location
         }
+        Write-ServerBuildStamp -RepositoryRoot $root -HaifaVersion $sdk.HaifaVersion
     }
 
     $jar = Join-Path $root 'super-harness-server/target/super-harness-server-0.1.0-SNAPSHOT-exec.jar'
