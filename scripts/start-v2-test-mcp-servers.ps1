@@ -30,6 +30,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'lib/run-fixture.ps1')
 $moduleDir = Join-Path $repoRoot 'tests/customer-demo-v2/mcp-servers'
 $policyFile = Join-Path $repoRoot 'contracts/customer-demo-v2/fixtures/reporting-policy.json'
 $policySha = '563e216fc77f87d968b3c34994746fa1f3368380ede30c97e03782c3895a9e9a'
@@ -41,28 +42,9 @@ New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
 $EvidenceDir = (Resolve-Path -LiteralPath $EvidenceDir).Path
 $manifestPath = Join-Path $EvidenceDir 'manifest.json'
 
-function Test-LoopbackBind {
-    param([int]$Port)
-    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
-    try {
-        $listener.Start()
-        return $true
-    } catch {
-        return $false
-    } finally {
-        try { $listener.Stop() } catch { }
-    }
-}
-
 function Assert-PortsBindable {
     param([int[]]$Ports)
-    $bad = @()
-    foreach ($p in $Ports) {
-        if (-not (Test-LoopbackBind -Port $p)) { $bad += $p }
-    }
-    if ($bad.Count -gt 0) {
-        throw "loopback port precheck failed (already in use): $($bad -join ', ')"
-    }
+    Assert-FixturePortsBindable -Ports $Ports -EvidenceDirectory $EvidenceDir
 }
 
 function Get-McpClasspath {
@@ -185,60 +167,6 @@ Assert-PortsBindable -Ports @($ReportingPort, $RegionPort)
 
 $classpath = Get-McpClasspath
 $java = (Get-Command java -ErrorAction Stop).Source
-
-function ConvertTo-CmdQuoted {
-    # Produces a double-quoted token using the CommandLineToArgvW backslash rules
-    # so cmd.exe and the child process both parse it unchanged.
-    param([string]$Value)
-    $sb = [System.Text.StringBuilder]::new()
-    [void]$sb.Append('"')
-    $backslashes = 0
-    foreach ($ch in $Value.ToCharArray()) {
-        if ($ch -eq '\') { $backslashes++; continue }
-        if ($ch -eq '"') {
-            [void]$sb.Append('\' * (($backslashes * 2) + 1))
-            [void]$sb.Append('"')
-            $backslashes = 0
-            continue
-        }
-        if ($backslashes -gt 0) { [void]$sb.Append('\' * $backslashes); $backslashes = 0 }
-        [void]$sb.Append($ch)
-    }
-    [void]$sb.Append('\' * ($backslashes * 2))
-    [void]$sb.Append('"')
-    return $sb.ToString()
-}
-
-function Start-DetachedProcess {
-    # Creates a process out-of-band through the CIM Win32_Process.Create provider
-    # so it does NOT inherit the caller's stdout/stderr pipe handles (W10-task-5).
-    # cmd.exe performs the file redirection so the logs are still captured.
-    param(
-        [string]$FilePath,
-        [string[]]$ArgumentList,
-        [string]$StdoutPath,
-        [string]$StderrPath,
-        [string]$WorkingDirectory
-    )
-    $tokens = @($FilePath) + $ArgumentList
-    $quoted = ($tokens | ForEach-Object { ConvertTo-CmdQuoted -Value $_ }) -join ' '
-    $inner = "$quoted > $(ConvertTo-CmdQuoted -Value $StdoutPath) 2> $(ConvertTo-CmdQuoted -Value $StderrPath)"
-    $comspec = if ($env:ComSpec) { $env:ComSpec } else { Join-Path $env:SystemRoot 'System32\cmd.exe' }
-    $commandLine = "$comspec /d /s /c `"$inner`""
-    $result = $null
-    for ($attempt = 1; $attempt -le 3; $attempt++) {
-        $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-            CommandLine      = $commandLine
-            CurrentDirectory = $WorkingDirectory
-        }
-        if ($result.ReturnValue -eq 0) { break }
-        Start-Sleep -Milliseconds 500
-    }
-    if ($result.ReturnValue -ne 0) {
-        throw "Win32_Process.Create failed for $FilePath (ReturnValue=$($result.ReturnValue) after 3 attempts)"
-    }
-    return [int]$result.ProcessId
-}
 
 function Get-JavaChildPid {
     # The manifest must record the Java PID that actually owns the listening port,

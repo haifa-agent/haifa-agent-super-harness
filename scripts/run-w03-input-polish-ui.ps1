@@ -20,40 +20,11 @@ $gatewayPort = 20618
 $frontendPort = 25618
 $null = New-Item -ItemType Directory -Force -Path $evidence
 
-function Get-OwnedRuntimeProcesses {
-    param([Parameter(Mandatory = $true)][string]$Root)
-
-    @(Get-CimInstance Win32_Process -Filter "Name='java.exe' or Name='node.exe'" -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.CommandLine -and
-            $_.CommandLine.IndexOf($Root, [StringComparison]::OrdinalIgnoreCase) -ge 0
-        })
-}
-
-# Fails loudly if the runner's own processes did not release the slot ports or if
-# any java/node process still references this worktree. Never terminates anything.
+. (Join-Path $PSScriptRoot 'lib/run-fixture.ps1')
+function Get-OwnedRuntimeProcesses { param([string]$Root) Get-FixtureOwnedRuntimeProcesses $Root }
 function Assert-RoundReleased {
-    param(
-        [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)][int[]]$Ports,
-        [Parameter(Mandatory = $true)][string]$RoundName
-    )
-
-    $deadline = (Get-Date).AddSeconds(15)
-    $busy = @()
-    $owned = @()
-    do {
-        $busy = @(foreach ($port in $Ports) {
-            @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
-        })
-        $owned = @(Get-OwnedRuntimeProcesses -Root $Root)
-        if ($busy.Count -eq 0 -and $owned.Count -eq 0) { return }
-        Start-Sleep -Milliseconds 250
-    } until ((Get-Date) -ge $deadline)
-
-    $busyText = ($busy | ForEach-Object { "port=$($_.LocalPort)/pid=$($_.OwningProcess)" }) -join ', '
-    $ownedText = ($owned | ForEach-Object { "$($_.Name)#$($_.ProcessId)" }) -join ', '
-    throw "W03 $RoundName cleanup assertion failed: listeners=[$busyText] ownedRuntimeProcesses=[$ownedText]"
+    param([string]$Root, [int[]]$Ports, [string]$RoundName)
+    Assert-FixtureRoundReleased $Root $Ports $RoundName
 }
 
 $rounds = @(
@@ -62,6 +33,7 @@ $rounds = @(
 )
 $summary = @()
 foreach ($round in $rounds) {
+    $beforeRuns = @(Get-ChildItem -LiteralPath $evidence -Directory -Filter 'run-*' | ForEach-Object { $_.FullName })
     $started = Get-Date
     & (Join-Path $root 'scripts/run-w18-ui-smoke.ps1') `
         -RepositoryRoot $root `
@@ -75,6 +47,10 @@ foreach ($round in $rounds) {
         -SkipBuild:$round.skip
     $exitCode = $LASTEXITCODE
     $finished = Get-Date
+
+    $newRuns = @(Get-ChildItem -LiteralPath $evidence -Directory -Filter 'run-*' | Where-Object { $_.FullName -notin $beforeRuns })
+    if ($newRuns.Count -ne 1) { throw 'Expected exactly one new W18 evidence run.' }
+    $runEvidence = $newRuns[0].FullName
 
     # Automatic, failing cleanup gate for this round's own slot processes.
     Assert-RoundReleased -Root $root -Ports @($gatewayPort, $frontendPort) -RoundName $round.name
@@ -94,14 +70,15 @@ foreach ($round in $rounds) {
         Remove-Item -LiteralPath $resolvedRound -Recurse -Force
     }
     $null = New-Item -ItemType Directory -Force -Path $roundEvidence
-    if (Test-Path -LiteralPath (Join-Path $evidence 'results.json') -PathType Leaf) {
-        Copy-Item -LiteralPath (Join-Path $evidence 'results.json') -Destination (Join-Path $roundEvidence 'results.json') -Force
+    if (Test-Path -LiteralPath (Join-Path $runEvidence 'results.json') -PathType Leaf) {
+        Copy-Item -LiteralPath (Join-Path $runEvidence 'results.json') -Destination (Join-Path $roundEvidence 'results.json') -Force
     }
-    if (Test-Path -LiteralPath (Join-Path $evidence 'artifacts') -PathType Container) {
-        Copy-Item -LiteralPath (Join-Path $evidence 'artifacts') -Destination (Join-Path $roundEvidence 'artifacts') -Recurse -Force
+    if (Test-Path -LiteralPath (Join-Path $runEvidence 'artifacts') -PathType Container) {
+        Copy-Item -LiteralPath (Join-Path $runEvidence 'artifacts') -Destination (Join-Path $roundEvidence 'artifacts') -Recurse -Force
     }
     $summary += [ordered]@{
         round = $round.name
+        originalEvidence = $runEvidence
         dataDirectory = $round.data
         skipBuild = $round.skip
         exitCode = $exitCode

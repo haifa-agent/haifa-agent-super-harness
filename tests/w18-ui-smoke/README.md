@@ -58,7 +58,7 @@ pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 `
 
 `-TitleSuggestions` selects `w03-title-suggestions.spec.cjs`, uses
 `target/agent-slot-<n>-title-suggestions-data`, and writes evidence under
-`target/w03-title-suggestions-evidence/playwright`. It is mutually exclusive with
+`local-tmp/slot-N-w03-title-suggestions/evidence/run-<timestamp>`. It is mutually exclusive with
 `-ActiveReconnect`, `-Interaction`, and `-LiveDeepSeek`, and it never starts the live provider.
 
 The W03 input-polish profile reuses the controlled loopback provider and the unmodified frozen
@@ -155,7 +155,7 @@ The reload evidence records HTTP 200 responses from both
 `/api/threads/{id}/messages/page` and
 `/api/langgraph/threads/{id}/history`; Run/SSE evidence records requested tuple
 payloads on wire event `messages`. Screenshots, traces, process logs, and JSON
-attachments are under ignored `target/w18-ui-smoke-evidence/playwright`. The
+attachments are under ignored `local-tmp/slot-N-w18-ui-smoke/evidence/run-<timestamp>`. The
 runner stopped its exact provider, Gateway, and frontend processes after both
 runs; slot ports `48018`/`63018` and the two provider ports were verified free.
 
@@ -181,3 +181,8 @@ The sanitized identities and health summary are recorded in
 `evidence/20260924-interaction-http-pass.json`.
 After a full six-module `mvn clean test` (90 tests, zero failures), a final browser execution also
 passed 2/2 in 8.1 seconds (3.516/3.044 seconds) and 47.806 seconds for the complete runner lifecycle.
+
+
+新的 UI 验收从 `w05-demo-artifact.spec.cjs` 黄金样例起步。`fixtures.cjs` 使用 Playwright `test.extend`，提供 `runtime`（必须由 runner 导出环境）、`workspace`（进入工作区）、`runFlow`（原 20 秒有界等待并报告最后状态）、`approval`（当前待批准卡片）与 `evidence`（截图、JSON、真实下载字节）。`w18-ui-smoke.spec.cjs` 的 4 个用例也使用该 fixtures；其他 spec 暂未迁移。
+
+每次 runner 运行创建独立的 `local-tmp/slot-<N>-<任务标签>/evidence/run-<时间戳>/`。默认标签为 `w18-ui-smoke`，黄金样例为 `w05-demo-artifact`；其他模式同样外置，旧 `target` 路径停止使用。`flow-health.json` 汇总冷暖、阶段耗时、首个失败、重试次数、清理与日志位置；`case-results.json` 逐项保留 PASS/FAIL/NOT_RUN 与相对证据路径；原始 `results.json`、trace、截图和日志仍保留。预检失败不启动进程，case 记 NOT_RUN；就绪或 Playwright 失败仍执行精确 PID 清理；清理失败使 runner 失败。

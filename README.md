@@ -272,3 +272,8 @@ pwsh -NoProfile -File tests/customer-demo/verify-customer-demo-evidence.ps1
 主 Gateway `18018` 已部署 main@530dfb2 的验收 JAR，冻结前端仍为 `33018`。已启用 `haifa-utility`，连接 `http://127.0.0.1:8091/mcp`，19 个工具来自实际 MCP 发现，协议 `2025-06-18`；在能力中心的 Plugins 页面可查看，在 Agent 的 MCP 选择中可启用。新会话可输入「请实际调用 MCP calculate 计算 23 * 19」，出现审批后点击 Approve。
 
 Utility 使用另一项目 `D:/workspace/haifa-ai-deerflow/utility-mcp-server` 的已有编译产物和离线 runtime classpath，以单 Java 进程运行（`-Xmx384m -XX:+UseSerialGC`，loopback 8091），避免常驻 Maven。运行清单、启动/停止脚本和部署原件在 `local-tmp/main-utility-preview-20260930/`。仅停止此 Utility 服务可运行 `pwsh -NoProfile -File local-tmp/main-utility-preview-20260930/start-utility.ps1 -Stop`；之后用同脚本不带 `-Stop` 恢复。脚本依赖已生成的 classpath 与 Utility target/classes，不删除这些文件。主服务数据及 continuation key 保持原样，本次连接不代表 V2 阶段通过。
+
+
+新增 UI 验收从 `tests/w18-ui-smoke/w05-demo-artifact.spec.cjs` 起步：该黄金样例使用生产 `write_file`、真实批准卡片、Artifact 下载及刷新重连。共享 `fixtures.cjs` 提供 runner 环境、进入工作区、Run 状态等待、当前批准卡片与截图/JSON/下载字节归档；默认 smoke 使用同一 fixtures，保留 4 个用例。
+
+`scripts/run-w18-ui-smoke.ps1` 通过 `scripts/lib/run-fixture.ps1` 管理完整槽位绑定预检、脱离调用方管道的启动、15/30/60 秒 Provider/Gateway/前端就绪等待及精确 PID 清理。所有模式的证据写入 `local-tmp/slot-<N>-<任务标签>/evidence/run-<时间戳>/`，包含原始日志、`managed-processes.json`、`flow-health.json`、`case-results.json` 和 Playwright 原件；冷暖轮分别建目录和数据，不覆盖首次失败。清理必须在原停止预算内实际绑定端口成功，失败时 runner 返回非零。MCP 启动器使用同一脱离管道的启动函数；共享库只转述 case 结果，不登记 SHPM 或提升验收状态。

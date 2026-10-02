@@ -1,56 +1,20 @@
+// UI golden sample: production write_file, approval, Artifact bytes and reload/reconnect.
 const crypto = require("node:crypto");
 const fs = require("node:fs");
-const path = require("node:path");
-
-const { expect, test } = require(path.resolve(
-  __dirname,
-  "../../frontend/node_modules/@playwright/test",
-));
-
-const APP =
-  process.env.E2E_APP_URL ??
-  `http://127.0.0.1:${process.env.E2E_FRONTEND_PORT ?? "25618"}`;
-
-function runIdentity(response) {
-  const location = response.headers()["content-location"];
-  expect(location, "run stream must expose Content-Location").toBeTruthy();
-  const match = location.match(/\/api\/threads\/([^/]+)\/runs\/([^/]+)$/);
-  expect(match, `unexpected run location: ${location}`).toBeTruthy();
-  return { threadId: match[1], runId: match[2], location };
-}
-
-async function pollRun(request, identity, expectedStatus) {
-  let snapshot;
-  await expect
-    .poll(
-      async () => {
-        const response = await request.get(`${APP}${identity.location}`);
-        expect(response.status(), await response.text()).toBe(200);
-        snapshot = await response.json();
-        return snapshot.status;
-      },
-      { timeout: 20_000, intervals: [50, 100, 250] },
-    )
-    .toBe(expectedStatus);
-  return snapshot;
-}
-
-async function saveEvidence(testInfo, evidence) {
-  const file = testInfo.outputPath("w05-demo-artifact.json");
-  fs.writeFileSync(file, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
-  await testInfo.attach("w05-demo-artifact.json", {
-    path: file,
-    contentType: "application/json",
-  });
-}
+const { expect, test } = require("./fixtures.cjs");
 
 function authoritativeToolProjection(state, expectedPath) {
   const messages = state?.values?.messages ?? [];
   const request = messages.find((message) =>
     message?.tool_calls?.some((call) => call.name === "write_file"),
   );
-  expect(request, "state must contain the authoritative write_file request").toBeTruthy();
-  const call = request.tool_calls.find((candidate) => candidate.name === "write_file");
+  expect(
+    request,
+    "state must contain the authoritative write_file request",
+  ).toBeTruthy();
+  const call = request.tool_calls.find(
+    (candidate) => candidate.name === "write_file",
+  );
   expect(call.args.path).toBe(expectedPath);
   const result = messages.find(
     (message) =>
@@ -58,7 +22,10 @@ function authoritativeToolProjection(state, expectedPath) {
       message?.name === "write_file" &&
       message?.tool_call_id === call.id,
   );
-  expect(result, "state must contain the matching write_file result").toBeTruthy();
+  expect(
+    result,
+    "state must contain the matching write_file result",
+  ).toBeTruthy();
   return {
     call,
     result,
@@ -66,10 +33,15 @@ function authoritativeToolProjection(state, expectedPath) {
   };
 }
 
-test("production write_file approval publishes one real Artifact and survives reload/reconnect", async (
-  { context, page },
-  testInfo,
-) => {
+test("production write_file approval publishes one real Artifact and survives reload/reconnect", async ({
+  context,
+  page,
+  runtime,
+  workspace,
+  runFlow,
+  approval,
+  evidence,
+}, testInfo) => {
   const prompt = `w18-file-tool-${Date.now()}`;
   const artifactPath = `/mnt/user-data/outputs/${prompt}.md`;
   const expectedBytes = Buffer.from(
@@ -81,9 +53,7 @@ test("production write_file approval publishes one real Artifact and survives re
     .update(expectedBytes)
     .digest("hex");
 
-  await page.goto("/workspace/chats/new", { waitUntil: "domcontentloaded" });
-  const input = page.locator('textarea[name="message"]');
-  await expect(input).toBeVisible();
+  const { input } = await workspace.open();
   const firstStreamPromise = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
@@ -95,13 +65,10 @@ test("production write_file approval publishes one real Artifact and survives re
   await input.press("Enter");
   const firstStream = await firstStreamPromise;
   expect(firstStream.status(), await firstStream.text()).toBe(200);
-  const identity = runIdentity(firstStream);
+  const identity = runFlow.identity(firstStream);
 
-  const card = page.getByTestId("human-input-card");
-  await expect(card).toBeVisible();
+  const { approve } = await approval.current();
   await expect(page.getByTestId("artifact-trigger")).toHaveCount(0);
-  const approve = card.getByRole("button", { name: "Approve", exact: true });
-  await expect(approve).toBeEnabled();
 
   let hiddenRequest;
   const resumedStreamPromise = page.waitForResponse((response) => {
@@ -126,10 +93,10 @@ test("production write_file approval publishes one real Artifact and survives re
     }
     return false;
   });
-  await approve.click();
+  await approve();
   const resumedStream = await resumedStreamPromise;
   expect(resumedStream.status(), await resumedStream.text()).toBe(200);
-  expect(runIdentity(resumedStream)).toEqual(identity);
+  expect(runFlow.identity(resumedStream)).toEqual(identity);
   const responseMetadata =
     hiddenRequest.input.messages.at(-1).additional_kwargs.human_input_response;
   expect(responseMetadata).toMatchObject({
@@ -140,12 +107,14 @@ test("production write_file approval publishes one real Artifact and survives re
     option_id: "approve",
     value: "approve",
   });
-  const terminal = await pollRun(context.request, identity, "success");
-  await expect(page.locator("#chat").getByText(artifactPath, { exact: true })).toBeVisible();
+  const terminal = await runFlow.poll(context.request, identity, "success");
+  await expect(
+    page.locator("#chat").getByText(artifactPath, { exact: true }),
+  ).toBeVisible();
   await expect(page.getByTestId("artifact-trigger")).toBeVisible();
 
   const stateResponse = await context.request.get(
-    `${APP}/api/langgraph/threads/${identity.threadId}/state`,
+    `${runtime.app}/api/langgraph/threads/${identity.threadId}/state`,
   );
   expect(stateResponse.status(), await stateResponse.text()).toBe(200);
   const state = await stateResponse.json();
@@ -169,7 +138,9 @@ test("production write_file approval publishes one real Artifact and survives re
 
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("artifact-trigger")).toBeVisible();
-  await expect(page.locator("#chat").getByText(artifactPath, { exact: true })).toBeVisible();
+  await expect(
+    page.locator("#chat").getByText(artifactPath, { exact: true }),
+  ).toBeVisible();
   const restoredCard = page.getByTestId("human-input-card");
   await expect(restoredCard).toHaveCount(1);
   await expect(restoredCard).toBeVisible();
@@ -177,18 +148,18 @@ test("production write_file approval publishes one real Artifact and survives re
     restoredCard.getByRole("button", { name: "Approve", exact: true }),
   ).toBeDisabled();
   const reloadedStateResponse = await context.request.get(
-    `${APP}/api/langgraph/threads/${identity.threadId}/state`,
+    `${runtime.app}/api/langgraph/threads/${identity.threadId}/state`,
   );
-  expect(reloadedStateResponse.status(), await reloadedStateResponse.text()).toBe(
-    200,
-  );
+  expect(
+    reloadedStateResponse.status(),
+    await reloadedStateResponse.text(),
+  ).toBe(200);
   const reloadedState = await reloadedStateResponse.json();
   const reloadedCards = reloadedState.values.messages.filter(
     (message) => message?.name === "ask_clarification",
   );
   const reloadedResults = reloadedState.values.messages.filter(
-    (message) =>
-      message?.type === "tool" && message?.name === "write_file",
+    (message) => message?.type === "tool" && message?.name === "write_file",
   );
   expect(reloadedCards).toHaveLength(1);
   expect(reloadedResults).toHaveLength(1);
@@ -205,9 +176,13 @@ test("production write_file approval publishes one real Artifact and survives re
   ).toBeVisible();
 
   await reconnected.getByTestId("artifact-trigger").click();
-  await expect(reconnected.getByText(`${prompt}.md`, { exact: true })).toBeVisible();
+  await expect(
+    reconnected.getByText(`${prompt}.md`, { exact: true }),
+  ).toBeVisible();
   const downloadPromise = reconnected.waitForEvent("download");
-  await reconnected.getByRole("link", { name: "Download", exact: true }).click();
+  await reconnected
+    .getByRole("link", { name: "Download", exact: true })
+    .click();
   const download = await downloadPromise;
   const downloadPath = await download.path();
   expect(downloadPath).toBeTruthy();
@@ -218,9 +193,10 @@ test("production write_file approval publishes one real Artifact and survives re
     .update(downloadedBytes)
     .digest("hex");
   expect(downloadSha256).toBe(expectedSha256);
+  await evidence.bytes("w05-demo-artifact.download.md", downloadedBytes);
 
   const replayed = await context.request.get(
-    `${APP}/api/langgraph/threads/${identity.threadId}/state`,
+    `${runtime.app}/api/langgraph/threads/${identity.threadId}/state`,
   );
   const replayedState = await replayed.json();
   expect(replayedState.values.artifacts).toEqual([artifactPath]);
@@ -231,13 +207,8 @@ test("production write_file approval publishes one real Artifact and survives re
   expect(replayedProjection.call.id).toBe(call.id);
   expect(replayedProjection.structured.artifactId).toBe(structured.artifactId);
 
-  const screenshot = testInfo.outputPath("w05-demo-artifact.png");
-  await reconnected.screenshot({ path: screenshot, fullPage: true });
-  await testInfo.attach("w05-demo-artifact.png", {
-    path: screenshot,
-    contentType: "image/png",
-  });
-  await saveEvidence(testInfo, {
+  await evidence.screenshot(reconnected, "w05-demo-artifact");
+  await evidence.json("w05-demo-artifact", {
     prompt,
     artifactPath,
     expectedSize: expectedBytes.length,

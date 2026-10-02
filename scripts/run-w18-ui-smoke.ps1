@@ -31,8 +31,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$flowWatch = [Diagnostics.Stopwatch]::StartNew()
-$flowTimes = [ordered]@{}
 if ($DeferUxV1Web -and -not $UxV1DefaultTools) {
     throw 'DeferUxV1Web requires the UX-V1 default-tools profile.'
 }
@@ -62,83 +60,27 @@ if ($UxV1DefaultTools -or $UxV1AgentSoul) {
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 . (Join-Path $PSScriptRoot 'lib/sdk-selection.ps1')
 . (Join-Path $PSScriptRoot 'lib/build-stamp.ps1')
-$sdk = Resolve-HaifaSdkSelection -RepositoryRoot $root
+$sdk = [pscustomobject]@{ Status = 'NOT_RUN'; HaifaVersion = $null }
 $internalGatewayBaseUrl = "http://127.0.0.1:$GatewayPort"
+ . (Join-Path $PSScriptRoot 'lib/run-fixture.ps1')
+$tag = if ($UxV1AgentSoul) { 'ux-v1-soul' } elseif ($UxV1DefaultTools) { 'ux-v1' }
+    elseif ($LiveDeepSeek) { 'w18-deepseek' } elseif ($ActiveReconnect) { 'w05-active-reconnect' }
+    elseif ($Interaction) { 'w05-interaction' } elseif ($DemoArtifact) { 'w05-demo-artifact' }
+    elseif ($TitleSuggestions) { 'w03-title-suggestions' } elseif ($InputPolish) { 'w03-input-polish-ui' }
+    elseif ($V2ModelSwitch) { 'w03-v2-model-switch' } elseif ($V2FileContext) { 'w04-v2-file-context' }
+    elseif ($V2Skill) { 'w15-v2-skill' } elseif ($V2Diagnostics) { 'w21-diagnostics' } else { 'w18-ui-smoke' }
+$fixture = New-RunFixture -RepositoryRoot $root -Slot $AgentSlot -TaskTag $tag `
+    -BuildMode $(if ($SkipBuild) { 'warm-reuse' } else { 'cold-build' }) -Ports @($GatewayPort, $FrontendPort)
+$evidenceRoot = $fixture.Evidence
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
-    $DataDirectory = Join-Path $root $(if ($UxV1AgentSoul) {
-        "local-tmp/slot-$AgentSlot-ux-v1-soul/data"
-    } elseif ($UxV1DefaultTools) {
-        "local-tmp/slot-$AgentSlot-ux-v1/data"
-    } elseif ($LiveDeepSeek) {
-        "target/agent-slot-$AgentSlot-deepseek-data"
-    } elseif ($Interaction) {
-        "target/agent-slot-$AgentSlot-interaction-data"
-    } elseif ($DemoArtifact) {
-        "local-tmp/slot-$AgentSlot-w05-m2"
-    } elseif ($TitleSuggestions) {
-        "target/agent-slot-$AgentSlot-title-suggestions-data"
-    } elseif ($InputPolish) {
-        "target/agent-slot-$AgentSlot-input-polish-data"
-    } elseif ($V2ModelSwitch) {
-        "local-tmp/slot-$AgentSlot-w03-v2-model-switch/data/ui"
-    } elseif ($V2FileContext) {
-        "local-tmp/slot-$AgentSlot-w04-v2-file-context/ui-data"
-    } elseif ($V2Skill) {
-        "local-tmp/slot-$AgentSlot-w15-v2-skill/data/ui"
-    } elseif ($V2Diagnostics) {
-        "local-tmp/slot-$AgentSlot-w21/data/ui"
-    } else {
-        "target/agent-slot-$AgentSlot-data"
-    })
+    $DataDirectory = Join-Path $root "local-tmp/slot-$AgentSlot-$tag/data/$(Split-Path -Leaf $evidenceRoot)"
 }
 $dataRoot = [IO.Path]::GetFullPath($DataDirectory).TrimEnd('\', '/')
 $rootPrefix = $root.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
 if (-not $dataRoot.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'W18 data directory must remain inside this worktree.'
 }
-
-foreach ($port in @($GatewayPort, $FrontendPort)) {
-    $listener = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue
-    if ($listener) {
-        throw "Refusing occupied W18 slot port $port (PID $($listener.OwningProcess -join ','))."
-    }
-    $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $port)
-    try { $probe.Start() }
-    catch { throw "W18 slot port $port cannot bind on loopback (check Windows excluded port ranges): $($_.Exception.Message)" }
-    finally { $probe.Stop() }
-}
-
-$null = New-Item -ItemType Directory -Force -Path $dataRoot
-$evidenceRootBase = Join-Path $root $(if ($UxV1AgentSoul) {
-    "local-tmp/slot-$AgentSlot-ux-v1-soul/evidence"
-} elseif ($UxV1DefaultTools) {
-    "local-tmp/slot-$AgentSlot-ux-v1/evidence"
-} elseif ($LiveDeepSeek) {
-    'target/w18-deepseek-web-l3/playwright'
-} elseif ($ActiveReconnect) {
-    'target/w05-active-reconnect-evidence/playwright'
-} elseif ($Interaction) {
-    'target/w05-interaction-evidence/playwright'
-} elseif ($DemoArtifact) {
-    "local-tmp/slot-$AgentSlot-w05-m2-evidence/playwright"
-} elseif ($TitleSuggestions) {
-    'target/w03-title-suggestions-evidence/playwright'
-} elseif ($InputPolish) {
-    "local-tmp/slot-$AgentSlot-w03-input-polish-ui/evidence"
-} elseif ($V2ModelSwitch) {
-    "local-tmp/slot-$AgentSlot-w03-v2-model-switch/evidence/ui"
-} elseif ($V2FileContext) {
-    "local-tmp/slot-$AgentSlot-w04-v2-file-context/evidence/ui"
-} elseif ($V2Skill) {
-    "local-tmp/slot-$AgentSlot-w15-v2-skill/evidence/ui"
-} elseif ($V2Diagnostics) {
-    "local-tmp/slot-$AgentSlot-w21/evidence/ui"
-} else {
-    'target/w18-ui-smoke-evidence/playwright'
-})
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$evidenceRoot = if ($UxV1DefaultTools -or $UxV1AgentSoul -or $DemoArtifact -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { Join-Path $evidenceRootBase "run-$stamp" } else { $evidenceRootBase }
-$null = New-Item -ItemType Directory -Force -Path $evidenceRoot
 $serverOut = Join-Path $evidenceRoot "server-$stamp.stdout.log"
 $serverErr = Join-Path $evidenceRoot "server-$stamp.stderr.log"
 $frontendOut = Join-Path $evidenceRoot "frontend-$stamp.stdout.log"
@@ -205,16 +147,17 @@ $managedEnvironment = @{
     W05_INTERACTION_ACCEPTANCE = $null
 }
 $savedEnvironment = @{}
-foreach ($name in $managedEnvironment.Keys) {
-    $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
-    [Environment]::SetEnvironmentVariable($name, $managedEnvironment[$name], 'Process')
-}
-
-$gatewayProcess = $null
-$frontendProcess = $null
-$providerProcess = $null
 $testExitCode = 1
+$expectedCases = @([regex]::Matches((Get-Content -Raw (Join-Path $root "tests/w18-ui-smoke/$($managedEnvironment.W18_PLAYWRIGHT_SPEC)")), 'test(?:\.skip|\.only)?\(\s*"([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
 try {
+    # Reject the complete pair before starting any process, including build commands.
+    Assert-FixturePortsBindable -Ports @($GatewayPort, $FrontendPort) -EvidenceDirectory $evidenceRoot
+    $sdk = Resolve-HaifaSdkSelection -RepositoryRoot $root
+    $null = New-Item -ItemType Directory -Force -Path $dataRoot
+    foreach ($name in $managedEnvironment.Keys) {
+        $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+        [Environment]::SetEnvironmentVariable($name, $managedEnvironment[$name], 'Process')
+    }
     $profile = & (Join-Path $root 'scripts/verify-haifa-frontend-profile.ps1') `
         -RepositoryRoot $root `
         -SourceRepository $SourceRepository
@@ -222,8 +165,7 @@ try {
         throw 'W18 Haifa frontend profile verification failed.'
     }
     $profile | Set-Content -LiteralPath (Join-Path $evidenceRoot "profile-$stamp.json") -Encoding utf8
-    $flowTimes.preparationMs = $flowWatch.ElapsedMilliseconds
-    $buildStartedMs = $flowWatch.ElapsedMilliseconds
+    Set-FixturePhase $fixture 'build'
 
     # The Interaction profile runs the Gateway from the test classpath, not the exec JAR.
     $reuseServerBuild = ($SkipBuild -or $SkipServerBuild) -and -not $Interaction
@@ -238,7 +180,7 @@ try {
         Remove-BuildStamp (Get-ServerBuildStampPath $root)
         Push-Location $root
         try {
-            & mvn.cmd -o -ntp -pl super-harness-server -am @(@($sdk.MavenArgument) -ne $null) package
+            & mvn.cmd -o -ntp -pl super-harness-server -am @(@($sdk.MavenArgument) -ne $null) package 2>&1 | Tee-Object -FilePath (Join-Path $evidenceRoot 'maven-build.raw.log')
             if ($LASTEXITCODE -ne 0) {
                 throw "Maven package failed with exit code $LASTEXITCODE."
             }
@@ -252,7 +194,7 @@ try {
         Remove-BuildStamp (Get-FrontendBuildStampPath $root)
         Push-Location (Join-Path $root 'frontend')
         try {
-            & corepack pnpm build
+            & corepack pnpm build 2>&1 | Tee-Object -FilePath (Join-Path $evidenceRoot 'frontend-build.raw.log')
             if ($LASTEXITCODE -ne 0) {
                 throw "Frozen frontend build failed with exit code $LASTEXITCODE."
             }
@@ -262,8 +204,7 @@ try {
         }
         Write-FrontendBuildStamp -RepositoryRoot $root -InternalGatewayBaseUrl $internalGatewayBaseUrl
     }
-    $flowTimes.buildMs = $flowWatch.ElapsedMilliseconds - $buildStartedMs
-    $readinessStartedMs = $flowWatch.ElapsedMilliseconds
+    Set-FixturePhase $fixture 'readiness'
 
     $jar = Join-Path $root 'super-harness-server/target/super-harness-server-0.1.0-SNAPSHOT-exec.jar'
     $next = Join-Path $root 'frontend/node_modules/next/dist/bin/next'
@@ -277,29 +218,12 @@ try {
     $providerUrl = $null
     if (-not $LiveDeepSeek) {
         $providerScript = Join-Path $root 'tests/w18-ui-smoke/loopback-openai-provider.cjs'
-        $providerProcess = Start-Process -FilePath (Get-Command node.exe).Source `
-            -ArgumentList @($providerScript, [string]$ProviderPort, $providerReady) `
-            -WorkingDirectory $root `
-            -RedirectStandardOutput $providerOut `
-            -RedirectStandardError $providerErr `
-            -PassThru `
-            -WindowStyle Hidden
-        $providerDeadline = (Get-Date).AddSeconds(15)
-        $providerMetadata = $null
-        do {
-            Start-Sleep -Milliseconds 100
-            if (Test-Path -LiteralPath $providerReady -PathType Leaf) {
-                try {
-                    $providerMetadata = Get-Content -Raw -LiteralPath $providerReady | ConvertFrom-Json
-                }
-                catch {
-                    $providerMetadata = $null
-                }
-            }
-        } until (($null -ne $providerMetadata -and $providerMetadata.type -eq 'ready') -or $providerProcess.HasExited -or (Get-Date) -ge $providerDeadline)
-        if ($null -eq $providerMetadata -or $providerMetadata.type -ne 'ready') {
-            throw "Controlled provider failed readiness (PID $($providerProcess.Id))."
-        }
+        $providerProcess = Start-FixtureProcess -Fixture $fixture -Name Provider -FilePath (Get-Command node.exe).Source `
+            -ArgumentList @($providerScript, [string]$ProviderPort, $providerReady) -WorkingDirectory $root `
+            -StdoutPath $providerOut -StderrPath $providerErr
+        $providerMetadata = Wait-FixtureReady -Entry $providerProcess -TimeoutSec 15 -ObjectName $providerReady `
+            -Observe { if (Test-Path -LiteralPath $providerReady) { Get-Content -Raw $providerReady | ConvertFrom-Json } } `
+            -Accept { param($value) $null -ne $value -and $value.type -eq 'ready' }
         $providerUrl = [string]$providerMetadata.address
         $providerUri = [Uri]$providerUrl
         if ($providerUri.Scheme -ne 'http' -or $providerUri.Host -ne '127.0.0.1' -or $providerUri.Port -lt 1) {
@@ -308,6 +232,8 @@ try {
         if ([int]$providerMetadata.pid -ne $providerProcess.Id) {
             throw 'Controlled provider ready metadata PID does not match the started process.'
         }
+        $fixture.Ports.Add($providerUri.Port)
+        $providerProcess.Ports = @($providerUri.Port)
         [Environment]::SetEnvironmentVariable('W18_PROVIDER_URL', $providerUrl, 'Process')
         $providerHealth = Invoke-RestMethod "$providerUrl/health" -TimeoutSec 2
         if ($providerHealth.status -ne 'ok') {
@@ -316,39 +242,18 @@ try {
     }
 
     if ($Interaction) {
-        # The fixture exists only on the test classpath. Surefire runs in the
-        # Maven JVM so the process tree remains attributable to this runner.
         [Environment]::SetEnvironmentVariable('W05_INTERACTION_ACCEPTANCE', '1', 'Process')
-        $gatewayProcess = Start-Process -FilePath (Get-Command mvn.cmd).Source `
-            -ArgumentList (@('-o', '-ntp', '-pl', 'super-harness-server', '-am', '-Dtest=InteractionAcceptanceServerTest', '-Dsurefire.failIfNoSpecifiedTests=false', '-DforkCount=0') + @(@($sdk.MavenArgument) -ne $null) + @('test')) `
-            -WorkingDirectory $root `
-            -RedirectStandardOutput $serverOut `
-            -RedirectStandardError $serverErr `
-            -PassThru `
-            -WindowStyle Hidden
+        $gatewayFile = (Get-Command mvn.cmd).Source
+        $gatewayArgs = @('-o', '-ntp', '-pl', 'super-harness-server', '-am', '-Dtest=InteractionAcceptanceServerTest', '-Dsurefire.failIfNoSpecifiedTests=false', '-DforkCount=0') + @(@($sdk.MavenArgument) -ne $null) + @('test')
+    } else {
+        $gatewayFile = (Get-Command java.exe).Source
+        $gatewayArgs = @('-jar', $jar)
     }
-    else {
-        $gatewayProcess = Start-Process -FilePath (Get-Command java.exe).Source `
-            -ArgumentList @('-jar', $jar) `
-            -WorkingDirectory $root `
-            -RedirectStandardOutput $serverOut `
-            -RedirectStandardError $serverErr `
-            -PassThru `
-            -WindowStyle Hidden
-    }
-    $gatewayDeadline = (Get-Date).AddSeconds(30)
-    do {
-        Start-Sleep -Milliseconds 200
-        try {
-            $health = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/health" -TimeoutSec 1
-        }
-        catch {
-            $health = $null
-        }
-    } until (($null -ne $health -and $health.status -eq 'ok') -or $gatewayProcess.HasExited -or (Get-Date) -ge $gatewayDeadline)
-    if ($null -eq $health -or $health.status -ne 'ok') {
-        throw "Haifa gateway failed readiness (PID $($gatewayProcess.Id))."
-    }
+    $gatewayProcess = Start-FixtureProcess -Fixture $fixture -Name Gateway -FilePath $gatewayFile `
+        -ArgumentList $gatewayArgs -WorkingDirectory $root -StdoutPath $serverOut -StderrPath $serverErr -Ports @($GatewayPort)
+    $health = Wait-FixtureReady -Entry $gatewayProcess -TimeoutSec 30 -ObjectName "http://127.0.0.1:$GatewayPort/health" `
+        -Observe { Invoke-RestMethod "http://127.0.0.1:$GatewayPort/health" -TimeoutSec 1 } `
+        -Accept { param($value) $null -ne $value -and $value.status -eq 'ok' }
 
     $managedModels = Invoke-RestMethod "http://127.0.0.1:$GatewayPort/api/managed-models" -TimeoutSec 3
     $modelName = if ($LiveDeepSeek) { 'w18-deepseek-live' } else { 'w18-controlled' }
@@ -461,29 +366,13 @@ try {
         -LiteralPath (Join-Path $evidenceRoot "managed-model-$stamp.json") `
         -Encoding utf8
 
-    $frontendProcess = Start-Process -FilePath (Get-Command node.exe).Source `
+    $frontendProcess = Start-FixtureProcess -Fixture $fixture -Name Frontend -FilePath (Get-Command node.exe).Source `
         -ArgumentList @($next, 'start', '--hostname', '127.0.0.1', '--port', [string]$FrontendPort) `
-        -WorkingDirectory (Join-Path $root 'frontend') `
-        -RedirectStandardOutput $frontendOut `
-        -RedirectStandardError $frontendErr `
-        -PassThru `
-        -WindowStyle Hidden
-    $frontendDeadline = (Get-Date).AddSeconds(60)
-    do {
-        Start-Sleep -Milliseconds 250
-        try {
-            $page = Invoke-WebRequest "http://127.0.0.1:$FrontendPort/workspace/chats/new" `
-                -UseBasicParsing `
-                -TimeoutSec 2
-        }
-        catch {
-            $page = $null
-        }
-    } until (($null -ne $page -and $page.StatusCode -eq 200) -or $frontendProcess.HasExited -or (Get-Date) -ge $frontendDeadline)
-    if ($null -eq $page -or $page.StatusCode -ne 200) {
-        throw "Frozen frontend failed readiness (PID $($frontendProcess.Id))."
-    }
-    $flowTimes.readinessMs = $flowWatch.ElapsedMilliseconds - $readinessStartedMs
+        -WorkingDirectory (Join-Path $root 'frontend') -StdoutPath $frontendOut -StderrPath $frontendErr -Ports @($FrontendPort)
+    $page = Wait-FixtureReady -Entry $frontendProcess -TimeoutSec 60 -ObjectName "http://127.0.0.1:$FrontendPort/workspace/chats/new" `
+        -Observe { Invoke-WebRequest "http://127.0.0.1:$FrontendPort/workspace/chats/new" -UseBasicParsing -TimeoutSec 2 } `
+        -Accept { param($value) $null -ne $value -and $value.StatusCode -eq 200 }
+    Set-FixturePhase $fixture 'assertions'
 
     [ordered]@{
         gateway = "http://127.0.0.1:$GatewayPort"
@@ -498,72 +387,40 @@ try {
 
     Push-Location $root
     try {
-        $assertionsStartedMs = $flowWatch.ElapsedMilliseconds
-        & node.exe frontend/node_modules/@playwright/test/cli.js test `
-            --config tests/w18-ui-smoke/playwright.config.cjs
-        $testExitCode = $LASTEXITCODE
-        $flowTimes.assertionsMs = $flowWatch.ElapsedMilliseconds - $assertionsStartedMs
+        $playwright = Start-FixtureProcess -Fixture $fixture -Name Playwright -FilePath (Get-Command node.exe).Source `
+            -ArgumentList @((Join-Path $root 'frontend/node_modules/@playwright/test/cli.js'), 'test', '--config', 'tests/w18-ui-smoke/playwright.config.cjs') `
+            -WorkingDirectory $root -StdoutPath (Join-Path $evidenceRoot 'playwright.raw.log') -StderrPath (Join-Path $evidenceRoot 'playwright.stderr.log')
+        $testExitCode = Wait-FixtureExit -Entry $playwright `
+            -TimeoutSec ([Math]::Max(1, $expectedCases.Count) * ([int]$managedEnvironment.W18_PLAYWRIGHT_TIMEOUT_MS / 1000) + 60)
+        Get-Content -LiteralPath (Join-Path $evidenceRoot 'playwright.raw.log')
+        $fixture.TestExitCode = $testExitCode
+        if ($testExitCode -ne 0) { throw "W18 UI smoke failed with exit code $testExitCode." }
     }
     finally {
         Pop-Location
     }
 }
-finally {
-    $cleanupStartedMs = $flowWatch.ElapsedMilliseconds
-    foreach ($process in @($frontendProcess, $gatewayProcess, $providerProcess)) {
-        if ($null -ne $process -and -not $process.HasExited) {
-            $descendants = @{}
-            $queue = [Collections.Generic.Queue[int]]::new()
-            $queue.Enqueue($process.Id)
-            while ($queue.Count -gt 0) {
-                $parentPid = $queue.Dequeue()
-                foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$parentPid" -ErrorAction SilentlyContinue)) {
-                    if (-not $descendants.ContainsKey([int]$child.ProcessId)) {
-                        $descendants[[int]$child.ProcessId] = $child
-                        $queue.Enqueue([int]$child.ProcessId)
-                    }
-                }
-            }
-            foreach ($child in @($descendants.Values | Sort-Object CreationDate -Descending)) {
-                Stop-Process -Id ([int]$child.ProcessId) -Force -ErrorAction SilentlyContinue
-            }
-            Stop-Process -InputObject $process -Force -ErrorAction SilentlyContinue
-            $null = $process.WaitForExit(10000)
-        }
-    }
-    foreach ($name in $savedEnvironment.Keys) {
-        [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
-    }
-    if ($UxV1DefaultTools -or $UxV1AgentSoul) {
-        $portFacts = foreach ($port in @($GatewayPort, $FrontendPort)) {
-            $remaining = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
-            [ordered]@{ port = $port; released = $remaining.Count -eq 0; pids = @($remaining | ForEach-Object { $_.OwningProcess }) }
-        }
-        $flowTimes.cleanupMs = $flowWatch.ElapsedMilliseconds - $cleanupStartedMs
-        [ordered]@{
-            sourceSha = (& git -C $root rev-parse HEAD)
-            sourceDirty = [bool](& git -C $root status --porcelain)
-            acceptanceProfile = $(if ($UxV1AgentSoul) { 'ux-v1-agent-soul' } else { 'ux-v1-default-tools' })
-            buildMode = $(if ($SkipBuild) { 'warm-reuse' } else { 'cold-build' })
-            serverBuildReused = [bool]($SkipBuild -or $SkipServerBuild)
-            sdkSelection = $sdk.Status
-            haifaVersion = $sdk.HaifaVersion
-            webDeferred = [bool]$DeferUxV1Web
-            testExitCode = $testExitCode
-            retryCount = 0
-            timings = $flowTimes
-            totalMs = $flowWatch.ElapsedMilliseconds
-            ports = @($portFacts)
-            remainingWorktreeProcesses = @(Get-CimInstance Win32_Process | Where-Object {
-                $_.Name -match '^(java|node)\.exe$' -and $_.CommandLine -and
-                $_.CommandLine.Contains($root, [StringComparison]::OrdinalIgnoreCase)
-            } | Select-Object ProcessId, ParentProcessId, Name, CommandLine)
-            logs = @($serverOut, $serverErr, $frontendOut, $frontendErr)
-            evidenceRoot = $evidenceRoot
-        } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'flow-health.json') -Encoding utf8
-    }
+catch {
+    $fixture.FirstFailure = [ordered]@{ phase = $fixture.Phase; message = $_.Exception.Message }
+    throw
 }
-
-if ($testExitCode -ne 0) {
-    throw "W18 UI smoke failed with exit code $testExitCode."
+finally {
+    Set-FixturePhase $fixture 'cleanup'
+    try { Stop-FixtureProcesses $fixture }
+    catch {
+        if ($null -eq $fixture.FirstFailure) { $fixture.FirstFailure = @{ phase = 'cleanup'; message = $_.Exception.Message } }
+        throw
+    }
+    finally {
+        foreach ($name in $savedEnvironment.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
+        }
+        Set-FixturePhase $fixture 'evidenceArchive'
+        Write-FixtureFlowHealth $fixture -ExpectedCases $expectedCases -Extra @{
+            acceptanceProfile = $tag; sdkSelection = $sdk.Status; haifaVersion = $sdk.HaifaVersion
+            serverBuildReused = [bool]($SkipBuild -or $SkipServerBuild); webDeferred = [bool]$DeferUxV1Web
+            dataRoot = $dataRoot
+        }
+        Write-Output "flowHealth=$evidenceRoot/flow-health.json"
+    }
 }
