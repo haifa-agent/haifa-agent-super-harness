@@ -118,7 +118,11 @@ Gateway 从 `resources/upstream/deerflow/prompts/` 读取冻结 DeerFlow 原文�
 
 本切片 `update_agent` 只支持 `soul`、`description`、`display_name`，能力字段明确报错；省略字段保持原值，冻结 OptionalText 的 `null`/`none`/`undefined` 字符串视为未传。SOUL 使用现有 agent 配置 JSON 保存，不另建 SOUL 文件；bootstrap Skill、全局 SOUL 和 legacy pending Run 自动迁移为已登记差异。旧 Thread 保留历史读取；旧 Run 全部结束后可按当前配置准入新 Turn，成功后记录新 Run 的身份与签名。缺少原身份或签名的活跃 Run 不能恢复执行或 Steer。
 
-M3 消费本地公开 `0.1.2-SNAPSHOT` JAR，SDK 来源与构件 hash 见 [集成报告](private-docs/ai-coding-report/39-deerflow-parity-delivery/W03/W03-AgentSoulSdkIntegration.md)。人工暂缓 PR266 合并；SDK 主线合并状态和产品验收结果分别登记在 SHPM。
+M3 消费本地公开 `0.1.2-SNAPSHOT` JAR，SDK 来源与构件 hash 见 [集成报告](private-docs/ai-coding-report/39-deerflow-parity-delivery/W03/W03-AgentSoulSdkIntegration.md)。PR266 已于 2026-10-02 人工合入 `dev@d97dd584`。按本次人工精简要求，W03-task-5 经生产/构建源码一致、26 项公开构件 hash 不变和原始证据复核后，复用既有 SDK L3、公开消费者两 JVM、M3 全仓/UI/smoke 结果，取消重复发布和重跑；合并 SHA 的 SDK L3 如实标记 `NOT_RUN`。原测试整理日志缺失项在首批验收后，以完整合并 tree 上9类123项定向测试及新原始日志补证，首次FAIL保留。task-5 已由主控在 SHPM 验收为 finished，详见 [验收报告](private-docs/ai-coding-report/39-deerflow-parity-delivery/W03/W03-FrozenInstructionControllerAcceptance.md) 与 [038-13 收尾范围](private-docs/prompts/038-sdk-012-super-harness-gaps/13-frozen-instruction-diagnostic-prompt.md)。W03 整包仍为 in_progress：非flash模式和思考参数的正向执行合同尚未交付，阻断issue为 `W03-F03-MODE-CONTRACT-001`；M4和演示GO由其各自门禁结算。
+
+模式缺口的 [开发提示词](private-docs/prompts/39-deerflow-parity-delivery/W03-Developing/W03-ModeThinkingConfiguration.md) 已按冻结 DeerFlow、DeepSeek 官方文档和实际 SDK JAR 核对。思考模式（开/关）与推理级别（强度）是两个不同属性，SDK 已有 `ModelReasoningMode`、`ModelReasoningEffort`，通过 `ModelReasoningPolicy` 组合；界面沿用冻结 DeerFlow 的交互与字段映射。Flash/Pro 都支持思考，SH 需要接入每 Run 的冻结参数；SDK 另需补 DeepSeek 方言的 LOW、新 Flash 精确 Binding 和工具历史续接。W03负责模型配置与这两个属性接线，计划执行归W07、子Agent执行归W08，后续按对应工作包交付组织pro/ultra联调。研究与文档交付不代表产品已实现或真实模型验收通过。
+
+2026-10-02 人工批准本切片精简：保留原Case与逐参数断言，W03按八组共用准备和必要运行轨迹；SDK编码前只复现LOW、Binding与历史续接缺口，完整恢复/安全验证放在稳定版本。SDK负责底层参数矩阵，SH验证配置映射、错误边界和Gateway恢复；满足断言的正式UI真实Run可同时作为smoke证据。两层最终构建门禁、真实smoke、规定UI cold/warm重复轮次和首次FAIL原件均保留，不继承task-5的特殊L3豁免。
 
 冻结 UI 的正式验收由主控在独立 worktree 运行，使用真实模型和合成 SOUL，验证“对话 → 保存 → setup_agent → 已创建 → 刷新可见”。第一轮 cold，第二轮在相同源码、依赖和构建时代理目标下 warm 复用构建，每轮使用新数据目录：
 
