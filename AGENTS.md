@@ -83,6 +83,7 @@
 
 ### 冻结前端（pnpm / Next.js）
 
+- 2026-10-02 实测：`run-w18-ui-smoke.ps1` 的受控模型若配置 `context_window=8192`，当前冻结 Lead prompt 与生产 Tool catalog 会在调用 Provider 前触发 `MODEL_CONTEXT_TOO_LONG`，默认 UI 的回复与恢复失败，取消已失败 Run 返回 409。检查原始 trace 中 Run 的 `diagnostics.error_code` 与空 `model_calls`，并核对 Provider 日志仅收到连接探针。最小修复：仅将本地受控模型 fixture 的窗口配置为 `32768`（含第二个受控模型），完整保留冻结 prompt、Tool catalog、UI 断言和原失败证据；不修改产品预算或真实模型配置。修复后先跑定向 UI 排障，再以同一最终 SHA 重跑正式冷/暖轮。
 - 每个新 worktree 的 `frontend/node_modules` 不会自动继承，运行 Next/Playwright 前先检查 `frontend/node_modules/.bin/next.cmd`、`playwright.cmd` 和 Playwright browser。
 - 系统 `pnpm --version` 可能与 `frontend/package.json` 固定的 `10.26.2` 不一致（本机实测 `10.26.1`），启动器会做 package-manager 精确版本检查，因此一律不用系统 `pnpm`。缺依赖时在该 worktree 的 `frontend/` 目录（否则会报根目录缺少 `package.json`）先执行 `$env:COREPACK_ENABLE_NETWORK='0'; corepack pnpm --version`，只有精确返回 `10.26.2` 才执行 `$env:COREPACK_ENABLE_NETWORK='0'; corepack pnpm install --offline --frozen-lockfile`。修复后须确认安装输出为 `downloaded 0`、`next.cmd` 与 `playwright.cmd` 存在，并再次验证版本。禁止联网下载、全局安装或复制其他 worktree 的依赖；离线依赖不齐则如实标记 UI `NOT_RUN` 并继续可执行的 HTTP/Java 门禁。
 - Next.js dev 对同一 `frontend/.next` 目录实行单实例保护：主工作树前端已在 `33018` 运行时，从同一主工作树再启动任何 UI runner，frontend stderr 会报 `Another next dev server is already running`，随后 runner 报 `Frozen frontend failed readiness`，功能断言并未执行。检查：读取该次 `frontend-*.stderr.log`，再用 `Get-NetTCPConnection -State Listen -LocalPort 33018,<槽位 Frontend>` 与 `Get-CimInstance Win32_Process` 核对主进程。最小修复：在独立工作包 worktree 使用独立 `frontend/.next`、槽位端口和数据目录做 UI 回归；禁止为此停止供人工验收的主前端或共享/复制 `.next`、`node_modules`。未执行的 UI 断言标为 `NOT_RUN`。

@@ -91,6 +91,8 @@ pwsh -NoProfile -File tests/frontend/verify-haifa-frontend-profile.ps1
 
 验收 `.cjs` 脚本（`tests/**`，含 Playwright 用例、受控 Provider 与 Steer 契约断言）的功能与运行方法见 [验收 .cjs 脚本功能与运行说明](docs/engineering/001-cjs-scripts.md)；相关前端 `.mjs` 脚本见该文附录 A。
 
+`run-w18-ui-smoke.ps1` 的本地受控模型使用 `context_window=32768`，让完整冻结 Lead prompt、生产 Tool catalog 和可选 Skill 正文容纳在同一次真实 SDK 请求中。若 Run 在 Provider 请求前返回 `MODEL_CONTEXT_TOO_LONG`，按 `AGENTS.md` 的受控模型排障记录核对配置和原始 trace。
+
 ## W05 客户演示 M2 Artifact UI 验收
 
 W05 的受控 L2 验收使用子槽位 1（Gateway `20618`、Frontend `25618`）、生产 Super Harness JAR、冻结 DeerFlow UI 和本地受控 Provider，验证 `write_file → Approval → Artifact → Reload/Reconnect → UI 下载`。它不会调用真实模型；真实模型整链属于后续 M4。

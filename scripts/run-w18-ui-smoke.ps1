@@ -377,9 +377,10 @@ try {
                 base_url = "$providerUrl/v1"
                 enabled = $true
                 supports_vision = $false
-                # The frozen consulting-analysis entry is ~8.2k tokens by itself.
-                # Its full activated body must fit alongside Run context and output.
-                context_window = $(if ($V2Skill) { 32768 } else { 8192 })
+                # The full frozen Lead prompt, production Tool catalog and optional Skill
+                # body must fit together. 8192 rejects even the default smoke before
+                # any Provider request with MODEL_CONTEXT_TOO_LONG.
+                context_window = 32768
                 max_tokens = 1024
                 api_key = 'w18-loopback-only'
             }
@@ -427,7 +428,7 @@ try {
                 base_url = "$providerUrl/v1"
                 enabled = $true
                 supports_vision = $false
-                context_window = 8192
+                context_window = 32768
                 max_tokens = 1024
                 api_key = 'w18-loopback-only'
             }
