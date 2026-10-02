@@ -34,9 +34,6 @@ Set-StrictMode -Version Latest
 if ($DeferUxV1Web -and -not $UxV1DefaultTools) {
     throw 'DeferUxV1Web requires the UX-V1 default-tools profile.'
 }
-if ($SkipServerBuild -and -not ($UxV1DefaultTools -or $UxV1AgentSoul)) {
-    throw 'SkipServerBuild requires a UX-V1 profile and a verified same-source JAR.'
-}
 
 $expectedGatewayPort = 10618 + (10000 * $AgentSlot)
 $expectedFrontendPort = 15618 + (10000 * $AgentSlot)
@@ -180,7 +177,8 @@ try {
         Remove-BuildStamp (Get-ServerBuildStampPath $root)
         Push-Location $root
         try {
-            & mvn.cmd -o -ntp -pl super-harness-server -am @(@($sdk.MavenArgument) -ne $null) package 2>&1 | Tee-Object -FilePath (Join-Path $evidenceRoot 'maven-build.raw.log')
+            # Unit tests belong to the full gate (scripts/verify-full.ps1); the cold round only packages.
+            & mvn.cmd -o -ntp -pl super-harness-server -am -DskipTests @(@($sdk.MavenArgument) -ne $null) package 2>&1 | Tee-Object -FilePath (Join-Path $evidenceRoot 'maven-build.raw.log')
             if ($LASTEXITCODE -ne 0) {
                 throw "Maven package failed with exit code $LASTEXITCODE."
             }

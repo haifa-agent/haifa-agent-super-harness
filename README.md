@@ -71,6 +71,8 @@ SDK 版本规则见 `AGENTS.md`「范围与依赖」。工作包 worktree 消费
 
 UI runner 在构建成功后写入构建戳（`frontend/.next/haifa-build-stamp.json`、`super-harness-server/target/haifa-build-stamp.json`），`-SkipBuild`/`-SkipServerBuild` 复用构建产物前先核对源码 SHA、前端 lockfile、构建时代理目标和 Haifa 版本；不一致时在启动任何进程前失败并点名字段，不会自动重建，需去掉 `-SkipBuild` 重跑。
 
+全仓门禁用 `pwsh -NoProfile -File scripts/verify-full.ps1`：它运行 `mvn -o -ntp clean verify`（同样读取 `local-tmp/sdk-selection.json`），Maven 输出写到 `local-tmp/verify-full/`，stdout 输出 JSON 汇总；通过后为它产出的 exec JAR 写入服务端构建戳。随后在同一提交上，任意 profile 的 UI 冷轮都可加 `-SkipServerBuild` 直接复用该 JAR，只重新构建前端。不加 `-SkipServerBuild` 的冷轮仍会自行打包后端，但以 `-DskipTests` 只打包、不重复执行单元测试；单元测试只由全仓门禁证明。
+
 这些入口的回归与提交前的 SDK 基线门禁：
 
 ```powershell
