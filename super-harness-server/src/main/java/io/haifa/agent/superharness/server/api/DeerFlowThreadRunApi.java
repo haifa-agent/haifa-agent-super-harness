@@ -110,6 +110,10 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final Pattern SSE_CURSOR = Pattern.compile("^(\\d+)-0$");
     private static final int EVENT_RETENTION_CAPACITY = 8;
     private static final int EVENT_PAGE_SIZE = 4;
+    /** A stream that has not looped for this long no longer holds the shared projector back. */
+    private static final long LIVE_OBSERVER_STALE_NANOS = Duration.ofSeconds(1).toNanos();
+    /** How long a bulk synchronization lets attached streams catch up before it goes ahead. */
+    private static final long LIVE_OBSERVER_CATCH_UP_NANOS = Duration.ofSeconds(2).toNanos();
     private static final int DIAGNOSTIC_EVENT_PAGE_SIZE = 100;
     private static final int RUN_DIAGNOSTIC_EVENT_PAGE_BUDGET = 20;
     private static final int THREAD_USAGE_EVENT_PAGE_BUDGET = 50;
@@ -1681,6 +1685,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         if (creator) awaitRunStart(run);
         exchange.sendResponseHeaders(200, 0);
 
+        Object observer = new Object();
         try (OutputStream output = exchange.getResponseBody()) {
             writeCommittedSse(output, () -> {
                 if (includeMetadata) {
@@ -1706,6 +1711,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                             return;
                         }
                     }
+                    run.observerDelivered(observer, delivered.sequence());
                     Optional<AppendResult.Gap> sourceGap = synchronizeOnePage(run);
                     observeClarificationBoundary(thread, run);
                     if (sourceGap.isPresent()) {
@@ -1781,6 +1787,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 run.bridge.cancel(run.runId);
             }
         } finally {
+            run.observerLeft(observer);
             observeClarificationBoundary(thread, run);
             synchronized (thread) {
                 boolean terminal = isKnownTerminal(() -> Optional.of(run.bridge.snapshot(run.runId)));
@@ -1836,8 +1843,22 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
     }
 
+    /**
+     * The projector is shared by every stream attached to the Run and keeps only a short window.
+     * Pulling durable events faster than an attached stream delivers them would push that stream
+     * out of the window and end it with a replay gap, so a pull waits for the slowest live stream.
+     */
+    private boolean wouldOutrunLiveObserver(RunRecord run) {
+        java.util.OptionalLong slowest = run.slowestLiveObserver(System.nanoTime());
+        return slowest.isPresent()
+                && run.projector.appendingWouldDropUndelivered(EVENT_PAGE_SIZE, slowest.getAsLong());
+    }
+
     private Optional<AppendResult.Gap> synchronizeOnePage(RunRecord run) {
         synchronized (run) {
+            if (wouldOutrunLiveObserver(run)) {
+                return Optional.empty();
+            }
             var page = run.bridge.events(run.runId, run.sdkCursor, EVENT_PAGE_SIZE);
             for (AgentRunEvent source : page.items()) {
                 AppendResult append = run.projector.append(source);
@@ -1855,7 +1876,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private void synchronizeAllAvailable(RunRecord run) {
         synchronized (run) {
+            long catchUpDeadline = System.nanoTime() + LIVE_OBSERVER_CATCH_UP_NANOS;
             while (true) {
+                awaitLiveObservers(run, catchUpDeadline);
                 var page = run.bridge.events(run.runId, run.sdkCursor, EVENT_PAGE_SIZE);
                 for (AgentRunEvent source : page.items()) {
                     AppendResult append = run.projector.append(source);
@@ -1872,6 +1895,21 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 if (!page.hasMore()) {
                     return;
                 }
+            }
+        }
+    }
+
+    /**
+     * Gives attached streams a bounded chance to deliver what is retained. Waiting on the Run
+     * monitor releases it, which lets those streams run their own synchronization step meanwhile.
+     */
+    private void awaitLiveObservers(RunRecord run, long deadlineNanos) {
+        while (wouldOutrunLiveObserver(run) && System.nanoTime() < deadlineNanos) {
+            try {
+                run.wait(5);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
             }
         }
     }
@@ -2952,6 +2990,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             ThreadRecord thread, int retention, Long exclusiveBeforeSequence) {
         if (thread.persistedSessionId == null) return List.of();
         HaifaRunBridge bridge = bridgeForPersistedThread(thread);
+        Set<String> clarificationRuns = clarificationRunIds(thread);
         Deque<ConversationTurn> retained = new ArrayDeque<>(Math.min(retention, 256));
         Optional<ConversationTurnCursor> cursor = Optional.empty();
         int pages = 0;
@@ -2966,6 +3005,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     continue;
                 }
                 if (exclusiveBeforeSequence != null && turn.sequence() >= exclusiveBeforeSequence) continue;
+                if (isPostClarificationAnswer(turn, clarificationRuns)) continue;
                 retained.addLast(turn);
                 while (retained.size() > retention) retained.removeFirst();
             }
@@ -2974,6 +3014,19 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             cursor = page.nextCursor();
         }
         return List.copyOf(retained);
+    }
+
+    /**
+     * A Run that asked for clarification stops at that boundary. Cancelling it is best-effort, so a
+     * fast model can still finish and persist an answer before the cancel lands; that answer is past
+     * the boundary and is never projected, exactly like the live stream already drops it.
+     */
+    private static boolean isPostClarificationAnswer(ConversationTurn turn, Set<String> clarificationRuns) {
+        return turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT
+                && turn.runId()
+                        .map(AgentRunId::value)
+                        .filter(clarificationRuns::contains)
+                        .isPresent();
     }
 
     private List<RunRecord> durableRuns(ThreadRecord thread) {
@@ -4043,6 +4096,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private volatile boolean clarificationObserved;
         private io.haifa.agent.runtime.api.RunEventCursor sdkCursor;
         private final Set<Long> deferredEventSequences = ConcurrentHashMap.newKeySet();
+        /** Attached streams: last delivered projection sequence and when the stream last looped. */
+        private final Map<Object, long[]> liveObservers = new ConcurrentHashMap<>();
         private final Set<String> projectedToolMessageIds = ConcurrentHashMap.newKeySet();
 
         private RunRecord(
@@ -4072,6 +4127,21 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             this.assistantSequence = humanSequence + 1;
             this.streamModes = Set.copyOf(streamModes);
             this.titleCandidate = titleCandidate;
+        }
+
+        void observerDelivered(Object observer, long deliveredSequence) {
+            liveObservers.put(observer, new long[] {deliveredSequence, System.nanoTime()});
+        }
+
+        void observerLeft(Object observer) {
+            liveObservers.remove(observer);
+        }
+
+        java.util.OptionalLong slowestLiveObserver(long nowNanos) {
+            return liveObservers.values().stream()
+                    .filter(progress -> nowNanos - progress[1] < LIVE_OBSERVER_STALE_NANOS)
+                    .mapToLong(progress -> progress[0])
+                    .min();
         }
     }
 
@@ -4125,6 +4195,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 return;
             }
             if (exclusiveBeforeSequence != null && turn.sequence() >= exclusiveBeforeSequence) return;
+            if (isPostClarificationAnswer(turn, clarificationRunIds)) return;
             messages.addLast(turn);
             while (messages.size() > HISTORY_MESSAGE_RETENTION) messages.removeFirst();
             // Frozen checkpoints the human input before the agent runs, so a clarification Run has a

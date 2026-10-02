@@ -129,6 +129,24 @@ public final class BoundedRunEventProjector {
         return new ReplayResult.Events(events, head());
     }
 
+    /**
+     * Whether accepting {@code count} more events would drop a retained event that a reader whose
+     * last delivered cursor is {@code deliveredSequence} has not received yet.
+     */
+    public synchronized boolean appendingWouldDropUndelivered(int count, long deliveredSequence) {
+        int dropped = Math.min(retained.size(), retained.size() + count - capacity);
+        if (dropped <= 0) {
+            return false;
+        }
+        int index = 0;
+        for (ProjectedRunEvent event : retained) {
+            if (++index == dropped) {
+                return event.cursor().sequence() > deliveredSequence;
+            }
+        }
+        return false;
+    }
+
     public synchronized ProjectionCursor head() {
         return new ProjectionCursor(runId.value(), projectionSequence);
     }

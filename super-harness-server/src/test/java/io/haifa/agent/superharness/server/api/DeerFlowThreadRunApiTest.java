@@ -91,6 +91,11 @@ class DeerFlowThreadRunApiTest {
 
     private void startApi(java.util.function.Function<JsonNode, HaifaRunBridge.ModelBinding> resolver)
             throws Exception {
+        if (api != null) {
+            // A test that swaps the model restarts the Gateway; the previous one must release its store.
+            api.close();
+            api = null;
+        }
         api = DeerFlowBootstrapApi.createForTests(
                 new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
                 dataDirectory,
