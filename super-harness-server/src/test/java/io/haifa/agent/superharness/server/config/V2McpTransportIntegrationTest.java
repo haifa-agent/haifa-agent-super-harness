@@ -62,7 +62,7 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * L2 evidence for the V2 minimum MCP carriage. Drives the real Haifa SDK MCP client
  * (through {@code McpToolPlatforms}) against the two independent local Streamable HTTP
- * test servers started by {@code scripts/start-v2-test-mcp-servers.ps1}. Every tool
+ * test servers started by {@code scripts/mcp/start-v2-test-mcp-servers.ps1}. Every tool
  * result in this test is produced by a real loopback HTTP MCP call; no stub, route
  * fulfilment or in-memory tool is used.
  */

@@ -76,9 +76,9 @@ java -cp $shCp io.haifa.agent.superharness.server.SkillStoreNegativeProbe $repo 
 | `mvn -o -ntp '-DargLine=-Xmx768m -XX:+UseSerialGC' clean verify` 首次 | **FAIL**，exit 1，196 tests / 12 failures / 9 skipped | `evidence/full-clean-verify-1.raw.log`，5:45；`evidence/full-clean-verify-1-surefire-reports/` 是 63 个原始 Surefire 文件的外置副本。11 个 W04 fixture 失败源于 checkout CRLF，另 1 个 W15 ArchUnit 失败源于公开 SDK 方法返回内部类型。原始及副本路径均保留。 |
 | `mvn -o -ntp -pl super-harness-server -am '-Dtest=DeerFlowUploadRunContextHttpTest' ... test` 修复 checkout 后首次 | **FAIL**，exit 1，11 个 license ERROR | `evidence/upload-checkout-repair-1.raw.log`。W15 manifest 的 license SHA 误取 CRLF checkout 字节 `3e8f6a...`，Git 固定 LF 字节实际 `b23dff...`；这是独立的首次失败。 |
 | 同一定向命令，修正受信 license hash 与 `.gitattributes` 后第二次 | PASS，exit 0，11/11、0 skipped | `evidence/upload-checkout-repair-2.raw.log`，测试 77.61 秒、Maven 1:21；含真实上传 SHA `ec326b7d...`、Run、ToolCall、回答。 |
-| `tests/contracts/verify-deerflow-contracts.ps1 -DeerFlowRoot D:/workspace/haifa-agent-super-harness/deer-flow` | PASS，exit 0 | `evidence/deerflow-contract-gate-1.raw.log`；冻结源 HEAD `e545c28ac301e6f9feae247c513d8ea8f83df294`。 |
-| `tests/contracts/verify-resource-license-inventory.ps1` | PASS，exit 0，24 checks | `evidence/resource-license-gate-1.raw.log`。 |
-| `tests/evidence/verify-evidence-report.ps1` 首次 | **FAIL**，exit 1 | `evidence/evidence-report-gate-1.raw.log`；本 worktree 被忽略的 `private-docs/` 缺失，测试无法把 SHPM prompt 路径复制到临时 fixture。 |
+| `tests/checks/contracts/verify-deerflow-contracts.ps1 -DeerFlowRoot D:/workspace/haifa-agent-super-harness/deer-flow` | PASS，exit 0 | `evidence/deerflow-contract-gate-1.raw.log`；冻结源 HEAD `e545c28ac301e6f9feae247c513d8ea8f83df294`。 |
+| `tests/checks/contracts/verify-resource-license-inventory.ps1` | PASS，exit 0，24 checks | `evidence/resource-license-gate-1.raw.log`。 |
+| `tests/checks/evidence/verify-evidence-report.ps1` 首次 | **FAIL**，exit 1 | `evidence/evidence-report-gate-1.raw.log`；本 worktree 被忽略的 `private-docs/` 缺失，测试无法把 SHPM prompt 路径复制到临时 fixture。 |
 | 同一证据命令，仅复制 SHPM 只读快照登记的 24 个 prompt/roadmap 文件到忽略的 `private-docs/` 后 | PASS，exit 0，101 assertions | `evidence/evidence-report-gate-2.raw.log`；只读快照 `evidence/shpm-readonly-snapshot.json`，未修改 SHPM。 |
 | `corepack pnpm install --offline --frozen-lockfile`（`frontend/`） | PASS，exit 0 | `evidence/frontend-offline-install-1.raw.log`；`pnpm 10.26.2`，1088 包，`downloaded 0`，41.9 秒；`next.cmd`/`playwright.cmd` 已存在。 |
 
@@ -92,7 +92,7 @@ ArchUnit 首败见 `evidence/full-clean-verify-1-surefire-reports/io.haifa.agent
 
 修复后代码提交 `7d429bb45cc360256a0768f7cb6b8be7027de4fb` 的全仓 `mvn -o -ntp clean verify '-DargLine=-Xmx768m -XX:+UseSerialGC'` exit 0，BUILD SUCCESS，06:32，服务端 196 tests / 0 failures / 0 errors / 9 skipped；原始 `evidence/public-sdk-consume-full-clean-verify-3.raw.log`，63 个 Surefire 文件在 `evidence/public-sdk-consume-full-clean-verify-3-surefire/`。`git diff --check`、PowerShell parser、静态 secret scan 均 PASS。每次 clean 前的 trace 与日志均在外置 `local-tmp/slot-2-w15-v2-skill/evidence/`，不在 `target`。
 
-同脚本为 `pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -V2Skill -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -DataDirectory <独立 data-root>`。启动前核对 NAT 排除段与 30618/35618 loopback bind 均 PASS；每轮采用不同 data-root，Provider 为受控 loopback 模型，未发送真实客户数据。
+同脚本为 `pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -V2Skill -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -DataDirectory <独立 data-root>`。启动前核对 NAT 排除段与 30618/35618 loopback bind 均 PASS；每轮采用不同 data-root，Provider 为受控 loopback 模型，未发送真实客户数据。
 
 | 轮次 | 结果、耗时及过程 | 原始证据 |
 | --- | --- | --- |

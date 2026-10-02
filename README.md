@@ -18,8 +18,8 @@ Super Harness 是产品、兼容与集成层，不是第二套 Agent Runtime。�
 
 ```powershell
 $env:SHPM_DB='C:\Users\wangr\.shpm\data\project.db'
-pwsh -NoProfile -File scripts/audit-work-package-delivery.ps1
-pwsh -NoProfile -File tests/evidence/verify-evidence-report.ps1
+pwsh -NoProfile -File scripts/governance/audit-work-package-delivery.ps1
+pwsh -NoProfile -File tests/checks/evidence/verify-evidence-report.ps1
 ```
 
 客户演示按轮次推进：客户演示 v0（亦称 V1，[路线图](private-docs/roadmap/36-super-harness-customer-demo-v0.md)）已在 `main@c112012` 结算 `GO`；客户演示 V2 的范围与阶段退出标准见 [show-roadmap-2](private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-2/README.md)，当前状态以 `shpm sprint gate DEMO-V2 --json` 为准。演示阶段通过不会自动关闭工作包，也不代表 PRD D01–D05 完整 Customer Demo Gate 或 Full Parity。
@@ -29,6 +29,12 @@ pwsh -NoProfile -File tests/evidence/verify-evidence-report.ps1
 - `super-harness-app` 验证真实的公开 SDK `Run → Java 类型化 Tool → Artifact` 链路：确定性 Tool 生成内容，应用再通过公开 Artifact 服务发布，保留真实 Run/Session 来源并校验存储内容的哈希。
 - `super-harness-harness` 是最小化、失败即关闭的证据校验器。必需用例缺失、显式失败、重复，或标为 PASS 却没有证据时，校验均失败。
 - Maven Enforcer 拒绝直接或传递依赖 Haifa 产品、演示、测试 JAR，并拒绝直接依赖实现模块；ArchUnit 测试禁止生产代码导入 SDK 内部包和实现包。
+
+## 脚本与测试目录
+
+`scripts/` 根目录保留 `test-targeted.ps1`、`verify-full.ps1` 和 `start-main-super-harness.ps1` 三个常用入口，其余按前端、协议、资源、doctor、UI、MCP、证据与治理分类，共用函数位于 `scripts/lib/`。完整入口说明见 [scripts/README.md](scripts/README.md)。
+
+`tests/checks/` 保存脚本与校验器的回归检查；`tests/ui/` 按 `smoke/`、`files/`、`dual-backend/` 保存浏览器验收用例与夹具。Java 单元测试仍位于各模块的 `src/test/java/`。目录用途、前置条件及旧路径对应关系见 [tests/README.md](tests/README.md)。
 
 ## 构建与验证
 
@@ -67,15 +73,17 @@ SDK 版本规则见 `AGENTS.md`「范围与依赖」。工作包 worktree 消费
 { "haifaVersion": "0.1.2-012-02a-delegation-SNAPSHOT" }
 ```
 
-`scripts/test-targeted.ps1`、`scripts/run-w18-ui-smoke.ps1` 和 `scripts/run-w04-frozen-ui-files.ps1` 会读取它并传 `-Dhaifa.version`；文件不存在时使用基线并输出 `sdkSelection=ABSENT`。直接运行 `mvn` 不会读取该文件，仍使用基线。
+`scripts/test-targeted.ps1`、`scripts/ui/run-w18-ui-smoke.ps1` 和 `scripts/ui/run-w04-frozen-ui-files.ps1` 会读取它并传 `-Dhaifa.version`；文件不存在时使用基线并输出 `sdkSelection=ABSENT`。直接运行 `mvn` 不会读取该文件，仍使用基线。
 
 UI runner 在构建成功后写入构建戳（`frontend/.next/haifa-build-stamp.json`、`super-harness-server/target/haifa-build-stamp.json`），`-SkipBuild`/`-SkipServerBuild` 复用构建产物前先核对源码 SHA、前端 lockfile、构建时代理目标和 Haifa 版本；不一致时在启动任何进程前失败并点名字段，不会自动重建，需去掉 `-SkipBuild` 重跑。
+
+全仓门禁用 `pwsh -NoProfile -File scripts/verify-full.ps1`：它运行 `mvn -o -ntp clean verify`（同样读取 `local-tmp/sdk-selection.json`），Maven 输出写到 `local-tmp/verify-full/`，stdout 输出 JSON 汇总；通过后为它产出的 exec JAR 写入服务端构建戳。随后在同一提交上，任意 profile 的 UI 冷轮都可加 `-SkipServerBuild` 直接复用该 JAR，只重新构建前端。不加 `-SkipServerBuild` 的冷轮仍会自行打包后端，但以 `-DskipTests` 只打包、不重复执行单元测试；单元测试只由全仓门禁证明。
 
 这些入口的回归与提交前的 SDK 基线门禁：
 
 ```powershell
-pwsh -NoProfile -File tests/build/verify-build-entry.ps1 -Maven
-pwsh -NoProfile -File tests/build/verify-haifa-version-baseline.ps1
+pwsh -NoProfile -File tests/checks/build/verify-build-entry.ps1 -Maven
+pwsh -NoProfile -File tests/checks/build/verify-haifa-version-baseline.ps1
 ```
 
 验收采用“先核对测试要证明什么，再运行完整门禁”的顺序：开发期间可用定向测试快速排障；正式验收前须核对 Oracle 与实际断言、环境和槽位配置，最终仍要完成全仓验证、真实 smoke、规定的 UI 重复轮次及主控独立复验。同一源码和代理配置下的暖轮可复用已验证的前端构建，但每轮的运行状态、原始证据和失败记录必须独立保留；详细执行规则见 `AGENTS.md` 的“验收提速（不降低门禁）”。
@@ -91,13 +99,13 @@ pwsh -NoProfile -File tests/build/verify-haifa-version-baseline.ps1
 先检查本轮依赖、浏览器、环境和槽位，不构建或启动服务：
 
 ```powershell
-pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 3 -GatewayPort 40618 -FrontendPort 45618 -PreflightOnly
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 3 -GatewayPort 40618 -FrontendPort 45618 -PreflightOnly
 ```
 
 只跑默认profile中一条真实SSE用例（标题精确匹配，未知/歧义标题在构建前失败）：
 
 ```powershell
-pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 3 -GatewayPort 40618 -FrontendPort 45618 -CaseTitle 'creates a thread and renders a real Haifa SSE answer'
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 3 -GatewayPort 40618 -FrontendPort 45618 -CaseTitle 'creates a thread and renders a real Haifa SSE answer'
 ```
 
 已验证同源码、依赖、SDK构件和代理目标的构建可按原规则加`-SkipBuild`，每次使用新数据目录。SDK同版本重新发布后必须去掉复用开关重新构建。`preflight.json`记录检查结果，`flow-health.json`记录执行范围和选中case；单case运行的其余case在`case-results.json`中保持`NOT_RUN`。空选择、缺依赖/浏览器、NO_PROXY通配符及不足的受控模型窗口均在构建前失败，不自动修改环境或安装依赖。预检/局部冒烟不替代正式全套冷暖轮、真实smoke或阶段验收。
@@ -109,10 +117,10 @@ pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 3 -GatewayPort 406
 以下命令只校验冻结前端、已记录的最小 BFF 补丁、仅连接 Haifa 的 loopback 配置，以及固定的 Node/pnpm 启动工具链，不启动服务：
 
 ```powershell
-pwsh -NoProfile -File scripts/start-haifa-frontend.ps1 `
+pwsh -NoProfile -File scripts/frontend/start-haifa-frontend.ps1 `
   -DryRun `
   -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow
-pwsh -NoProfile -File tests/frontend/verify-haifa-frontend-profile.ps1
+pwsh -NoProfile -File tests/checks/frontend/verify-haifa-frontend-profile.ps1
 ```
 
 受保护的主工作树拓扑与正式启动流程见下文“启动主工作树供人工验收”；历史 W18 配置设计与验收记录已归档至 `private-docs/prompts/39-deerflow-parity-delivery/W18-Developing/references/`。仅通过上述配置检查，不代表聊天功能或双后端差分验收通过。
@@ -128,13 +136,13 @@ W05 的受控 L2 验收使用子槽位 1（Gateway `20618`、Frontend `25618`）
 首次运行会执行 Maven package 和按槽位代理地址构建冻结前端：
 
 ```powershell
-pwsh -NoProfile -File scripts/run-w05-demo-artifact-ui.ps1
+pwsh -NoProfile -File scripts/ui/run-w05-demo-artifact-ui.ps1
 ```
 
 仅当 Java exec JAR 已在本次源码变更后重新生成、且 `.next` 已用同一槽位 Gateway 地址构建时，才可复用构建产物：
 
 ```powershell
-pwsh -NoProfile -File scripts/run-w05-demo-artifact-ui.ps1 -SkipBuild
+pwsh -NoProfile -File scripts/ui/run-w05-demo-artifact-ui.ps1 -SkipBuild
 ```
 
 脚本固定 `retries=0`，每次生成独立 Thread 和文件，并把 trace、截图、前后端/Provider 日志及 Artifact 字节/SHA 证据写入 `local-tmp/slot-1-w05-m2-evidence/playwright/run-<时间戳>/`。正式验收须连续运行两次且都通过；第一次数据不得清理，结束后还须确认 `20618`、`25618` 和子进程均已释放。
@@ -151,17 +159,17 @@ Gateway 通过 `GET /api/suggestions/config` 暴露冻结前端的后续建议�
 同一 Conversation 可在前一个 Run 终止后的下一 Turn 选择另一模型；当前 Run 的模型保持冻结，历史中的 Tool 与待审批 Interaction 仍归原 Run。可在独立槽位 1 用冻结 UI 和两个本地受控模型复验（不调用真实模型）：
 
 ```powershell
-pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 1 -GatewayPort 20618 -FrontendPort 25618 -V2ModelSwitch -DataDirectory local-tmp/slot-1-w03-v2-model-switch/data/ui-round-1
-pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 1 -GatewayPort 20618 -FrontendPort 25618 -V2ModelSwitch -DataDirectory local-tmp/slot-1-w03-v2-model-switch/data/ui-round-2 -SkipBuild
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 1 -GatewayPort 20618 -FrontendPort 25618 -V2ModelSwitch -DataDirectory local-tmp/slot-1-w03-v2-model-switch/data/ui-round-1
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 1 -GatewayPort 20618 -FrontendPort 25618 -V2ModelSwitch -DataDirectory local-tmp/slot-1-w03-v2-model-switch/data/ui-round-2 -SkipBuild
 ```
 
 第二轮的 `-SkipBuild` 只能用于首轮已按同一 Gateway 代理目标构建的前端；每轮使用独立数据目录，trace、截图及前后端/Provider 日志写入 `local-tmp/slot-1-w03-v2-model-switch/evidence/ui/run-<时间戳>/`。该受控 UI 回归不代替 W18 双后端差分、真实模型链或 V2 阶段门禁。
 
 ## W18 V2-M2 MCP 双后端差分
 
-`scripts/run-w18-v2-m2-mcp-rounds.ps1` 在 W18 独立 worktree 中按 reference 冷/暖、Haifa 冷/暖顺序运行同一套冻结 UI MCP 用例；每轮由 `scripts/run-w18-v2-m2-mcp.ps1` 管理独立 Gateway、Frontend、受控 Provider 和两个真实 Streamable HTTP MCP Server。槽位固定为 `20618/25618`，测试 MCP 使用 `20628/20629`，负例无监听端口为 `20630`，Provider 使用 `46618`。脚本会对整组端口查询 NAT 排除范围并实际绑定预检，保存每轮原始日志、trace、截图、Run 与配置证据，结束时只清理自己启动的进程。失败轮次保留 `FAIL`，不会暗中重试；MCP 切片通过也不自动提升 V2-M2 阶段。
+`scripts/ui/run-w18-v2-m2-mcp-rounds.ps1` 在 W18 独立 worktree 中按 reference 冷/暖、Haifa 冷/暖顺序运行同一套冻结 UI MCP 用例；每轮由 `scripts/ui/run-w18-v2-m2-mcp.ps1` 管理独立 Gateway、Frontend、受控 Provider 和两个真实 Streamable HTTP MCP Server。槽位固定为 `20618/25618`，测试 MCP 使用 `20628/20629`，负例无监听端口为 `20630`，Provider 使用 `46618`。脚本会对整组端口查询 NAT 排除范围并实际绑定预检，保存每轮原始日志、trace、截图、Run 与配置证据，结束时只清理自己启动的进程。失败轮次保留 `FAIL`，不会暗中重试；MCP 切片通过也不自动提升 V2-M2 阶段。
 
-本切片的负例只在 W18 runner 中启用：区域 fixture 检查测试专用 `Authorization` 值，缺失或错误时返回真实 HTTP 401；报告 fixture 可在完成一次 `get_status` 调用后、发送响应头前断开连接。测试读取 fixture 的拒绝和调用计数，以核对失效凭据及“结果未知”时没有自动重放。普通 `scripts/start-v2-test-mcp-servers.ps1` 启动不启用这些控制点。
+本切片的负例只在 W18 runner 中启用：区域 fixture 检查测试专用 `Authorization` 值，缺失或错误时返回真实 HTTP 401；报告 fixture 可在完成一次 `get_status` 调用后、发送响应头前断开连接。测试读取 fixture 的拒绝和调用计数，以核对失效凭据及“结果未知”时没有自动重放。普通 `scripts/mcp/start-v2-test-mcp-servers.ps1` 启动不启用这些控制点。
 
 运行前须在该 worktree 以离线 Maven 门禁生成 `super-harness-server/target/*-exec.jar`，并在 `frontend/` 用精确版本 Corepack `pnpm 10.26.2` 离线安装依赖。只有空闲物理内存超过 4 GB、其他 Maven 构建或发布已停止时才运行重型门禁和四轮脚本。完整命令和证据目录由 W18 任务报告记录。
 ## Lead 系统提示词装配
@@ -185,8 +193,8 @@ M3 消费本地公开 `0.1.2-SNAPSHOT` JAR，SDK 来源与构件 hash 见 [集�
 冻结 UI 的正式验收由主控在独立 worktree 运行，使用真实模型和合成 SOUL，验证“对话 → 保存 → setup_agent → 已创建 → 刷新可见”。第一轮 cold，第二轮在相同源码、依赖和构建时代理目标下 warm 复用构建，每轮使用新数据目录：
 
 ```powershell
-pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -UxV1AgentSoul -SkipServerBuild -DataDirectory local-tmp/slot-2-ux-v1-soul/data/ui-cold
-pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -UxV1AgentSoul -SkipBuild -DataDirectory local-tmp/slot-2-ux-v1-soul/data/ui-warm
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -UxV1AgentSoul -SkipServerBuild -DataDirectory local-tmp/slot-2-ux-v1-soul/data/ui-cold
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -UxV1AgentSoul -SkipBuild -DataDirectory local-tmp/slot-2-ux-v1-soul/data/ui-warm
 ```
 
 `-SkipServerBuild` 只在本轮源码已经完成全仓门禁、exec JAR 已生成时使用。脚本固定 retries=0，将 trace、截图、前后端原始日志和 `flow-health.json` 保存到 `local-tmp/slot-2-ux-v1-soul/evidence/run-<时间戳>/`，结束后核对端口和子进程清理。trace 包含实际合成 SOUL 的浏览器流量；派生 JSON 只记录 hash、长度与 ID。命令和局部测试通过不自动结算阶段 PASS。
@@ -200,8 +208,8 @@ Gateway 从 `third-party/deerflow/skills/manifest.json` 读取受信、不可变
 W15 冻结 UI 回归从独立槽位运行，先在该 worktree 的 `frontend/` 用 `COREPACK_ENABLE_NETWORK=0` 执行 `corepack pnpm install --offline --frozen-lockfile`，确认版本为 `10.26.2` 且 `downloaded 0`，再在仓库根执行同一脚本两轮：
 
 ```powershell
-pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -V2Skill -DataDirectory local-tmp/slot-2-w15-v2-skill/data/ui-round-1
-pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -V2Skill -DataDirectory local-tmp/slot-2-w15-v2-skill/data/ui-round-2 -SkipBuild
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -V2Skill -DataDirectory local-tmp/slot-2-w15-v2-skill/data/ui-round-1
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -V2Skill -DataDirectory local-tmp/slot-2-w15-v2-skill/data/ui-round-2 -SkipBuild
 ```
 
 第二轮 `-SkipBuild` 仅在首轮已按 Gateway `30618` 构建成功后使用。每轮脚本在结束时清理槽位进程，Playwright trace、截图及前后端/受控 Provider 日志写到 `local-tmp/slot-2-w15-v2-skill/evidence/ui/run-<时间戳>/`；测试需检查 `skill_load` ToolCall、启用后的模型 Context 和禁用后新 Run 的隔离。完整验收仍以开发报告的实际运行结果为准。
@@ -210,7 +218,7 @@ pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 306
 
 三个生产 Web 工具通过公开 SDK 的 `JavaToolSpec.networkAccess(hosts)` 声明 `NETWORK_ACCESS` 与逻辑服务主机；覆盖 endpoint 时主机元数据随实例配置变化，代理地址不进入逻辑服务名单。Bridge 仅对这三个生产工具显式配置 `autoApproveReadOnlyNetworkTools`，复用原策略 evaluator 并保留其它 MCP、文件写入、自定义 ASK/DENY 和危险工具的审批。主机元数据参与冻结 Catalog/Policy digest，SDK 不拦截工具自建 HTTP 客户端。上游交付与人工审查入口见 [SDK 消费记录](docs/todo.md)。
 
-UX-V1 默认工具验收在独立工作树运行 `pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -UxV1DefaultTools -DataDirectory <本工作树内的新数据目录>`。DDG 挑战仍在时，按人工指示追加 `-DeferUxV1Web`：A 文件/Artifact、B 澄清继续执行，C 搜索依赖链显式记为 NOT_RUN；延期或局部通过不能记为 M1 全部通过。源码、前端依赖和构建时代理目标相同时，第二轮可加 `-SkipBuild`，仍须使用新的 data-root、Run 与证据。原始 SSE、Run diagnostics/Usage、trace、截图及 `flow-health.json` 外置到该槽位 `local-tmp`；保留失败与首次卡点。
+UX-V1 默认工具验收在独立工作树运行 `pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 -UxV1DefaultTools -DataDirectory <本工作树内的新数据目录>`。DDG 挑战仍在时，按人工指示追加 `-DeferUxV1Web`：A 文件/Artifact、B 澄清继续执行，C 搜索依赖链显式记为 NOT_RUN；延期或局部通过不能记为 M1 全部通过。源码、前端依赖和构建时代理目标相同时，第二轮可加 `-SkipBuild`，仍须使用新的 data-root、Run 与证据。原始 SSE、Run diagnostics/Usage、trace、截图及 `flow-health.json` 外置到该槽位 `local-tmp`；保留失败与首次卡点。
 
 主控已经在同一源码运行全仓 `clean verify` 并留存 JAR 哈希、SDK 构件与原始门禁证据时，冷轮可加 `-SkipServerBuild` 复用该 JAR，仍按本槽位重新构建 Next；它不会执行 Java 门禁，不能用来替代或跳过失败的全仓验证。源码或 SDK 构件改变后必须重新构建、验证。
 
@@ -231,8 +239,8 @@ UX-V1 默认工具验收在独立工作树运行 `pwsh -NoProfile -File scripts/
 W21 冻结 UI 诊断用例使用独立槽位 3、受控 Provider 和两次相同脚本运行。首轮完成构建，次轮只在源码、前端依赖和 Gateway 代理目标完全一致时复用构建；两轮使用不同数据目录，原始日志、trace、截图和诊断 JSON 保存到 `local-tmp/slot-3-w21/evidence/ui/run-<时间戳>/`。执行前需按 `AGENTS.md` 检查整组端口、空闲内存和冻结来源：
 
 ```powershell
-pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 3 -GatewayPort 40618 -FrontendPort 45618 -V2Diagnostics -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow -DataDirectory local-tmp/slot-3-w21/data/ui-cold
-pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 3 -GatewayPort 40618 -FrontendPort 45618 -V2Diagnostics -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow -DataDirectory local-tmp/slot-3-w21/data/ui-warm -SkipBuild
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 3 -GatewayPort 40618 -FrontendPort 45618 -V2Diagnostics -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow -DataDirectory local-tmp/slot-3-w21/data/ui-cold
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 3 -GatewayPort 40618 -FrontendPort 45618 -V2Diagnostics -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow -DataDirectory local-tmp/slot-3-w21/data/ui-warm -SkipBuild
 ```
 
 用例在真实冻结页面批准生产 `write_file`，核对同一 Run 的 ModelCall、ToolCall、Interaction、Artifact ID 和下载字节，并核对页面请求的 `/token-usage`。受控 Provider 另有真实省略 Usage SSE 帧的负例，要求 SDK 报 `PARTIAL_RESPONSE` 且诊断和 HTTP Usage 保持未知。冻结页面当前关闭可见 token badge，因此不把 badge 当作通过断言；跨身份隔离仍须另行执行。
@@ -265,14 +273,14 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -GatewayOnly
 客户演示固定 Oracle 位于 `contracts/customer-demo/customer-demo-v0-oracle.json`。在启动或派发演示任务前，先运行只读 doctor；它会核对冻结 DeerFlow 来源、Haifa Agent `0.1.2-SNAPSHOT` 本地 Maven 构件、主工作树端口及进程、同源模型目录、OS 凭据存在性和外置数据目录，但不会调用真实模型或读取凭据值：
 
 ```powershell
-pwsh -NoProfile -File scripts/verify-customer-demo-doctor.ps1 `
+pwsh -NoProfile -File scripts/doctor/verify-customer-demo-doctor.ps1 `
   -OutputPath local-tmp/customer-demo-m0/doctor-live-read-only.json
 ```
 
 只检查 Oracle、冻结来源和 SDK 构件时加 `-StaticOnly`。未获人工真实模型预算授权时，doctor 会将 `budget-authorization` 和整体结果保留为 `NOT_RUN`；不得仅为获得 `PASS` 擅自添加 `-BudgetApproved`，该开关只记录已经取得的明确人工授权，本身不会发起模型请求。脚本的正反合同测试为：
 
 ```powershell
-pwsh -NoProfile -File tests/customer-demo/verify-customer-demo-doctor.ps1
+pwsh -NoProfile -File tests/checks/customer-demo/verify-customer-demo-doctor.ps1
 ```
 
 ### 客户演示 v0 证据包与 fail-closed 门禁
@@ -282,9 +290,9 @@ pwsh -NoProfile -File tests/customer-demo/verify-customer-demo-doctor.ps1
 以下命令只做只读校验与聚合，输出面向主控的机器 JSON 与简明汇总，不会启动服务、不会调用任何真实或付费模型，也不会写入 SHPM 或自动宣布阶段完成：
 
 ```powershell
-pwsh -NoProfile -File scripts/verify-customer-demo-evidence.ps1 `
+pwsh -NoProfile -File scripts/evidence/verify-customer-demo-evidence.ps1 `
   -OutputDirectory target/customer-demo-evidence
-pwsh -NoProfile -File tests/customer-demo/verify-customer-demo-evidence.ps1
+pwsh -NoProfile -File tests/checks/customer-demo/verify-customer-demo-evidence.ps1
 ```
 
 校验会拒绝缺轮次、重复 ID、两轮 SHA 或配置不一致、隐藏 retry、缺失首次失败、只报最佳轮、Artifact 无 provenance/下载 hash、缺失或漂移的真实下载字节（文件不存在、SHA 不符、字节数不符）、`fileSha256` 与 `downloadSha256` 或真实下载字节不一致、provenance 原件未绑定 Oracle tool/artifact 或 `downloadSha256`/`downloadByteCount`、provenance 原件 SHA 漂移、无参考回落证据、跳阶段、M4 无人工验收、自报 GO、GO 与 M4 SHA 不一致以及敏感值；结果严格区分 `PASS`/`FAIL`/`NOT_RUN`/`BLOCKED_EXTERNAL`/`UPSTREAM_UNSUPPORTED`：任一 stage 或 round `FAIL` 都会使 `customerDemo.status` 与 `overallStatus` 变为 `FAIL`，`BLOCKED_EXTERNAL`/`UPSTREAM_UNSUPPORTED` 在机器摘要中单独列出，绝不折叠成 `NOT_RUN`。当前 bundle 为全阶段 `NOT_RUN`、演示决策 `NO_GO`，只有当 M0–M4 全部 PASS、两轮在同一主线 SHA、同一模型/配置/数据根上连续完成且有人工验收时才会接受 `GO`；可用 `-RequireGo` 把“尚未 GO”升级为失败，供 M4 最终门禁使用。
@@ -296,6 +304,6 @@ pwsh -NoProfile -File tests/customer-demo/verify-customer-demo-evidence.ps1
 Utility 使用另一项目 `D:/workspace/haifa-ai-deerflow/utility-mcp-server` 的已有编译产物和离线 runtime classpath，以单 Java 进程运行（`-Xmx384m -XX:+UseSerialGC`，loopback 8091），避免常驻 Maven。运行清单、启动/停止脚本和部署原件在 `local-tmp/main-utility-preview-20260930/`。仅停止此 Utility 服务可运行 `pwsh -NoProfile -File local-tmp/main-utility-preview-20260930/start-utility.ps1 -Stop`；之后用同脚本不带 `-Stop` 恢复。脚本依赖已生成的 classpath 与 Utility target/classes，不删除这些文件。主服务数据及 continuation key 保持原样，本次连接不代表 V2 阶段通过。
 
 
-新增 UI 验收从 `tests/w18-ui-smoke/w05-demo-artifact.spec.cjs` 起步：该黄金样例使用生产 `write_file`、真实批准卡片、Artifact 下载及刷新重连。共享 `fixtures.cjs` 提供 runner 环境、进入工作区、Run 状态等待、当前批准卡片与截图/JSON/下载字节归档；默认 smoke 使用同一 fixtures，保留 4 个用例。
+新增 UI 验收从 `tests/ui/smoke/w05-demo-artifact.spec.cjs` 起步：该黄金样例使用生产 `write_file`、真实批准卡片、Artifact 下载及刷新重连。共享 `fixtures.cjs` 提供 runner 环境、进入工作区、Run 状态等待、当前批准卡片与截图/JSON/下载字节归档；默认 smoke 使用同一 fixtures，保留 4 个用例。
 
-`scripts/run-w18-ui-smoke.ps1` 通过 `scripts/lib/run-fixture.ps1` 管理完整槽位绑定预检、脱离调用方管道的启动、15/30/60 秒 Provider/Gateway/前端就绪等待及精确 PID 清理。所有模式的证据写入 `local-tmp/slot-<N>-<任务标签>/evidence/run-<时间戳>/`，包含原始日志、`managed-processes.json`、`flow-health.json`、`case-results.json` 和 Playwright 原件；冷暖轮分别建目录和数据，不覆盖首次失败。清理必须在原停止预算内实际绑定端口成功，失败时 runner 返回非零。MCP 启动器使用同一脱离管道的启动函数；共享库只转述 case 结果，不登记 SHPM 或提升验收状态。
+`scripts/ui/run-w18-ui-smoke.ps1` 通过 `scripts/lib/run-fixture.ps1` 管理完整槽位绑定预检、脱离调用方管道的启动、15/30/60 秒 Provider/Gateway/前端就绪等待及精确 PID 清理。所有模式的证据写入 `local-tmp/slot-<N>-<任务标签>/evidence/run-<时间戳>/`，包含原始日志、`managed-processes.json`、`flow-health.json`、`case-results.json` 和 Playwright 原件；冷暖轮分别建目录和数据，不覆盖首次失败。清理必须在原停止预算内实际绑定端口成功，失败时 runner 返回非零。MCP 启动器使用同一脱离管道的启动函数；共享库只转述 case 结果，不登记 SHPM 或提升验收状态。
