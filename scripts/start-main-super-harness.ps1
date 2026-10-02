@@ -42,7 +42,7 @@ foreach ($port in $portsToCheck) {
 
 $java = Get-Command java.exe -ErrorAction Stop
 $shell = Get-Command pwsh.exe -ErrorAction Stop
-$launcher = Join-Path $root 'scripts/start-haifa-frontend.ps1'
+$launcher = Join-Path $root 'scripts/frontend/start-haifa-frontend.ps1'
 $jar = Join-Path $root 'super-harness-server/target/super-harness-server-0.1.0-SNAPSHOT-exec.jar'
 
 if ($Build) {

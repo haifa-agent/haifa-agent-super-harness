@@ -134,7 +134,7 @@ The opt-in W05 browser profile registers its executable mutation fixture only fr
 `src/test/java`; the normal executable JAR and normal bootstrap still register no tools:
 
 ```powershell
-pwsh -NoProfile -File scripts/run-w05-interaction-smoke.ps1
+pwsh -NoProfile -File scripts/ui/run-w05-interaction-smoke.ps1
 ```
 
 This is acceptance evidence for the frozen card/HTTP wiring, not evidence that a product Tool is

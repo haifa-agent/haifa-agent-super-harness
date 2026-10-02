@@ -106,7 +106,7 @@ non-zero sub-cursors still fail closed. A controlled-provider browser run proved
 reload with `on_disconnect=continue`, observer join, ordered `messages`/`end` delivery, one rendered
 assistant message, and terminal `success`. The browser case passed twice without retries and released
 its provider, Gateway, and frontend processes. The sanitized evidence is in
-`tests/w18-ui-smoke/evidence/20260923-active-reconnect-pass.json`.
+`tests/ui/smoke/evidence/20260923-active-reconnect-pass.json`.
 
 The unsupported Interaction card projection fails closed. `NOT_RUN`: process-restart reconstruction,
 HTTP Interaction submission/card rendering, real `updates`/`custom` payload projection, and
