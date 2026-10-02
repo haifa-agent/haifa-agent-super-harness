@@ -46,6 +46,12 @@ mvn -o -ntp verify
 
 ### 定向测试与 SDK 版本选择
 
+新 Java 验收测试从 `ProductionWriteFileHttpTest.productionApprovalGateRejectsMismatchedCrossThreadDuplicateAndRejectedWrites` 起步：真实 SDK 请求 `write_file`、审批当前 Run、执行生产工具、下载 Artifact 并核验字节和重启后的哈希。`ControlledModel`/`ControlledProvider` 提供含 usage 的受控模型响应，`SseEvents.PendingApproval` 处理冻结 SSE 与当前 Run 审批，`GatewayFixture` 提供生产装配和 HTTP 证据，`GatewayProcessFixture` 管理真实 Gateway 子进程。SOUL 与 Lead 特有断言仍留在原测试；`AcceptanceFixturesTest` 验证夹具的失败路径。数据与证据默认外置到 `local-tmp/acceptance-fixtures/`，验收时通过进程级 `ENG_ACCEPTANCE_DATA_ROOT`、`ENG_ACCEPTANCE_EVIDENCE_ROOT`、`ENG_ACCEPTANCE_GATEWAY_PORT` 指定独立槽位。
+
+```powershell
+pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'ProductionWriteFileHttpTest,AcceptanceFixturesTest' -LowMemory
+```
+
 开发内环的定向测试统一使用：
 
 ```powershell

@@ -2,6 +2,8 @@ package io.haifa.agent.superharness.server;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static io.haifa.agent.superharness.server.AgentSoulTestSupport.*;
+import static io.haifa.agent.superharness.server.GatewayFixture.*;
+import static io.haifa.agent.superharness.server.ControlledModel.*;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -120,12 +122,12 @@ class SetupAgentToolTest {
 
     @Test
     void bootstrapWithoutAgentNameRegistersSetupButActualInvocationCannotWrite() throws Exception {
-        var model = new RecordingModel((request, index) -> index == 1
+        var model = new ControlledModel((request, index) -> index == 1
                 ? call(request, "setup_agent", Map.of("soul", "synthetic no scope", "description", "must-not-write"))
                 : stop(request));
-        try (var fixture = new Fixture(data, model)) {
+        try (var fixture = new GatewayFixture(data, model)) {
             fixture.seed("control", "synthetic control");
-            fixture.replacePositiveControl("control");
+            replacePositiveControl(fixture, "control");
             ConfigFingerprint before = ConfigFingerprint.read(data);
             fixture.thread("bootstrap-no-name");
             fixture.completed(fixture.run("bootstrap-no-name", null, true));
@@ -134,7 +136,7 @@ class SetupAgentToolTest {
             for (var request : model.requests) {
                 assertThat(names(request)).contains("setup_agent").doesNotContain("update_agent");
                 assertThat(instructions(request).contains("<soul>\n")).isFalse();
-                fixture.requestEvidence(request);
+                requestEvidence(fixture, request);
             }
             var results = fixture.results("bootstrap-no-name", "setup_agent");
             assertThat(results.size()).isEqualTo(1);
@@ -170,12 +172,12 @@ class SetupAgentToolTest {
 
     @Test
     void setupUpsertsSameScopedAgentTwiceAndPreservesUnchangedFields() throws Exception {
-        var model = new RecordingModel((request, index) -> switch (index) {
+        var model = new ControlledModel((request, index) -> switch (index) {
             case 1 -> call(request, "setup_agent", Map.of("soul", "synthetic setup first", "description", "first"));
             case 2 -> call(request, "setup_agent", Map.of("soul", "synthetic setup replacement", "description", "second"));
             default -> stop(request);
         });
-        try (var fixture = new Fixture(data, model)) {
+        try (var fixture = new GatewayFixture(data, model)) {
             fixture.seed("agent-a", "synthetic old soul");
             var preserved = JSON.createObjectNode().put("display_name", "Preserved name");
             preserved.putObject("knowledge_scope").put("project", "synthetic-project");
@@ -206,17 +208,17 @@ class SetupAgentToolTest {
                     .as("narrow FILE_WRITE exemption executes without approval").isFalse();
             for (var request : model.requests) {
                 assertThat(names(request)).contains("setup_agent").doesNotContain("update_agent");
-                fixture.requestEvidence(request);
+                requestEvidence(fixture, request);
             }
         }
     }
 
     @Test
     void setupCreatesMissingAgentAndInstalledSkillWhitelist() throws Exception {
-        var model = new RecordingModel((request, index) -> index == 1
+        var model = new ControlledModel((request, index) -> index == 1
                 ? call(request, "setup_agent", Map.of("soul", "synthetic new agent", "description", "new",
                         "skills", List.of("consulting-analysis"))) : stop(request));
-        try (var fixture = new Fixture(data, model)) {
+        try (var fixture = new GatewayFixture(data, model)) {
             fixture.thread("setup-new");
             fixture.completed(fixture.run("setup-new", "new-agent", true));
             assertThat(hash(fixture.agent("new-agent").path("soul").asText())).isEqualTo(hash("synthetic new agent"));
@@ -224,7 +226,7 @@ class SetupAgentToolTest {
             assertThat(fixture.agent("new-agent").path("skills").get(0).asText()).isEqualTo("consulting-analysis");
             assertThat(fixture.results("setup-new", "setup_agent")).hasSize(1);
             assertThat(model.requests.size()).isEqualTo(2);
-            for (var request : model.requests) fixture.requestEvidence(request);
+            for (var request : model.requests) requestEvidence(fixture, request);
         }
     }
 
@@ -237,12 +239,12 @@ class SetupAgentToolTest {
                 Map.of("soul", "synthetic replacement", "description", "must-not-write", "name", "agent-b"));
         int caseIndex = 0;
         for (var payload : payloads) {
-            var model = new RecordingModel((request, index) -> index == 1
+            var model = new ControlledModel((request, index) -> index == 1
                     ? call(request, "setup_agent", payload) : stop(request));
-            try (var fixture = new Fixture(data.resolve("negative-" + caseIndex++), model)) {
+            try (var fixture = new GatewayFixture(data.resolve("negative-" + caseIndex++), model)) {
                 fixture.seed("agent-a", "synthetic-A");
                 fixture.seed("agent-b", "synthetic-B");
-                fixture.replacePositiveControl("agent-a");
+                replacePositiveControl(fixture, "agent-a");
                 String a = hash(fixture.agent("agent-a").toString());
                 String b = hash(fixture.agent("agent-b").toString());
                 ConfigFingerprint before = ConfigFingerprint.read(fixture.data);
@@ -267,7 +269,7 @@ class SetupAgentToolTest {
     void exactFutureCustomLimitIsAcceptedButOneMoreCharacterCannotReplaceIt() throws Exception {
         String boundary = customSoulAtLimit("new-agent");
         ConfigFingerprint[] afterFirstWrite = new ConfigFingerprint[1];
-        var model = new RecordingModel((request, index) -> {
+        var model = new ControlledModel((request, index) -> {
             if (index == 1) return call(request, "setup_agent", Map.of("soul", boundary, "description", "boundary", "skills", List.of()));
             if (index == 2) {
                 try { afterFirstWrite[0] = ConfigFingerprint.read(data); }
@@ -276,9 +278,9 @@ class SetupAgentToolTest {
             }
             return stop(request);
         });
-        try (var fixture = new Fixture(data, model)) {
+        try (var fixture = new GatewayFixture(data, model)) {
             fixture.seed("control", "synthetic-control");
-            fixture.replacePositiveControl("control");
+            replacePositiveControl(fixture, "control");
             fixture.thread("setup-boundary");
             fixture.completed(fixture.run("setup-boundary", "new-agent", true));
             assertThat(afterFirstWrite[0]).isNotNull();
@@ -297,12 +299,12 @@ class SetupAgentToolTest {
     @Test
     void setupChecksFutureCustomPromptLengthBeforeCreatingOrReplacingAgent() throws Exception {
         String oversized = "&".repeat(7000);
-        var model = new RecordingModel((request, index) -> index == 1
+        var model = new ControlledModel((request, index) -> index == 1
                 ? call(request, "setup_agent", Map.of("soul", oversized, "description", "must-not-write"))
                 : stop(request));
-        try (var fixture = new Fixture(data, model)) {
+        try (var fixture = new GatewayFixture(data, model)) {
             fixture.seed("agent-b", "synthetic existing control");
-            fixture.replacePositiveControl("agent-b");
+            replacePositiveControl(fixture, "agent-b");
             ConfigFingerprint before = ConfigFingerprint.read(data);
             fixture.thread("setup-long");
             fixture.completed(fixture.run("setup-long", "new-agent", true));

@@ -64,7 +64,7 @@ public class AgentSoulPromptRecoveryHttpTest {
 
     @ParameterizedTest @MethodSource("damagedMetadata")
     void existingPendingRunWithDamagedServerMetadataCannotExecute(String mutation) throws Exception {
-        try (var fixture = new AgentSoulGatewayProcessFixture("guard-" + mutation)) {
+        try (var fixture = new GatewayProcessFixture("guard-" + mutation)) {
             var model = new GuardModel(true);
             Pending pending = admit(fixture, model);
             PersistentThreadCatalog catalog = new PersistentThreadCatalog(fixture.json, fixture.data);
@@ -99,7 +99,7 @@ public class AgentSoulPromptRecoveryHttpTest {
 
     @ParameterizedTest @MethodSource("missingDiagnostics")
     void publicTypedDiagnosticUnavailableFailsProductGuardWithoutExecution(String mode) throws Exception {
-        try (var fixture = new AgentSoulGatewayProcessFixture("guard-diagnostic-" + mode)) {
+        try (var fixture = new GatewayProcessFixture("guard-diagnostic-" + mode)) {
             var model = new GuardModel(true);
             AgentRunId otherOwnerRun = mode.equals("wrong-run-id") ? admitOtherOwnerRun(fixture) : null;
             Pending pending = admit(fixture, model);
@@ -146,7 +146,7 @@ public class AgentSoulPromptRecoveryHttpTest {
         }
     }
 
-    private static AgentRunId admitOtherOwnerRun(AgentSoulGatewayProcessFixture fixture) throws Exception {
+    private static AgentRunId admitOtherOwnerRun(GatewayProcessFixture fixture) throws Exception {
         var otherModel = new GuardModel(false);
         try (var api = open(fixture, otherModel)) {
             api.start();
@@ -154,7 +154,7 @@ public class AgentSoulPromptRecoveryHttpTest {
             assertThat(fixture.send("POST", "/api/threads", "{\"thread_id\":\"diagnostic-other-owner-thread\"}")
                     .statusCode()).isEqualTo(200);
             var response = fixture.send("POST", "/api/threads/diagnostic-other-owner-thread/runs/stream", ordinary(fixture));
-            String location = AgentSoulGatewayProcessFixture.location(response);
+            String location = GatewayProcessFixture.location(response);
             JsonNode real = fixture.get(location);
             assertThat(real.path("status").asText()).isEqualTo("success");
             assertThat(real.path("diagnostics").path("sdk_status").asText()).isEqualTo("COMPLETED");
@@ -164,7 +164,7 @@ public class AgentSoulPromptRecoveryHttpTest {
     }
 
     @Test void clientsCannotForgeAgentBootstrapOrPromptSignatureDuringCreateOrPatch() throws Exception {
-        try (var fixture = new AgentSoulGatewayProcessFixture("client-metadata")) {
+        try (var fixture = new GatewayProcessFixture("client-metadata")) {
             var model = new GuardModel(false);
             try (var api = open(fixture, model)) {
                 api.start();
@@ -181,7 +181,7 @@ public class AgentSoulPromptRecoveryHttpTest {
                 assertThat(patched.statusCode()).isEqualTo(404);
                 assertNoServerKeys(fixture.get("/api/threads/guard-thread").path("metadata"));
                 var run = fixture.send("POST", "/api/threads/guard-thread/runs/stream", ordinary(fixture));
-                AgentSoulGatewayProcessFixture.location(run);
+                GatewayProcessFixture.location(run);
                 JsonNode admitted = fixture.get("/api/threads/guard-thread").path("metadata");
                 assertThat(admitted.path(AGENT).asText()).isEmpty();
                 assertThat(admitted.path(BOOTSTRAP).asBoolean()).isFalse();
@@ -208,7 +208,7 @@ public class AgentSoulPromptRecoveryHttpTest {
     }
 
     private void legacy(boolean pendingCase) throws Exception {
-        try (var fixture = new AgentSoulGatewayProcessFixture("legacy-" + pendingCase)) {
+        try (var fixture = new GatewayProcessFixture("legacy-" + pendingCase)) {
             var model = new GuardModel(pendingCase);
             Pending pending = admit(fixture, model);
             var catalog = new PersistentThreadCatalog(fixture.json, fixture.data);
@@ -239,7 +239,7 @@ public class AgentSoulPromptRecoveryHttpTest {
                     var steer = fixture.http.send(steerRequest, HttpResponse.BodyHandlers.ofString());
                     String steerDetail = fixture.json.readTree(steer.body()).path("detail").asText();
                     fixture.proof("legacy-steer-rejection", Map.of("existing_run", pending.run(),
-                            "status", steer.statusCode(), "response_sha256", AgentSoulGatewayProcessFixture.hash(steer.body()),
+                            "status", steer.statusCode(), "response_sha256", GatewayProcessFixture.hash(steer.body()),
                             "detail", DETAIL.equals(steerDetail) ? steerDetail : "UNEXPECTED_DETAIL",
                             "detail_matches_identity_guard", DETAIL.equals(steerDetail),
                             "evidence_kind", "derived-response-digest"));
@@ -269,7 +269,7 @@ public class AgentSoulPromptRecoveryHttpTest {
                     var admitted = fixture.send("POST", "/api/threads/guard-thread/runs/stream",
                             ordinary(fixture, currentInput));
                     assertThat(admitted.statusCode()).isEqualTo(200);
-                    String location = AgentSoulGatewayProcessFixture.location(admitted);
+                    String location = GatewayProcessFixture.location(admitted);
                     newRun = location.substring(location.lastIndexOf('/') + 1);
                     assertThat(newRun).isNotEqualTo(pending.run());
                     JsonNode currentRun = fixture.get(location);
@@ -351,12 +351,12 @@ public class AgentSoulPromptRecoveryHttpTest {
 
     public record QueryOnlyEmpty() {}
 
-    private Pending admit(AgentSoulGatewayProcessFixture fixture, GuardModel model) throws Exception {
+    private Pending admit(GatewayProcessFixture fixture, GuardModel model) throws Exception {
         try (var api = open(fixture, model)) {
             api.start(); fixture.base = URI.create("http://127.0.0.1:" + api.address().getPort());
             assertThat(fixture.send("POST", "/api/threads", "{\"thread_id\":\"guard-thread\"}").statusCode()).isEqualTo(200);
             var response = fixture.send("POST", "/api/threads/guard-thread/runs/stream", ordinary(fixture));
-            String location = AgentSoulGatewayProcessFixture.location(response);
+            String location = GatewayProcessFixture.location(response);
             String run = location.substring(location.lastIndexOf('/') + 1);
             fixture.runDiagnostic(location, "before-admission-status-and-card", model.responseDiagnostic(fixture));
             assertThat(fixture.get(location).path("status").asText()).isEqualTo(model.pending ? "interrupted" : "success");
@@ -368,18 +368,18 @@ public class AgentSoulPromptRecoveryHttpTest {
         }
     }
 
-    private static DeerFlowBootstrapApi open(AgentSoulGatewayProcessFixture fixture, GuardModel model) throws Exception {
+    private static DeerFlowBootstrapApi open(GatewayProcessFixture fixture, GuardModel model) throws Exception {
         var binding = LocalProbeModelTestSupport.binding(model);
         return DeerFlowBootstrapApi.createForInteractionTests(
                 new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0), fixture.data,
                 new SecretKeySpec(new byte[32], "AES"), ignored -> binding, List.of());
     }
 
-    private static String ordinary(AgentSoulGatewayProcessFixture fixture) throws Exception {
+    private static String ordinary(GatewayProcessFixture fixture) throws Exception {
         return ordinary(fixture, HUMAN);
     }
 
-    private static String ordinary(AgentSoulGatewayProcessFixture fixture, String humanInput) throws Exception {
+    private static String ordinary(GatewayProcessFixture fixture, String humanInput) throws Exception {
         return fixture.json.writeValueAsString(Map.of("assistant_id", "lead_agent",
                 "input", Map.of("messages", List.of(Map.of("type", "human", "content", humanInput))),
                 "context", Map.of("model_name", "super-harness-local-probe"),
@@ -387,7 +387,7 @@ public class AgentSoulPromptRecoveryHttpTest {
                 "multitask_strategy", "reject"));
     }
 
-    private static void assertRejected(AgentSoulGatewayProcessFixture fixture, Pending pending, GuardModel model) throws Exception {
+    private static void assertRejected(GatewayProcessFixture fixture, Pending pending, GuardModel model) throws Exception {
         var rejected = fixture.send("POST", "/api/threads/guard-thread/runs/stream", fixture.approval(pending.request()));
         assertThat(rejected.statusCode()).isEqualTo(409);
         assertThat(fixture.json.readTree(rejected.body()).path("detail").asText()).isEqualTo(DETAIL);
@@ -407,7 +407,7 @@ public class AgentSoulPromptRecoveryHttpTest {
         assertThat(metadata.has(SIGNATURE)).isFalse();
     }
 
-    private static void assertNoWrite(AgentSoulGatewayProcessFixture fixture) throws Exception {
+    private static void assertNoWrite(GatewayProcessFixture fixture) throws Exception {
         var workspace = new RestrictedWorkspaceService(fixture.data.resolve("workspace"), WorkspaceLimits.defaults());
         var projects = new PersistentProjectWorkspaceService(fixture.data.resolve("workspace"),
                 WorkspaceLimits.defaults(), WorkspaceChangeLimits.defaults());
@@ -421,28 +421,29 @@ public class AgentSoulPromptRecoveryHttpTest {
     private record Pending(String run, String request) {}
     private static final class GuardModel implements AgentChatModel {
         private final boolean pending;
-        private final AtomicInteger calls = new AtomicInteger();
-        private volatile AgentChatResponse lastResponse;
-        GuardModel(boolean pending) { this.pending = pending; }
-        @Override public AgentChatResponse invoke(AgentChatRequest request) { return response(request); }
-        @Override public AgentChatResponse invokeStreaming(AgentChatRequest request, ModelStreamSink sink) { return response(request); }
-        private AgentChatResponse response(AgentChatRequest request) {
-            int call = calls.incrementAndGet();
-            lastResponse = new AgentChatResponse("m3-guard-" + call, request.model().providerModelId(), pending ? "" : "Fixture complete",
+        private final ControlledModel model;
+        private final AtomicInteger calls;
+        GuardModel(boolean pending) {
+            this.pending = pending;
+            model = new ControlledModel((request, call) -> ControlledModel.response(request, "m3-guard-" + call,
+                    pending ? "" : "Fixture complete",
                     pending && call == 1 ? List.of(new ModelToolCall(new ProviderToolCallCorrelationId("m3-guard-write"),
                             "write_file", Map.of("path", OUTPUT, "content", "must not execute"))) : List.of(),
                     pending && call == 1 ? ModelFinishReason.TOOL_CALLS : ModelFinishReason.STOP,
-                    ModelUsage.unpriced(4, 4), "", Map.of());
-            return lastResponse;
+                    ModelUsage.unpriced(4, 4)));
+            calls = model.calls;
         }
-        Map<String, Object> responseDiagnostic(AgentSoulGatewayProcessFixture fixture) throws Exception {
+        @Override public AgentChatResponse invoke(AgentChatRequest request) { return model.invoke(request); }
+        @Override public AgentChatResponse invokeStreaming(AgentChatRequest request, ModelStreamSink sink) { return model.invokeStreaming(request, sink); }
+
+        Map<String, Object> responseDiagnostic(GatewayProcessFixture fixture) throws Exception {
             Map<String, Object> shape = Map.of("response_kind", "public-AgentChatResponse",
-                    "model_calls", calls.get(), "response_present", lastResponse != null,
+                    "model_calls", calls.get(), "response_present", model.lastResponse != null,
                     "tool_calls_count", pending && calls.get() == 1 ? 1 : 0,
                     "finish_reason", pending && calls.get() == 1 ? "TOOL_CALLS" : "STOP",
-                    "usage_present", lastResponse != null, "input_tokens", 4, "output_tokens", 4);
+                    "usage_present", model.lastResponse != null, "input_tokens", 4, "output_tokens", 4);
             Map<String, Object> diagnostic = new LinkedHashMap<>(shape);
-            diagnostic.put("response_shape_sha256", AgentSoulGatewayProcessFixture.hash(fixture.json.writeValueAsString(shape)));
+            diagnostic.put("response_shape_sha256", GatewayProcessFixture.hash(fixture.json.writeValueAsString(shape)));
             diagnostic.put("evidence_kind", "derived-typed-response-shape");
             return diagnostic;
         }

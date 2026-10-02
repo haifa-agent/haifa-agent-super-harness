@@ -2,6 +2,8 @@ package io.haifa.agent.superharness.server;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static io.haifa.agent.superharness.server.AgentSoulTestSupport.*;
+import static io.haifa.agent.superharness.server.GatewayFixture.*;
+import static io.haifa.agent.superharness.server.ControlledModel.*;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpServer;
@@ -25,12 +27,12 @@ class AgentSoulBootstrapHttpTest {
 
     @Test
     void bootstrapBypassesOnlyAgentLookupInAllResolvers() throws Exception {
-        try (var fixture = new ProductionFixture(data)) {
+        try (var fixture = new GatewayFixture.Managed(data)) {
             var http = fixture.http;
             http.thread("bootstrap-missing");
             http.completed(http.run("bootstrap-missing", "missing-legal-agent", true));
             assertThat(fixture.requests.size()).isEqualTo(1);
-            assertThat(fixture.names(0)).contains("setup_agent").doesNotContain("update_agent");
+            assertThat(names(fixture, 0)).contains("setup_agent").doesNotContain("update_agent");
             for (Boolean flag : java.util.Arrays.asList(null, false)) {
                 String thread = flag == null ? "missing-no-flag" : "missing-false";
                 http.thread(thread);
@@ -54,8 +56,8 @@ class AgentSoulBootstrapHttpTest {
             http.thread("bootstrap-no-name");
             http.completed(http.run("bootstrap-no-name", null, true));
             assertThat(fixture.requests.size()).isEqualTo(2);
-            assertThat(fixture.names(1)).contains("setup_agent").doesNotContain("update_agent");
-            assertThat(fixture.instructions(1).contains("You are " + LeadPromptInputs.DEFAULT_AGENT_NAME + ",")).isTrue();
+            assertThat(names(fixture, 1)).contains("setup_agent").doesNotContain("update_agent");
+            assertThat(instructions(fixture, 1).contains("You are " + LeadPromptInputs.DEFAULT_AGENT_NAME + ",")).isTrue();
         }
     }
 
@@ -65,7 +67,7 @@ class AgentSoulBootstrapHttpTest {
         AtomicInteger listCalls = new AtomicInteger();
         HttpServer mcp = localMcp(initializeCalls, listCalls);
         mcp.start();
-        try (var fixture = new ProductionFixture(data)) {
+        try (var fixture = new GatewayFixture.Managed(data)) {
             var http = fixture.http;
             http.seed("agent-a", "synthetic custom identity that bootstrap must ignore");
             ObjectNode all = JSON.createObjectNode();
@@ -86,11 +88,11 @@ class AgentSoulBootstrapHttpTest {
             http.thread("custom-positive");
             http.completed(http.run("custom-positive", "agent-a", false));
             assertThat(fixture.requests.size()).isEqualTo(1);
-            assertThat(fixture.names(0)).contains("skill_load", "skill_resource_read", "update_agent");
-            assertThat(fixture.names(0).stream().anyMatch(name -> name.endsWith("probe_tool"))).isTrue();
+            assertThat(names(fixture, 0)).contains("skill_load", "skill_resource_read", "update_agent");
+            assertThat(names(fixture, 0).stream().anyMatch(name -> name.endsWith("probe_tool"))).isTrue();
             assertThat(initializeCalls.get()).isPositive();
             assertThat(listCalls.get()).isPositive();
-            soulEquals(fixture.instructions(0), "synthetic custom identity that bootstrap must ignore");
+            soulEquals(instructions(fixture, 0), "synthetic custom identity that bootstrap must ignore");
             int initialized = initializeCalls.get();
             int listed = listCalls.get();
 
@@ -99,19 +101,19 @@ class AgentSoulBootstrapHttpTest {
                 http.thread(thread);
                 http.completed(http.run(thread, agent, true));
                 int request = fixture.requests.size() - 1;
-                String instructions = fixture.instructions(request);
+                String instructions = instructions(fixture, request);
                 assertThat(instructions.contains("You are " + LeadPromptInputs.DEFAULT_AGENT_NAME + ",")).isTrue();
                 assertThat(instructions.contains("<soul>\n")).isFalse();
                 assertThat(instructions.contains("<self_update>")).isFalse();
                 assertThat(instructions.contains("<skill_system>\n")).isFalse();
                 Set<String> expected = new java.util.HashSet<>(BASE_TOOLS);
                 expected.add("setup_agent");
-                assertThat(fixture.names(request)).containsExactlyInAnyOrderElementsOf(expected);
+                assertThat(names(fixture, request)).containsExactlyInAnyOrderElementsOf(expected);
                 assertThat(initializeCalls.get()).as("bootstrap does not connect MCP").isEqualTo(initialized);
                 assertThat(listCalls.get()).isEqualTo(listed);
                 java.nio.file.Files.writeString(http.evidence.resolve(thread + ".provider-summary.json"),
                         JSON.writeValueAsString(java.util.Map.of("instructions_chars", instructions.length(),
-                                "instructions_sha256", hash(instructions), "tools", fixture.names(request),
+                                "instructions_sha256", hash(instructions), "tools", names(fixture, request),
                                 "mcp_initialize_count", initializeCalls.get(), "mcp_list_count", listCalls.get())));
             }
         } finally { mcp.stop(0); }

@@ -27,8 +27,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import javax.crypto.spec.SecretKeySpec;
 
-/** Own M3 fixture. Production Gateway entry point, OS port 0, bounded exact-process lifecycle. */
-final class AgentSoulGatewayProcessFixture implements AutoCloseable {
+/** Production Gateway child with a bounded, exact-process and exact-port lifecycle. */
+final class GatewayProcessFixture implements AutoCloseable {
     private static final IPHlpAPI NATIVE_TCP = nativeTcpApi();
     final ObjectMapper json = new ObjectMapper();
     HttpClient http = newClient();
@@ -41,9 +41,9 @@ final class AgentSoulGatewayProcessFixture implements AutoCloseable {
     private final List<Process> ownedProcesses = new ArrayList<>();
     private int sequence;
 
-    AgentSoulGatewayProcessFixture(String scenario) throws Exception {
+    GatewayProcessFixture(String scenario) throws Exception {
         Path external = Path.of(System.getProperty("super.harness.soul.restart.evidence.dir",
-                "../local-tmp/slot-2-m3/evidence"));
+                System.getenv().getOrDefault("ENG_ACCEPTANCE_EVIDENCE_ROOT", "../local-tmp/acceptance-fixtures/evidence")));
         evidence = Files.createDirectories(external.toAbsolutePath().normalize().resolve(scenario + "-" + UUID.randomUUID()));
         data = Files.createDirectories(evidence.resolve("data"));
         if (NATIVE_TCP != null) {
@@ -60,6 +60,11 @@ final class AgentSoulGatewayProcessFixture implements AutoCloseable {
 
     void start() throws Exception {
         require(gateway == null, "Previous production Gateway must stop before restart");
+        int configuredPort = Integer.parseInt(System.getenv().getOrDefault("ENG_ACCEPTANCE_GATEWAY_PORT", "0"));
+        try (var probe = new java.net.ServerSocket()) {
+            probe.bind(new InetSocketAddress("127.0.0.1", configuredPort));
+            proof("port-before-start-" + (sequence + 1), Map.of("configured_port", configuredPort, "bind", "PASS"));
+        }
         ClientClosure priorClient = closeClient(System.nanoTime() + Duration.ofSeconds(5).toNanos());
         proof("client-before-start-" + (sequence + 1), priorClient);
         require(priorClient.terminated(), "Previous fixture HTTP client did not terminate before restart");
@@ -76,7 +81,7 @@ final class AgentSoulGatewayProcessFixture implements AutoCloseable {
         env.put("SUPER_HARNESS_PROFILE", "local");
         env.put("DEER_FLOW_AUTH_DISABLED", "1");
         env.put("SUPER_HARNESS_BIND_ADDRESS", "127.0.0.1");
-        env.put("SUPER_HARNESS_PORT", "0");
+        env.put("SUPER_HARNESS_PORT", Integer.toString(configuredPort));
         env.put("SUPER_HARNESS_DATA_DIR", data.toString());
         env.put("HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF", "env://M3_PROCESS_KEY");
         env.put("M3_PROCESS_KEY", Base64.getEncoder().encodeToString(new SecretKeySpec(new byte[32], "AES").getEncoded()));
@@ -152,34 +157,11 @@ final class AgentSoulGatewayProcessFixture implements AutoCloseable {
         return json.writeValueAsString(body);
     }
 
-    String approval(String requestId) throws Exception {
-        ObjectNode body = (ObjectNode) json.readTree(runBody("", false, "approve"));
-        body.remove("context");
-        ObjectNode message = (ObjectNode) body.path("input").path("messages").get(0);
-        message.put("id", "m3-approval");
-        message.putObject("additional_kwargs").put("hide_from_ui", true).putObject("human_input_response")
-                .put("version", 1).put("kind", "human_input_response").put("source", "haifa_interaction")
-                .put("request_id", requestId).put("response_kind", "option").put("option_id", "approve").put("value", "approve");
-        return json.writeValueAsString(body);
-    }
+    String approval(String requestId) { return SseEvents.PendingApproval.reply(requestId, "approve"); }
 
-    JsonNode card(String sse) throws Exception {
-        var matches = Pattern.compile("event: messages\\r?\\ndata: ([^\\r\\n]+)").matcher(sse);
-        while (matches.find()) {
-            JsonNode tuple = json.readTree(matches.group(1));
-            require(tuple.isArray() && tuple.size() == 2, "Actual frozen messages SSE must be a two-element tuple");
-            JsonNode item = tuple.get(0);
-            if (!tuple.get(1).path("langgraph_node").asText().equals("tools")) continue;
-            if (item.path("artifact").path("human_input").path("request_id").isTextual()) return item;
-        }
-        throw new AssertionError("Actual frozen SSE must contain a human input card");
-    }
+    JsonNode card(String sse) { return SseEvents.read(sse).card(); }
 
-    JsonNode event(String sse, String name) throws Exception {
-        var match = Pattern.compile("event: " + Pattern.quote(name) + "\\r?\\ndata: ([^\\r\\n]+)").matcher(sse);
-        require(match.find(), "Required real SSE event is missing");
-        return json.readTree(match.group(1));
-    }
+    JsonNode event(String sse, String name) { return SseEvents.read(sse).event(name); }
 
     static String location(HttpResponse<String> response) {
         require(response.statusCode() == 200, "Actual Run stream must be accepted");

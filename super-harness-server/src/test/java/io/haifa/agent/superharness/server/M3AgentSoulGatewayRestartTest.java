@@ -3,7 +3,6 @@ package io.haifa.agent.superharness.server;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.sun.net.httpserver.HttpServer;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
 import io.haifa.agent.superharness.workspace.RestrictedWorkspaceService;
 import io.haifa.agent.superharness.workspace.WorkspaceChangeLimits;
@@ -18,7 +17,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 /** Oracle 12: two real production Gateway JVMs and the frozen REST/SSE approval protocol. */
@@ -40,48 +38,25 @@ class M3AgentSoulGatewayRestartTest {
         String thread = bootstrap ? "m3-bootstrap-restart" : "m3-update-restart";
         String agent = bootstrap ? "m3-bootstrap-target" : "m3-update-target";
         List<Capture> captures = new CopyOnWriteArrayList<>();
-        List<Map<String, Object>> responseDiagnostics = new CopyOnWriteArrayList<>();
-        var providerFailure = new AtomicReference<String>();
-        try (var fixture = new AgentSoulGatewayProcessFixture(thread)) {
-            HttpServer provider = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-            provider.createContext("/v1/chat/completions", exchange -> {
-                try {
-                    JsonNode request = fixture.json.readTree(exchange.getRequestBody());
-                    captures.add(capture(request));
-                    int call = captures.size();
-                    String tool = call == 1 ? (bootstrap ? "setup_agent" : "update_agent")
-                            : call == 2 ? "write_file" : null;
-                    Map<String, Object> arguments = call == 1
-                            ? (bootstrap ? Map.of("soul", B, "description", "M3 fixture", "skills", List.of())
-                                    : Map.of("soul", B))
-                            : Map.of("path", PATH, "content", CONTENT);
-                    Map<String, Object> delta = tool == null ? Map.of("content", "M3 fixture complete")
-                            : Map.of("tool_calls", List.of(Map.of("index", 0, "id", "m3-tool-" + call,
-                                    "type", "function", "function", Map.of("name", tool,
-                                            "arguments", fixture.json.writeValueAsString(arguments)))));
-                    String chunk = fixture.json.writeValueAsString(Map.of("id", "m3-response-" + call,
-                            "model", "m3-fixture-model", "usage", Map.of("prompt_tokens", 4,
-                                    "completion_tokens", 4, "total_tokens", 8), "choices", List.of(Map.of("index", 0,
-                                    "finish_reason", tool == null ? "stop" : "tool_calls", "delta", delta))));
-                    byte[] bytes = ("data: " + chunk + "\n\ndata: [DONE]\n\n").getBytes(StandardCharsets.UTF_8);
-                    Map<String, Object> responseDiagnostic = Map.of("call", call, "response_kind", "openai-compatible-sse",
-                            "choices_count", 1, "finish_reason", tool == null ? "stop" : "tool_calls",
-                            "tool_calls_count", tool == null ? 0 : 1, "usage_present", true,
-                            "response_bytes", bytes.length, "response_sha256", AgentSoulGatewayProcessFixture.hash(new String(bytes, StandardCharsets.UTF_8)));
-                    responseDiagnostics.add(responseDiagnostic);
-                    fixture.proof("provider-response-" + call, responseDiagnostic);
-                    exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
-                    exchange.sendResponseHeaders(200, bytes.length);
-                    exchange.getResponseBody().write(bytes);
-                    fixture.proof("provider-" + call, captures.get(call - 1));
-                } catch (Throwable failure) {
-                    providerFailure.compareAndSet(null, failure.getClass().getSimpleName());
-                    exchange.sendResponseHeaders(500, -1);
-                } finally { exchange.close(); }
-            });
-            provider.start();
-            int providerPort = provider.getAddress().getPort();
-            try {
+        try (var fixture = new GatewayProcessFixture(thread)) {
+            int providerPort;
+            try (var provider = new ControlledProvider(fixture.evidence.resolve("provider"), false, (request, call) -> {
+                captures.add(capture(request));
+                fixture.proof("provider-" + call, captures.get(call - 1));
+                String tool = call == 1 ? (bootstrap ? "setup_agent" : "update_agent")
+                        : call == 2 ? "write_file" : null;
+                Map<String, Object> arguments = call == 1
+                        ? (bootstrap ? Map.of("soul", B, "description", "M3 fixture", "skills", List.of())
+                                : Map.of("soul", B))
+                        : Map.of("path", PATH, "content", CONTENT);
+                return tool == null
+                        ? ControlledProvider.stop("m3-response-" + call, "m3-fixture-model", "M3 fixture complete", 4, 4)
+                        : ControlledProvider.call("m3-response-" + call, "m3-fixture-model", "m3-tool-" + call,
+                                tool, arguments, 4, 4);
+            })) {
+                providerPort = provider.port();
+                var responseDiagnostics = provider.responseDiagnostics;
+                var providerFailure = provider.failure;
                 fixture.start();
                 fixture.configureModel(providerPort);
                 if (!bootstrap) assertThat(fixture.send("POST", "/api/agents", fixture.json.writeValueAsString(Map.of(
@@ -90,7 +65,7 @@ class M3AgentSoulGatewayRestartTest {
                         "thread_id", thread, "metadata", Map.of("title", "M3 restart fixture")))).statusCode()).isEqualTo(200);
                 var admitted = fixture.send("POST", "/api/threads/" + thread + "/runs/stream",
                         fixture.runBody(agent, bootstrap, "Execute fixture plan"));
-                String location = AgentSoulGatewayProcessFixture.location(admitted);
+                String location = GatewayProcessFixture.location(admitted);
                 String run = location.substring(location.lastIndexOf('/') + 1);
                 fixture.runDiagnostic(location, "before-admission-card", List.copyOf(responseDiagnostics));
                 JsonNode card = fixture.card(admitted.body());
@@ -102,8 +77,8 @@ class M3AgentSoulGatewayRestartTest {
                 assertThat(captures).hasSize(2);
                 // setup/update is a real automatic standard-write exception; only the ordinary
                 // write has raised a pending card, after the actual Agent store changed to B.
-                assertThat(AgentSoulGatewayProcessFixture.hash(fixture.get("/api/agents/" + agent).path("soul").asText()))
-                        .isEqualTo(AgentSoulGatewayProcessFixture.hash(B));
+                assertThat(GatewayProcessFixture.hash(fixture.get("/api/agents/" + agent).path("soul").asText()))
+                        .isEqualTo(GatewayProcessFixture.hash(B));
                 JsonNode metadata = fixture.get("/api/threads/" + thread).path("metadata");
                 String signature = metadata.path("haifa_lead_prompt_signature").asText();
                 assertThat(signature).matches("[0-9a-f]{64}");
@@ -169,7 +144,7 @@ class M3AgentSoulGatewayRestartTest {
                 assertThat(captures).hasSize(3);
                 var next = fixture.send("POST", "/api/threads/" + thread + "/runs/stream",
                         fixture.runBody(agent, false, "Complete next fixture"));
-                String nextLocation = AgentSoulGatewayProcessFixture.location(next);
+                String nextLocation = GatewayProcessFixture.location(next);
                 assertThat(nextLocation).isNotEqualTo(location);
                 assertThat(fixture.get(nextLocation).path("status").asText()).isEqualTo("success");
                 assertThat(captures).hasSize(4);
@@ -182,7 +157,7 @@ class M3AgentSoulGatewayRestartTest {
                 assertInstruction(captures.get(3), nextSignature, false, true);
                 fixture.proof("oracle-12", Map.of("run", run, "request", requestId, "tool_call", toolCallId,
                         "signature", signature, "next_signature", nextSignature, "bootstrap", bootstrap,
-                        "provider_calls", 4, "duplicate_approval", 409, "artifact_sha256", AgentSoulGatewayProcessFixture.hash(CONTENT)));
+                        "provider_calls", 4, "duplicate_approval", 409, "artifact_sha256", GatewayProcessFixture.hash(CONTENT)));
                 fixture.stop();
                 var workspace = new RestrictedWorkspaceService(fixture.data.resolve("workspace"), WorkspaceLimits.defaults());
                 var projects = new PersistentProjectWorkspaceService(fixture.data.resolve("workspace"),
@@ -192,7 +167,7 @@ class M3AgentSoulGatewayRestartTest {
                 assertThat(workspace.findArtifacts("default", binding.workspaceId(), "thread:" + thread)).singleElement();
                 System.out.println("M3_RESTART_EVIDENCE bootstrap=" + bootstrap + " run=" + run + " signature=" + signature
                         + " provider_calls=4 duplicate=409 evidence=" + fixture.evidence);
-            } finally { provider.stop(0); }
+            }
             try (var probe = new java.net.ServerSocket()) { probe.bind(new InetSocketAddress("127.0.0.1", providerPort)); }
         }
     }
@@ -205,7 +180,7 @@ class M3AgentSoulGatewayRestartTest {
             if (role.equals("system") || role.equals("developer")) {
                 String content = message.path("content").asText();
                 instructions.add(content);
-                hashes.add(AgentSoulGatewayProcessFixture.hash(content.trim()));
+                hashes.add(GatewayProcessFixture.hash(content.trim()));
             }
         }
         List<String> leads = instructions.stream()
@@ -216,7 +191,7 @@ class M3AgentSoulGatewayRestartTest {
         Set<String> tools = new TreeSet<>();
         for (JsonNode tool : request.path("tools")) tools.add(tool.path("function").path("name").asText());
         return new Capture(List.copyOf(hashes), Set.copyOf(tools), leads.size(),
-                leads.size() == 1 ? AgentSoulGatewayProcessFixture.hash(lead.trim()) : "",
+                leads.size() == 1 ? GatewayProcessFixture.hash(lead.trim()) : "",
                 soul != null && soul.strip().equals(A), soul != null && soul.strip().equals(B),
                 soul != null, selfUpdate != null);
     }
@@ -226,7 +201,7 @@ class M3AgentSoulGatewayRestartTest {
                 .matcher(lead);
         if (!match.find()) return null;
         String body = match.group(1);
-        AgentSoulGatewayProcessFixture.require(!match.find(), "Actual Lead must not contain duplicate structured blocks");
+        GatewayProcessFixture.require(!match.find(), "Actual Lead must not contain duplicate structured blocks");
         return body;
     }
 

@@ -2,6 +2,8 @@ package io.haifa.agent.superharness.server;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static io.haifa.agent.superharness.server.AgentSoulTestSupport.*;
+import static io.haifa.agent.superharness.server.GatewayFixture.*;
+import static io.haifa.agent.superharness.server.ControlledModel.*;
 
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
@@ -50,13 +52,13 @@ class UpdateAgentToolTest {
 
     @Test
     void replacementAndOnlyDescriptionOrDisplayNamePreserveUnprovidedFields() throws Exception {
-        var model = new RecordingModel((request, index) -> switch (index) {
+        var model = new ControlledModel((request, index) -> switch (index) {
             case 1 -> call(request, "update_agent", Map.of("soul", "synthetic full replacement"));
             case 2 -> call(request, "update_agent", Map.of("description", "new description"));
             case 3 -> call(request, "update_agent", Map.of("display_name", "New Display"));
             default -> stop(request);
         });
-        try (var fixture = new Fixture(data, model)) {
+        try (var fixture = new GatewayFixture(data, model)) {
             fixture.seed("agent-a", "synthetic original prefix and tail");
             fixture.seed("agent-b", "synthetic-B");
             var preserved = JSON.createObjectNode();
@@ -83,7 +85,7 @@ class UpdateAgentToolTest {
                 // Updating persistent product configuration must not change this active Run.
                 soulEquals(instructions(request), "synthetic original prefix and tail");
                 assertThat(names(request)).contains("update_agent").doesNotContain("setup_agent");
-                fixture.requestEvidence(request);
+                requestEvidence(fixture, request);
             }
         }
     }
@@ -103,12 +105,12 @@ class UpdateAgentToolTest {
     @MethodSource("forbiddenArguments")
     void undeclaredCapabilityOrForeignTargetIsRejectedBeforeAnyPartialWrite(
             String field, boolean mixed, Map<String, Object> payload) throws Exception {
-        var model = new RecordingModel((request, index) -> index == 1
+        var model = new ControlledModel((request, index) -> index == 1
                 ? call(request, "update_agent", payload) : stop(request));
-        try (var fixture = new Fixture(data, model)) {
+        try (var fixture = new GatewayFixture(data, model)) {
             fixture.seed("agent-a", "synthetic-A");
             fixture.seed("agent-b", "synthetic-B");
-            var positiveControl = fixture.replacePositiveControl("agent-a");
+            var positiveControl = replacePositiveControl(fixture, "agent-a");
             String a = hash(fixture.agent("agent-a").toString());
             String b = hash(fixture.agent("agent-b").toString());
             ConfigFingerprint before = ConfigFingerprint.read(data);
@@ -201,12 +203,12 @@ class UpdateAgentToolTest {
 
     @Test
     void blankSoulCannotReplaceExistingConfiguration() throws Exception {
-        var model = new RecordingModel((request, index) -> index == 1
+        var model = new ControlledModel((request, index) -> index == 1
                 ? call(request, "update_agent", Map.of("soul", " \n\t", "description", "must-not-write"))
                 : stop(request));
-        try (var fixture = new Fixture(data, model)) {
+        try (var fixture = new GatewayFixture(data, model)) {
             fixture.seed("agent-a", "synthetic-A");
-            fixture.replacePositiveControl("agent-a");
+            replacePositiveControl(fixture, "agent-a");
             ConfigFingerprint before = ConfigFingerprint.read(data);
             fixture.thread("update-blank");
             fixture.completed(fixture.run("update-blank", "agent-a", false));
@@ -222,7 +224,7 @@ class UpdateAgentToolTest {
     void frozenNullishStringsKeepValuesAndOrdinaryTextReplacesThem() throws Exception {
         String[] firstSoul = new String[1];
         String[] firstDisplay = new String[1];
-        var model = new RecordingModel((request, index) -> switch (index) {
+        var model = new ControlledModel((request, index) -> switch (index) {
             case 1 -> call(request, "update_agent", Map.of("soul", " null ", "description", "changed", "display_name", "None"));
             case 2 -> {
                 try {
@@ -234,7 +236,7 @@ class UpdateAgentToolTest {
             }
             default -> stop(request);
         });
-        try (var fixture = new Fixture(data, model)) {
+        try (var fixture = new GatewayFixture(data, model)) {
             fixture.seed("agent-a", "synthetic-A");
             fixture.thread("nulls");
             fixture.completed(fixture.run("nulls", "agent-a", false));
@@ -294,7 +296,7 @@ class UpdateAgentToolTest {
                         return production.invoke(input, context);
                     }
                 };
-        var model = new RecordingModel((request, index) -> index == 1
+        var model = new ControlledModel((request, index) -> index == 1
                 ? call(request, "update_agent", Map.of("soul", "synthetic allowed field", "model", "forbidden-model"))
                 : stop(request));
         var binding = LocalProbeModelTestSupport.binding(model);
@@ -396,7 +398,7 @@ class UpdateAgentToolTest {
     void exactUpdatedPromptLimitIsAcceptedButOneMoreCharacterCannotReplaceIt() throws Exception {
         String boundary = customSoulAtLimit("agent-a");
         ConfigFingerprint[] afterFirstWrite = new ConfigFingerprint[1];
-        var model = new RecordingModel((request, index) -> {
+        var model = new ControlledModel((request, index) -> {
             if (index == 1) return call(request, "update_agent", Map.of("soul", boundary));
             if (index == 2) {
                 try { afterFirstWrite[0] = ConfigFingerprint.read(data); }
@@ -405,9 +407,9 @@ class UpdateAgentToolTest {
             }
             return stop(request);
         });
-        try (var fixture = new Fixture(data, model)) {
+        try (var fixture = new GatewayFixture(data, model)) {
             fixture.seed("agent-a", "synthetic-A");
-            fixture.replacePositiveControl("agent-a");
+            replacePositiveControl(fixture, "agent-a");
             fixture.thread("update-boundary");
             fixture.completed(fixture.run("update-boundary", "agent-a", false));
             assertThat(afterFirstWrite[0]).isNotNull();
@@ -426,12 +428,12 @@ class UpdateAgentToolTest {
     @Test
     void updateChecksRenderedLengthIncludingHtmlExpansionBeforeReplacingAgent() throws Exception {
         String oversized = "&".repeat(7000);
-        var model = new RecordingModel((request, index) -> index == 1
+        var model = new ControlledModel((request, index) -> index == 1
                 ? call(request, "update_agent", Map.of("soul", oversized, "description", "must-not-write"))
                 : stop(request));
-        try (var fixture = new Fixture(data, model)) {
+        try (var fixture = new GatewayFixture(data, model)) {
             fixture.seed("agent-a", "synthetic-A");
-            fixture.replacePositiveControl("agent-a");
+            replacePositiveControl(fixture, "agent-a");
             ConfigFingerprint before = ConfigFingerprint.read(data);
             fixture.thread("update-long");
             fixture.completed(fixture.run("update-long", "agent-a", false));
