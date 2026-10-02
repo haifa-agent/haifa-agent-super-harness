@@ -8,7 +8,7 @@ Super Harness 是产品、兼容与集成层，不是第二套 Agent Runtime。�
 
 ## 客户演示与项目看板
 
-项目的任务状态、派工、checkpoint、验收证据和客户演示门禁由 SHPM（Super Harness Project Manager）维护；人工可在 http://127.0.0.1:8787/ 只读查看。只有主控智能体通过 `shpm` 命令写入，子智能体不写 SHPM。提示词、roadmap、交付报告和原始证据的正文仍在 `private-docs`、`contracts` 与各 worktree 的 `local-tmp` 等原位置，SHPM 只保存路径。
+项目的任务状态、派工、checkpoint、验收证据和客户演示门禁由 SHPM（Super Harness Project Manager）维护；人工可在 http://127.0.0.1:8787/ 只读查看。只有主控智能体通过 `shpm` 命令写入，子智能体不写 SHPM。提示词、roadmap、交付报告和原始证据的正文仍在 `private-docs`、`contracts` 与各 worktree 的 `local-tmp` 等原位置，SHPM 只保存路径。环境准备和完整操作流程见 [SHPM 使用手册](docs/shpm-manual.md)。
 
 原 `work-packages.js`、`docs/todo.md`、`dashboard.html` 与 `work-package-dag.html` 已删除，进度只看 SHPM。W00–W24 仍是必需的产品工作包；2026-10-02 人工批准另建 `ENG` 横切工程工作包，不能用它替代任何产品工作包。W24 证据门禁与主控派工审计直接读取 SHPM 快照（数据库缺失时 fail closed，不会新建空库）：
 
@@ -105,7 +105,7 @@ pwsh -NoProfile -File tests/checks/frontend/verify-haifa-frontend-profile.ps1
 
 验收 `.cjs` 脚本（`tests/**`，含 Playwright 用例、受控 Provider 与 Steer 契约断言）的功能与运行方法见 [验收 .cjs 脚本功能与运行说明](docs/engineering/001-cjs-scripts.md)；相关前端 `.mjs` 脚本见该文附录 A。
 
-`run-w18-ui-smoke.ps1` 的本地受控模型使用 `context_window=32768`，让完整冻结 Lead prompt、生产 Tool catalog 和可选 Skill 正文容纳在同一次真实 SDK 请求中。若 Run 在 Provider 请求前返回 `MODEL_CONTEXT_TOO_LONG`，按 `AGENTS.md` 的受控模型排障记录核对配置和原始 trace。
+`run-w18-ui-smoke.ps1` 的本地受控模型使用 `context_window=32768`，让完整冻结 Lead prompt、生产 Tool catalog 和可选 Skill 正文容纳在同一次真实 SDK 请求中。运行前按 `AGENTS.md`「冻结前端」的使用说明准备依赖、槽位与受控模型配置。
 
 ## W05 客户演示 M2 Artifact UI 验收
 
