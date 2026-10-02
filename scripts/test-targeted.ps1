@@ -58,11 +58,13 @@ $null = New-Item -ItemType Directory -Force -Path $logDirectory
 $logPath = Join-Path $logDirectory "test-targeted-$(Get-Date -Format 'yyyyMMdd-HHmmss-fff').log"
 
 $savedMavenOpts = $env:MAVEN_OPTS
+$savedJavaToolOptions = $env:JAVA_TOOL_OPTIONS
 $watch = [Diagnostics.Stopwatch]::StartNew()
 Push-Location $root
 try {
     if ($LowMemory) {
         $env:MAVEN_OPTS = '-Xmx512m -XX:+UseSerialGC'
+        $env:JAVA_TOOL_OPTIONS = '-Xmx96m -XX:+UseSerialGC'
     }
     & mvn.cmd @mavenArguments *> $logPath
     $mavenExitCode = $LASTEXITCODE
@@ -70,6 +72,7 @@ try {
 finally {
     Pop-Location
     $env:MAVEN_OPTS = $savedMavenOpts
+    $env:JAVA_TOOL_OPTIONS = $savedJavaToolOptions
     $watch.Stop()
 }
 

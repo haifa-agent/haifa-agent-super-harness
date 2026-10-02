@@ -222,6 +222,25 @@ try {
     Assert-True ($manifestOne.mavenSurefire.status -eq 'PASS') "Surefire status must be PASS"
     Assert-True ($manifestOne.deerflow.runtimeStatus -eq 'NOT_RUN') "runtime NOT_RUN must be preserved"
     Assert-True ($manifestOne.overallStatus -eq 'NOT_RUN') "overall cannot become PASS while runtime is NOT_RUN"
+    # ENG is the only human-approved extension; the mandatory parity ledger remains intact.
+    $engSnapshot = Read-Snap $valid
+    $engSnapshot.tables.work_package = @($engSnapshot.tables.work_package | Where-Object id -ne 'ENG')
+    $engSnapshot.tables.task = @($engSnapshot.tables.task | Where-Object work_package_id -ne 'ENG')
+    $engSnapshot.tables.assignment = @($engSnapshot.tables.assignment | Where-Object task_id -notlike 'ENG-*')
+    $engSnapshot.tables.work_package += [pscustomobject]@{ id='ENG'; title='Engineering'; kind='cross_cutting'; state='pending'; started_at=$null; completed_at=$null; details_json=$null }
+    $null = Test-ShpmGovernance -Snapshot $engSnapshot -RepositoryRoot $valid
+    Assert-True $true 'the approved cross-cutting ENG package must be accepted'
+    ($engSnapshot.tables.work_package | Where-Object id -eq 'ENG').kind = 'delivery'
+    $engRejected = $false
+    try { $null = Test-ShpmGovernance -Snapshot $engSnapshot -RepositoryRoot $valid }
+    catch { $engRejected = $_.Exception.Message.Contains('ENG must remain a cross_cutting') }
+    Assert-True $engRejected 'ENG must not expand the product delivery ledger'
+    ($engSnapshot.tables.work_package | Where-Object id -eq 'ENG').kind = 'cross_cutting'
+    $engSnapshot.tables.work_package = @($engSnapshot.tables.work_package | Where-Object id -ne 'W24')
+    $ledgerRejected = $false
+    try { $null = Test-ShpmGovernance -Snapshot $engSnapshot -RepositoryRoot $valid }
+    catch { $ledgerRejected = $_.Exception.Message.Contains('work-package ids must be exactly W00 through W24') }
+    Assert-True $ledgerRejected 'ENG must not substitute for a missing mandatory W24 package'
     $second = Invoke-Generator $valid 'target/evidence-two' -RequireSurefire
     Assert-True ($second.ExitCode -eq 0) "second deterministic generation must pass"
     $firstHash = (Get-FileHash -LiteralPath $manifestOnePath -Algorithm SHA256).Hash

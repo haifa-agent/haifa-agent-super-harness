@@ -155,9 +155,9 @@ try {
 
     if ($Maven) {
         Write-Output 'test-targeted.ps1 with Maven'
-        $run = Invoke-Entry $testTargeted @('-Test', $FastTestClass)
+        $run = Invoke-Entry $testTargeted @('-Test', $FastTestClass, '-LowMemory')
         $json = Get-EntryJson $run.Text
-        $ok = $run.ExitCode -eq 0 -and $json.status -eq 'PASS' -and $json.tests -gt 0 -and $json.command.Contains(' -am ') -and $json.sdkSelection -eq 'ABSENT' -and -not $json.command.Contains('-Dhaifa.version')
+        $ok = $run.ExitCode -eq 0 -and $json.status -eq 'PASS' -and $json.tests -gt 0 -and $json.command.Contains(' -am ') -and $json.command.Contains('-DargLine=-Xmx768m -XX:+UseSerialGC') -and $json.sdkSelection -eq 'ABSENT' -and -not $json.command.Contains('-Dhaifa.version')
         Set-Case 'T1-fast-class-passes-with-am' $(if ($ok) { 'PASS' } else { 'FAIL' }) "tests=$($json.tests) log=$($json.logPath)"
 
         $run = Invoke-Entry $testTargeted @('-Test', 'NoSuchTestClassForBuildEntryRegression')

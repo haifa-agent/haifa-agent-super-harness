@@ -96,19 +96,24 @@ function Test-ShpmGovernance {
     $relations = @($t.relation)
     $verifications = @($t.verification)
 
-    # Work packages: the fixed W00-W24 ledger and lifecycle timestamps.
-    Assert-ShpmCondition ($packages.Count -eq 25) 'SHPM must contain exactly 25 work packages'
+    # W00-W24 remain mandatory. Human scope decision 2026-10-02 permits ENG only
+    # as an additional cross-cutting engineering package.
+    Assert-ShpmCondition ($packages.Count -in @(25, 26)) 'SHPM must contain exactly 25 work packages, or 26 with the approved ENG package'
     $expectedIds = @(0..24 | ForEach-Object { 'W{0:D2}' -f $_ })
     $actualIds = @($packages | ForEach-Object { [string]$_.id })
-    Assert-ShpmCondition (@($actualIds | Sort-Object -Unique).Count -eq 25) 'work-package ids must be unique'
+    if ($actualIds -contains 'ENG') { $expectedIds += 'ENG' }
+    Assert-ShpmCondition (@($actualIds | Sort-Object -Unique).Count -eq $packages.Count) 'work-package ids must be unique'
     Assert-ShpmCondition (@(Compare-Object ($expectedIds | Sort-Object) ($actualIds | Sort-Object)).Count -eq 0) `
-        'work-package ids must be exactly W00 through W24'
+        'work-package ids must be exactly W00 through W24, plus the optional approved ENG package'
     $byId = @{}
     foreach ($package in $packages) {
         $id = [string]$package.id
         $byId[$id] = $package
         Assert-ShpmCondition ($script:ShpmWorkPackageStates -contains [string]$package.state) "$id has an invalid state"
         Assert-ShpmCondition ($script:ShpmWorkPackageKinds -contains [string]$package.kind) "$id has an invalid kind"
+        if ($id -eq 'ENG') {
+            Assert-ShpmCondition ([string]$package.kind -eq 'cross_cutting') 'ENG must remain a cross_cutting engineering package'
+        }
         $started = $null
         $completed = $null
         if ($null -ne $package.started_at) { $started = Get-ShpmIsoTime $package.started_at "$id.started_at" }

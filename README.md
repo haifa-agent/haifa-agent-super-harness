@@ -10,7 +10,7 @@ Super Harness 是产品、兼容与集成层，不是第二套 Agent Runtime。�
 
 项目的任务状态、派工、checkpoint、验收证据和客户演示门禁由 SHPM（Super Harness Project Manager）维护；人工可在 http://127.0.0.1:8787/ 只读查看。只有主控智能体通过 `shpm` 命令写入，子智能体不写 SHPM。提示词、roadmap、交付报告和原始证据的正文仍在 `private-docs`、`contracts` 与各 worktree 的 `local-tmp` 等原位置，SHPM 只保存路径。
 
-原 `work-packages.js`、`docs/todo.md`、`dashboard.html` 与 `work-package-dag.html` 已删除，进度只看 SHPM。W24 证据门禁与主控派工审计直接读取 SHPM 快照（数据库缺失时 fail closed，不会新建空库）：
+原 `work-packages.js`、`docs/todo.md`、`dashboard.html` 与 `work-package-dag.html` 已删除，进度只看 SHPM。W00–W24 仍是必需的产品工作包；2026-10-02 人工批准另建 `ENG` 横切工程工作包，不能用它替代任何产品工作包。W24 证据门禁与主控派工审计直接读取 SHPM 快照（数据库缺失时 fail closed，不会新建空库）：
 
 `requires` 支持工作包前置依赖和阶段到既有任务或工作包的依赖。工作包仍检查存在性、自引用、重复和环；阶段依赖检查合法来源与目标。阶段 `PASS` 时，所有 `required` 的 `requires` 和 `delivers` 任务必须已由主控验收为 `finished`，合法关系不自动提升阶段结果。
 

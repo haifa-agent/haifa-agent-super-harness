@@ -13,6 +13,8 @@ $TempParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')
 $TempRoot = Join-Path $TempParent ("w24-demo-evidence-" + [Guid]::NewGuid().ToString('N'))
 $Assertions = 0
 $Passed = [System.Collections.Generic.List[string]]::new()
+$ReferencedRawEvidence = @([regex]::Matches((Get-Content -LiteralPath $SourceBundle -Raw), '"(local-tmp/[^"\r\n]+)"') |
+    ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
 
 function Assert-True([bool]$Condition, [string]$Message) {
     $script:Assertions++
@@ -32,6 +34,18 @@ function New-FixtureRoot([string]$Name) {
         $targetEvidence = Join-Path $root 'contracts/customer-demo/evidence'
         $null = New-Item -ItemType Directory -Force -Path $targetEvidence
         Get-ChildItem -LiteralPath $sourceEvidence -File | Copy-Item -Destination $targetEvidence -Force
+    }
+    # The committed bundle can reference archived real evidence outside contracts.
+    # Copy its available originals; missing or stale evidence still fails validation.
+    foreach ($relative in $ReferencedRawEvidence) {
+        $source = [IO.Path]::GetFullPath((Join-Path $RepositoryRoot $relative))
+        if (-not $source.StartsWith($RepositoryRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar,
+                [StringComparison]::OrdinalIgnoreCase)) { throw 'Bundle evidence escapes its source repository.' }
+        if (Test-Path -LiteralPath $source -PathType Leaf) {
+            $destination = Join-Path $root $relative
+            $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination)
+            Copy-Item -LiteralPath $source -Destination $destination
+        }
     }
     return $root
 }
@@ -61,6 +75,28 @@ function Set-ProvenanceField {
 
 function Read-SourceBundle {
     return (Get-Content -LiteralPath $SourceBundle -Raw | ConvertFrom-Json -Depth 64 -DateKind String)
+}
+
+function Read-PartialBundle {
+    # The committed live bundle may advance to GO; these negatives require an
+    # explicit partial fixture while keeping all existing expected results.
+    $bundle = Read-SourceBundle
+    $bundle.decision = 'NO_GO'
+    foreach ($stage in @($bundle.stages | Where-Object id -in @('M2', 'M3', 'M4'))) {
+        $stage.workStatus = 'pending'
+        $stage.result = 'NOT_RUN'
+        $stage.proof = $null
+        $stage.mainCommit = $null
+        $stage.acceptedAt = $null
+        $stage.evidence = @()
+    }
+    foreach ($round in $bundle.rounds) { $round.status = 'NOT_RUN' }
+    $bundle.humanAcceptance.present = $false
+    $bundle.humanAcceptance.path = $null
+    $bundle.humanAcceptance.sha256 = $null
+    $bundle.humanAcceptance.acceptedBy = $null
+    $bundle.humanAcceptance.acceptedAt = $null
+    return $bundle
 }
 
 function New-GoBundle([string]$Root) {
@@ -195,7 +231,7 @@ try {
     $null = New-Item -ItemType Directory -Force -Path $TempRoot
 
     $notRunRoot = New-FixtureRoot 'not-run'
-    Write-Bundle $notRunRoot (Read-SourceBundle) | Out-Null
+    Write-Bundle $notRunRoot (Read-PartialBundle) | Out-Null
     Assert-Passes $notRunRoot 'valid-partial-bundle'
     $notRunManifest = Get-Content -LiteralPath (Join-Path $notRunRoot 'target/cde-evidence/customer-demo-evidence-manifest.json') -Raw |
         ConvertFrom-Json -Depth 40 -DateKind String
@@ -338,14 +374,14 @@ try {
 
     foreach ($mutation in $mutations) {
         $root = New-FixtureRoot ("mutant-" + $mutation.Name)
-        $bundle = if ($mutation.ContainsKey('Base') -and $mutation.Base -eq 'notrun') { Read-SourceBundle } else { New-GoBundle $root }
+        $bundle = if ($mutation.ContainsKey('Base') -and $mutation.Base -eq 'notrun') { Read-PartialBundle } else { New-GoBundle $root }
         & $mutation.Apply $bundle $root
         Write-Bundle $root $bundle | Out-Null
         Assert-Rejected -Root $root -Name $mutation.Name -Pattern $mutation.Pattern
     }
 
     $skippingRoot = New-FixtureRoot 'mutant-stage-skipping'
-    $skippingBundle = Read-SourceBundle
+    $skippingBundle = Read-PartialBundle
     $m3Ref = New-EvidenceFile $skippingRoot 'evidence/stage-M3.json' '{"stage":"M3"}'
     $m3 = $skippingBundle.stages[3]
     $m3.workStatus = 'complete'
