@@ -210,7 +210,7 @@ function Wait-FixtureExit {
 }
 
 function Wait-FixturePortsReleased {
-    param([int[]]$Ports, [long]$Started, [int]$TimeoutSec, [string]$Root = '')
+    param([int[]]$Ports, [long]$Started, [int]$TimeoutSec, [string]$Root = '', [int[]]$OwnedPids = @())
     $facts = @{}; $first = @{}
     do {
         foreach ($port in $Ports) {
@@ -226,13 +226,14 @@ function Wait-FixturePortsReleased {
             }
         }
         $owned = @($(if ($Root) { Get-FixtureOwnedRuntimeProcesses $Root }))
-        if ($facts.Count -eq $Ports.Count -and $owned.Count -eq 0 -and
+        $remaining = @($OwnedPids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+        if ($facts.Count -eq $Ports.Count -and $owned.Count -eq 0 -and $remaining.Count -eq 0 -and
             [Diagnostics.Stopwatch]::GetElapsedTime($Started).TotalSeconds -le $TimeoutSec) {
             return @($Ports | ForEach-Object { $facts[$_] })
         }
         Start-Sleep -Milliseconds 10
     } while ([Diagnostics.Stopwatch]::GetElapsedTime($Started).TotalSeconds -lt $TimeoutSec)
-    $failure = [InvalidOperationException]::new("Cleanup exceeded ${TimeoutSec}s: ports=$(($Ports | Where-Object { -not $facts.ContainsKey($_) }) -join ','); ownedRuntimeProcesses=$($owned.Count).")
+    $failure = [InvalidOperationException]::new("Cleanup exceeded ${TimeoutSec}s: ports=$(($Ports | Where-Object { -not $facts.ContainsKey($_) }) -join ','); ownedRuntimeProcesses=$($owned.Count); trackedPids=$($remaining -join ',').")
     $failure.Data['portFacts'] = @(foreach ($port in $Ports) {
         if ($facts.ContainsKey($port)) { $facts[$port] } else {
             @{ port = $port; released = $false; firstBindFailure = $first.ContainsKey($port); firstTcpState = $first[$port] }
@@ -268,10 +269,11 @@ function Stop-FixtureProcesses {
         }
     }
     $ports = @($Fixture.Ports | Select-Object -Unique)
+    $ownedPids = @($Fixture.Processes | ForEach-Object { $_.Owned.Keys } | Select-Object -Unique)
     $released = @()
     try {
         if ($Fixture.Processes.Count) {
-            $released = @(Wait-FixturePortsReleased -Ports $ports -Started $started -TimeoutSec $budget -Root $Fixture.Root)
+            $released = @(Wait-FixturePortsReleased -Ports $ports -Started $started -TimeoutSec $budget -Root $Fixture.Root -OwnedPids $ownedPids)
         } else {
             # Preflight can reject another owner's port. We created no process and must not stop that owner.
             $released = @(foreach ($port in $ports) { @{ port = $port; bindable = Test-FixtureLoopbackBind $port; managed = $false } })

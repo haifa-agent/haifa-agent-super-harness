@@ -79,4 +79,31 @@ Check 'managed-command-preserves-nonzero-exit' {
         if ($code -ne 7) { throw "Detached command lost nonzero exit: $code" }
     } finally { Stop-FixtureProcesses $f; Write-FixtureFlowHealth $f -ExpectedCases @('diagnostic: no UI assertions') }
 }
+Check 'release-waits-for-tracked-child-without-runtime-or-ports' {
+    $scriptFile = Join-Path $EvidenceDirectory 'delayed-child.ps1'
+    [IO.File]::WriteAllText($scriptFile, 'Start-Sleep -Milliseconds 1500')
+    $child = Start-Process -FilePath (Get-Command pwsh).Source -ArgumentList @('-NoProfile','-File',$scriptFile) -WindowStyle Hidden -PassThru
+    try {
+        $started = [Diagnostics.Stopwatch]::GetTimestamp()
+        $null = Wait-FixturePortsReleased -Ports @() -Started $started -TimeoutSec 5 -OwnedPids @($child.Id)
+        $child.Refresh()
+        if (-not $child.HasExited -or [Diagnostics.Stopwatch]::GetElapsedTime($started).TotalMilliseconds -lt 1000) {
+            throw 'Release returned while a tracked non-runtime child was still exiting'
+        }
+    } finally { if (-not $child.HasExited) { $child.Kill(); $child.WaitForExit() }; $child.Dispose() }
+}
+Check 'tracked-child-timeout-retains-original-deadline' {
+    $scriptFile = Join-Path $EvidenceDirectory 'blocked-child.ps1'
+    [IO.File]::WriteAllText($scriptFile, 'Start-Sleep -Seconds 10')
+    $child = Start-Process -FilePath (Get-Command pwsh).Source -ArgumentList @('-NoProfile','-File',$scriptFile) -WindowStyle Hidden -PassThru
+    try {
+        $started = [Diagnostics.Stopwatch]::GetTimestamp()
+        $rejected = $false
+        try { $null = Wait-FixturePortsReleased -Ports @() -Started $started -TimeoutSec 1 -OwnedPids @($child.Id) }
+        catch { $rejected = $_.Exception.Message -like "*Cleanup exceeded 1s*trackedPids=$($child.Id)*" }
+        if (-not $rejected -or $child.HasExited -or [Diagnostics.Stopwatch]::GetElapsedTime($started).TotalSeconds -gt 3) {
+            throw 'Tracked child escaped timeout or changed the deadline'
+        }
+    } finally { if (-not $child.HasExited) { $child.Kill(); $child.WaitForExit() }; $child.Dispose() }
+}
 ConvertTo-Json -InputObject $results.ToArray() | Set-Content (Join-Path $EvidenceDirectory 'verification-results.json')
