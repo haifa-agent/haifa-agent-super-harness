@@ -82,6 +82,26 @@ pwsh -NoProfile -File tests/build/verify-haifa-version-baseline.ps1
 
 ## W18 冻结前端本地配置
 
+### 验收快速反馈
+
+开发顺序为实现、定向测试或单case冒烟、集中自审修复、稳定版本正式门禁。独立读取批量执行，终端默认只汇总退出码、计数、首个失败和原件路径。按 [交接模板](docs/acceptance-handoff-template.md) 在各worktree的`local-tmp/acceptance-handoff.md`记录短交接；等待构建时做独立检查，保留有界等待和进展更新。
+
+先检查本轮依赖、浏览器、环境和槽位，不构建或启动服务：
+
+```powershell
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 3 -GatewayPort 40618 -FrontendPort 45618 -PreflightOnly
+```
+
+只跑默认profile中一条真实SSE用例（标题精确匹配，未知/歧义标题在构建前失败）：
+
+```powershell
+pwsh -NoProfile -File scripts/run-w18-ui-smoke.ps1 -AgentSlot 3 -GatewayPort 40618 -FrontendPort 45618 -CaseTitle 'creates a thread and renders a real Haifa SSE answer'
+```
+
+已验证同源码、依赖、SDK构件和代理目标的构建可按原规则加`-SkipBuild`，每次使用新数据目录。SDK同版本重新发布后必须去掉复用开关重新构建。`preflight.json`记录检查结果，`flow-health.json`记录执行范围和选中case；单case运行的其余case在`case-results.json`中保持`NOT_RUN`。空选择、缺依赖/浏览器、NO_PROXY通配符及不足的受控模型窗口均在构建前失败，不自动修改环境或安装依赖。预检/局部冒烟不替代正式全套冷暖轮、真实smoke或阶段验收。
+
+生产JAR profile（包括默认受控profile）可用已有`-SkipServerBuild`复用经过门禁和构建戳核对的同SHA/SDK JAR，同时仍执行本槽位Next冷构建，避免UI准备再次执行已通过的Java测试。Interaction使用测试classpath，拒绝此开关；缺构建戳、源码/SDK不匹配仍在启动前失败。它不执行或替代Java门禁，主控必须先保存本轮门禁与JAR身份；SDK重新发布后仍须重建。
+
 客户 V2 验收按“演示主链优先、独立用例批量执行、问题集中修复”推进。局部失败留档后继续无依赖用例，批次结束按根因统一处理；高级路径先记录风险，必需门禁仍按真实结果结算。人工操作见 [简要测试说明](private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-2/V2-Manual-Test-Guide.md)，批次划分和结果记录见 [剩余测试用例](private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-2/V2-Remaining-Test-Cases.md)。
 
 以下命令只校验冻结前端、已记录的最小 BFF 补丁、仅连接 Haifa 的 loopback 配置，以及固定的 Node/pnpm 启动工具链，不启动服务：

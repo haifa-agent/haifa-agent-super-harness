@@ -26,7 +26,10 @@ param(
     [switch]$DeferUxV1Web,
     # Reuse the same-source reactor JAR after the controller's full gate; still build Next cold.
     [switch]$SkipServerBuild,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [ValidateNotNullOrEmpty()]
+    [string]$CaseTitle,
+    [switch]$PreflightOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,8 +37,8 @@ Set-StrictMode -Version Latest
 if ($DeferUxV1Web -and -not $UxV1DefaultTools) {
     throw 'DeferUxV1Web requires the UX-V1 default-tools profile.'
 }
-if ($SkipServerBuild -and -not ($UxV1DefaultTools -or $UxV1AgentSoul)) {
-    throw 'SkipServerBuild requires a UX-V1 profile and a verified same-source JAR.'
+if ($SkipServerBuild -and $Interaction) {
+    throw 'SkipServerBuild cannot reuse an executable JAR for the Interaction test-classpath profile.'
 }
 
 $expectedGatewayPort = 10618 + (10000 * $AgentSlot)
@@ -60,6 +63,8 @@ if ($UxV1DefaultTools -or $UxV1AgentSoul) {
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 . (Join-Path $PSScriptRoot 'lib/sdk-selection.ps1')
 . (Join-Path $PSScriptRoot 'lib/build-stamp.ps1')
+. (Join-Path $PSScriptRoot 'lib/smoke-preflight.ps1')
+$controlledContextWindow = 32768
 $sdk = [pscustomobject]@{ Status = 'NOT_RUN'; HaifaVersion = $null }
 $internalGatewayBaseUrl = "http://127.0.0.1:$GatewayPort"
  . (Join-Path $PSScriptRoot 'lib/run-fixture.ps1')
@@ -148,8 +153,16 @@ $managedEnvironment = @{
 }
 $savedEnvironment = @{}
 $testExitCode = 1
-$expectedCases = @([regex]::Matches((Get-Content -Raw (Join-Path $root "tests/w18-ui-smoke/$($managedEnvironment.W18_PLAYWRIGHT_SPEC)")), 'test(?:\.skip|\.only)?\(\s*"([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+$expectedCases = @()
+$selectedCases = @()
+$preflight = [ordered]@{ result = 'NOT_RUN'; assertions = 'NOT_RUN'; servicesStartedDuringPreflight = $false }
 try {
+    $selection = Resolve-SmokeCaseSelection -SpecPath (Join-Path $root "tests/w18-ui-smoke/$($managedEnvironment.W18_PLAYWRIGHT_SPEC)") -CaseTitle $CaseTitle
+    $expectedCases = $selection.All
+    $selectedCases = $selection.Selected
+    Assert-SmokeEnvironment -Environment $managedEnvironment -DataRoot $dataRoot -GatewayBaseUrl $internalGatewayBaseUrl `
+        -Controlled (-not $LiveDeepSeek) -ContextWindow $controlledContextWindow
+    $preflight.dependencies = Assert-SmokeDependencies -RepositoryRoot $root
     # Reject the complete pair before starting any process, including build commands.
     Assert-FixturePortsBindable -Ports @($GatewayPort, $FrontendPort) -EvidenceDirectory $evidenceRoot
     $sdk = Resolve-HaifaSdkSelection -RepositoryRoot $root
@@ -165,9 +178,7 @@ try {
         throw 'W18 Haifa frontend profile verification failed.'
     }
     $profile | Set-Content -LiteralPath (Join-Path $evidenceRoot "profile-$stamp.json") -Encoding utf8
-    Set-FixturePhase $fixture 'build'
-
-    # The Interaction profile runs the Gateway from the test classpath, not the exec JAR.
+    # Warm-build checks are also preflight checks; no build or process has started.
     $reuseServerBuild = ($SkipBuild -or $SkipServerBuild) -and -not $Interaction
     if ($reuseServerBuild) {
         Assert-ServerBuildStamp -RepositoryRoot $root -HaifaVersion $sdk.HaifaVersion
@@ -175,6 +186,17 @@ try {
     if ($SkipBuild) {
         Assert-FrontendBuildStamp -RepositoryRoot $root -InternalGatewayBaseUrl $internalGatewayBaseUrl
     }
+    $preflight.result = 'PASS'
+    $preflight.sdkSelection = $sdk.Status
+    $preflight.haifaVersion = $sdk.HaifaVersion
+    $preflight.selectedCases = $selectedCases
+    if ($PreflightOnly) {
+        $preflight | ConvertTo-Json -Depth 5 | Write-Output
+        return
+    }
+    Set-FixturePhase $fixture 'build'
+
+    # The Interaction profile runs the Gateway from the test classpath, not the exec JAR.
     if (-not $SkipBuild) {
         if (-not $SkipServerBuild) {
         Remove-BuildStamp (Get-ServerBuildStampPath $root)
@@ -285,7 +307,7 @@ try {
                 # The full frozen Lead prompt, production Tool catalog and optional Skill
                 # body must fit together. 8192 rejects even the default smoke before
                 # any Provider request with MODEL_CONTEXT_TOO_LONG.
-                context_window = 32768
+                context_window = $controlledContextWindow
                 max_tokens = 1024
                 api_key = 'w18-loopback-only'
             }
@@ -333,7 +355,7 @@ try {
                 base_url = "$providerUrl/v1"
                 enabled = $true
                 supports_vision = $false
-                context_window = 32768
+                context_window = $controlledContextWindow
                 max_tokens = 1024
                 api_key = 'w18-loopback-only'
             }
@@ -387,20 +409,29 @@ try {
 
     Push-Location $root
     try {
+        $playwrightArguments = @((Join-Path $root 'frontend/node_modules/@playwright/test/cli.js'), 'test', '--config', 'tests/w18-ui-smoke/playwright.config.cjs')
+        if ($selection.Grep) { $playwrightArguments += @('--grep', $selection.Grep) }
         $playwright = Start-FixtureProcess -Fixture $fixture -Name Playwright -FilePath (Get-Command node.exe).Source `
-            -ArgumentList @((Join-Path $root 'frontend/node_modules/@playwright/test/cli.js'), 'test', '--config', 'tests/w18-ui-smoke/playwright.config.cjs') `
+            -ArgumentList $playwrightArguments `
             -WorkingDirectory $root -StdoutPath (Join-Path $evidenceRoot 'playwright.raw.log') -StderrPath (Join-Path $evidenceRoot 'playwright.stderr.log')
         $testExitCode = Wait-FixtureExit -Entry $playwright `
-            -TimeoutSec ([Math]::Max(1, $expectedCases.Count) * ([int]$managedEnvironment.W18_PLAYWRIGHT_TIMEOUT_MS / 1000) + 60)
-        Get-Content -LiteralPath (Join-Path $evidenceRoot 'playwright.raw.log')
+            -TimeoutSec ([Math]::Max(1, $selectedCases.Count) * ([int]$managedEnvironment.W18_PLAYWRIGHT_TIMEOUT_MS / 1000) + 60)
         $fixture.TestExitCode = $testExitCode
         if ($testExitCode -ne 0) { throw "W18 UI smoke failed with exit code $testExitCode." }
+        Write-FixtureCaseResults -EvidenceDirectory $evidenceRoot -ExpectedCases $expectedCases
+        $actualCases = @(Get-Content -Raw (Join-Path $evidenceRoot 'case-results.json') | ConvertFrom-Json)
+        $allowedNotRun = @($(if ($DeferUxV1Web) { 'C web: web_search -> web_fetch without approval' }))
+        Assert-SmokeCaseResults -Rows $actualCases -SelectedCases $selectedCases -AllowedNotRun $allowedNotRun
+        [ordered]@{ selected = $selectedCases.Count; passed = @($actualCases | Where-Object result -eq 'PASS').Count
+            notRun = @($actualCases | Where-Object result -eq 'NOT_RUN').Count; exitCode = $testExitCode
+            rawLog = (Join-Path $evidenceRoot 'playwright.raw.log') } | ConvertTo-Json -Compress | Write-Output
     }
     finally {
         Pop-Location
     }
 }
 catch {
+    if ($preflight.result -ne 'PASS') { $preflight.result = 'FAIL' }
     $fixture.FirstFailure = [ordered]@{ phase = $fixture.Phase; message = $_.Exception.Message }
     throw
 }
@@ -412,6 +443,7 @@ finally {
         throw
     }
     finally {
+        $preflight | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'preflight.json') -Encoding utf8
         foreach ($name in $savedEnvironment.Keys) {
             [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
         }
@@ -420,6 +452,8 @@ finally {
             acceptanceProfile = $tag; sdkSelection = $sdk.Status; haifaVersion = $sdk.HaifaVersion
             serverBuildReused = [bool]($SkipBuild -or $SkipServerBuild); webDeferred = [bool]$DeferUxV1Web
             dataRoot = $dataRoot
+            executionScope = $(if ($PreflightOnly) { 'preflight-only' } elseif ($CaseTitle) { 'selected-case' } else { 'full-profile' })
+            selectedCases = $selectedCases
         }
         Write-Output "flowHealth=$evidenceRoot/flow-health.json"
     }

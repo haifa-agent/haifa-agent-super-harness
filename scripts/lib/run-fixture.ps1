@@ -325,8 +325,10 @@ function Write-FixtureCaseResults {
         }
         foreach ($suite in @($report.suites)) { Read-FixtureSuite $suite }
     }
-    if ($rows.Count -eq 0) {
-        foreach ($name in $ExpectedCases) { $rows.Add([ordered]@{ name = $name; result = 'NOT_RUN'; firstFailure = $null; evidence = @() }) }
+    foreach ($name in $ExpectedCases) {
+        if (-not @($rows | Where-Object { $_.name -ceq $name }).Count) {
+            $rows.Add([ordered]@{ name = $name; result = 'NOT_RUN'; firstFailure = $null; evidence = @() })
+        }
     }
     ConvertTo-Json -InputObject $rows.ToArray() -Depth 10 | Set-Content -Encoding utf8 (Join-Path $EvidenceDirectory 'case-results.json')
 }
