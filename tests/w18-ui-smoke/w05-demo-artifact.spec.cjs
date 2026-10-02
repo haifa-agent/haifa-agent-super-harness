@@ -176,11 +176,18 @@ test("production write_file approval publishes one real Artifact and survives re
   ).toBeVisible();
 
   await reconnected.getByTestId("artifact-trigger").click();
+  const artifactCard = reconnected.locator('#chat [data-slot="card"]').filter({
+    has: reconnected
+      .locator('[data-slot="card-title"]')
+      .getByText(`${prompt}.md`, { exact: true }),
+  });
   await expect(
-    reconnected.getByText(`${prompt}.md`, { exact: true }),
+    artifactCard
+      .locator('[data-slot="card-title"]')
+      .getByText(`${prompt}.md`, { exact: true }),
   ).toBeVisible();
   const downloadPromise = reconnected.waitForEvent("download");
-  await reconnected
+  await artifactCard
     .getByRole("link", { name: "Download", exact: true })
     .click();
   const download = await downloadPromise;
