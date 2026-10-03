@@ -97,7 +97,7 @@ async function fillDraft(page, source) {
   const form = editor(page);
   await expect(form).toBeVisible();
   // The new-name label also contains a hint paragraph, so its accessible name is longer than "Name".
-  await form.locator("label").filter({ has: form.getByText("Name", { exact: true }) }).locator("input").fill(source.name);
+  await form.getByRole("textbox", { name: "Name Use letters, numbers, and hyphens only.", exact: true }).fill(source.name);
   await form.getByLabel("Display name", { exact: true }).fill(source.display_name ?? "");
   await form.getByLabel("Delegation description", { exact: true }).fill(source.description);
   await form.getByLabel("System prompt", { exact: true }).fill(source.system_prompt);
