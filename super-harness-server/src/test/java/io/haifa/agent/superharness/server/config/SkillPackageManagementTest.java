@@ -24,6 +24,10 @@ class SkillPackageManagementTest {
                 .put("reason", "Controlled unit screening fixture"));
         return store;
     }
+    private static Map<String, byte[]> currentFiles(SkillConfigStore store) throws Exception {
+        String revision = store.exportManifest("sample-helper").get("revision").toString();
+        return SkillPackageFiles.archive(store.exportArchive("sample-helper", revision));
+    }
 
     @Test void completePackageSurvivesRestartAndExportRoundTrip() throws Exception {
         var store = store();
@@ -37,6 +41,22 @@ class SkillPackageManagementTest {
         Map<String, byte[]> restored = SkillPackageFiles.archive(restart.exportArchive("sample-helper", manifest.get("revision").toString()));
         assertThat(restored.keySet()).isEqualTo(source.keySet());
         source.forEach((name, bytes) -> assertThat(restored.get(name)).containsExactly(bytes));
+    }
+
+    @Test void installedEntryMetadataSurvivesVersionStorageRestartAndExport() throws Exception {
+        var store = store();
+        var source = SkillPackageFiles.archivePackage(SkillPackageArchiveTest.unixMetadataArchive());
+        store.install(SkillPackageArchiveTest.unixMetadataArchive(), null);
+        String before = store.exportManifest("sample-helper").get("revision").toString();
+        var restart = new SkillConfigStore(json, data, SkillConfigStore.repositoryRootFromWorkingDirectory());
+        assertThat(restart.projection(SkillRunTools.Selection.all()).allowedSkills()).contains("sample-helper");
+        var manifest = restart.exportManifest("sample-helper");
+        assertThat(manifest.get("revision")).isEqualTo(before);
+        assertThat(manifest.get("directory_count")).isEqualTo(4L);
+        var restored = SkillPackageFiles.archivePackage(restart.exportArchive("sample-helper", before));
+        assertThat(restored.emptyDirectories()).isEqualTo(source.emptyDirectories());
+        assertThat(restored.executableFiles()).isEqualTo(source.executableFiles());
+        source.files().forEach((path, bytes) -> assertThat(restored.files().get(path)).containsExactly(bytes));
     }
 
     @Test void editRollbackAndDeleteRetainHistoryWithoutRevivingOnReload() throws Exception {
@@ -53,6 +73,47 @@ class SkillPackageManagementTest {
         assertThat(store.history("sample-helper")).hasSize(4);
         assertThatThrownBy(() -> store.customDetail("sample-helper")).isInstanceOf(java.io.FileNotFoundException.class);
         assertThat(store.projection(SkillRunTools.Selection.all()).allowedSkills()).doesNotContain("sample-helper");
+    }
+
+    @Test void rollbackRestoresSupportingFileBytesAndRemovesNewFilesWithoutChangingInstructions() throws Exception {
+        var store = store();
+        byte[] instructions = markdown("Original");
+        byte[] binary = new byte[] {0, 1, (byte) 0xff, 42};
+        store.install(SkillPackageFiles.export("sample-helper", Map.of("SKILL.md", instructions,
+                "references/fact.txt", "first".getBytes(StandardCharsets.UTF_8), "assets/data.bin", binary)), null);
+        store.manage("write_file", "sample-helper", "second", "references/fact.txt", null, null, null, "agent", null);
+        store.rollback("sample-helper", -1);
+        assertThat(currentFiles(store).get("references/fact.txt")).containsExactly("first".getBytes(StandardCharsets.UTF_8));
+        store.manage("remove_file", "sample-helper", null, "assets/data.bin", null, null, null, "agent", null);
+        store.rollback("sample-helper", -1);
+        assertThat(currentFiles(store).get("assets/data.bin")).containsExactly(binary);
+        store.manage("write_file", "sample-helper", "new", "references/new.txt", null, null, null, "agent", null);
+        store.rollback("sample-helper", -1);
+        assertThat(currentFiles(store)).doesNotContainKey("references/new.txt");
+        assertThat(currentFiles(store).get("SKILL.md")).containsExactly(instructions);
+    }
+
+    @Test void managedPathAliasesCannotPublishAnUninstallablePackage() throws Exception {
+        var store = store();
+        store.manage("create", "sample-helper", new String(markdown("Original"), StandardCharsets.UTF_8), null, null, null, null, "agent", null);
+        store.manage("write_file", "sample-helper", "one", "references/Foo.txt", null, null, null, "agent", null);
+        byte[] before = Files.readAllBytes(data.resolve("skills_config.json"));
+        int history = store.history("sample-helper").size();
+        assertThatThrownBy(() -> store.manage("write_file", "sample-helper", "two", "references/foo.txt", null, null, null, "agent", null))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Duplicate Skill package path");
+        assertThat(Files.readAllBytes(data.resolve("skills_config.json"))).containsExactly(before);
+        assertThat(store.history("sample-helper")).hasSize(history);
+        assertThat(currentFiles(store)).containsKey("references/Foo.txt").doesNotContainKey("references/foo.txt");
+        store.manage("write_file", "sample-helper", "one", "references/\u00e9.txt", null, null, null, "agent", null);
+        before = Files.readAllBytes(data.resolve("skills_config.json"));
+        assertThatThrownBy(() -> store.manage("write_file", "sample-helper", "two", "references/e\u0301.txt", null, null, null, "agent", null))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Duplicate Skill package path");
+        assertThat(Files.readAllBytes(data.resolve("skills_config.json"))).containsExactly(before);
+        store.manage("write_file", "sample-helper", "one", "templates/Folder/a.txt", null, null, null, "agent", null);
+        before = Files.readAllBytes(data.resolve("skills_config.json"));
+        assertThatThrownBy(() -> store.manage("write_file", "sample-helper", "two", "templates/folder/b.txt", null, null, null, "agent", null))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Duplicate Skill package path");
+        assertThat(Files.readAllBytes(data.resolve("skills_config.json"))).containsExactly(before);
     }
 
     @Test void failedScanAndBadPatchDoNotPublishConfiguration() throws Exception {

@@ -32,6 +32,13 @@ public final class SkillPackageFiles {
     private static final Pattern NAME = Pattern.compile("[a-z][a-z0-9-]{0,62}");
     private SkillPackageFiles() {}
 
+    /** Frozen export's file bytes, explicit empty directories and normalized executable flags. */
+    record PackageContent(Map<String, byte[]> files, Set<String> emptyDirectories, Set<String> executableFiles) {
+        static PackageContent filesOnly(Map<String, byte[]> files) { return new PackageContent(files, Set.of(), Set.of()); }
+    }
+
+    private record CentralMember(int offset, int mode) {}
+
     public static String name(String name) {
         if (name == null || !NAME.matcher(name).matches()) throw new IllegalArgumentException("Invalid Skill name");
         return name;
@@ -54,22 +61,70 @@ public final class SkillPackageFiles {
         return path;
     }
 
+    /** Apply the archive's portable component identity before either import or managed publication. */
+    static void validatePaths(Iterable<String> paths) {
+        Map<String, String> aliases = new java.util.HashMap<>();
+        Set<String> files = new java.util.HashSet<>();
+        for (String raw : paths) {
+            String[] components = path(raw).split("/");
+            StringBuilder prefix = new StringBuilder();
+            for (String component : components) {
+                if (!prefix.isEmpty()) prefix.append('/');
+                prefix.append(component);
+                String exact = prefix.toString();
+                String canonical = java.text.Normalizer.normalize(exact, java.text.Normalizer.Form.NFC)
+                        .toLowerCase(java.util.Locale.ROOT);
+                String earlier = aliases.putIfAbsent(canonical, exact);
+                if (earlier != null && !earlier.equals(exact)) throw new IllegalArgumentException("Duplicate Skill package path");
+            }
+            files.add(raw);
+        }
+        for (String file : files) {
+            int slash = file.indexOf('/');
+            while (slash >= 0) {
+                if (files.contains(file.substring(0, slash))) throw new IllegalArgumentException("Skill package file conflicts with directory");
+                slash = file.indexOf('/', slash + 1);
+            }
+        }
+    }
+
+    static void validatePackagePaths(PackageContent content) {
+        List<String> all = new ArrayList<>(content.files().keySet());
+        all.addAll(content.emptyDirectories());
+        validatePaths(all);
+        if (content.emptyDirectories().stream().anyMatch(content.files()::containsKey)
+                || !content.files().keySet().containsAll(content.executableFiles())) {
+            throw new IllegalArgumentException("Skill package entry metadata conflicts with files");
+        }
+    }
+
     public static Map<String, byte[]> archive(byte[] bytes) throws IOException {
+        return archivePackage(bytes).files();
+    }
+
+    static PackageContent archivePackage(byte[] bytes) throws IOException {
         if (bytes.length > MAX_ARCHIVE_BYTES) throw new IllegalArgumentException("Skill archive is too large");
-        validateCentralDirectory(bytes);
+        Map<String, CentralMember> central = validateCentralDirectory(bytes);
         Map<String, byte[]> files = new TreeMap<>();
+        Set<String> directories = new java.util.TreeSet<>(), executable = new java.util.TreeSet<>();
         Set<String> paths = new java.util.HashSet<>();
         int total = 0, count = 0;
         try (var zip = new ZipInputStream(new ByteArrayInputStream(bytes), StandardCharsets.UTF_8)) {
             for (ZipEntry entry; (entry = zip.getNextEntry()) != null;) {
                 if (++count > MAX_FILES) throw new IllegalArgumentException("Too many Skill archive entries");
                 String key = entry.getName();
+                CentralMember member = central.get(key);
+                if (member == null) throw new IllegalArgumentException("Skill ZIP headers disagree");
+                int type = member.mode() & 0170000;
+                if (type != 0 && type != (entry.isDirectory() ? 0040000 : 0100000)) {
+                    throw new IllegalArgumentException("Skill ZIP entry type is inconsistent");
+                }
                 if (entry.isDirectory()) key = key.substring(0, key.length() - 1);
                 path(key);
                 if (!paths.add(java.text.Normalizer.normalize(key, java.text.Normalizer.Form.NFC).toLowerCase(java.util.Locale.ROOT))) {
                     throw new IllegalArgumentException("Duplicate Skill archive path");
                 }
-                if (entry.isDirectory()) continue;
+                if (entry.isDirectory()) { directories.add(key); continue; }
                 byte[] value = zip.readNBytes(MAX_FILE_BYTES + 1);
                 if (value.length > MAX_FILE_BYTES || (long) total + value.length > MAX_PACKAGE_BYTES) {
                     throw new IllegalArgumentException("Skill package exceeds size limits");
@@ -77,8 +132,10 @@ public final class SkillPackageFiles {
                 total += value.length;
                 if (executableBinary(value)) throw new IllegalArgumentException("Skill archive contains executable binary content");
                 files.put(key, value);
+                if ((member.mode() & 0111) != 0) executable.add(key);
             }
         }
+        if (count != central.size()) throw new IllegalArgumentException("Skill ZIP headers disagree");
         if (files.isEmpty()) throw new IllegalArgumentException("Skill archive is empty");
         // Frozen installer accepts either a flat package or one enclosing directory.
         if (!files.containsKey("SKILL.md")) {
@@ -90,11 +147,27 @@ public final class SkillPackageFiles {
             Map<String, byte[]> stripped = new TreeMap<>();
             files.forEach((key, value) -> stripped.put(key.substring(prefix.length()), value));
             files = stripped;
+            Set<String> strippedDirectories = new java.util.TreeSet<>();
+            for (String directory : directories) {
+                if (directory.equals(prefix.substring(0, prefix.length() - 1))) continue;
+                if (!directory.startsWith(prefix)) throw new IllegalArgumentException("Skill archive has entries outside its root");
+                strippedDirectories.add(directory.substring(prefix.length()));
+            }
+            directories = strippedDirectories;
+            Set<String> strippedExecutable = new java.util.TreeSet<>();
+            for (String path : executable) strippedExecutable.add(path.substring(prefix.length()));
+            executable = strippedExecutable;
         }
         if (files.keySet().stream().anyMatch(key -> !key.equals("SKILL.md") && key.endsWith("/SKILL.md"))) {
             throw new IllegalArgumentException("Nested SKILL.md is not accepted by the installer");
         }
-        return files;
+        Set<String> allDirectories = Set.copyOf(directories);
+        Set<String> filePaths = Set.copyOf(files.keySet());
+        directories.removeIf(dir -> filePaths.stream().anyMatch(file -> file.startsWith(dir + "/"))
+                || allDirectories.stream().anyMatch(child -> !child.equals(dir) && child.startsWith(dir + "/")));
+        PackageContent content = new PackageContent(files, directories, executable);
+        validatePackagePaths(content);
+        return content;
     }
 
     private static boolean executableBinary(byte[] value) {
@@ -105,7 +178,7 @@ public final class SkillPackageFiles {
                 0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca).contains(magic);
     }
 
-    private static void validateCentralDirectory(byte[] bytes) {
+    private static Map<String, CentralMember> validateCentralDirectory(byte[] bytes) {
         // JDK ZIP streams do not expose Unix external attributes; read only the central
         // metadata to reject links/encryption/ZIP64 before any filesystem mutation.
         int end = -1;
@@ -122,6 +195,7 @@ public final class SkillPackageFiles {
             throw new IllegalArgumentException("Invalid or excessive Skill ZIP directory");
         }
         int current = (int) offset;
+        Map<String, CentralMember> members = new LinkedHashMap<>();
         for (int i = 0; i < count; i++) {
             if (current + 46 > end || u32(bytes, current) != 0x02014b50L) {
                 throw new IllegalArgumentException("Invalid Skill ZIP entry");
@@ -131,9 +205,16 @@ public final class SkillPackageFiles {
                     || u32(bytes, current + 20) == 0xffffffffL || u32(bytes, current + 24) == 0xffffffffL) {
                 throw new IllegalArgumentException("Skill archive links/encryption/ZIP64 are unsupported");
             }
+            int nameLength = u16(bytes, current + 28);
+            if (current + 46 + nameLength > end) throw new IllegalArgumentException("Invalid Skill ZIP entry length");
+            String name = new String(bytes, current + 46, nameLength, StandardCharsets.UTF_8);
+            if (members.putIfAbsent(name, new CentralMember(current, mode)) != null) {
+                throw new IllegalArgumentException("Duplicate Skill archive path");
+            }
             current += 46 + u16(bytes, current + 28) + u16(bytes, current + 30) + u16(bytes, current + 32);
         }
         if (current != end) throw new IllegalArgumentException("Invalid Skill ZIP directory length");
+        return members;
     }
 
     private static int u16(byte[] bytes, int offset) {
@@ -167,6 +248,7 @@ public final class SkillPackageFiles {
                 files.put(relative, content); total += length;
             }
         }
+        validatePaths(files.keySet());
         return files;
     }
 
@@ -180,6 +262,23 @@ public final class SkillPackageFiles {
         return HexFormat.of().formatHex(digest.digest());
     }
 
+    static String digest(PackageContent content) {
+        validatePackagePaths(content);
+        if (content.emptyDirectories().isEmpty() && content.executableFiles().isEmpty()) return digest(content.files());
+        MessageDigest digest = sha();
+        field(digest, "haifa-skill-package-entries-v1".getBytes(StandardCharsets.US_ASCII));
+        field(digest, digest(content.files()).getBytes(StandardCharsets.US_ASCII));
+        for (String directory : new java.util.TreeSet<>(content.emptyDirectories())) {
+            field(digest, "directory".getBytes(StandardCharsets.US_ASCII));
+            field(digest, directory.getBytes(StandardCharsets.UTF_8));
+        }
+        for (String executable : new java.util.TreeSet<>(content.executableFiles())) {
+            field(digest, "executable".getBytes(StandardCharsets.US_ASCII));
+            field(digest, executable.getBytes(StandardCharsets.UTF_8));
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
     static String hash(byte[] content) { return HexFormat.of().formatHex(sha().digest(content)); }
     private static MessageDigest sha() {
         try { return MessageDigest.getInstance("SHA-256"); }
@@ -187,24 +286,48 @@ public final class SkillPackageFiles {
     }
 
     public static byte[] export(String name, Map<String, byte[]> files) throws IOException {
+        return export(name, PackageContent.filesOnly(files));
+    }
+
+    static byte[] export(String name, PackageContent content) throws IOException {
+        validatePackagePaths(content);
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         try (var zip = new ZipOutputStream(bytes, StandardCharsets.UTF_8)) {
-            for (var row : exportRows(files)) {
+            for (var row : exportRows(content)) {
                 String relative = row.get("path").toString();
                 boolean directory = row.get("type").equals("directory");
                 ZipEntry member = new ZipEntry(name(name) + "/" + (relative.equals(".") ? "" : path(relative)) + (directory && !relative.equals(".") ? "/" : ""));
                 member.setTime(0); zip.putNextEntry(member);
-                if (!directory) zip.write(files.get(relative));
+                if (!directory) zip.write(content.files().get(relative));
                 zip.closeEntry();
                 if (bytes.size() > MAX_ARCHIVE_BYTES) throw new IllegalArgumentException("Skill export is too large");
             }
         }
         if (bytes.size() > MAX_ARCHIVE_BYTES) throw new IllegalArgumentException("Skill export is too large");
-        return bytes.toByteArray();
+        byte[] archive = bytes.toByteArray();
+        var central = validateCentralDirectory(archive);
+        for (var row : exportRows(content)) {
+            String relative = row.get("path").toString();
+            boolean directory = row.get("type").equals("directory");
+            String memberName = name + "/" + (relative.equals(".") ? "" : relative + (directory ? "/" : ""));
+            CentralMember member = central.get(memberName);
+            if (member == null) throw new IOException("Skill ZIP export entry is missing");
+            int mode = directory ? 0040755 : Boolean.TRUE.equals(row.get("executable")) ? 0100755 : 0100644;
+            archive[member.offset() + 5] = 3; // Unix creator; never preserve privilege bits.
+            ByteBuffer.wrap(archive, member.offset() + 38, 4).order(ByteOrder.LITTLE_ENDIAN)
+                    .putInt((mode << 16) | (directory ? 0x10 : 0));
+        }
+        return archive;
     }
 
     public static Map<String, Object> exportManifest(String name, Map<String, byte[]> files) {
-        List<Map<String, Object>> rows = exportRows(files);
+        return exportManifest(name, PackageContent.filesOnly(files));
+    }
+
+    static Map<String, Object> exportManifest(String name, PackageContent content) {
+        validatePackagePaths(content);
+        Map<String, byte[]> files = content.files();
+        List<Map<String, Object>> rows = exportRows(content);
         List<Map<String, Object>> blockers = new ArrayList<>(), warnings = new ArrayList<>();
         files.forEach((path, bytes) -> {
             if (!path.equals("SKILL.md") && path.endsWith("/SKILL.md")) blockers.add(Map.of("code", "skill_export_nested_skill", "path", path,
@@ -290,14 +413,21 @@ public final class SkillPackageFiles {
         return tokens.stream().map(tool -> aliases.getOrDefault(tool, tool)).distinct().toList();
     }
 
-    private static List<Map<String, Object>> exportRows(Map<String, byte[]> files) {
+    private static List<Map<String, Object>> exportRows(PackageContent content) {
+        Map<String, byte[]> files = content.files();
         List<Map<String, Object>> rows = new ArrayList<>();
         Set<String> directories = new java.util.TreeSet<>();
         directories.add(".");
+        directories.addAll(content.emptyDirectories());
         for (var entry : new TreeMap<>(files).entrySet()) {
             Path path = Path.of(entry.getKey()).getParent();
             while (path != null) { directories.add(path.toString().replace('\\', '/')); path = path.getParent(); }
-            rows.add(Map.of("path", entry.getKey(), "type", "file", "size", entry.getValue().length, "executable", false));
+            rows.add(Map.of("path", entry.getKey(), "type", "file", "size", entry.getValue().length,
+                    "executable", content.executableFiles().contains(entry.getKey())));
+        }
+        for (String empty : content.emptyDirectories()) {
+            Path parent = Path.of(empty).getParent();
+            while (parent != null) { directories.add(parent.toString().replace('\\', '/')); parent = parent.getParent(); }
         }
         directories.forEach(dir -> rows.add(Map.of("path", dir, "type", "directory", "size", 0, "executable", false)));
         rows.sort((left, right) -> java.util.Arrays.compareUnsigned(
@@ -316,7 +446,7 @@ public final class SkillPackageFiles {
             field(digest, row.get("type").toString().getBytes(StandardCharsets.US_ASCII));
             field(digest, row.get("size").toString().getBytes(StandardCharsets.US_ASCII));
             field(digest, files.containsKey(path) ? sha().digest(files.get(path)) : new byte[0]);
-            field(digest, "0".getBytes(StandardCharsets.US_ASCII));
+            field(digest, (Boolean.TRUE.equals(row.get("executable")) ? "1" : "0").getBytes(StandardCharsets.US_ASCII));
         }
         return HexFormat.of().formatHex(digest.digest());
     }

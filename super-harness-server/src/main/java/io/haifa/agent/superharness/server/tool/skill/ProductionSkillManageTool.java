@@ -29,8 +29,12 @@ public final class ProductionSkillManageTool implements JavaTool<ProductionSkill
         requireOwner(context);
         if (ClarificationBoundaryRegistry.active(context.runId().value())) return new Output(false, ClarificationBoundaryRegistry.DISCARD_MESSAGE);
         try {
+            Runnable admission = () -> {
+                context.cancellation().throwIfCancellationRequested();
+                if (!Instant.now().isBefore(context.deadline())) throw new IllegalStateException("Skill tool deadline expired");
+            };
             store.manage(input.action().name(), input.name(), value(input.content()), value(input.path()),
-                    value(input.find()), value(input.replace()), input.expected_count().orElse(null), "agent", threadId);
+                    value(input.find()), value(input.replace()), input.expected_count().orElse(null), "agent", threadId, admission);
             return new Output(true, "Skill '" + input.name() + "': " + input.action() + " completed. Subsequent Runs can discover the published version.");
         } catch (java.io.IOException | RuntimeException rejected) {
             return new Output(false, "Error: Skill operation rejected; check package validity, patch counts and configured security screening.");
