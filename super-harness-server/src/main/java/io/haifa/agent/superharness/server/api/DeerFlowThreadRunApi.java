@@ -1954,6 +1954,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
             var page = run.bridge.events(run.runId, run.sdkCursor, EVENT_PAGE_SIZE);
             for (AgentRunEvent source : page.items()) {
+                // Message notifications have no Parent wire frame; Child replay reads the SDK feed directly.
+                if (source.payload() instanceof RunEventPayloads.MessageCommitted) continue;
                 AppendResult append = run.projector.append(source);
                 if (append instanceof AppendResult.Gap gap) {
                     return Optional.of(gap);
@@ -1974,6 +1976,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 awaitLiveObservers(run, catchUpDeadline);
                 var page = run.bridge.events(run.runId, run.sdkCursor, EVENT_PAGE_SIZE);
                 for (AgentRunEvent source : page.items()) {
+                    if (source.payload() instanceof RunEventPayloads.MessageCommitted) continue;
                     AppendResult append = run.projector.append(source);
                     if (append instanceof AppendResult.Gap gap) {
                         throw new EventProjectionException(

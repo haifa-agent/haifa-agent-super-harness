@@ -18,6 +18,7 @@ import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
 import io.haifa.agent.superharness.server.config.LocalServerConfiguration;
+import io.haifa.agent.superharness.server.testsupport.GatewayFixture;
 import io.haifa.agent.superharness.server.testsupport.LocalProbeModelTestSupport;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
@@ -29,6 +30,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -446,12 +448,15 @@ public class DeerFlowSteerApiTest {
         }
         assertThat(status).isEqualTo("success");
 
-        JsonNode durableMessages = getJson("/api/threads/" + threadId + "/state")
-                .path("values").path("messages");
+        Path evidence = GatewayFixture.evidenceDirectory();
+        JsonNode durableState = getJson("/api/threads/" + threadId + "/state");
+        Files.writeString(evidence.resolve("long-steer-durable-state.json"), durableState.toString());
+        JsonNode durableMessages = durableState.path("values").path("messages");
         assertThat(durableMessages.size()).isEqualTo(22);
         HttpResponse<String> gap = client.send(HttpRequest.newBuilder()
                 .uri(baseUri.resolve(location + "/stream"))
                 .GET().build(), HttpResponse.BodyHandlers.ofString());
+        Files.writeString(evidence.resolve("long-steer-gap.sse"), gap.body());
         assertThat(gap.body()).contains("event: gap", "earliest_available_event_id");
         String gapData = gap.body().lines().filter(line -> line.startsWith("data: "))
                 .findFirst().orElseThrow().substring(6);
@@ -461,6 +466,7 @@ public class DeerFlowSteerApiTest {
                 .uri(baseUri.resolve(location + "/stream"))
                 .header("Last-Event-ID", (earliestSequence - 1) + "-0")
                 .GET().build(), HttpResponse.BodyHandlers.ofString());
+        Files.writeString(evidence.resolve("long-steer-retained-replay.sse"), replay.body());
         assertThat(replay.statusCode()).isEqualTo(200);
         assertThat(replay.body()).contains("event: end").doesNotContain("event: error");
         int replayedSuperseded = 0;

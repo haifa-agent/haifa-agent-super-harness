@@ -182,7 +182,11 @@ public final class HaifaRunBridge implements AutoCloseable {
             AgentChatModel configuredModels = new AgentChatModel() {
                 private AgentChatModel delegate(io.haifa.agent.model.api.AgentChatRequest request) {
                     ModelBinding selected = frozenModels.get(request.model().modelId().value());
-                    if (selected == null || !selected.snapshot().configurationDigest().equals(request.model().configurationDigest())) {
+                    // Recovery registers the same managed revision with a read-only default
+                    // policy. The SDK resumes with the original Run's frozen invocation
+                    // options, which legitimately have a different digest.
+                    // All other frozen fields must still match the credential-owning adapter.
+                    if (selected == null || !matchesFrozenModelConfiguration(selected.snapshot(), request.model())) {
                         throw new IllegalArgumentException("Model request does not match an admitted configuration");
                     }
                     return selected.model();
@@ -350,6 +354,17 @@ public final class HaifaRunBridge implements AutoCloseable {
     public boolean matchesModelBinding(ModelBinding candidate) {
         return bindingIdentity().equals(candidate.name() + "@" + candidate.revision())
                 && binding.snapshot().configurationDigest().equals(candidate.snapshot().configurationDigest());
+    }
+
+    /** Recovery preserves SDK-owned Run options without relaxing adapter or credential identity. */
+    static boolean matchesFrozenModelConfiguration(ResolvedModelSnapshot selected, ResolvedModelSnapshot request) {
+        ResolvedModelSnapshot normalized = ResolvedModelSnapshot.create(
+                selected.providerId(), selected.providerVersion(), selected.modelId(), selected.modelVersion(),
+                selected.providerModelId(), selected.adapterType(), selected.adapterVersion(), selected.apiStyle(),
+                selected.dialect(), selected.endpoint(), selected.credentialRef(), selected.nativeStreaming(),
+                selected.capabilities(), selected.contextWindow(), selected.maxOutputTokens(),
+                selected.providerOptions(), request.invocationOptions());
+        return normalized.configurationDigest().equals(request.configurationDigest());
     }
 
     public boolean hasTools() {
