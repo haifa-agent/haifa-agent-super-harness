@@ -42,7 +42,7 @@ public final class ProductionWebFetchTool
     private final HttpClient http;
 
     public ProductionWebFetchTool(WebToolConfig config) {
-        this(config, WebHttpClients.create(config));
+        this(config, WebHttpClients.shared(config));
     }
 
     public ProductionWebFetchTool(WebToolConfig config, HttpClient http) {

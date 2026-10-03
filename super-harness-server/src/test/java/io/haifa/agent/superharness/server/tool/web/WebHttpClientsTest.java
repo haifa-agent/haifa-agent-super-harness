@@ -33,6 +33,17 @@ import org.junit.jupiter.api.Timeout;
 @Timeout(10)
 class WebHttpClientsTest {
     @Test
+    void defaultToolsShareOneClientPerConfiguration() {
+        WebToolConfig defaults = WebToolConfig.fromEnvironment(java.util.Map.of());
+        WebToolConfig slower = WebToolConfig.fromEnvironment(
+                java.util.Map.of(WebToolConfig.TIMEOUT_ENVIRONMENT, "37"));
+
+        assertThat(WebHttpClients.shared(WebToolConfig.fromEnvironment(java.util.Map.of())))
+                .isSameAs(WebHttpClients.shared(defaults));
+        assertThat(WebHttpClients.shared(slower)).isNotSameAs(WebHttpClients.shared(defaults));
+    }
+
+    @Test
     void emptyEnvironmentPreservesDefaultSelectorAndNoGlobalMutation() {
         ProxySelector previous = ProxySelector.getDefault();
         assertThat(WebHttpClients.selector(Map.of(), previous)).isSameAs(previous);

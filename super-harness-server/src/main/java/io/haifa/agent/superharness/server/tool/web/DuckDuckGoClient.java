@@ -53,7 +53,7 @@ final class DuckDuckGoClient {
     }
 
     DuckDuckGoClient(WebToolConfig config, System.Logger webLog) {
-        this(config, webLog, WebHttpClients.create(config));
+        this(config, webLog, WebHttpClients.shared(config));
     }
 
     DuckDuckGoClient(WebToolConfig config, System.Logger webLog, HttpClient http) {

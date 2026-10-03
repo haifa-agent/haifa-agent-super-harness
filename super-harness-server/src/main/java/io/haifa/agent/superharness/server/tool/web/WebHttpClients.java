@@ -18,6 +18,17 @@ import java.util.function.Predicate;
 final class WebHttpClients {
     private WebHttpClients() {}
 
+    /**
+     * One client per configuration for the life of the process. The default Web tools are built
+     * for every Run, and each new JDK HttpClient owns a selector thread until it is collected.
+     */
+    private static final java.util.concurrent.ConcurrentMap<WebToolConfig, HttpClient> SHARED =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    static HttpClient shared(WebToolConfig config) {
+        return SHARED.computeIfAbsent(config, WebHttpClients::create);
+    }
+
     static HttpClient create(WebToolConfig config) {
         return create(config, System.getenv());
     }
