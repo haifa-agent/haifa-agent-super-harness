@@ -2,7 +2,7 @@
 
 The frozen frontend almost never changes, yet every new worktree used to rebuild it (about two
 minutes). A production build depends only on the frozen sources, the lockfile, the Node version
-and the Gateway URL that ``next.config.js`` bakes into its rewrites, so builds are cached under
+and the Gateway URL and non-static public profile baked into the build, so builds are cached under
 that key in the main checkout (``local-tmp/shared/frontend-build/<key>/``) and restored into any
 worktree that needs the same build. ``.next/cache`` (build-time cache, not needed by
 ``next start``) is left out.
@@ -41,14 +41,17 @@ def cache_root(repo: Path) -> Path:
 
 
 def cache_key(repo: Path, gateway: str) -> str | None:
+    if os.environ.get("NEXT_PUBLIC_STATIC_WEBSITE_ONLY") != "false":
+        return None
     if run("git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all", "--", "frontend"):
         return None
     lockfile = hashlib.sha256((repo / "frontend" / "pnpm-lock.yaml").read_bytes()).hexdigest()
     parts = [
-        "frozen-frontend-build-v1",
+        "frozen-frontend-build-v2",
         run("git", "-C", str(repo), "rev-parse", "HEAD:frontend"),
         lockfile,
         gateway.rstrip("/"),
+        "NEXT_PUBLIC_STATIC_WEBSITE_ONLY=false",
         run("node", "--version"),
     ]
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:32]

@@ -316,6 +316,7 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1
 
 ```powershell
 $env:DEER_FLOW_INTERNAL_GATEWAY_BASE_URL='http://127.0.0.1:18018'
+$env:NEXT_PUBLIC_STATIC_WEBSITE_ONLY='false'
 $env:COREPACK_ENABLE_NETWORK='0'
 Push-Location frontend
 try {
@@ -327,7 +328,7 @@ Write-FrontendBuildStamp -RepositoryRoot (Get-Location).Path -InternalGatewayBas
 pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -ProductionFrontend
 ```
 
-`-ProductionFrontend` 只使用构建戳与当前前端树、lockfile、代理目标完全匹配的 `.next`；预检不符即拒绝启动。该模式沿用相同的冻结来源、同源代理、身份与固定端口检查。默认启动方式仍为开发模式。
+`-ProductionFrontend` 只使用构建戳与当前前端树、lockfile、代理目标及 `NEXT_PUBLIC_STATIC_WEBSITE_ONLY=false` 构建配置完全匹配的 `.next`；预检不符即拒绝启动。构建前必须设置该变量，避免把只读静态站点配置固化到客户端。该模式沿用相同的冻结来源、同源代理、身份与固定端口检查。默认启动方式仍为开发模式。
 
 只需重建或重启 Gateway、而受保护的前端仍在运行时，先核对监听 `18018` 的 Java 进程并只停止该 PID，再运行相关 Maven 测试和 `mvn -o -ntp -pl super-harness-server -am package`，随后执行：
 

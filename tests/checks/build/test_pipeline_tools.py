@@ -162,6 +162,18 @@ class FrontendGateCacheTest(unittest.TestCase):
 
 
 class FrontendBuildCacheTest(unittest.TestCase):
+    def test_cache_requires_non_static_build_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            frontend = repo / "frontend"
+            frontend.mkdir()
+            (frontend / "pnpm-lock.yaml").write_text("lockfile", encoding="utf-8")
+            with patch.object(build_cache, "run", side_effect=lambda *args: "" if "status" in args else "value"):
+                with patch.dict(build_cache.os.environ, {"NEXT_PUBLIC_STATIC_WEBSITE_ONLY": "true"}):
+                    self.assertIsNone(build_cache.cache_key(repo, "http://127.0.0.1:11619"))
+                with patch.dict(build_cache.os.environ, {"NEXT_PUBLIC_STATIC_WEBSITE_ONLY": "false"}):
+                    self.assertIsNotNone(build_cache.cache_key(repo, "http://127.0.0.1:11619"))
+
     def test_restore_copies_complete_build_and_removes_previous_target(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
