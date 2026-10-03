@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.haifa.agent.superharness.server.testsupport.ControlledProvider;
 import io.haifa.agent.superharness.server.testsupport.GatewayFixture;
 import io.haifa.agent.superharness.server.testsupport.DelegationHttpFixture;
+import io.haifa.agent.superharness.server.testsupport.SseEvents;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -117,6 +118,86 @@ class DeerFlowTaskDelegationApiTest {
         }
     }
 
+    @Test void missingChildProviderUsageStaysUnknownAndExplicitZeroSurvivesRestart() throws Exception {
+        AtomicInteger parent = new AtomicInteger();
+        try (var provider = new ControlledProvider(evidence, true, (request, call) -> {
+            if (child(request)) {
+                ObjectNode response = ControlledProvider.stop("child-" + call, "w08-model", "child output", 0, 0);
+                if (request.path("messages").toString().contains("usage omitted")) response.remove("usage");
+                return response;
+            }
+            int lead = parent.incrementAndGet();
+            return lead % 2 == 1 ? ControlledProvider.call("lead-" + call, "w08-model", "usage-task-" + call,
+                    "task", Map.of("agent", "researcher", "objective", lead == 1 ? "usage omitted" : "usage explicit zero"))
+                    : ControlledProvider.stop("lead-" + call, "w08-model", "parent continued");
+        }, true)) {
+            Map<String, String> locations = new java.util.LinkedHashMap<>();
+            Map<String, JsonNode> states = new java.util.LinkedHashMap<>();
+            try (var gateway = GatewayFixture.production(data, Integer.getInteger("w08.gatewayPort", 14618), env, evidence)) {
+                configure(gateway.base, provider.port()); seed(gateway.base, "researcher", "CHILD-W08", 30, 5);
+                for (String thread : List.of("child-usage-omitted", "child-usage-zero")) {
+                    boolean omitted = thread.endsWith("omitted");
+                    String location = execute(gateway.base, thread, input(true));
+                    locations.put(thread, location);
+                    JsonNode run = http.get(gateway.base, location, thread + "-run.json");
+                    assertThat(run.path("status").asText()).isEqualTo("success");
+                    JsonNode state = http.get(gateway.base, "/api/threads/" + thread + "/state", thread + "-state.json");
+                    states.put(thread, state);
+                    JsonNode result = messages(state).stream().filter(message -> message.path("name").asText().equals("task"))
+                            .findFirst().orElseThrow();
+                    JsonNode metadata = result.path("additional_kwargs");
+                    assertThat(metadata.path("subagent_status").asText()).isEqualTo(omitted ? "failed" : "completed");
+                    if (omitted) {
+                        assertThat(metadata.has("subagent_token_usage")).isFalse();
+                        assertThat(run.path("total_tokens").isNull()).isTrue();
+                        assertThat(run.has("subagent_tokens")).isFalse();
+                        assertThat(Files.readString(evidence.resolve(thread + ".sse"))).doesNotContain("subagent_token_usage");
+                    } else {
+                        assertThat(metadata.path("subagent_token_usage").path("total_tokens").isIntegralNumber()).isTrue();
+                        assertThat(metadata.path("subagent_token_usage").path("total_tokens").asLong()).isZero();
+                        assertThat(run.path("subagent_tokens").isIntegralNumber()).isTrue();
+                        assertThat(run.path("subagent_tokens").asLong()).isZero();
+                        assertThat(run.path("total_tokens").asLong()).isEqualTo(14);
+                        var stream = SseEvents.read(Files.readString(evidence.resolve(thread + ".sse")));
+                        var totals = java.util.stream.Stream.of("messages", "messages/partial", "messages/complete", "custom")
+                                .flatMap(name -> stream.named(name).stream())
+                                .flatMap(frame -> frame.data().findValues("subagent_token_usage").stream())
+                                .map(usage -> usage.path("total_tokens")).toList();
+                        assertThat(totals).isNotEmpty().allSatisfy(total -> {
+                            assertThat(total.isIntegralNumber()).isTrue();
+                            assertThat(total.asLong()).isZero();
+                        });
+                    }
+                }
+                assertThat(provider.responseDiagnostics.stream().filter(frame -> Boolean.FALSE.equals(frame.get("usage_present"))).toList())
+                        .hasSize(1);
+                var omittedFrame = provider.responseDiagnostics.stream()
+                        .filter(frame -> Boolean.FALSE.equals(frame.get("usage_present"))).findFirst().orElseThrow();
+                int omittedCall = ((Number) omittedFrame.get("call")).intValue();
+                String suffix = omittedFrame.get("response_kind").equals("openai-compatible-sse") ? ".sse" : ".json";
+                assertThat(Files.readString(evidence.resolve("provider-response-" + omittedCall + suffix)))
+                        .contains("child output").doesNotContain("\"usage\"");
+            }
+            int calls = provider.calls.get();
+            try (var restarted = GatewayFixture.production(data, Integer.getInteger("w08.gatewayPort", 14618), env, evidence)) {
+                for (String thread : locations.keySet()) {
+                    assertThat(http.get(restarted.base, "/api/threads/" + thread + "/state", thread + "-restart-state.json")
+                            .path("values").path("messages")).isEqualTo(states.get(thread).path("values").path("messages"));
+                    JsonNode run = http.get(restarted.base, locations.get(thread), thread + "-restart-run.json");
+                    if (thread.endsWith("omitted")) {
+                        assertThat(run.path("total_tokens").isNull()).isTrue();
+                        assertThat(run.has("subagent_tokens")).isFalse();
+                    } else {
+                        assertThat(run.path("subagent_tokens").isIntegralNumber()).isTrue();
+                        assertThat(run.path("subagent_tokens").asLong()).isZero();
+                    }
+                }
+                assertThat(provider.calls.get()).isEqualTo(calls);
+            }
+            assertThat(provider.failure.get()).isNull();
+        }
+    }
+
     @Test void unknownChildIsRejectedBeforeCreationAndParentContinues() throws Exception {
         try (var provider = new ControlledProvider(evidence, true, (request, call) -> call == 1
                 ? ControlledProvider.call("unknown-" + call, "w08-model", "unknown-provider", "task",
@@ -192,7 +273,7 @@ class DeerFlowTaskDelegationApiTest {
 
     @Test void childTimeoutComesFromItsProfileAndParentContinues() throws Exception {
         AtomicInteger parent = new AtomicInteger();
-        try (var provider = new ControlledProvider(evidence, true, (request, call) -> {
+        var provider = new ControlledProvider(evidence, true, (request, call) -> {
             if (child(request)) {
                 Thread.sleep(1800); // Real controlled HTTP latency exceeds the declared SDK Child wall.
                 return ControlledProvider.stop("late-" + call, "w08-model", "late child");
@@ -201,6 +282,7 @@ class DeerFlowTaskDelegationApiTest {
                     "timeout-provider", "task", Map.of("agent", "researcher", "objective", "Bounded slow request"))
                     : ControlledProvider.stop("lead-" + call, "w08-model", "parent continued");
         }, (request, authorization) -> true, DelegationHttpFixture::isChild);
+        try (provider;
                 var gateway = GatewayFixture.production(data, Integer.getInteger("w08.gatewayPort", 14618), env, evidence)) {
             configure(gateway.base, provider.port()); seed(gateway.base, "researcher", "CHILD-W08", 1, 5);
             String location = execute(gateway.base, "timeout", input(true));
@@ -209,8 +291,8 @@ class DeerFlowTaskDelegationApiTest {
                     .filter(message -> message.path("name").asText().equals("task")).findFirst().orElseThrow();
             assertThat(result.path("additional_kwargs").path("subagent_status").asText()).isEqualTo("timed_out");
             assertThat(parent.get()).isEqualTo(2);
-            assertThat(provider.expectedResponseAborts.get()).isEqualTo(1);
         }
+        assertThat(provider.expectedResponseAborts.get()).isEqualTo(1);
     }
 
     @Test void selectedChildModelHasARealModelContribution() throws Exception {

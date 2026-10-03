@@ -148,6 +148,15 @@ public final class HaifaRunBridge implements AutoCloseable {
             DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
             SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
             SubagentRunConfiguration delegation) {
+        this(binding, tools, foundation, mcpProjection, skillProjection, agentContext, delegation,
+                new io.haifa.agent.runtime.api.ChildRunCapacity(delegation.settings().runningCapacity()));
+    }
+
+    public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity) {
+        java.util.Objects.requireNonNull(childRunCapacity, "childRunCapacity");
         this.agentContext = java.util.Objects.requireNonNull(agentContext, "agent context must not be null");
         List<McpServerSpec> mcpSpecs = mcpProjection.specs();
         this.binding = binding;
@@ -224,7 +233,7 @@ public final class HaifaRunBridge implements AutoCloseable {
                     .policy(new PolicyPlatformContribution(
                             PolicyPresets.standardApproval(), new DefaultPolicyDecisionService()));
             if (delegation.enabled()) {
-                builder.maxConcurrentChildRuns(delegation.settings().runningCapacity()).nonInteractiveChildTools();
+                builder.childRunCapacity(childRunCapacity).nonInteractiveChildTools();
                 for (var child : delegation.children()) {
                     Set<String> childTools = child.allowedTools(allowedTools);
                     builder.runProfile(new ProductRunProfile(child.profileId(), "1.0.0", child.model().name(),

@@ -188,7 +188,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                                 "Subagent configuration unavailable; admitting Run without delegation");
                         return io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled();
                     }
-                });
+                }, new io.haifa.agent.runtime.api.ChildRunCapacity(delegationSettings.runningCapacity()));
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
         this.skillsApi = new DeerFlowSkillsApi(objectMapper, skillStore, workspaceApi);

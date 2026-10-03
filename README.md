@@ -190,6 +190,8 @@ pwsh -NoProfile -File scripts/test-targeted.ps1 -Test DeerFlowSubagentCatalogApi
 
 生产 Run 的 `context.subagent_enabled=true` 才声明 SDK Child 与 `task`；未提供、null、false 或 bootstrap 时关闭。Custom Agent 的 `allowed_subagents=null` 表示全部有效定义，`[]` 表示禁止全部，列表取有效目录交集。每次新 Run 读取目录、模型和实际 Tool 声明生成快照与指纹；正在执行的 Run 沿用已冻结声明，重启历史读取公开 SDK 事实。新启用委托的 Parent 使用 `haifa-super-harness:lead` 定义 ID，避免与合法 Child 名称冲突；未启用及历史恢复保留原定义 ID，历史 Run 不改名。
 
+每个 Gateway 以公开 SDK `ChildRunCapacity` 持有一个共享容量，全部 Thread、后续 Bridge 重建与恢复 Bridge 复用同一实例；不同 Gateway/data-root 独立，准入、等待唤醒、取消与实际执行结束后的容量释放由 SDK 管理。
+
 进程启动配置 `HAIFA_SUPER_HARNESS_SUBAGENT_MAX_RUNNING` 默认 3，`HAIFA_SUPER_HARNESS_SUBAGENT_MAX_CONCURRENT` 默认取进程容量；并发夹取到 1–64 且不超过容量。`HAIFA_SUPER_HARNESS_SUBAGENT_MAX_TOTAL_PER_RUN` 默认 6，夹取到 1–50。非法整数启动失败；本期不支持 context 覆盖。Child 的 `timeout_seconds`、`max_turns` 通过公开 profile 映射到 SDK，深度绝对上限 1；`tools=null` 继承 Parent 实际 Tool 集后减禁用项，`[]` 保持空集，Child 的需审批操作由 SDK 非交互策略拒绝。`skills` 存储保留，但本期不装配。
 
 启用委托的 Parent wall 授权为 `120000 + max_total_per_run * 最大有效 Child timeout_ms`，以免原 120 秒 Parent wall 提前终止委托等待。Parent 原有 16 次迭代、模型/Tool 调用预算等限制仍生效；执行限额与终止由 SDK 拥有。默认内置 timeout900秒、总量6时 wall 授权为5520000毫秒。未启用委托仍使用原120秒授权。

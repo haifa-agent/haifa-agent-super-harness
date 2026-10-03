@@ -160,6 +160,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private final McpProjectionProvider mcpProjections;
     private final SkillProjectionProvider skillProjections;
     private final DelegationProjectionProvider delegationProjections;
+    // One public SDK capacity owner per Gateway, shared by all Thread and recovery Bridges.
+    private final io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity;
     private final DeerFlowUploadContext uploadContext;
     private final PersistentThreadCatalog threadCatalog;
     private final DurableHaifaFoundation foundation;
@@ -241,6 +243,24 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             DeerFlowUploadContext uploadContext, Function<JsonNode, AgentPromptContext> agentPromptResolver,
             BiFunction<HaifaRunBridge, AgentRunId, Optional<FrozenInstructionDiagnostic>> instructionDiagnostics,
             DelegationProjectionProvider delegationProjections) throws IOException {
+        this(json, runModelResolver, projectExists, workspaceChanges, dataDirectory, continuationKey,
+                runToolsForThread, mcpProjections, skillProjections, uploadContext, agentPromptResolver,
+                instructionDiagnostics, delegationProjections,
+                new io.haifa.agent.runtime.api.ChildRunCapacity(
+                        io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings.defaults().runningCapacity()));
+    }
+
+    DeerFlowThreadRunApi(ObjectMapper json,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            Predicate<String> projectExists, PersistentProjectWorkspaceService workspaceChanges,
+            Path dataDirectory, SecretKey continuationKey,
+            Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread,
+            McpProjectionProvider mcpProjections, SkillProjectionProvider skillProjections,
+            DeerFlowUploadContext uploadContext, Function<JsonNode, AgentPromptContext> agentPromptResolver,
+            BiFunction<HaifaRunBridge, AgentRunId, Optional<FrozenInstructionDiagnostic>> instructionDiagnostics,
+            DelegationProjectionProvider delegationProjections,
+            io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity) throws IOException {
+        this.childRunCapacity = java.util.Objects.requireNonNull(childRunCapacity, "childRunCapacity");
         this.json = json;
         this.runModelResolver = runModelResolver;
         this.agentPromptResolver = java.util.Objects.requireNonNull(agentPromptResolver, "agentPromptResolver");
@@ -1408,7 +1428,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             AgentPromptContext agentPrompt,
             io.haifa.agent.superharness.server.config.SubagentRunConfiguration delegation) {
         bridgeBuilds.incrementAndGet();
-        return new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt), foundation, mcpProjection, skillProjection, agentPrompt, delegation);
+        return new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt), foundation, mcpProjection, skillProjection, agentPrompt, delegation, childRunCapacity);
     }
 
     private List<? extends JavaTool<?, ?>> toolsForThread(ThreadRecord thread, AgentPromptContext agentPrompt) {
