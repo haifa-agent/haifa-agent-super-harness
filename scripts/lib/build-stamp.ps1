@@ -7,8 +7,10 @@
     A runner writes a stamp right after a successful build and asserts it before
     reusing that output. A stamp records only what makes the output reusable:
 
-      frontend (frontend/.next):   HEAD, HEAD:frontend tree, pnpm-lock.yaml hash and the
-                                   DEER_FLOW_INTERNAL_GATEWAY_BASE_URL baked into the build
+      frontend (frontend/.next):   HEAD:frontend tree, pnpm-lock.yaml hash and the
+                                   DEER_FLOW_INTERNAL_GATEWAY_BASE_URL baked into the build; the
+                                   repository HEAD is deliberately not part of it, because the
+                                   build output does not depend on commits outside frontend/
       server (exec JAR directory): HEAD and the Haifa SDK version it was built against
 
     Output built from uncommitted sources gets no stamp and therefore cannot be reused.
@@ -52,7 +54,6 @@ function Test-StampSourcesDirty {
 function Get-FrontendStampFields {
     param([string]$RepositoryRoot, [string]$InternalGatewayBaseUrl)
     return [ordered]@{
-        sourceSha = Invoke-StampGit $RepositoryRoot @('rev-parse', 'HEAD')
         frontendTree = Invoke-StampGit $RepositoryRoot @('rev-parse', 'HEAD:frontend')
         lockfileSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $RepositoryRoot 'frontend/pnpm-lock.yaml')).Hash.ToLowerInvariant()
         internalGatewayBaseUrl = $InternalGatewayBaseUrl

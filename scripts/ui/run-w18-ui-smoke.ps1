@@ -157,6 +157,7 @@ $savedEnvironment = @{}
 $testExitCode = 1
 $expectedCases = @()
 $selectedCases = @()
+$frontendBuild = 'NOT_RUN'
 $preflight = [ordered]@{ result = 'NOT_RUN'; assertions = 'NOT_RUN'; servicesStartedDuringPreflight = $false }
 try {
     $selection = Resolve-SmokeCaseSelection -SpecPath (Join-Path $root "tests/ui/smoke/$($managedEnvironment.W18_PLAYWRIGHT_SPEC)") -CaseTitle $CaseTitle
@@ -216,18 +217,38 @@ try {
         Write-ServerBuildStamp -RepositoryRoot $root -HaifaVersion $sdk.HaifaVersion
         }
 
-        Remove-BuildStamp (Get-FrontendBuildStampPath $root)
-        Push-Location (Join-Path $root 'frontend')
+        # The frozen frontend almost never changes: reuse this worktree's build when its stamp still
+        # matches, else restore the shared cached build, and only run `pnpm build` when neither exists.
         try {
-            & corepack pnpm build 2>&1 | Tee-Object -FilePath (Join-Path $evidenceRoot 'frontend-build.raw.log')
-            if ($LASTEXITCODE -ne 0) {
-                throw "Frozen frontend build failed with exit code $LASTEXITCODE."
+            Assert-FrontendBuildStamp -RepositoryRoot $root -InternalGatewayBaseUrl $internalGatewayBaseUrl
+            $frontendBuild = 'REUSED'
+        }
+        catch {
+            Remove-BuildStamp (Get-FrontendBuildStampPath $root)
+            $buildCache = Join-Path $root 'scripts/lib/frontend_build_cache.py'
+            $null = & python $buildCache restore --repo $root --gateway $internalGatewayBaseUrl
+            if ($LASTEXITCODE -eq 0) {
+                $frontendBuild = 'RESTORED'
             }
+            else {
+                Push-Location (Join-Path $root 'frontend')
+                try {
+                    & corepack pnpm build 2>&1 | Tee-Object -FilePath (Join-Path $evidenceRoot 'frontend-build.raw.log')
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Frozen frontend build failed with exit code $LASTEXITCODE."
+                    }
+                }
+                finally {
+                    Pop-Location
+                }
+                $null = & python $buildCache store --repo $root --gateway $internalGatewayBaseUrl
+                $frontendBuild = 'BUILT'
+            }
+            Write-FrontendBuildStamp -RepositoryRoot $root -InternalGatewayBaseUrl $internalGatewayBaseUrl
         }
-        finally {
-            Pop-Location
-        }
-        Write-FrontendBuildStamp -RepositoryRoot $root -InternalGatewayBaseUrl $internalGatewayBaseUrl
+    }
+    else {
+        $frontendBuild = 'REUSED'
     }
     Set-FixturePhase $fixture 'readiness'
 
@@ -454,6 +475,7 @@ finally {
         Write-FixtureFlowHealth $fixture -ExpectedCases $expectedCases -Extra @{
             acceptanceProfile = $tag; sdkSelection = $sdk.Status; haifaVersion = $sdk.HaifaVersion
             serverBuildReused = [bool]($SkipBuild -or $SkipServerBuild); webDeferred = [bool]$DeferUxV1Web
+            frontendBuild = $frontendBuild
             dataRoot = $dataRoot
             executionScope = $(if ($PreflightOnly) { 'preflight-only' } elseif ($CaseTitle) { 'selected-case' } else { 'full-profile' })
             selectedCases = $selectedCases

@@ -9,7 +9,7 @@
     fails. A process NO_PROXY with wildcard/CIDR entries is replaced for this run only.
 
     Then runs
-        mvn -o -ntp -DforkCount=<Forks> -DreuseForks=true clean verify
+        mvn -o -ntp -DforkCount=<Forks> -DreuseForks=true clean verify     (Forks defaults to 3)
     with the Haifa SDK version from local-tmp/sdk-selection.json (see
     scripts/lib/sdk-selection.ps1). On success it writes the server build stamp, so UI
     runners on the same commit can reuse this JAR with -SkipServerBuild instead of
@@ -28,7 +28,7 @@
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [ValidateRange(1, 4)]
-    [int]$Forks = 2,
+    [int]$Forks = 3,
     [switch]$LowMemory,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Rejected = @()

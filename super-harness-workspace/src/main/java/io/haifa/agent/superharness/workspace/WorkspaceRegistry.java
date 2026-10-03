@@ -119,13 +119,47 @@ final class WorkspaceRegistry {
         moveAtomically(part, target);
     }
 
+    /**
+     * Renames atomically when the file system supports it.
+     *
+     * <p>Windows reports both an existing target directory and a briefly held handle (a scanner or
+     * indexer touching a just-written file) as {@link java.nio.file.AccessDeniedException}. An
+     * existing target is reported as {@link java.nio.file.FileAlreadyExistsException}, as on other
+     * platforms, so callers' "someone else published it" handling applies; otherwise the rename is
+     * retried briefly (about half a second in total) before the denial is reported.
+     */
     static void moveAtomically(Path source, Path target) throws IOException {
-        try {
-            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
-        } catch (java.nio.file.AtomicMoveNotSupportedException exception) {
-            Files.move(source, target);
+        long backoffMillis = 10;
+        for (int attempt = 1; ; attempt++) {
+            try {
+                try {
+                    Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+                } catch (java.nio.file.AtomicMoveNotSupportedException exception) {
+                    Files.move(source, target);
+                }
+                return;
+            } catch (java.nio.file.AccessDeniedException denied) {
+                if (Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    var exists = new java.nio.file.FileAlreadyExistsException(
+                            source.toString(), target.toString(), denied.getReason());
+                    exists.initCause(denied);
+                    throw exists;
+                }
+                if (attempt >= MOVE_ATTEMPTS) {
+                    throw denied;
+                }
+                try {
+                    Thread.sleep(backoffMillis);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw denied;
+                }
+                backoffMillis = Math.min(100, backoffMillis * 2);
+            }
         }
     }
+
+    private static final int MOVE_ATTEMPTS = 8;
 
     static void createDirectories(Path path) {
         try {

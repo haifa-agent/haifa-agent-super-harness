@@ -746,11 +746,7 @@ public final class PersistentProjectWorkspaceService {
                 "Super Harness workspace change baseline");
         try {
             Files.createDirectories(target.getParent());
-            try {
-                Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
-            } catch (java.nio.file.AtomicMoveNotSupportedException exception) {
-                Files.move(temporary, target);
-            }
+            WorkspaceRegistry.moveAtomically(temporary, target);
         } catch (FileAlreadyExistsException exception) {
             throw new WorkspaceException(WorkspaceError.RUN_ALREADY_TRACKED,
                     "a baseline already exists for this workspace and run", exception);
@@ -797,11 +793,7 @@ public final class PersistentProjectWorkspaceService {
         try {
             persistFileStates(properties, temporary, after);
             storeNew(properties, temporary.resolve(BASELINE_FILE), "Super Harness completed workspace changes");
-            try {
-                Files.move(temporary, completed, StandardCopyOption.ATOMIC_MOVE);
-            } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
-                Files.move(temporary, completed);
-            }
+            WorkspaceRegistry.moveAtomically(temporary, completed);
         } catch (FileAlreadyExistsException raced) {
             deleteTreeBestEffort(root, temporary, "\\.completed-[0-9a-f-]{36}");
         } catch (IOException failure) {
