@@ -108,9 +108,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final List<String> SUPPORTED_STREAM_MODES =
             List.of("messages-tuple", "updates", "custom");
     private static final Pattern SSE_CURSOR = Pattern.compile("^(\\d+)-0$");
-    // The public feed now includes message.committed facts. Keep a prior deferred
-    // assistant turn in the bounded reconnect window alongside the terminal tail.
-    private static final int EVENT_RETENTION_CAPACITY = 16;
+    private static final int EVENT_RETENTION_CAPACITY = 8;
     private static final int EVENT_PAGE_SIZE = 4;
     /** A stream that has not looped for this long no longer holds the shared projector back. */
     private static final long LIVE_OBSERVER_STALE_NANOS = Duration.ofSeconds(1).toNanos();
@@ -1886,6 +1884,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
             var page = run.bridge.events(run.runId, run.sdkCursor, EVENT_PAGE_SIZE);
             for (AgentRunEvent source : page.items()) {
+                // Durable messages supply the transcript; commit notifications have no
+                // frozen wire frame and must not evict reconnectable assistant events.
+                if (source.payload() instanceof RunEventPayloads.MessageCommitted) continue;
                 AppendResult append = run.projector.append(source);
                 if (append instanceof AppendResult.Gap gap) {
                     return Optional.of(gap);
@@ -1906,6 +1907,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 awaitLiveObservers(run, catchUpDeadline);
                 var page = run.bridge.events(run.runId, run.sdkCursor, EVENT_PAGE_SIZE);
                 for (AgentRunEvent source : page.items()) {
+                    if (source.payload() instanceof RunEventPayloads.MessageCommitted) continue;
                     AppendResult append = run.projector.append(source);
                     if (append instanceof AppendResult.Gap gap) {
                         throw new EventProjectionException(
