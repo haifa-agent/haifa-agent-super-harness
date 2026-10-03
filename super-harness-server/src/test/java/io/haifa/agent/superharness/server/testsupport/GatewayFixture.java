@@ -96,9 +96,13 @@ public final class GatewayFixture implements AutoCloseable {
     final AtomicInteger records = new AtomicInteger();
 
     public GatewayFixture(Path data, ControlledModel model) throws Exception {
+        this(data, model, evidenceDirectory());
+    }
+
+    public GatewayFixture(Path data, ControlledModel model, Path evidence) throws Exception {
         this(data, DeerFlowBootstrapApi.createForTests(
                 new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0), data,
-                ignored -> LocalProbeModelTestSupport.binding(model), new SecretKeySpec(new byte[32], "AES")));
+                ignored -> LocalProbeModelTestSupport.binding(model), new SecretKeySpec(new byte[32], "AES")), evidence);
     }
 
     public GatewayFixture(Path data, DeerFlowBootstrapApi api) throws Exception {

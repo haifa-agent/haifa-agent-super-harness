@@ -194,6 +194,15 @@ pwsh -NoProfile -File scripts/test-targeted.ps1 -Test DeerFlowSubagentCatalogApi
 
 生产装配定向验证：`pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'DeerFlowTaskDelegationApiTest,SubagentRunConfigurationTest,LeadPromptComposerTest' -LowMemory`。这些测试消费主控指定的公开候选 JAR；完整回放/UI/全仓门禁仍须独立验收，未合入上游 dev 的 SDK 候选不能使本分支合入 main。
 
+W08 子任务步骤兼容层通过公开 SDK 的 `messages` 持久游标和 `subscribe` 信号投影既有 Parent SSE
+`custom` 流；不新增步骤存储或执行线程。刷新回放入口为
+`GET /api/threads/{thread_id}/runs/{run_id}/events?event_types=subagent.step&task_id={task_id}&limit=500&after_seq=0`。
+`task_id` 必填且使用 Parent 的 Runtime task Tool Call ID；只支持 `subagent.step`，limit 为 1–500，
+after_seq 为非负 JavaScript 安全整数。未知 task 返回 `[]`，未知或不属于该线程的 Parent 返回 404。
+步骤正文与序列化参数最多 8192 个 Unicode 字符并保留截断标记；模型与已知累计 Usage 来自该 Child 的
+公开事件，不读取当前目录推测历史。该接线需要包含公开 `RunMessage*` API 的 SDK 候选，当前完整
+HTTP/SSE、重启与冻结 UI 验收以工作包证据为准；接口静态实现不表示 W08 全部通过。
+
 ## W03 后续建议配置
 
 Gateway 通过 `GET /api/suggestions/config` 暴露冻结前端的后续建议全局配置。以下两个环境变量在进程启动时读取一次，均为可选：

@@ -20,6 +20,7 @@ import io.haifa.agent.runtime.api.InteractionState;
 import io.haifa.agent.runtime.api.InteractionView;
 import io.haifa.agent.runtime.api.RunEventCursor;
 import io.haifa.agent.runtime.api.RunEventPayloads;
+import io.haifa.agent.runtime.api.RunMessageCursor;
 import io.haifa.agent.runtime.api.RuntimeContractException;
 import io.haifa.agent.runtime.api.ToolCallView;
 import io.haifa.agent.sdk.api.RunInputCommand;
@@ -101,6 +102,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final Pattern JOIN_STREAM =
             Pattern.compile("^/api/threads/([^/]+)/runs/([^/]+)/stream$");
     private static final Pattern RUN = Pattern.compile("^/api/threads/([^/]+)/runs/([^/]+)$");
+    private static final Pattern RUN_EVENTS = Pattern.compile("^/api/threads/([^/]+)/runs/([^/]+)/events$");
     private static final Pattern WORKSPACE_CHANGES =
             Pattern.compile("^/api/threads/([^/]+)/runs/([^/]+)/workspace-changes$");
     private static final Pattern CANCEL =
@@ -394,6 +396,11 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             match = RUN.matcher(path);
             if (match.matches() && exchange.getRequestMethod().equals("GET")) {
                 getRun(exchange, match.group(1), match.group(2));
+                return;
+            }
+            match = RUN_EVENTS.matcher(path);
+            if (match.matches() && exchange.getRequestMethod().equals("GET")) {
+                getSubtaskEvents(exchange, match.group(1), match.group(2));
                 return;
             }
             sendJson(exchange, 404, Map.of("detail", "Not Found"));
@@ -1742,97 +1749,129 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         Object observer = new Object();
         try (OutputStream output = exchange.getResponseBody()) {
             writeCommittedSse(output, () -> {
-                if (includeMetadata) {
-                    writeSse(
-                            output,
-                            "metadata",
-                            Map.of("run_id", run.runId.value(), "thread_id", run.threadId),
-                            null);
-                }
-                ProjectionCursor delivered = initialCursor;
-                long nextHeartbeat = System.nanoTime() + java.time.Duration.ofMillis(100).toNanos();
-                long terminalWithoutEventSince = 0;
-                while (true) {
-                    ReplayResult replay = run.projector.replayAfter(delivered);
-                    if (replay instanceof ReplayResult.Gap gap) {
-                        writeReplayGap(output, run, gap.gap(), gap.authoritativeView(), delivered);
-                        return;
-                    }
-                    ReplayResult.Events events = (ReplayResult.Events) replay;
-                    for (ProjectedRunEvent event : events.events()) {
-                        delivered = event.cursor();
-                        if (writeProjectedEvent(output, thread, run, event)) {
-                            return;
-                        }
-                    }
-                    run.observerDelivered(observer, delivered.sequence());
-                    Optional<AppendResult.Gap> sourceGap = synchronizeOnePage(run);
-                    observeClarificationBoundary(thread, run);
-                    if (sourceGap.isPresent()) {
-                        AppendResult.Gap gap = sourceGap.orElseThrow();
-                        writeReplayGap(output, run, gap.gap(), gap.authoritativeView(), delivered);
-                        return;
-                    }
-                    if (reemitPendingCard && run.projector.head().equals(delivered)) {
-                        // A reconnect can catch up past the durable interaction event (or the
-                        // event left the bounded replay window). Re-project the SDK-authored
-                        // pending card instead of leaving the client with a heartbeat-only
-                        // stream that never observes the waiting Interaction.
-                        Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
-                        if (pending.isPresent()
-                                && (run.interactionRequestId == null
-                                        || run.interactionRequestId.equals(
-                                                pending.orElseThrow().requestId().value()))) {
-                            if (writePendingInteractionCard(
-                                    output,
-                                    thread,
-                                    run,
-                                    pending.orElseThrow().requestId().value(),
-                                    sseCursor(delivered))) {
-                                return;
-                            }
-                        }
-                    }
-                    if (run.projector.head().equals(delivered)
-                            && run.bridge.snapshot(run.runId).status().isTerminal()) {
-                        if (!creator && delivered.sequence() == initialCursor.sequence()) {
-                            // The observer already acknowledged the durable terminal cursor. Match
-                            // DeerFlow's terminal rejoin behavior with an id-less end sentinel.
-                            writeSse(output, "end", null, null);
-                            return;
-                        }
-                        if (terminalWithoutEventSince == 0) {
-                            terminalWithoutEventSince = System.nanoTime();
-                        }
-                        if (System.nanoTime() - terminalWithoutEventSince
-                                < TERMINAL_EVENT_SETTLE_TIMEOUT.toNanos()) {
-                            try {
-                                Thread.sleep(10);
-                            } catch (InterruptedException exception) {
-                                Thread.currentThread().interrupt();
-                                return;
-                            }
-                            continue;
-                        }
-                        // A public terminal snapshot without the matching durable lifecycle event
-                        // would make resume ambiguous. Fail closed instead of inventing an end id.
+                try (DeerFlowSubtaskStream subtasks = run.streamModes.contains("custom")
+                        ? new DeerFlowSubtaskStream(run.bridge, run.runId) : null) {
+                    if (includeMetadata) {
                         writeSse(
                                 output,
-                                "error",
-                                Map.of("message", "Durable terminal event is unavailable"),
+                                "metadata",
+                                Map.of("run_id", run.runId.value(), "thread_id", run.threadId),
                                 null);
-                        return;
                     }
-                    if (System.nanoTime() >= nextHeartbeat) {
-                        writeHeartbeat(output);
-                        nextHeartbeat = System.nanoTime() + java.time.Duration.ofMillis(100).toNanos();
-                    }
-                    try {
-                        Thread.sleep(10);
-                    } catch (InterruptedException exception) {
-                        Thread.currentThread().interrupt();
-                        run.bridge.cancel(run.runId);
-                        break;
+                    ProjectionCursor delivered = initialCursor;
+                    long nextHeartbeat = System.nanoTime() + java.time.Duration.ofMillis(100).toNanos();
+                    long terminalWithoutEventSince = 0;
+                    long childTerminalWaitSince = 0;
+                    while (true) {
+                        ReplayResult replay = run.projector.replayAfter(delivered);
+                        if (replay instanceof ReplayResult.Gap gap) {
+                            writeReplayGap(output, run, gap.gap(), gap.authoritativeView(), delivered);
+                            return;
+                        }
+                        ReplayResult.Events events = (ReplayResult.Events) replay;
+                        for (ProjectedRunEvent event : events.events()) {
+                            if (subtasks != null && event.terminalKind().terminal()
+                                    && !subtasks.drain(true, frame -> writeSse(output, "custom", frame, null))) {
+                                if (childTerminalWaitSince == 0) childTerminalWaitSince = System.nanoTime();
+                                if (System.nanoTime() - childTerminalWaitSince >= TERMINAL_EVENT_SETTLE_TIMEOUT.toNanos()) {
+                                    writeSse(output, "error", Map.of(
+                                            "code", "child_terminal_projection_unavailable",
+                                            "message", "Child terminal facts could not be drained before Parent end"), null);
+                                    return;
+                                }
+                                // Retain this Parent frame's cursor until actual Child facts are drained.
+                                break;
+                            }
+                            delivered = event.cursor();
+                            if (writeProjectedEvent(output, thread, run, event)) {
+                                return;
+                            }
+                        }
+                        if (subtasks != null) subtasks.drain(false, frame -> writeSse(output, "custom", frame, null));
+                        run.observerDelivered(observer, delivered.sequence());
+                        Optional<AppendResult.Gap> sourceGap = synchronizeOnePage(run);
+                        observeClarificationBoundary(thread, run);
+                        if (sourceGap.isPresent()) {
+                            AppendResult.Gap gap = sourceGap.orElseThrow();
+                            writeReplayGap(output, run, gap.gap(), gap.authoritativeView(), delivered);
+                            return;
+                        }
+                        if (reemitPendingCard && run.projector.head().equals(delivered)) {
+                            // A reconnect can catch up past the durable interaction event (or the
+                            // event left the bounded replay window). Re-project the SDK-authored
+                            // pending card instead of leaving the client with a heartbeat-only
+                            // stream that never observes the waiting Interaction.
+                            Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
+                            if (pending.isPresent()
+                                    && (run.interactionRequestId == null
+                                            || run.interactionRequestId.equals(
+                                                    pending.orElseThrow().requestId().value()))) {
+                                if (writePendingInteractionCard(
+                                        output,
+                                        thread,
+                                        run,
+                                        pending.orElseThrow().requestId().value(),
+                                        sseCursor(delivered))) {
+                                    return;
+                                }
+                            }
+                        }
+                        if (run.projector.head().equals(delivered)
+                                && run.bridge.snapshot(run.runId).status().isTerminal()) {
+                            if (!creator && delivered.sequence() == initialCursor.sequence()) {
+                                if (subtasks != null && !subtasks.drain(true, frame -> writeSse(output, "custom", frame, null))) {
+                                    if (childTerminalWaitSince == 0) childTerminalWaitSince = System.nanoTime();
+                                    if (System.nanoTime() - childTerminalWaitSince >= TERMINAL_EVENT_SETTLE_TIMEOUT.toNanos()) {
+                                        writeSse(output, "error", Map.of("code", "child_terminal_projection_unavailable",
+                                                "message", "Child terminal facts could not be drained before Parent end"), null);
+                                        return;
+                                    }
+                                    try {
+                                        Thread.sleep(10);
+                                    } catch (InterruptedException interrupted) {
+                                        Thread.currentThread().interrupt();
+                                        return;
+                                    }
+                                    continue;
+                                }
+                                // The observer already acknowledged the durable terminal cursor. Match
+                                // DeerFlow's terminal rejoin behavior with an id-less end sentinel.
+                                writeSse(output, "end", null, null);
+                                return;
+                            }
+                            if (terminalWithoutEventSince == 0) {
+                                terminalWithoutEventSince = System.nanoTime();
+                            }
+                            if (System.nanoTime() - terminalWithoutEventSince
+                                    < TERMINAL_EVENT_SETTLE_TIMEOUT.toNanos()) {
+                                try {
+                                    Thread.sleep(10);
+                                } catch (InterruptedException exception) {
+                                    Thread.currentThread().interrupt();
+                                    return;
+                                }
+                                continue;
+                            }
+                            // A public terminal snapshot without the matching durable lifecycle event
+                            // would make resume ambiguous. Fail closed instead of inventing an end id.
+                            writeSse(
+                                    output,
+                                    "error",
+                                    Map.of("message", "Durable terminal event is unavailable"),
+                                    null);
+                            return;
+                        }
+                        if (System.nanoTime() >= nextHeartbeat) {
+                            writeHeartbeat(output);
+                            nextHeartbeat = System.nanoTime() + java.time.Duration.ofMillis(100).toNanos();
+                        }
+                        try {
+                            Thread.sleep(10);
+                        } catch (InterruptedException exception) {
+                            Thread.currentThread().interrupt();
+                            run.bridge.cancel(run.runId);
+                            break;
+                        }
                     }
                 }
             });
@@ -2424,6 +2463,74 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
         exchange.sendResponseHeaders(202, -1);
         exchange.close();
+    }
+
+    private void getSubtaskEvents(HttpExchange exchange, String threadId, String runId) throws IOException {
+        String taskId;
+        int limit;
+        long after;
+        try {
+            taskId = queryValue(exchange, "task_id").filter(value -> !value.isBlank())
+                    .orElseThrow(() -> new IllegalArgumentException("task_id is required"));
+            String types = queryValue(exchange, "event_types").orElse("subagent.step");
+            if (java.util.Arrays.stream(types.split(",", -1)).map(String::trim)
+                    .anyMatch(value -> !"subagent.step".equals(value))) {
+                throw new IllegalArgumentException("Only subagent.step event_types are supported");
+            }
+            limit = (int) subtaskQueryNumber(queryValue(exchange, "limit").orElse("500"), 1, 500);
+            after = subtaskQueryNumber(queryValue(exchange, "after_seq").orElse("0"), 0,
+                    DeerFlowSubtaskProjection.MAX_SAFE_INTEGER);
+        } catch (IllegalArgumentException invalid) {
+            sendJson(exchange, 422, Map.of("detail", invalid.getMessage()));
+            return;
+        }
+        ThreadRecord thread = threads.get(threadId);
+        RunRecord run = thread == null ? null : findOrRestoreRun(thread, runId).orElse(null);
+        if (run == null) {
+            sendJson(exchange, 404, Map.of("detail", "Run not found"));
+            return;
+        }
+        // Resolve only through the caller-visible Parent's actual children and exact Runtime Tool ID.
+        var child = run.bridge.children(run.runId).stream()
+                .filter(candidate -> candidate.parentRunId().equals(run.runId))
+                .filter(candidate -> run.bridge.childTaskId(run.runId, candidate.runId()).filter(taskId::equals).isPresent())
+                .findFirst();
+        if (child.isEmpty()) {
+            sendJson(exchange, 200, List.of());
+            return;
+        }
+        var task = run.bridge.runtimeToolCall(run.runId, taskId)
+                .filter(call -> call.runId().equals(run.runId) && "task".equals(call.toolName()))
+                .orElseThrow(() -> new IllegalStateException("Child has no exact Parent task Tool"));
+        var childId = child.orElseThrow().runId();
+        var page = run.bridge.messages(childId, new RunMessageCursor(childId, after), limit);
+        if (page.items().size() > limit || !page.nextCursor().runId().equals(childId)
+                || !page.headCursor().runId().equals(childId)) {
+            throw new IllegalStateException("Invalid Child message page scope");
+        }
+        List<Map<String, Object>> events = new ArrayList<>();
+        long previous = after;
+        for (var message : page.items()) {
+            if (message.sequence() <= previous) throw new IllegalStateException("Child message page is not ordered");
+            previous = message.sequence();
+            try {
+                events.add(DeerFlowSubtaskProjection.event(task.id().value(), message));
+            } catch (IllegalArgumentException invalidSource) {
+                throw new IllegalStateException("Child message sequence is outside the transport range");
+            }
+        }
+        sendJson(exchange, 200, events);
+    }
+
+    static long subtaskQueryNumber(String raw, long minimum, long maximum) {
+        if (!raw.matches("[0-9]+")) throw new IllegalArgumentException("Invalid subtask numeric parameter");
+        try {
+            long value = Long.parseLong(raw);
+            if (value < minimum || value > maximum) throw new IllegalArgumentException("Subtask parameter is outside its range");
+            return value;
+        } catch (NumberFormatException invalid) {
+            throw new IllegalArgumentException("Subtask parameter is outside its range");
+        }
     }
 
     private void getRun(HttpExchange exchange, String threadId, String runId) throws IOException {
