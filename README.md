@@ -362,4 +362,20 @@ Utility 使用另一项目 `D:/workspace/haifa-ai-deerflow/utility-mcp-server` �
 
 新增 UI 验收从 `tests/ui/smoke/w05-demo-artifact.spec.cjs` 起步：该黄金样例使用生产 `write_file`、真实批准卡片、Artifact 下载及刷新重连。共享 `fixtures.cjs` 提供 runner 环境、进入工作区、Run 状态等待、当前批准卡片与截图/JSON/下载字节归档；默认 smoke 使用同一 fixtures，保留 4 个用例。
 
+### W08 独立目录 UI 验收
+
+`-W08Catalog` 选择 `tests/ui/smoke/w08-subagent-catalog.spec.cjs` 的 8 个用例，使用未修改的冻结设置页与真实 `/api/subagents`：内置条目不可编辑、表单创建及刷新、完整编辑表单、单独 enabled 局部 PUT、非法名称禁止提交、重名 409、删除 204，以及显式模型和长合法名称的保存。每个用例使用独立条目，编辑/删除等前置通过真实 REST 建立；不拦截请求、不模拟后端。显式模型保存不代表 Child 模型执行，长目录名称不替代 UI-14 的 task 标题验收。
+
+主控确认完整槽位和 SDK 选择后，先执行受影响单 case：
+
+```powershell
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 `
+  -W08Catalog -AgentSlot 1 -GatewayPort 20618 -FrontendPort 25618 -ProviderPort 0 `
+  -CaseTitle 'W08 UI-02 creates a managed subagent and survives reload'
+```
+
+`-CaseTitle` 必须与 spec 中的静态标题完整一致；`-PreflightOnly` 只做预检。完整目录轮次去掉 `-CaseTitle`，同一稳定源码/SDK 上运行两轮，每轮使用新的 `-DataDirectory`；只有构建戳一致时第二轮可使用 `-SkipBuild`。该 profile 与其他 W18 profile 互斥，沿用 runner 的端口、依赖、Provider、构建和进程清理，证据位于 `local-tmp/slot-1-w08-catalog/evidence/run-<时间戳>/`，包含 trace、截图、真实请求响应、前后目录和流程健康度。未执行的轮次保持 `NOT_RUN`。
+
+目录 profile 只覆盖 W08 UI-01–05及补充保存用例，不发送委托 Run。Ultra 的真实 thinking/plan/subagent 载荷须另行验收：最新 W03 已接通思考执行，但 W07 plan/pro/ultra 门禁及 UI 能力发布前置仍需满足；被阻断的委托 UI 用例保持 `NOT_RUN`。本 profile 不改变 Task4 Oracle12 的既有 `FAIL`，也不声明整个 Task5 或 W08 完成。
+
 `scripts/ui/run-w18-ui-smoke.ps1` 通过 `scripts/lib/run-fixture.ps1` 管理完整槽位绑定预检、脱离调用方管道的启动、15/30/60 秒 Provider/Gateway/前端就绪等待及精确 PID 清理。所有模式的证据写入 `local-tmp/slot-<N>-<任务标签>/evidence/run-<时间戳>/`，包含原始日志、`managed-processes.json`、`flow-health.json`、`case-results.json` 和 Playwright 原件；冷暖轮分别建目录和数据，不覆盖首次失败。清理必须在原停止预算内实际绑定端口成功，失败时 runner 返回非零。MCP 启动器使用同一脱离管道的启动函数；共享库只转述 case 结果，不登记 SHPM 或提升验收状态。

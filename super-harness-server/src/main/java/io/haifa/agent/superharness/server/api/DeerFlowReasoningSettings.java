@@ -53,9 +53,9 @@ final class DeerFlowReasoningSettings {
                 || "ultra".equals(mode)) {
             throw new IllegalArgumentException("Plan mode requires W07 plan execution");
         }
-        if (Boolean.TRUE.equals(booleanValue(context, "subagent_enabled"))) {
-            throw new IllegalArgumentException("Subagent delegation requires W08 execution");
-        }
+        // W08 admits the Child declaration separately; this parser validates the field
+        // without treating delegation as a reasoning or plan capability.
+        booleanValue(context, "subagent_enabled");
         booleanValue(context, "thinking_enabled");
         effort(context.get("reasoning_effort"));
         if ("flash".equals(mode) && Boolean.TRUE.equals(booleanValue(context, "thinking_enabled"))) {
