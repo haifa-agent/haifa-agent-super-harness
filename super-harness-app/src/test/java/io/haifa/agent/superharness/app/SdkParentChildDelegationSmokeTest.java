@@ -147,6 +147,22 @@ class SdkParentChildDelegationSmokeTest {
                             .map(child -> child.runId().value())
                             .toList());
             assertThat(parent.usage().childRuns()).isEqualTo(2);
+
+            // This public-JAR assertion intentionally requires the upstream output metadata change.
+            // A stale SNAPSHOT must fail instead of passing with a digest invented by the consumer.
+            var calls = agent.runs().toolCalls(parent.runId());
+            assertThat(calls).filteredOn(call -> "task".equals(call.toolName())).hasSize(2).allSatisfy(call -> {
+                var result = call.result().orElseThrow();
+                assertThat(result.structuredData().values())
+                        .containsEntry("status", "COMPLETED")
+                        .containsEntry("outputPreview", "child result")
+                        .containsEntry("outputTruncated", false)
+                        .containsEntry("outputSha256", "9112a70c23a792fb2ecb8b78193daaf4f1f5bb2f9267ae3731d25573b4d8d9ea");
+                assertThat(events.items())
+                        .filteredOn(event -> event.eventType().equals("child.run.completed"))
+                        .anySatisfy(event -> assertThat(((RunEventPayloads.ChildRunLifecycle) event.payload()).toolCallId())
+                                .isEqualTo(call.id().value()));
+            });
         }
     }
 
