@@ -33,5 +33,5 @@ function Invoke-QuickChecks {
     $script = Join-Path $RepositoryRoot 'scripts/lib/quick_checks.py'
     $output = & python $script --repo $RepositoryRoot
     $result = (@($output) -join "`n") | ConvertFrom-Json
-    return , @($result.failures)
+    return @($result.failures)
 }
