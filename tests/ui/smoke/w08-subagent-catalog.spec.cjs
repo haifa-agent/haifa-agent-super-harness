@@ -110,9 +110,21 @@ async function mutation(page, evidence, method, pathname, action, label) {
     response.request().method() === method && new URL(response.url()).pathname === pathname,
   );
   const [response] = await Promise.all([pending, action()]);
-  const body = await response.text();
+  let body;
+  let bodyUnavailable;
+  try {
+    body = await response.text();
+  } catch (error) {
+    if (method !== "DELETE" || response.status() !== 204
+        || !error.message.includes("Network.getResponseBody")
+        || !error.message.includes("No data found for resource with given identifier")) throw error;
+    // Chromium has no cached body for this 204. The deletion case independently
+    // validates its actual HTTP framing; this error must never become an empty body.
+    body = null;
+    bodyUnavailable = error.message;
+  }
   const request = response.request().postDataJSON();
-  const observed = { method, path: pathname, request, status: response.status(), body };
+  const observed = { method, path: pathname, request, status: response.status(), body, bodyUnavailable };
   await evidence.json(label, observed);
   return observed;
 }
@@ -175,7 +187,7 @@ test("W08 UI-03 edits the full form without changing other fields", async ({ con
   const form = editor(page, false);
   await expect(form.getByLabel("Name", { exact: true })).toBeDisabled();
   const changed = { ...source, description: "Updated delegation description through the real frozen form" };
-  await form.getByLabel("Delegation description", { exact: true }).fill(changed.description);
+  await form.getByRole("textbox", { name: "Delegation description", exact: true }).fill(changed.description);
   const result = await mutation(page, evidence, "PUT", `${COLLECTION}/${source.name}`,
     () => form.getByRole("button", { name: "Save", exact: true }).click(), "ui-edit-full-form");
   expect(result.status, result.body).toBe(200);
@@ -250,26 +262,142 @@ test("W08 UI-04b shows the real duplicate-name conflict", async ({ context, page
 test("W08 UI-05 deletes a managed subagent", async ({ context, page, runtime, evidence }) => {
   const source = definition("w08-ui-delete");
   const before = await seed(context, runtime, evidence, source);
-  await openCatalog(page, runtime);
-  let confirmation;
-  page.once("dialog", async (dialog) => {
-    confirmation = { type: dialog.type(), message: dialog.message() };
-    await dialog.accept();
+  const deletePath = `${COLLECTION}/${source.name}`;
+  const origin = new URL(runtime.app).origin;
+  const network = await context.newCDPSession(page);
+  const requests = new Map();
+  const responseHeaderFacts = new Map();
+  network.on("Network.requestWillBeSent", (event) => {
+    const url = new URL(event.request.url);
+    if (url.origin !== origin || !(
+      (event.request.method === "GET" && url.pathname === COLLECTION)
+      || (event.request.method === "DELETE" && url.pathname === deletePath))) return;
+    requests.set(event.requestId, {
+      requestId: event.requestId, method: event.request.method, url: event.request.url,
+      status: null, responseObserved: false, entityBytes: 0, dataEvents: 0,
+      finished: false, failed: null, cached: false, serviceWorker: false,
+      redirected: Boolean(event.redirectResponse), transferBytes: null,
+      protocol: null, observationError: null,
+    });
   });
-  const result = await mutation(page, evidence, "DELETE", `${COLLECTION}/${source.name}`,
-    () => row(page, before).getByRole("button", { name: "Delete", exact: true }).click(), "ui-delete");
-  expect(result.status, result.body).toBe(204);
-  expect(result.body).toBe("");
-  expect(result.request).toBeNull();
-  expect(confirmation?.type).toBe("confirm");
-  await evidence.json("delete-confirmation", confirmation);
-  await expect(row(page, before)).toHaveCount(0);
-  const entries = await catalog(context, runtime, evidence, "catalog-after-delete");
-  expect(entries.some((entry) => entry.name === source.name)).toBe(false);
-  const refreshed = await reloadCatalog(page, evidence);
-  expect(refreshed.some((entry) => entry.name === source.name)).toBe(false);
-  await expect(row(page, before)).toHaveCount(0);
-  await evidence.screenshot(page, "deleted-after-reload");
+  network.on("Network.responseReceivedExtraInfo", (event) => {
+    // ExtraInfo can arrive before responseReceived. Retain only framing facts,
+    // never raw headers that could contain cookies or authentication values.
+    const fields = Object.entries(event.headers);
+    responseHeaderFacts.set(event.requestId, {
+      status: event.statusCode, completeHeaders: true,
+      contentLength: fields.filter(([name]) => name.toLowerCase() === "content-length").map(([, value]) => value),
+      transferEncoding: fields.filter(([name]) => name.toLowerCase() === "transfer-encoding").map(([, value]) => value),
+    });
+  });
+  network.on("Network.responseReceived", (event) => {
+    const observed = requests.get(event.requestId);
+    if (!observed) return;
+    observed.status = event.response.status;
+    observed.responseObserved = true;
+    observed.cached ||= Boolean(event.response.fromDiskCache);
+    observed.serviceWorker = Boolean(event.response.fromServiceWorker);
+    observed.protocol = event.response.protocol;
+    if (event.response.url !== observed.url) observed.observationError = "Response URL changed";
+  });
+  network.on("Network.requestServedFromCache", (event) => {
+    const observed = requests.get(event.requestId);
+    if (observed) observed.cached = true;
+  });
+  network.on("Network.dataReceived", (event) => {
+    const observed = requests.get(event.requestId);
+    if (!observed) return;
+    if (!Number.isSafeInteger(event.dataLength) || event.dataLength < 0
+        || !Number.isSafeInteger(observed.entityBytes + event.dataLength)) {
+      observed.observationError = "Invalid native entity byte count";
+      return;
+    }
+    observed.entityBytes += event.dataLength;
+    observed.dataEvents++;
+  });
+  network.on("Network.loadingFinished", (event) => {
+    const observed = requests.get(event.requestId);
+    if (!observed) return;
+    observed.finished = true;
+    // This includes response headers, so it is metadata rather than entity bytes.
+    observed.transferBytes = event.encodedDataLength;
+  });
+  network.on("Network.loadingFailed", (event) => {
+    const observed = requests.get(event.requestId);
+    if (!observed) return;
+    const error = event.errorText || "Native request failed";
+    observed.failed = error;
+    if (error !== "net::ERR_ABORTED") observed.observationError = error;
+  });
+  try {
+    await network.send("Network.enable");
+    await openCatalog(page, runtime);
+    // Positive control: the same observer must see real UI GET response data.
+    await expect.poll(() => [...requests.values()].some((entry) => entry.method === "GET"
+      && entry.responseObserved && entry.status === 200 && entry.finished
+      && !entry.failed && !entry.observationError && !entry.cached && !entry.serviceWorker && !entry.redirected
+      && entry.dataEvents > 0 && entry.entityBytes > 0), { timeout: 5_000 }).toBe(true);
+    expect([...requests.values()].filter((entry) => entry.failed)).toEqual([]);
+    let confirmation;
+    page.once("dialog", async (dialog) => {
+      confirmation = { type: dialog.type(), message: dialog.message() };
+      await dialog.accept();
+    });
+    const result = await mutation(page, evidence, "DELETE", deletePath,
+      () => row(page, before).getByRole("button", { name: "Delete", exact: true }).click(), "ui-delete");
+    expect(result.status, result.body).toBe(204);
+    expect(result.request).toBeNull();
+    await expect.poll(() => [...requests.values()].filter((entry) => entry.method === "DELETE")
+      .map((entry) => ({ status: entry.status, responseObserved: entry.responseObserved,
+        headers: responseHeaderFacts.get(entry.requestId) })), { timeout: 5_000 }).toEqual([
+      { status: 204, responseObserved: true,
+        headers: { status: 204, completeHeaders: true, contentLength: [], transferEncoding: [] } },
+    ]);
+    const measured = [...requests.values()].find((entry) => entry.method === "DELETE");
+    expect(measured.url).toBe(new URL(deletePath, runtime.app).href);
+    expect(measured.protocol).toBe("http/1.1");
+    expect(measured.cached || measured.serviceWorker || measured.redirected).toBe(false);
+    expect(measured.observationError).toBeNull();
+    // HTTP 204 ends at the complete headers and cannot carry an entity:
+    // https://www.rfc-editor.org/rfc/rfc9110.html#name-204-no-content
+    // https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3
+    // This is protocol framing evidence, not raw packet proof that a sender
+    // emitted no illegal trailing octets. No missing body is converted to "".
+    expect(measured.entityBytes).toBe(0);
+    expect([null, "net::ERR_ABORTED"]).toContain(measured.failed);
+    if (result.body !== null) expect(result.body).toBe("");
+    expect(confirmation?.type).toBe("confirm");
+    await evidence.json("delete-confirmation", confirmation);
+    await expect(row(page, before)).toHaveCount(0);
+    const entries = await catalog(context, runtime, evidence, "catalog-after-delete");
+    expect(entries.some((entry) => entry.name === source.name)).toBe(false);
+    const refreshed = await reloadCatalog(page, evidence);
+    expect(refreshed.some((entry) => entry.name === source.name)).toBe(false);
+    await expect(row(page, before)).toHaveCount(0);
+    // Recheck after the real follow-up requests so late native events cannot
+    // overwrite an earlier successful observation or hide received entity data.
+    expect(measured.entityBytes).toBe(0);
+    expect(measured.observationError).toBeNull();
+    expect([null, "net::ERR_ABORTED"]).toContain(measured.failed);
+    await evidence.json("delete-empty-entity", {
+      requestId: measured.requestId, status: measured.status,
+      headers: responseHeaderFacts.get(measured.requestId),
+      emptyEntityBasis: "HTTP204 framing", observedEntityBytes: measured.entityBytes,
+      dataEvents: measured.dataEvents, loadingFinished: measured.finished,
+      loadingFailureDiagnostic: measured.failed,
+      body: result.body, bodyUnavailable: result.bodyUnavailable,
+    });
+    await evidence.screenshot(page, "deleted-after-reload");
+  } finally {
+    try {
+      await evidence.json("delete-native-network", { requests: [...requests.values()].map((entry) => ({
+        ...entry, headers: responseHeaderFacts.get(entry.requestId),
+      })) });
+    } finally {
+      network.removeAllListeners();
+      await network.detach();
+    }
+  }
 });
 
 test("W08 catalog preserves an explicit model and a long legal name", async ({ context, page, runtime, evidence }) => {

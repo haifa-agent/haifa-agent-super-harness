@@ -1,6 +1,6 @@
-# W08 Delegation Transcript Slice
+# W08 Delegation Compatibility
 
-This slice connects SDK `task` Tool Calls to the existing `DeerFlowToolTranscriptProjection`. It does not yet register child agents in `HaifaRunBridge`, implement the subagent directory, or add live/replay step endpoints. It must not be reported as W08 completion.
+This candidate connects the frozen subagent catalog, SDK Child profiles, `task` Tool Calls and persisted Child steps through public SDK APIs. It must not be reported as full W08 completion.
 
 ## Implemented contract
 
@@ -10,7 +10,9 @@ For terminal task calls, `subagent_status` is always one of `completed`, `failed
 
 Complete-output metadata from Haifa Agent PR #273 is mapped to the frozen result preview and digest. Without it, a complete legacy summary may be displayed, but its hash is never presented as a complete-output hash. Usage requires both nonnegative integer counts and a total representable exactly by the frontend; missing, invalid or overflowing values are omitted. Model and capped reason fields are only emitted when explicitly present in the authorized source. Ordinary tools, clarification handling, artifact projection and model-visible Tool Result content are unchanged.
 
-No table, Run state, scheduler, Child ID scheme, approval engine, or independent output store is introduced.
+The managed catalog stores product configuration alongside the existing configuration boundary. `HaifaRunBridge` freezes enabled catalog entries into SDK profiles, keeps selected model identity and credentials, and delegates scheduling, cancellation, Child execution and noninteractive approval denial to the SDK. No second Runtime, Child scheduler, approval engine or output store is introduced.
+
+Child messages are read from the public SDK's authorized durable message pages. The product projects them into the existing Parent SSE and the task-scoped replay endpoint described in the [README](../README.md#w08-子智能体目录). Subscription signals only wake a connection's cursor reader; restart replay does not depend on transient subscriptions. Unknown or unsafe usage remains omitted.
 
 ## Verification and dependency
 
@@ -18,4 +20,6 @@ No table, Run state, scheduler, Child ID scheme, approval engine, or independent
 
 Keep this change in draft until the SDK change is reviewed, published through the approved SDK workflow, and the exact JAR fingerprint is used for the consumer gate. No candidate SDK version is committed to the POM. The standalone JDK mapping checks do not replace Maven/JUnit, ArchUnit, SDK/JAR, HTTP/SSE, restart, or frozen-browser evidence.
 
-The full requirements and this iteration's verification report are maintained in the internal documentation repository under W08, with documentation PR #8. Remaining work includes catalog and Child registration, non-interactive Child policy, actual Child model attribution, live steps, persistent replay, Run-level usage aggregation and end-to-end acceptance.
+The exact SDK commit and JAR fingerprints come from the official publication manifest selected by the controller in ignored `local-tmp/sdk-selection.json`. Tracked dependencies retain the baseline version. The candidate cannot merge to Harness main until the upstream SDK is reviewed and merged by a human, the baseline is published from `dev`, and baseline gates are rerun.
+
+The requirements and validation report remain in internal documentation PR #8. Full W08 is blocked by the retained Oracle 12: the original frozen live conversion drops truncation fields retained by replay. SDK Windows CI also remains failed. Ultra depends on W07 plan execution; created-but-not-started Child coverage, complete dual-backend and dual-identity acceptance, and the unknown-usage/schema discrepancy remain open. Component tests and the catalog UI profile do not settle these gates.
