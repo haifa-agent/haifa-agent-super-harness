@@ -42,7 +42,7 @@ class DeerFlowThreadRunApiTest extends AbstractDeerFlowThreadRunApiTest {
         HttpResponse<String> first = postJson(
                 "/api/threads",
                 """
-                {"thread_id":"thread-one","metadata":{"label":"kept","owner":"attacker","user_id":"attacker","system_role":"owner"}}
+                {"thread_id":"thread-one","metadata":{"label":"kept","owner":"attacker","user_id":"attacker","system_role":"owner","haifa_model_configuration_digest":"forged"}}
                 """);
         HttpResponse<String> second = postJson(
                 "/api/threads", "{\"thread_id\":\"thread-one\",\"metadata\":{\"label\":\"ignored\"}}");
@@ -53,6 +53,7 @@ class DeerFlowThreadRunApiTest extends AbstractDeerFlowThreadRunApiTest {
         assertThat(body.path("thread_id").asText()).isEqualTo("thread-one");
         assertThat(body.path("status").asText()).isEqualTo("idle");
         assertThat(body.path("metadata").path("label").asText()).isEqualTo("kept");
+        assertThat(body.path("metadata").has(DeerFlowThreadRunApi.MODEL_CONFIGURATION_DIGEST_METADATA_KEY)).isFalse();
         assertThat(body.path("metadata").has("owner")).isFalse();
         assertThat(body.path("metadata").has("user_id")).isFalse();
         assertThat(json.readTree(second.body()).path("metadata").path("label").asText())
@@ -119,6 +120,42 @@ class DeerFlowThreadRunApiTest extends AbstractDeerFlowThreadRunApiTest {
 
         assertThat(multipleBlocks.statusCode()).isEqualTo(200);
         assertThat(multipleBlocks.body()).contains("Haifa Agent SDK: first second");
+    }
+
+    @Test
+    void sameRevisionThinkingChangesRebuildOnlyTheNewTurnAndLeaveReplayFrozen() throws Exception {
+        List<Map<String, Object>> options = new java.util.concurrent.CopyOnWriteArrayList<>();
+        AgentChatModel model = request -> {
+            options.add(request.model().invocationOptions());
+            return new AgentChatResponse("mode-response", "local", "mode answer", List.of(), ModelFinishReason.STOP,
+                    ModelUsage.unpriced(1, 1), "", Map.of());
+        };
+        startApi(body -> {
+            var base = LocalProbeModelTestSupport.binding(model);
+            var original = base.snapshot();
+            Map<String, Object> policy = "thinking".equals(body.path("context").path("mode").asText())
+                    ? Map.of("thinking", "enabled", "reasoning_effort", "low") : Map.of("thinking", "disabled");
+            var snapshot = io.haifa.agent.model.api.ResolvedModelSnapshot.create(original.providerId(),
+                    original.providerVersion(), original.modelId(), original.modelVersion(), original.providerModelId(),
+                    original.adapterType(), original.adapterVersion(), original.apiStyle(), original.dialect(),
+                    original.endpoint(), original.credentialRef(), original.nativeStreaming(), original.capabilities(),
+                    original.contextWindow(), original.maxOutputTokens(), original.providerOptions(), policy);
+            return new HaifaRunBridge.ModelBinding(base.name(), base.revision(), model, snapshot);
+        });
+        createThread("mode-switch");
+        List<String> runIds = new ArrayList<>();
+        for (String mode : List.of("flash", "thinking", "flash")) {
+            var response = postJson("/api/threads/mode-switch/runs/stream",
+                    "{\"input\":{\"messages\":[{\"type\":\"human\",\"content\":\"mode turn\"}]},"
+                            + "\"context\":{\"mode\":\"" + mode + "\"},\"on_disconnect\":\"continue\"}");
+            assertThat(response.statusCode()).isEqualTo(200);
+            runIds.add(response.headers().firstValue("content-location").orElseThrow().replaceFirst(".*/", ""));
+        }
+        assertThat(options).extracting(value -> value.get("thinking")).containsExactly("disabled", "enabled", "disabled");
+        assertThat(options.get(1)).containsEntry("reasoning_effort", "low");
+        assertThat(runIds).doesNotHaveDuplicates();
+        assertThat(get("/api/threads/mode-switch/runs/" + runIds.getFirst()).statusCode()).isEqualTo(200);
+        assertThat(options).hasSize(3);
     }
 
     @Test

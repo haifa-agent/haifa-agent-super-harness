@@ -22,6 +22,9 @@ import io.haifa.agent.model.api.ModelDefinitionId;
 import io.haifa.agent.model.api.ModelMessage;
 import io.haifa.agent.model.api.ModelMessageRole;
 import io.haifa.agent.model.api.ModelProviderId;
+import io.haifa.agent.model.api.ModelProfileStatus;
+import io.haifa.agent.model.api.ModelReasoningMode;
+import io.haifa.agent.model.openai.OpenAiCompatibleModelProfileFactory;
 import io.haifa.agent.model.api.ModelStreamControl;
 import io.haifa.agent.model.api.ModelToolSpecification;
 import io.haifa.agent.model.api.ResolvedCredential;
@@ -52,6 +55,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -72,7 +76,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
     private static final Pattern OS_CREDENTIAL_REF =
             Pattern.compile("^os://[A-Za-z_][A-Za-z0-9_-]*$");
     private static final URI DEEPSEEK_ENDPOINT = URI.create("https://api.deepseek.com");
-    private static final Set<String> REASONING_EFFORTS = Set.of("low", "medium", "high");
+    private static final Set<String> REASONING_EFFORTS = Set.of("minimal", "low", "medium", "high");
     private static final List<String> AGENT_FIELDS = List.of(
             "display_name",
             "description",
@@ -123,31 +127,14 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         if (!context.isMissingNode() && !context.isNull() && !context.isObject()) {
             throw new IllegalArgumentException("context must be an object");
         }
-        String mode = context.path("mode").asText("flash");
-        if (!Set.of("flash", "thinking", "pro", "ultra").contains(mode)) {
-            throw new IllegalArgumentException("Unsupported mode '" + mode + "'");
-        }
-        if (!mode.equals("flash")) {
-            throw new IllegalArgumentException(
-                    "Mode '" + mode + "' requires an available reasoning-capable model");
-        }
-        // The frozen composer sends "minimal" when Flash is selected, including for
-        // models that do not expose reasoning effort. It is the no-reasoning value,
-        // not a request to enable a reasoning-capable mode.
-        if (context.has("reasoning_effort") && !context.get("reasoning_effort").isNull()
-                && !"minimal".equals(context.get("reasoning_effort").asText())) {
-            throw new IllegalArgumentException("reasoning_effort is not supported in flash mode");
-        }
-        rejectUnavailableBooleanCapability(context, "thinking_enabled", "thinking");
-        rejectUnavailableBooleanCapability(context, "is_plan_mode", "plan mode");
-        rejectUnavailableBooleanCapability(context, "subagent_enabled", "subagent delegation");
-
+        DeerFlowReasoningSettings.validateExecutionPreset(context);
         String requestedModel = optionalNonBlankText(context.get("model_name"), "context.model_name");
         String agentName = selectedAgentName(body);
         String agentModel = null;
+        ObjectNode agent = null;
         if (agentName != null && !bootstrap) {
             String selectedAgentName = agentName.toLowerCase(java.util.Locale.ROOT);
-            ObjectNode agent = store.agent(selectedAgentName)
+            agent = store.agent(selectedAgentName)
                     .orElseThrow(
                             () -> new IllegalArgumentException("Agent '" + selectedAgentName + "' not found"));
             agentModel = nullableStoredText(agent.get("model"));
@@ -159,7 +146,28 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                 : store.executableModel(selectedName)
                         .orElseThrow(() -> new IllegalArgumentException(
                                 "Model '" + selectedName + "' is not configured and usable"));
-        return binding(selected);
+        boolean supported = supportsReasoning(selected);
+        Map<String, Object> options = new LinkedHashMap<>();
+        if (DEEPSEEK_ENDPOINT.equals(URI.create(selected.path("base_url").asText()))) {
+            options.putAll(DeerFlowReasoningSettings.resolve(context, agent, supported).frozenOptions());
+            if ("enabled".equals(options.get("thinking"))) options.put("requires_reasoning_continuation", true);
+        } else {
+            DeerFlowReasoningSettings.resolve(context, agent, false);
+        }
+        ObjectNode effective = selected.deepCopy();
+        JsonNode settings = agent == null ? null : agent.get("model_settings");
+        if (settings != null && settings.isObject()) {
+            JsonNode maxTokens = settings.get("max_tokens");
+            if (maxTokens != null && !maxTokens.isNull()) effective.set("max_tokens", maxTokens);
+            JsonNode temperature = settings.get("temperature");
+            if (temperature != null && !temperature.isNull()) {
+                if ("enabled".equals(options.get("thinking"))) {
+                    throw new IllegalArgumentException("DeepSeek thinking cannot be combined with temperature");
+                }
+                options.put("temperature", temperature.numberValue());
+            }
+        }
+        return binding(effective, options);
     }
 
     /**
@@ -660,12 +668,27 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         result.put("model", stored.path("model").asText());
         String displayName = stored.path("display_name").asText();
         result.put("display_name", displayName.isBlank() ? stored.path("name").asText() : displayName);
+        // The frozen UI defaults a reasoning-capable model to pro. Keep this release gate
+        // closed until W07 and the joint default-pro acceptance are complete.
         result.put("supports_thinking", false);
         result.put("supports_reasoning_effort", false);
         return result;
     }
 
+    private boolean supportsReasoning(ObjectNode config) {
+        if (!DEEPSEEK_ENDPOINT.equals(URI.create(config.path("base_url").asText()))) return false;
+        var profile = OpenAiCompatibleModelProfileFactory.fromSnapshot(
+                binding(config).snapshot(), java.time.LocalDate.of(2026, 10, 3));
+        return profile.status() == ModelProfileStatus.VERIFIED
+                && profile.allowedReasoningModes().contains(ModelReasoningMode.ENABLED);
+    }
+
     private HaifaRunBridge.ModelBinding binding(ObjectNode config) {
+        boolean deepSeek = DEEPSEEK_ENDPOINT.equals(URI.create(config.path("base_url").asText()));
+        return binding(config, deepSeek ? Map.of("thinking", "disabled") : Map.of());
+    }
+
+    private HaifaRunBridge.ModelBinding binding(ObjectNode config, Map<String, Object> invocationOptions) {
         String name = config.path("name").asText();
         String revision = config.path("revision").asText("unsaved-probe");
         URI endpoint = URI.create(config.path("base_url").asText());
@@ -710,7 +733,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                 allowInsecureHttp,
                 MAX_PROVIDER_RESPONSE_BYTES);
         ResolvedModelSnapshot snapshot = ResolvedModelSnapshot.create(
-                new ModelProviderId("super-harness-managed-openai-compatible"),
+                new ModelProviderId(deepSeek ? "deepseek" : "super-harness-managed-openai-compatible"),
                 "0.1.1-SNAPSHOT",
                 new ModelDefinitionId(name),
                 revision,
@@ -722,11 +745,12 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                 endpoint,
                 new CredentialRef(credentialReference),
                 true,
-                Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING),
+                deepSeek ? Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING, ModelCapability.REASONING)
+                        : Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING),
                 contextWindow,
                 maxOutputTokens,
                 Map.of(),
-                deepSeek ? Map.of("thinking", "disabled") : Map.of());
+                invocationOptions);
         return new HaifaRunBridge.ModelBinding(name, revision, model, snapshot);
     }
 

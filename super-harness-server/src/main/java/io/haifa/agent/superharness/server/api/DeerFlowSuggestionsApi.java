@@ -176,9 +176,8 @@ final class DeerFlowSuggestionsApi implements HttpHandler {
     private List<String> generate(String conversation, int n, String modelName) {
         try {
             ObjectNode resolverBody = json.createObjectNode();
-            if (modelName != null) {
-                resolverBody.putObject("context").put("model_name", modelName);
-            }
+            ObjectNode context = resolverBody.putObject("context").put("mode", "flash").put("thinking_enabled", false);
+            if (modelName != null) context.put("model_name", modelName);
             HaifaRunBridge.ModelBinding binding = modelResolver.apply(resolverBody);
             ResolvedModelSnapshot snapshot = binding.snapshot();
             int maxOutputTokens = Math.min(snapshot.maxOutputTokens(), DEFAULT_MAX_OUTPUT_TOKENS);

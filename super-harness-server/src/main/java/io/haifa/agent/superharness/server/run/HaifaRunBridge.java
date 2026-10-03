@@ -258,6 +258,15 @@ public final class HaifaRunBridge implements AutoCloseable {
         return binding.name() + "@" + binding.revision();
     }
 
+    public String modelConfigurationDigest() {
+        return binding.snapshot().configurationDigest();
+    }
+
+    public boolean matchesModelBinding(ModelBinding candidate) {
+        return bindingIdentity().equals(candidate.name() + "@" + candidate.revision())
+                && binding.snapshot().configurationDigest().equals(candidate.snapshot().configurationDigest());
+    }
+
     public boolean hasTools() {
         return hasTools;
     }
