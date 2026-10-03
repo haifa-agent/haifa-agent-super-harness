@@ -39,6 +39,7 @@ class V2SkillSourceCategoryTest {
         ObjectNode manifest = (ObjectNode) json.readTree(
                 sourceRepository.resolve("third-party/deerflow/skills/manifest.json").toFile());
         JsonNode upstream = manifest.path("packages").get(0);
+        manifest.set("packages", json.createArrayNode().add(upstream.deepCopy()));
         assertThat(upstream.path("name").asText()).isEqualTo("consulting-analysis");
         assertThat(upstream.path("category").asText()).isEqualTo("public");
         for (var file : upstream.path("files").properties()) {

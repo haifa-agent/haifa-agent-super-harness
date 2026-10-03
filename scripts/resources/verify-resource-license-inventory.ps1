@@ -302,8 +302,11 @@ if ([string]$notice.status -eq 'GENERATED') {
     }
 }
 
+& python -B (Join-Path $PSScriptRoot 'skill_license_inventory.py') --repository $RepositoryRoot --inventory $InventoryPath --verify
+if ($LASTEXITCODE -ne 0) { throw 'Bundled Skill license inventory verification failed.' }
 foreach ($skill in @($inventory.non_imported_skills)) {
     $id = [string]$skill.id
+    if ($skill.import_status -eq 'BUNDLED') { continue } # Exact complete-resource/license checks ran above.
     Assert-Equal $skill.category 'non_imported_skill' "Skill '$id' has an invalid category"
     if ([string]$skill.import_status -ne 'NOT_IMPORTED') {
         throw "Non-imported skill '$id' was mislabeled as imported"

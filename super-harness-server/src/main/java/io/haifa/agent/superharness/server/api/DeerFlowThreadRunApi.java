@@ -139,6 +139,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
      * Server-owned; stripped from client-supplied metadata.
      */
     public static final String SKILL_SELECTION_METADATA_KEY = "haifa_skill_names";
+    public static final String SKILL_VERSIONS_METADATA_KEY = "haifa_skill_versions";
     public static final String LEAD_SIGNATURE_METADATA_KEY = "haifa_lead_prompt_signature";
     static final String AGENT_NAME_METADATA_KEY = "haifa_agent_name";
     static final String AGENT_BOOTSTRAP_METADATA_KEY = "haifa_agent_bootstrap";
@@ -269,6 +270,10 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         SkillRunTools.Projection forRun(JsonNode body);
 
         SkillRunTools.Projection forRecovery(SkillRunTools.Selection selection);
+
+        default SkillRunTools.Projection forRecovery(SkillRunTools.Selection selection, Map<String, String> versions) {
+            return forRecovery(selection);
+        }
 
         static SkillProjectionProvider none() {
             return new SkillProjectionProvider() {
@@ -405,6 +410,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         // Server-owned: only a Run may record the MCP projection used for restart recovery.
         metadata.remove(MCP_SELECTION_METADATA_KEY);
         metadata.remove(SKILL_SELECTION_METADATA_KEY);
+        metadata.remove(SKILL_VERSIONS_METADATA_KEY);
         metadata.remove(LEAD_SIGNATURE_METADATA_KEY);
         metadata.remove(MODEL_CONFIGURATION_DIGEST_METADATA_KEY);
         metadata.remove(AGENT_NAME_METADATA_KEY);
@@ -1337,7 +1343,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 }
             }
             HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection,
-                    skillProjections.forRecovery(thread.skillSelection()), restored);
+                    skillProjections.forRecovery(thread.skillSelection(), thread.skillVersions()), restored);
             boolean claimBinding = thread.modelBindingIdentity == null
                     || thread.modelBindingIdentity.equals(bridge.bindingIdentity());
             // Conversation/run reads use shared SQLite. The last selected model is preferred
@@ -3047,6 +3053,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private List<RunRecord> durableRuns(ThreadRecord thread) {
+        // A newly created Thread has no SDK session or durable Runs. Do not construct a
+        // recovery bridge merely to reject a response addressed to another Thread.
+        if (thread.persistedSessionId == null) return List.of();
         HaifaRunBridge bridge = bridgeForPersistedThread(thread);
         List<RunRecord> result = new ArrayList<>();
         for (ConversationTurn turn : newestRunTurns(thread, bridge)) {
@@ -4014,6 +4023,18 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return SkillRunTools.Selection.of(names);
         }
 
+        private Map<String, String> skillVersions() {
+            Object value = metadata.get(SKILL_VERSIONS_METADATA_KEY);
+            if (value == null) return Map.of();
+            if (!(value instanceof Map<?, ?> versions)) throw new IllegalStateException("Persisted Skill versions are invalid");
+            Map<String, String> result = new LinkedHashMap<>();
+            versions.forEach((name, version) -> {
+                if (!(name instanceof String text) || !(version instanceof String reference)) throw new IllegalStateException("Persisted Skill version is invalid");
+                result.put(text, reference);
+            });
+            return Map.copyOf(result);
+        }
+
         private Long framingFromSequence() {
             Object value = metadata.get(USER_INPUT_FRAMING_METADATA_KEY);
             if (value == null) return null;
@@ -4037,6 +4058,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             Map<String, Object> updated = new LinkedHashMap<>(metadata);
             updated.put(SKILL_SELECTION_METADATA_KEY, projection == null ? List.of()
                     : projection.selectedPackages().stream().map(SkillRunTools.Package::name).toList());
+            updated.put(SKILL_VERSIONS_METADATA_KEY, projection == null ? Map.of() : projection.selectedPackages().stream()
+                    .collect(java.util.stream.Collectors.toMap(SkillRunTools.Package::name,
+                            pkg -> pkg.source().descriptor().reference().sourceId() + "@" + pkg.version())));
             updated.put(LEAD_SIGNATURE_METADATA_KEY, signature);
             updated.put(AGENT_NAME_METADATA_KEY, agentPrompt.agentName() == null ? "" : agentPrompt.agentName());
             updated.put(AGENT_BOOTSTRAP_METADATA_KEY, agentPrompt.bootstrap());

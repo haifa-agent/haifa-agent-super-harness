@@ -292,7 +292,10 @@ class SetupAgentToolTest {
             assertThat(results.size()).isEqualTo(2);
             assertThat(results.getFirst().path("content").asText().contains("created successfully!")).isTrue();
             assertThat(results.getLast().path("content").asText().contains("Error:")).isTrue();
-            fixture.completed(fixture.run("setup-boundary", "new-agent", false));
+            // The boundary prompt is checked on a fresh session so earlier Tool-call history
+            // cannot consume this independent model-context budget.
+            fixture.thread("setup-boundary-fresh");
+            fixture.completed(fixture.run("setup-boundary-fresh", "new-agent", false));
             assertThat(instructions(model.requests.getLast()).trim().length()).isEqualTo(32000);
             soulEquals(instructions(model.requests.getLast()), boundary);
         }
