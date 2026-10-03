@@ -312,6 +312,23 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1
 
 启动脚本会校验冻结 DeerFlow 源码和前端工具链的精确版本；在隐藏窗口中启动 Haifa Gateway 和现有的受保护前端启动器；在有界超时内等待 `/health`、`/api/v1/auth/me` 与前端就绪；最后输出访问地址、精确 PID、数据目录和日志路径。人工验收入口为 `http://127.0.0.1:33018/`。遇到端口占用时，脚本会拒绝启动，不会自行结束未知进程。若尚未运行完整验证，可传入 `-Build`，由脚本执行离线 Maven Reactor `package` 门禁。脚本退出后，服务仍会继续运行。
 
+需要避免开发模式首次打开聊天页时的动态编译，可先在本工作树按固定代理目标构建冻结前端，再用已验证的构建戳启动生产模式。构建失败不得写入构建戳；代理目标、冻结前端源码或 lockfile 变化后必须重新构建。
+
+```powershell
+$env:DEER_FLOW_INTERNAL_GATEWAY_BASE_URL='http://127.0.0.1:18018'
+$env:COREPACK_ENABLE_NETWORK='0'
+Push-Location frontend
+try {
+    corepack pnpm build
+    if ($LASTEXITCODE -ne 0) { throw 'Frozen frontend build failed.' }
+} finally { Pop-Location }
+. scripts/lib/build-stamp.ps1
+Write-FrontendBuildStamp -RepositoryRoot (Get-Location).Path -InternalGatewayBaseUrl $env:DEER_FLOW_INTERNAL_GATEWAY_BASE_URL
+pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -ProductionFrontend
+```
+
+`-ProductionFrontend` 只使用构建戳与当前前端树、lockfile、代理目标完全匹配的 `.next`；预检不符即拒绝启动。该模式沿用相同的冻结来源、同源代理、身份与固定端口检查。默认启动方式仍为开发模式。
+
 只需重建或重启 Gateway、而受保护的前端仍在运行时，先核对监听 `18018` 的 Java 进程并只停止该 PID，再运行相关 Maven 测试和 `mvn -o -ntp -pl super-harness-server -am package`，随后执行：
 
 ```powershell
