@@ -24,9 +24,23 @@ public final class ControlledProvider implements AutoCloseable {
     public final List<JsonNode> requests = new CopyOnWriteArrayList<>();
     public final List<Map<String, Object>> responseDiagnostics = new CopyOnWriteArrayList<>();
     public final AtomicInteger calls = new AtomicInteger();
+    public final AtomicInteger expectedResponseAborts = new AtomicInteger();
     public final AtomicReference<Throwable> failure = new AtomicReference<>();
 
     public ControlledProvider(Path evidence, boolean rawEvidence, Responder responder) throws Exception {
+        this(evidence, rawEvidence, responder, (request, authorization) -> true);
+    }
+
+    /** Synthetic credential assertions return a boolean; headers never enter evidence or errors. */
+    public ControlledProvider(Path evidence, boolean rawEvidence, Responder responder,
+            java.util.function.BiPredicate<JsonNode, String> authorizationAccepted) throws Exception {
+        this(evidence, rawEvidence, responder, authorizationAccepted, request -> false);
+    }
+
+    /** Only response-write IO failures for explicitly selected cancellation requests are expected. */
+    public ControlledProvider(Path evidence, boolean rawEvidence, Responder responder,
+            java.util.function.BiPredicate<JsonNode, String> authorizationAccepted,
+            java.util.function.Predicate<JsonNode> expectedResponseAbort) throws Exception {
         this.evidence = Files.createDirectories(evidence);
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/v1/chat/completions", exchange -> {
@@ -37,6 +51,9 @@ public final class ControlledProvider implements AutoCloseable {
                     return;
                 }
                 JsonNode request = JSON.readTree(exchange.getRequestBody());
+                if (!authorizationAccepted.test(request, exchange.getRequestHeaders().getFirst("Authorization"))) {
+                    throw new AssertionError("Controlled Provider authorization did not match synthetic model identity");
+                }
                 requests.add(request);
                 int call = calls.incrementAndGet();
                 ObjectNode response = responder.respond(request, call);
@@ -63,10 +80,19 @@ public final class ControlledProvider implements AutoCloseable {
                     Files.writeString(evidence.resolve("provider-request-" + call + ".json"), request.toPrettyString());
                     Files.write(evidence.resolve("provider-response-" + call + (streaming ? ".sse" : ".json")), bytes);
                 }
-                exchange.getResponseHeaders().set("Content-Type", streaming
-                        ? "text/event-stream; charset=utf-8" : "application/json");
-                exchange.sendResponseHeaders(200, bytes.length);
-                try (var output = exchange.getResponseBody()) { output.write(bytes); }
+                try {
+                    exchange.getResponseHeaders().set("Content-Type", streaming
+                            ? "text/event-stream; charset=utf-8" : "application/json");
+                    exchange.sendResponseHeaders(200, bytes.length);
+                    try (var output = exchange.getResponseBody()) { output.write(bytes); }
+                } catch (java.io.IOException responseWriteFailure) {
+                    if (!expectedResponseAbort.test(request)) throw responseWriteFailure;
+                    expectedResponseAborts.incrementAndGet();
+                    Files.writeString(evidence.resolve("provider-response-abort-" + call + ".json"),
+                            JSON.writeValueAsString(Map.of("call", call, "phase", "response-write",
+                                    "error_class", responseWriteFailure.getClass().getName(),
+                                    "explicitly_expected", true, "response_bytes", bytes.length)));
+                }
             } catch (Exception | AssertionError handlerFailure) {
                 failure.compareAndSet(null, handlerFailure);
                 try {

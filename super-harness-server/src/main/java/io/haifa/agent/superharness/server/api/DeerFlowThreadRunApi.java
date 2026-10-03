@@ -156,6 +156,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private final Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread;
     private final McpProjectionProvider mcpProjections;
     private final SkillProjectionProvider skillProjections;
+    private final DelegationProjectionProvider delegationProjections;
     private final DeerFlowUploadContext uploadContext;
     private final PersistentThreadCatalog threadCatalog;
     private final DurableHaifaFoundation foundation;
@@ -223,6 +224,20 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             Function<JsonNode, AgentPromptContext> agentPromptResolver,
             BiFunction<HaifaRunBridge, AgentRunId, Optional<FrozenInstructionDiagnostic>> instructionDiagnostics)
             throws IOException {
+        this(json, runModelResolver, projectExists, workspaceChanges, dataDirectory, continuationKey,
+                runToolsForThread, mcpProjections, skillProjections, uploadContext, agentPromptResolver,
+                instructionDiagnostics, (body, model) -> io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled());
+    }
+
+    DeerFlowThreadRunApi(ObjectMapper json,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            Predicate<String> projectExists, PersistentProjectWorkspaceService workspaceChanges,
+            Path dataDirectory, SecretKey continuationKey,
+            Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread,
+            McpProjectionProvider mcpProjections, SkillProjectionProvider skillProjections,
+            DeerFlowUploadContext uploadContext, Function<JsonNode, AgentPromptContext> agentPromptResolver,
+            BiFunction<HaifaRunBridge, AgentRunId, Optional<FrozenInstructionDiagnostic>> instructionDiagnostics,
+            DelegationProjectionProvider delegationProjections) throws IOException {
         this.json = json;
         this.runModelResolver = runModelResolver;
         this.agentPromptResolver = java.util.Objects.requireNonNull(agentPromptResolver, "agentPromptResolver");
@@ -232,6 +247,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         this.runToolsForThread = runToolsForThread;
         this.mcpProjections = mcpProjections == null ? McpProjectionProvider.none() : mcpProjections;
         this.skillProjections = skillProjections == null ? SkillProjectionProvider.none() : skillProjections;
+        this.delegationProjections = java.util.Objects.requireNonNull(delegationProjections);
         this.uploadContext = java.util.Objects.requireNonNull(uploadContext, "uploadContext");
         this.threadCatalog = new PersistentThreadCatalog(json, dataDirectory);
         this.foundation = new DurableHaifaFoundation(dataDirectory, continuationKey);
@@ -283,6 +299,12 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 }
             };
         }
+    }
+
+    @FunctionalInterface
+    interface DelegationProjectionProvider {
+        io.haifa.agent.superharness.server.config.SubagentRunConfiguration forRun(
+                JsonNode body, HaifaRunBridge.ModelBinding parent);
     }
 
     boolean hasThread(String threadId) {
@@ -859,9 +881,11 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             boolean switchingMcp;
             boolean switchingSkills;
             boolean switchingPrompt;
+            boolean switchingDelegation;
             try {
+                var delegation = delegationProjections.forRun(body, binding);
                 if (thread.bridge == null) {
-                    HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt);
+                    HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt, delegation);
                     // Restoring the Conversation is read-only; claim the selected model only
                     // after the SDK has admitted the new Run successfully.
                     attachBridge(thread, bridge, false);
@@ -880,9 +904,13 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 // and must rebuild independently when bootstrap/default prompts have identical text.
                 switchingPrompt = !selectedBridge.matchesAgentIdentity(agentPrompt)
                         || !selectedBridge.promptSignature().equals(
-                                HaifaRunBridge.promptSignatureFor(toolsForThread(thread, agentPrompt), skillProjection, agentPrompt));
-                if (switchingModel || switchingMcp || switchingSkills || switchingPrompt) {
-                    selectedBridge = newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt);
+                                HaifaRunBridge.promptSignatureFor(toolsForThread(thread, agentPrompt), skillProjection, agentPrompt, delegation,
+                                        selectedBridge.mcpToolNames()));
+                switchingDelegation = !selectedBridge.delegationSignature().equals(
+                        delegation.signature(toolsForThread(thread, agentPrompt), mcpProjection.fingerprint(),
+                                skillProjection == null ? "" : skillProjection.fingerprint(), selectedBridge.mcpToolNames()));
+                if (switchingModel || switchingMcp || switchingSkills || switchingPrompt || switchingDelegation) {
+                    selectedBridge = newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt, delegation);
                 }
             } catch (RuntimeException failure) {
                 if (createdBridge && thread.bridge != null) {
@@ -922,7 +950,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 // switchingModel cannot both be true. On a failed switch the old bridge stays
                 // attached for durable history and a subsequent Turn; only the rejected new
                 // bridge is closed here.
-                if (switchingModel || switchingMcp || switchingSkills || switchingPrompt || createdBridge) {
+                if (switchingModel || switchingMcp || switchingSkills || switchingPrompt || switchingDelegation || createdBridge) {
                     if (createdBridge) thread.bridge = null;
                     ownedBridges.remove(selectedBridge);
                     selectedBridge.close();
@@ -931,7 +959,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 sendJson(exchange, 500, Map.of("detail", "Run could not start"));
                 return;
             }
-            if (switchingModel || switchingMcp || switchingSkills || switchingPrompt) {
+            if (switchingModel || switchingMcp || switchingSkills || switchingPrompt || switchingDelegation) {
                 thread.bridge = selectedBridge;
                 ownedBridges.add(selectedBridge);
             }
@@ -1357,8 +1385,17 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             McpRunTools.Projection mcpProjection,
             SkillRunTools.Projection skillProjection,
             AgentPromptContext agentPrompt) {
+        // Restart history only reads SDK facts. A later Run separately admits fresh declarations.
+        return newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt,
+                io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled());
+    }
+
+    private HaifaRunBridge newBridge(HaifaRunBridge.ModelBinding binding, ThreadRecord thread,
+            McpRunTools.Projection mcpProjection, SkillRunTools.Projection skillProjection,
+            AgentPromptContext agentPrompt,
+            io.haifa.agent.superharness.server.config.SubagentRunConfiguration delegation) {
         bridgeBuilds.incrementAndGet();
-        return new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt), foundation, mcpProjection, skillProjection, agentPrompt);
+        return new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt), foundation, mcpProjection, skillProjection, agentPrompt, delegation);
     }
 
     private List<? extends JavaTool<?, ?>> toolsForThread(ThreadRecord thread, AgentPromptContext agentPrompt) {
@@ -2533,18 +2570,79 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         response.put("multitask_strategy", "reject");
         response.put("created_at", run.createdAt.toString());
         response.put("updated_at", snapshot.updatedAt().toString());
-        response.put("total_input_tokens", usageKnown ? snapshot.usage().inputTokens() : null);
-        response.put("total_output_tokens", usageKnown ? snapshot.usage().outputTokens() : null);
-        response.put("total_tokens", usageKnown
-                ? Math.addExact(snapshot.usage().inputTokens(), snapshot.usage().outputTokens()) : null);
+        java.util.OptionalLong parentTokens = usageKnown
+                ? sumUsageTokens(snapshot.usage().inputTokens(), snapshot.usage().outputTokens())
+                : java.util.OptionalLong.empty();
+        usageKnown = usageKnown && parentTokens.isPresent();
+        Optional<long[]> childUsage = includeDiagnostics ? childUsage(run) : Optional.empty();
+        java.util.OptionalLong totalInput = usageKnown && childUsage.isPresent()
+                ? sumUsageTokens(snapshot.usage().inputTokens(), childUsage.orElseThrow()[0]) : java.util.OptionalLong.empty();
+        java.util.OptionalLong totalOutput = usageKnown && childUsage.isPresent()
+                ? sumUsageTokens(snapshot.usage().outputTokens(), childUsage.orElseThrow()[1]) : java.util.OptionalLong.empty();
+        java.util.OptionalLong total = totalInput.isPresent() && totalOutput.isPresent()
+                ? sumUsageTokens(totalInput.orElseThrow(), totalOutput.orElseThrow()) : java.util.OptionalLong.empty();
+        boolean totalKnown = total.isPresent();
+        response.put("total_input_tokens", totalKnown ? totalInput.orElseThrow() : null);
+        response.put("total_output_tokens", totalKnown ? totalOutput.orElseThrow() : null);
+        response.put("total_tokens", totalKnown ? total.orElseThrow() : null);
         response.put("llm_call_count", usageKnown ? snapshot.usage().modelCalls() : null);
-        response.put("lead_agent_tokens", null);
-        response.put("subagent_tokens", null);
+        if (usageKnown) response.put("lead_agent_tokens", parentTokens.orElseThrow());
+        childUsage.ifPresent(usage -> sumUsageTokens(usage[0], usage[1])
+                .ifPresent(tokens -> response.put("subagent_tokens", tokens)));
         response.put("middleware_tokens", null);
         response.put("message_count", null);
         response.put("stop_reason", facts.values().get("stop_reason"));
         response.put("diagnostics", facts.values());
         return response;
+    }
+
+    private Optional<long[]> childUsage(RunRecord parent) {
+        long input = 0, output = 0;
+        for (var child : parent.bridge.children(parent.runId)) {
+            AgentRunSnapshot snapshot = parent.bridge.snapshot(child.runId());
+            List<AgentRunEvent> events = new ArrayList<>();
+            RunEventCursor cursor = parent.bridge.beforeFirstEvent(child.runId());
+            boolean complete = false;
+            for (int pages = 0; pages < RUN_DIAGNOSTIC_EVENT_PAGE_BUDGET; pages++) {
+                var page = parent.bridge.events(child.runId(), cursor, 256);
+                events.addAll(page.items());
+                if (!page.hasMore()) { complete = true; break; }
+                cursor = page.nextCursor();
+            }
+            RunDiagnosticProjection.Facts facts;
+            try {
+                facts = RunDiagnosticProjection.from(snapshot, events, List.of(), Optional.empty(), complete,
+                        complete ? null : "child_usage_scan_limit");
+            } catch (ArithmeticException invalidUsage) {
+                return Optional.empty();
+            }
+            boolean knownZero = complete && snapshot.status().isTerminal() && snapshot.usage().modelCalls() == 0
+                    && snapshot.usage().inputTokens() == 0 && snapshot.usage().outputTokens() == 0
+                    && events.stream().noneMatch(event -> event.payload() instanceof RunEventPayloads.ModelLifecycle);
+            if (!facts.usageKnown() && !knownZero) return Optional.empty();
+            var nextInput = sumUsageTokens(input, snapshot.usage().inputTokens());
+            var nextOutput = sumUsageTokens(output, snapshot.usage().outputTokens());
+            if (nextInput.isEmpty() || nextOutput.isEmpty()
+                    || sumUsageTokens(nextInput.orElseThrow(), nextOutput.orElseThrow()).isEmpty()) return Optional.empty();
+            input = nextInput.orElseThrow();
+            output = nextOutput.orElseThrow();
+        }
+        return Optional.of(new long[] {input, output});
+    }
+
+    /** Browser-facing usage is unknown when any source or its sum is not exactly representable. */
+    static java.util.OptionalLong sumUsageTokens(long... tokens) {
+        long total = 0;
+        try {
+            for (long value : tokens) {
+                if (value < 0 || value > 9_007_199_254_740_991L) return java.util.OptionalLong.empty();
+                total = Math.addExact(total, value);
+                if (total > 9_007_199_254_740_991L) return java.util.OptionalLong.empty();
+            }
+        } catch (ArithmeticException invalidUsage) {
+            return java.util.OptionalLong.empty();
+        }
+        return java.util.OptionalLong.of(total);
     }
 
     private record DiagnosticScan(RunDiagnosticProjection.Facts facts, int pagesRead) {}

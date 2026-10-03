@@ -97,6 +97,16 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             DeerFlowSuggestionsApi.Settings suggestionsSettings,
             SkillConfigStore testSkillStore)
             throws IOException {
+        this(server, executor, dataDirectory, continuationKey, testRunModelResolver, testRunTools,
+                suggestionsSettings, testSkillStore,
+                io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings.defaults());
+    }
+
+    private DeerFlowBootstrapApi(HttpServer server, ExecutorService executor, Path dataDirectory,
+            SecretKey continuationKey, Function<JsonNode, HaifaRunBridge.ModelBinding> testRunModelResolver,
+            List<? extends JavaTool<?, ?>> testRunTools, DeerFlowSuggestionsApi.Settings suggestionsSettings,
+            SkillConfigStore testSkillStore,
+            io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings delegationSettings) throws IOException {
         this.server = server;
         this.executor = executor;
         this.objectMapper = new ObjectMapper();
@@ -155,7 +165,24 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                         },
                 new DeerFlowUploadContext(toolWorkspace),
                 configurationApi::resolveAgentPromptContext,
-                HaifaRunBridge::frozenInstructionDiagnostic);
+                HaifaRunBridge::frozenInstructionDiagnostic,
+                (body, parent) -> {
+                    if (!DeerFlowConfigurationApi.subagentEnabled(body)) {
+                        return io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled();
+                    }
+                    try {
+                        return io.haifa.agent.superharness.server.config.SubagentRunConfiguration.project(
+                                subagentCatalog.runtimeSnapshot(), configurationApi.resolveAllowedSubagents(body),
+                                parent, configurationApi::resolveChildModel,
+                                delegationSettings);
+                    } catch (IOException | RuntimeException unavailable) {
+                        // Safe degradation applies only to configuration reads; SDK declaration
+                        // validation happens later and must retain its own failure boundary.
+                        System.getLogger(DeerFlowBootstrapApi.class.getName()).log(System.Logger.Level.WARNING,
+                                "Subagent configuration unavailable; admitting Run without delegation");
+                        return io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled();
+                    }
+                });
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
         this.projectApi = new DeerFlowProjectApi(objectMapper, projects, threadRunApi, workspaceApi);
@@ -277,7 +304,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 dataDirectory,
                 continuationKey(environment, dataDirectory),
                 null,
-                DeerFlowSuggestionsApi.Settings.fromEnvironment(environment));
+                DeerFlowSuggestionsApi.Settings.fromEnvironment(environment),
+                io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings.fromEnvironment(environment));
     }
 
     private static DeerFlowBootstrapApi createWithKey(
@@ -287,12 +315,21 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
             DeerFlowSuggestionsApi.Settings suggestionsSettings)
             throws IOException {
+        return createWithKey(configuration, dataDirectory, continuationKey, runModelResolver, suggestionsSettings,
+                io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings.defaults());
+    }
+
+    private static DeerFlowBootstrapApi createWithKey(LocalServerConfiguration configuration,
+            Path dataDirectory, SecretKey continuationKey,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            DeerFlowSuggestionsApi.Settings suggestionsSettings,
+            io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings delegationSettings) throws IOException {
         HttpServer server = HttpServer.create(configuration.socketAddress(), 0);
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         server.setExecutor(executor);
         return new DeerFlowBootstrapApi(
                 server, executor, dataDirectory, continuationKey, runModelResolver, List.of(),
-                suggestionsSettings, null);
+                suggestionsSettings, null, delegationSettings);
     }
 
     public static DeerFlowBootstrapApi createForTests(

@@ -186,6 +186,14 @@ pwsh -NoProfile -File scripts/test-targeted.ps1 -Test DeerFlowSubagentCatalogApi
 
 原始合成请求/响应保存在当前 worktree 的 `local-tmp/acceptance-fixtures/evidence/`；可在启动测试的会话设置 `ENG_ACCEPTANCE_DATA_ROOT`、`ENG_ACCEPTANCE_EVIDENCE_ROOT` 指向该槽位的独立目录。目录测试不调用模型；完整 W08 的 SDK、Run、回放与 UI 门禁由对应任务验收。
 
+生产 Run 的 `context.subagent_enabled=true` 才声明 SDK Child 与 `task`；未提供、null、false 或 bootstrap 时关闭。Custom Agent 的 `allowed_subagents=null` 表示全部有效定义，`[]` 表示禁止全部，列表取有效目录交集。每次新 Run 读取目录、模型和实际 Tool 声明生成快照与指纹；正在执行的 Run 沿用已冻结声明，重启历史读取公开 SDK 事实。新启用委托的 Parent 使用 `haifa-super-harness:lead` 定义 ID，避免与合法 Child 名称冲突；未启用及历史恢复保留原定义 ID，历史 Run 不改名。
+
+进程启动配置 `HAIFA_SUPER_HARNESS_SUBAGENT_MAX_RUNNING` 默认 3，`HAIFA_SUPER_HARNESS_SUBAGENT_MAX_CONCURRENT` 默认取进程容量；并发夹取到 1–64 且不超过容量。`HAIFA_SUPER_HARNESS_SUBAGENT_MAX_TOTAL_PER_RUN` 默认 6，夹取到 1–50。非法整数启动失败；本期不支持 context 覆盖。Child 的 `timeout_seconds`、`max_turns` 通过公开 profile 映射到 SDK，深度绝对上限 1；`tools=null` 继承 Parent 实际 Tool 集后减禁用项，`[]` 保持空集，Child 的需审批操作由 SDK 非交互策略拒绝。`skills` 存储保留，但本期不装配。
+
+启用委托的 Parent wall 授权为 `120000 + max_total_per_run * 最大有效 Child timeout_ms`，以免原 120 秒 Parent wall 提前终止委托等待。Parent 原有 16 次迭代、模型/Tool 调用预算等限制仍生效；执行限额与终止由 SDK 拥有。默认内置 timeout900秒、总量6时 wall 授权为5520000毫秒。未启用委托仍使用原120秒授权。
+
+生产装配定向验证：`pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'DeerFlowTaskDelegationApiTest,SubagentRunConfigurationTest,LeadPromptComposerTest' -LowMemory`。这些测试消费主控指定的公开候选 JAR；完整回放/UI/全仓门禁仍须独立验收，未合入上游 dev 的 SDK 候选不能使本分支合入 main。
+
 ## W03 后续建议配置
 
 Gateway 通过 `GET /api/suggestions/config` 暴露冻结前端的后续建议全局配置。以下两个环境变量在进程启动时读取一次，均为可选：

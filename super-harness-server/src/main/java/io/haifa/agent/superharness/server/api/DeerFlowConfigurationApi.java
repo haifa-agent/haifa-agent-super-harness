@@ -128,6 +128,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
             throw new IllegalArgumentException("context must be an object");
         }
         DeerFlowReasoningSettings.validateExecutionPreset(context);
+        subagentEnabled(body);
         String requestedModel = optionalNonBlankText(context.get("model_name"), "context.model_name");
         String agentName = selectedAgentName(body);
         String agentModel = null;
@@ -185,6 +186,30 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         ObjectNode agent = store.agent(selected)
                 .orElseThrow(() -> new IllegalArgumentException("Agent '" + selected + "' not found"));
         return McpRunTools.Selection.fromJson(agent.get("mcp_plugins"));
+    }
+
+    static boolean subagentEnabled(JsonNode body) {
+        JsonNode value = body.path("context").get("subagent_enabled");
+        if (value == null || value.isNull()) return false;
+        if (!value.isBoolean()) throw new IllegalArgumentException("context.subagent_enabled must be boolean");
+        return value.booleanValue() && !isBootstrap(body);
+    }
+
+    java.util.Optional<Set<String>> resolveAllowedSubagents(JsonNode body) {
+        String name = selectedAgentName(body);
+        if (name == null) return java.util.Optional.empty();
+        ObjectNode selected = store.agent(name).orElseThrow(
+                () -> new IllegalArgumentException("Selected agent is unavailable"));
+        JsonNode value = selected.get("allowed_subagents");
+        if (value == null || value.isNull()) return java.util.Optional.empty();
+        Set<String> allowed = new java.util.TreeSet<>();
+        value.forEach(item -> allowed.add(item.asText()));
+        return java.util.Optional.of(Set.copyOf(allowed));
+    }
+
+    HaifaRunBridge.ModelBinding resolveChildModel(String name) {
+        return binding(store.executableModel(name).orElseThrow(
+                () -> new IllegalStateException("Child model is unavailable")));
     }
 
     /** Frozen Agent.skills: null selects all enabled packages, [] selects none. */
