@@ -57,6 +57,8 @@ if ($UxV1DefaultTools -or $UxV1AgentSoul) {
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 . (Join-Path $PSScriptRoot '../lib/sdk-selection.ps1')
 . (Join-Path $PSScriptRoot '../lib/build-stamp.ps1')
+. (Join-Path $PSScriptRoot '../lib/preflight.ps1')
+Use-SafeNoProxy
 $sdk = [pscustomobject]@{ Status = 'NOT_RUN'; HaifaVersion = $null }
 $internalGatewayBaseUrl = "http://127.0.0.1:$GatewayPort"
  . (Join-Path $PSScriptRoot '../lib/run-fixture.ps1')

@@ -77,6 +77,19 @@ SDK 版本规则见 `AGENTS.md`「范围与依赖」。工作包 worktree 消费
 
 UI runner 在构建成功后写入构建戳（`frontend/.next/haifa-build-stamp.json`、`super-harness-server/target/haifa-build-stamp.json`），`-SkipBuild`/`-SkipServerBuild` 复用构建产物前先核对源码 SHA、前端 lockfile、构建时代理目标和 Haifa 版本；不一致时在启动任何进程前失败并点名字段，不会自动重建，需去掉 `-SkipBuild` 重跑。
 
+全仓门禁入口还会先跑秒级预检（`scripts/lib/quick_checks.py`：SDK 基线门禁、`git diff --check`、secret scan），失败时直接输出 `FAIL_PREFLIGHT`，不启动 Maven；Maven 默认两个并行 fork（`-Forks`，1–4）。摘要 JSON 同时写到日志旁的同名 `.json`。`test-targeted.ps1`、`verify-full.ps1` 和 UI runner 遇到含通配符或 CIDR 的 `NO_PROXY` 时，只在本进程内改用 `127.0.0.1,localhost`。
+
+流水线辅助脚本（Python，核心逻辑在脚本内）：
+
+```powershell
+python scripts/governance/change_scope.py                      # 按 main 以来的改动给出需要的门禁
+python scripts/governance/shpm_dispatch.py --task ... --execute # 一次完成登记、启动与派工
+python scripts/governance/shpm_record_gates.py --task ... local-tmp/verify-full/<run>.json <UI 证据目录> --execute
+python -m unittest discover -s tests/checks/build -p "test_*.py"
+```
+
+两个 SHPM 脚本不带 `--execute` 时只打印将要执行的命令。
+
 全仓门禁用 `pwsh -NoProfile -File scripts/verify-full.ps1`：它运行 `mvn -o -ntp clean verify`（同样读取 `local-tmp/sdk-selection.json`），Maven 输出写到 `local-tmp/verify-full/`，stdout 输出 JSON 汇总；通过后为它产出的 exec JAR 写入服务端构建戳。随后在同一提交上，任意 profile 的 UI 冷轮都可加 `-SkipServerBuild` 直接复用该 JAR，只重新构建前端。不加 `-SkipServerBuild` 的冷轮仍会自行打包后端，但以 `-DskipTests` 只打包、不重复执行单元测试；单元测试只由全仓门禁证明。
 
 这些入口的回归与提交前的 SDK 基线门禁：

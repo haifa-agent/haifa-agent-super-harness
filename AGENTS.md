@@ -21,8 +21,8 @@
 - 后续新增脚本以 Python 为主，核心逻辑集中在 Python 中；如需方便不同平台调用，可提供 `.ps1` 和 `.sh` 薄封装，仅负责必要的环境准备、调用 Python、透传参数与退出码，避免在封装中重复实现核心逻辑。
 - 每个工作包使用独立 branch/worktree、端口和数据目录。
 - Git commit message（标题与正文）以及 GitHub PR 的标题、描述和评论（含 review comment）必须使用英文；适用于本仓库及上游 `D:\workspace\haifa-agent` 的 PR。命令、路径、配置键和 API 名称保留原样。
-- 提交前须运行范围内定向测试、可执行的全仓门禁、`git diff --check`、secret scan 与真实 smoke，并保留真实 Run/Tool/Artifact 证据；失败项和未运行项分别记录为 `FAIL`/`NOT_RUN`，不得用静态验证替代运行证据，不得放宽断言或删除失败测试换取绿灯。
-- Playwright 验收除功能断言外还必须报告流程健康度：cold/warm 启动与总耗时、是否重试、首个超时或卡点、Next 动态编译时间、trace/screenshot/日志位置，以及结束后端口和子进程是否清理；至少做一次同脚本重复运行以区分稳定问题与偶发问题。不得用无界等待掩盖启动或断言失败；等待必须有明确对象、超时和失败证据。
+- 提交前须运行范围内定向测试、按改动范围确定的门禁（见「验收提速」B 条）、`git diff --check`、secret scan 与真实 smoke，并保留真实 Run/Tool/Artifact 证据；失败项和未运行项分别记录为 `FAIL`/`NOT_RUN`，不得用静态验证替代运行证据，不得放宽断言或删除失败测试换取绿灯。
+- Playwright 验收除功能断言外还必须报告流程健康度：各轮（冷轮仅在跑了时）启动与总耗时、是否重试、首个超时或卡点、Next 动态编译时间、trace/screenshot/日志位置，以及结束后端口和子进程是否清理；至少做一次同脚本重复运行以区分稳定问题与偶发问题。不得用无界等待掩盖启动或断言失败；等待必须有明确对象、超时和失败证据。
 - 原始证据外置：运行任何 `mvn clean` 或重跑前，须把需保留的 Playwright trace、截图及前后端/Provider 原始日志复制到该工作包的外置独立证据目录（例如 worktree 的 `local-tmp/<slot>/evidence`，不能是另一个 `target`），并记录原始与复制路径。原始日志已消失时，只能明确标注为从先前终端输出重建的摘要，不得冒充原始证据。首次失败的证据同样保留，不得改记为 `NOT_RUN`。
 
 ### 验收提速（不降低门禁）
@@ -35,6 +35,11 @@
 - 开发内环先运行受影响模块的定向测试、合同/语法检查和必要的单 case UI 排障；这些结果只用于快速定位，不能替代提交前全仓门禁、真实 smoke、同脚本重复运行或主控独立验收。代码或断言修改后，先保存首次 FAIL 原件，再按变更范围重跑；不得靠反复整套重跑碰运气。
 - 正式 UI 前一次性核对冻结来源、SDK 实际落盘构件、前端依赖与浏览器、完整槽位端口绑定、独立 data-root/凭据引用、Provider、Gateway 和前端代理目标。预检失败先修环境或如实记 `NOT_RUN`/`BLOCKED_EXTERNAL`，不要等长轮次超时后才发现配置错误。
 - 同一源码 SHA、前端依赖和构建时代理目标完全一致时，可在同一独立 worktree 内复用已验证的构建产物完成后续暖轮；变更代码、依赖、代理目标或槽位后必须重建并重新验证。复用构建不等于复用 Run、Thread、数据目录或测试结果，不得跳过规定的 cold/warm、双后端、连续两轮与最终主线 SHA 门禁。
+- 2026-10-03 人工批准以下四项流程裁剪（A–D），用于减少不产生新信息的重复运行：
+  - A. 快进合入不重跑：最终门禁前先把分支变基到 main 最新提交，合入使用快进。快进后 main 的 SHA 与已验证 SHA 相同，主控核对门禁摘要 JSON（`local-tmp/verify-full/*.json`）的 `sourceSha`、`haifaVersion` 和 UI `flow-health.json` 的 `sourceSha` 与合入后 HEAD 一致，即直接复用这些结果，不在 main 上重跑门禁和 UI；非快进合入（merge commit、冲突解决、合入前 main 已前进）必须在合入后的 SHA 上重跑。固定端口主服务的刷新与 smoke 照常执行；客户演示「同一主线 SHA 连续两轮 L3」不受本条影响。
+  - B. 按改动范围定门禁：运行 `python scripts/governance/change_scope.py` 得到建议门禁。只改文档 → 文档检查；只改脚本 → 脚本回归，改到 `scripts/lib/`、`scripts/ui/` 再加一轮暖轮；只改 Java 测试 → 全仓门禁；改产品代码、UI 脚本或用例 → 全仓门禁加两轮暖轮；改冻结前端 → 加一轮冷轮。建议只是下限，主控或复审可以要求更多。
+  - C. UI 默认两次暖轮：同一提交上默认跑两次暖轮（满足同脚本重复运行）；冷轮只在冻结前端、前端依赖、槽位或代理目标变化、构建戳失效时跑。新 worktree 首次运行没有构建戳，第一轮自然就是冷轮。
+  - D. SHPM 登记用薄封装：派工用 `python scripts/governance/shpm_dispatch.py`（一次完成 task create、sprint link、task start、assign create），门禁结果用 `python scripts/governance/shpm_record_gates.py` 从门禁摘要 JSON 和 UI 证据目录登记。两者默认只打印命令，加 `--execute` 才写入；结果原样登记（FAIL 仍是 FAIL），`deliver`、`accept`、阶段结果和 `GO` 仍由主控手工执行。
 - 每轮分别记录准备/构建、服务就绪、功能断言、证据归档、复审及返工耗时和首次卡点；证据目录与 SHPM 记录可由脚本汇总，但原始日志、首次 FAIL、`NOT_RUN` 和人工裁决须保留，脚本不得自动提升阶段 `PASS`/`GO`。仅并行执行真正独立且资源、端口、数据目录隔离的检查；本机内存不足时不要并发重型 Maven/Next/Java 任务。
 
 ## 环境与排障记录
@@ -46,9 +51,9 @@
 - 在仓库根目录使用 Java 21、Maven 3.9.15 和 PowerShell 7（`pwsh`）；也可用 `mvnw.cmd` / `./mvnw`，Wrapper 首次使用需下载分发包，之后可离线复用。
 - 新 Java 验收测试从 `ProductionWriteFileHttpTest` 黄金样例起步，复用 `testsupport` 中的模型、审批、Gateway 与进程夹具；独立数据、证据和端口的配置见 [README「定向测试与 SDK 版本选择」](README.md#定向测试与-sdk-版本选择)。
 - 定向测试：`pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'ProductionWriteFileHttpTest,AcceptanceFixturesTest' -LowMemory`。替换 `-Test` 即可选择用例，其他模块用 `-Module`；入口固定带 `-am`，匹配 0 个测试算失败，不传额外 Maven goal、`-DskipTests` 或 `-Dhaifa.version`。
-- 全仓门禁：`pwsh -NoProfile -File scripts/verify-full.ps1 -LowMemory`，运行离线 `clean verify` 并生成 exec JAR 与构建戳。执行前保存需保留的原始证据，并停止当前 worktree 中占用该 JAR 的精确进程。
+- 全仓门禁：`pwsh -NoProfile -File scripts/verify-full.ps1`，先跑秒级预检（SDK 基线门禁、`git diff --check`、对 main 以来改动的 secret scan），失败即停、不启动 Maven；再以两个并行 fork（`-Forks 2`，内存紧张时 `-Forks 1 -LowMemory`）运行离线 `clean verify`，生成 exec JAR、构建戳和摘要 JSON。执行前保存需保留的原始证据，并停止当前 worktree 中占用该 JAR 的精确进程。
 - SDK 选择沿用「范围与依赖」规则，由入口读取本 worktree 的 `local-tmp/sdk-selection.json`；提交前运行 `pwsh -NoProfile -File tests/checks/build/verify-haifa-version-baseline.ps1`。测试日志位于 `local-tmp/test-targeted/`、`local-tmp/verify-full/`，stdout 输出 JSON 汇总。
-- 同一提交全仓门禁通过后，`scripts/ui/run-w18-ui-smoke.ps1` 的冷轮用 `-SkipServerBuild` 复用 JAR，只构建前端；暖轮用 `-SkipBuild` 复用前后端构建。复用由构建戳校验源码、SDK 版本、前端依赖和代理目标，输入变化后重新构建验证；每轮仍使用独立数据与证据。
+- 同一提交全仓门禁通过后，`scripts/ui/run-w18-ui-smoke.ps1` 的冷轮用 `-SkipServerBuild` 复用 JAR，只构建前端；暖轮用 `-SkipBuild` 复用前后端构建。冻结前端来源校验在源码与 DeerFlow 检出未变时复用本 worktree 的上次 PASS（`local-tmp/cache/frontend-source-gate/`，键见 `scripts/lib/frontend_gate_cache.py`）。复用由构建戳校验源码、SDK 版本、前端依赖和代理目标，输入变化后重新构建验证；每轮仍使用独立数据与证据。
 
 ### 默认 Web 工具环境代理
 
