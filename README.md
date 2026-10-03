@@ -160,6 +160,19 @@ pwsh -NoProfile -File scripts/ui/run-w05-demo-artifact-ui.ps1 -SkipBuild
 
 脚本固定 `retries=0`，每次生成独立 Thread 和文件，并把 trace、截图、前后端/Provider 日志及 Artifact 字节/SHA 证据写入 `local-tmp/slot-1-w05-m2-evidence/playwright/run-<时间戳>/`。正式验收须连续运行两次且都通过；第一次数据不得清理，结束后还须确认 `20618`、`25618` 和子进程均已释放。
 
+## W03 思考配置开发切片
+
+本分支通过公开 `ModelReasoningPolicy` 分别接入思考开关与推理级别：请求显式值优先于 Agent
+非 null 默认值；显式 `thinking_enabled:null` 按冻结后端关闭思考，省略则继承。
+开启时 `minimal/low` 映射 LOW、`medium/high` 映射 HIGH；flash 关闭且省略 effort。
+Agent 的 `model_settings` 冻结到新 Run，启用思考与显式 temperature 组合明确拒绝。
+同型号同 revision 的参数变化通过配置 digest 重建下一 Turn 的 Bridge；SDK 保持旧 Run 的冻结参数。
+Thread 仅保存服务器维护的 digest 索引，用于拒绝 Steer 改参，不保存第二份模型 snapshot。
+
+目录 `supports_thinking`、`supports_reasoning_effort` 暂保持 false，直到 SDK 038-14 发布、联调以及
+W07 默认 pro 路径通过发布验收。显式 thinking 后端接线已开发，完整 UI、真实模型 smoke、
+Gateway 审批恢复和最终门禁待流程/CI 优化完成后执行。本切片不提供计划、子 Agent 或思考正文展示。
+
 ## W03 后续建议配置
 
 Gateway 通过 `GET /api/suggestions/config` 暴露冻结前端的后续建议全局配置。以下两个环境变量在进程启动时读取一次，均为可选：

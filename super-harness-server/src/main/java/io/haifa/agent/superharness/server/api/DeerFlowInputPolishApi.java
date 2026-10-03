@@ -120,7 +120,9 @@ final class DeerFlowInputPolishApi implements HttpHandler {
     }
 
     private String polish(String text, String locale) {
-        HaifaRunBridge.ModelBinding binding = modelResolver.apply(json.createObjectNode());
+        ObjectNode resolverBody = json.createObjectNode();
+        resolverBody.putObject("context").put("mode", "flash").put("thinking_enabled", false);
+        HaifaRunBridge.ModelBinding binding = modelResolver.apply(resolverBody);
         ResolvedModelSnapshot snapshot = binding.snapshot();
         int maxOutputTokens = Math.min(snapshot.maxOutputTokens(), DEFAULT_MAX_OUTPUT_TOKENS);
         String callId = "input-polish-" + UUID.randomUUID();

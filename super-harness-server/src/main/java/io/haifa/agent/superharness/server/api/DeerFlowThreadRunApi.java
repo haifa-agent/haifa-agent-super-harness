@@ -144,6 +144,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     static final String AGENT_BOOTSTRAP_METADATA_KEY = "haifa_agent_bootstrap";
     public static final String USER_INPUT_FRAMING_METADATA_KEY = "haifa_user_input_framing_from_sequence";
     static final String MCP_SELECTION_METADATA_KEY = "haifa_mcp_plugins";
+    // A digest-only admission index, never a second model snapshot. The SDK owns recovery parameters.
+    static final String MODEL_CONFIGURATION_DIGEST_METADATA_KEY = "haifa_model_configuration_digest";
 
     private final ObjectMapper json;
     private final Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver;
@@ -404,6 +406,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         metadata.remove(MCP_SELECTION_METADATA_KEY);
         metadata.remove(SKILL_SELECTION_METADATA_KEY);
         metadata.remove(LEAD_SIGNATURE_METADATA_KEY);
+        metadata.remove(MODEL_CONFIGURATION_DIGEST_METADATA_KEY);
         metadata.remove(AGENT_NAME_METADATA_KEY);
         metadata.remove(AGENT_BOOTSTRAP_METADATA_KEY);
         metadata.remove(USER_INPUT_FRAMING_METADATA_KEY);
@@ -793,6 +796,17 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                         sendJson(exchange, 409, Map.of("detail", "Pending Run prompt or agent identity is unavailable"));
                         return;
                     }
+                    JsonNode requestedContext = body.path("context");
+                    boolean declaresModelSettings = requestedContext.has("mode")
+                            || requestedContext.has("thinking_enabled") || requestedContext.has("reasoning_effort")
+                            || requestedContext.has("model_name");
+                    Object originalDigest = thread.metadata.get(MODEL_CONFIGURATION_DIGEST_METADATA_KEY);
+                    String expectedDigest = originalDigest instanceof String value ? value
+                            : active.bridge.modelConfigurationDigest();
+                    if (declaresModelSettings && !expectedDigest.equals(binding.snapshot().configurationDigest())) {
+                        sendJson(exchange, 409, Map.of("detail", "Active Run model settings are frozen"));
+                        return;
+                    }
                     ProjectionCursor requestedCursor;
                     try {
                         requestedCursor = parseSseCursor(
@@ -855,8 +869,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 // A Conversation is durable across Turns, but the SDK freezes its model per Run.
                 // Keep the old Run's bridge for replay/Interaction; only the new Turn changes model.
                 selectedBridge = thread.bridge;
-                switchingModel = !selectedBridge.bindingIdentity()
-                        .equals(binding.name() + "@" + binding.revision());
+                switchingModel = !selectedBridge.matchesModelBinding(binding);
                 // A configuration change only affects the tool snapshot of later Runs; a Turn whose
                 // MCP projection differs from the attached bridge rebuilds it rather than hot-editing
                 // the active Run.
@@ -923,6 +936,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 ownedBridges.add(selectedBridge);
             }
             thread.modelBindingIdentity = selectedBridge.bindingIdentity();
+            Map<String, Object> modelMetadata = new LinkedHashMap<>(thread.metadata);
+            modelMetadata.put(MODEL_CONFIGURATION_DIGEST_METADATA_KEY, binding.snapshot().configurationDigest());
+            thread.metadata = modelMetadata;
             boolean workspaceRecordingEnabled = false;
             if (staged != null) {
                 try {
@@ -1286,7 +1302,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (lastBinding != null && lastBinding.lastIndexOf('@') > 0) {
                 var resolverBody = json.createObjectNode();
                 resolverBody.putObject("context")
-                        .put("model_name", lastBinding.substring(0, lastBinding.lastIndexOf('@')));
+                        .put("model_name", lastBinding.substring(0, lastBinding.lastIndexOf('@')))
+                        .put("mode", "flash").put("thinking_enabled", false);
                 try {
                     binding = runModelResolver.apply(resolverBody);
                 } catch (IllegalArgumentException unavailable) {

@@ -393,7 +393,7 @@ class DeerFlowConfigurationApiTest {
                         + ",\"context\":{\"mode\":\"flash\",\"thinking_enabled\":true}}");
         assertThat(unsupportedCapability.statusCode()).isEqualTo(422);
         assertThat(unsupportedCapability.body())
-                .contains("do not support thinking")
+                .contains("support thinking")
                 .doesNotContain("api_key");
 
         HttpResponse<String> unsupportedEffort = request(
@@ -670,6 +670,26 @@ class DeerFlowConfigurationApiTest {
         } finally {
             provider.stop(0);
         }
+    }
+
+    @Test
+    void freezesReasoningAndAgentSettingsWithoutChangingTheManagedRevision() throws Exception {
+        assertThat(request("PUT", "/api/managed-models", withModel(
+                saveModelAt(null, "synthetic-key", "https://api.deepseek.com"), "deepseek-v4-pro")).statusCode()).isEqualTo(200);
+        assertThat(request("POST", "/api/agents",
+                "{\"name\":\"reasoning-agent\",\"model\":\"demo-model\",\"thinking_enabled\":true,"
+                        + "\"reasoning_effort\":\"low\",\"model_settings\":{\"max_tokens\":128}}").statusCode()).isEqualTo(201);
+        var handler = new DeerFlowConfigurationApi(json, dataDirectory);
+        var thinking = handler.resolveRunModel(json.readTree("{\"context\":{\"agent_name\":\"reasoning-agent\"}}"));
+        var flash = handler.resolveRunModel(json.readTree("{\"context\":{\"agent_name\":\"reasoning-agent\",\"thinking_enabled\":false}}"));
+        assertThat(thinking.snapshot().providerId().value()).isEqualTo("deepseek");
+        assertThat(thinking.snapshot().invocationOptions()).containsEntry("thinking", "enabled")
+                .containsEntry("reasoning_effort", "low").containsEntry("requires_reasoning_continuation", true);
+        assertThat(flash.snapshot().invocationOptions()).containsExactlyEntriesOf(Map.of("thinking", "disabled"));
+        assertThat(thinking.revision()).isEqualTo(flash.revision());
+        assertThat(thinking.snapshot().configurationDigest()).isNotEqualTo(flash.snapshot().configurationDigest());
+        assertThat(thinking.snapshot().maxOutputTokens()).isEqualTo(128);
+        assertThat(request("GET", "/api/models", null).body()).contains("\"supports_thinking\":false");
     }
 
     @Test
