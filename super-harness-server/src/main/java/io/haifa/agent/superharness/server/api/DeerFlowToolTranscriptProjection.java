@@ -59,7 +59,9 @@ public final class DeerFlowToolTranscriptProjection {
         Map<String, Object> toolCall = new LinkedHashMap<>();
         toolCall.put("id", call.id().value());
         toolCall.put("name", call.toolName());
-        toolCall.put("args", call.arguments().values());
+        toolCall.put("args", "task".equals(call.toolName())
+                ? DeerFlowDelegationProjection.arguments(call.arguments().values())
+                : call.arguments().values());
         toolCall.put("type", "tool_call");
 
         Map<String, Object> message = baseMessage(call, "request", "ai");
@@ -105,6 +107,15 @@ public final class DeerFlowToolTranscriptProjection {
                     .map(notice -> "Error: " + error + ". " + notice)
                     .orElse(error));
             additional.put("haifa_tool_error", error);
+        }
+        if ("task".equals(call.toolName())) {
+            ToolResultView result = call.result().orElse(null);
+            additional.putAll(DeerFlowDelegationProjection.result(
+                    call.status().name(),
+                    result == null ? null : result.successful(),
+                    result == null ? Map.of() : result.structuredData().values(),
+                    result != null && result.structuredData().truncated(),
+                    call.error().map(value -> value.wireCode()).orElse(null)));
         }
         message.put("additional_kwargs", Map.copyOf(additional));
         return Optional.of(message);
