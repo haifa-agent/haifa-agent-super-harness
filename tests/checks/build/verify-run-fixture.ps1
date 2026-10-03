@@ -109,4 +109,78 @@ Check 'tracked-child-timeout-retains-original-deadline' {
         }
     } finally { if (-not $child.HasExited) { $child.Kill(); $child.WaitForExit() }; $child.Dispose() }
 }
+# These controls use real, directly owned Windows processes and live CIM reads.
+# Only the recorded expectation is changed; no process query or stop function is mocked.
+function New-IdentityControlChild([string]$Label, [int]$LifetimeMs) {
+    $scriptFile = Join-Path $EvidenceDirectory "$Label.ps1"
+    $readyFile = Join-Path $EvidenceDirectory "$Label.ready"
+    [IO.File]::WriteAllText($scriptFile, "[IO.File]::WriteAllText('$($readyFile.Replace("'", "''"))','ready'); Start-Sleep -Milliseconds $LifetimeMs")
+    $child = Start-Process -FilePath (Get-Command pwsh).Source -ArgumentList @('-NoProfile','-File',$scriptFile) -WindowStyle Hidden -PassThru
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    while (-not (Test-Path -LiteralPath $readyFile) -and $clock.Elapsed.TotalSeconds -lt 3) { Start-Sleep -Milliseconds 10 }
+    if (-not (Test-Path -LiteralPath $readyFile)) {
+        if (-not $child.HasExited) { $child.Kill(); $child.WaitForExit() }; $child.Dispose()
+        throw 'Identity control child did not become ready before the deadline'
+    }
+    $fact = Get-FixtureProcessFact (Get-CimInstance Win32_Process -Filter "ProcessId=$($child.Id)" -ErrorAction Stop)
+    [pscustomobject]@{ Process = $child; Fact = $fact }
+}
+function New-IdentityControlFixture($Control) {
+    $fixture = New-RunFixture $root 1 eng-runner-library diagnostic @()
+    $entry = [pscustomobject]@{ Name='IdentityControl'; Id=$Control.Process.Id; WrapperPid=$Control.Process.Id
+        Owned=@{}; Ports=@(); Stdout=''; Stderr=''; Started=[Diagnostics.Stopwatch]::GetTimestamp() }
+    $entry.Owned[$Control.Fact.pid] = $Control.Fact
+    $fixture.Processes.Add($entry)
+    $fixture
+}
+Check 'changed-command-refuses-stop-and-waits-for-natural-exit' {
+    $control = New-IdentityControlChild 'identity-short' 2500
+    try {
+        $control.Fact.identityHash = '0' * 64
+        $fixture = New-IdentityControlFixture $control
+        Stop-FixtureProcesses $fixture
+        $control.Process.Refresh()
+        $changes = @($fixture.Cleanup.identityChanges)
+        if (-not $fixture.Cleanup.success -or -not $control.Process.HasExited -or $control.Process.ExitCode -ne 0 -or $changes.Count -ne 1 -or
+                -not $changes[0].stopRefused -or $changes[0].disposition -ne 'ORIGINAL_EXITED' -or
+                $changes[0].expectedCreated -ne $changes[0].currentCreated -or
+                $changes[0].expectedHash -eq $changes[0].currentHash -or $fixture.Cleanup.budgetMs -ne 10000 -or
+                $fixture.Cleanup.elapsedMs -gt 10000) { throw 'Changed command escaped exact-creation natural-exit validation' }
+        $fixture.Cleanup | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $EvidenceDirectory 'identity-short-cleanup.json')
+    } finally { if (-not $control.Process.HasExited) { $control.Process.Kill(); $control.Process.WaitForExit() }; $control.Process.Dispose() }
+}
+Check 'changed-command-persistent-process-stays-alive-and-fails-original-deadline' {
+    $control = New-IdentityControlChild 'identity-long' 30000
+    try {
+        $control.Fact.identityHash = '0' * 64
+        $fixture = New-IdentityControlFixture $control
+        $rejected = $false
+        try { Stop-FixtureProcesses $fixture }
+        catch { $rejected = $_.Exception.Message -like "*Refusing changed process identity pid=$($control.Process.Id)*" }
+        $control.Process.Refresh()
+        $changes = @($fixture.Cleanup.identityChanges)
+        if (-not $rejected -or $fixture.Cleanup.success -or $control.Process.HasExited -or $changes.Count -ne 1 -or
+                -not $changes[0].stopRefused -or $changes[0].disposition -ne 'ORIGINAL_STILL_PRESENT' -or
+                $fixture.Cleanup.remainingPids -notcontains $control.Process.Id -or $fixture.Cleanup.budgetMs -ne 10000 -or
+                $fixture.Cleanup.elapsedMs -lt 10000 -or $fixture.Cleanup.elapsedMs -gt 13000) {
+            throw 'Persistent changed command was stopped or escaped the original cleanup deadline'
+        }
+        $fixture.Cleanup | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $EvidenceDirectory 'identity-long-cleanup.json')
+    } finally { if (-not $control.Process.HasExited) { $control.Process.Kill(); $control.Process.WaitForExit() }; $control.Process.Dispose() }
+}
+Check 'different-creation-preserves-real-live-process-as-reused-pid' {
+    $control = New-IdentityControlChild 'identity-reused' 30000
+    try {
+        $control.Fact.created = ([DateTime]::Parse($control.Fact.created).AddSeconds(-1)).ToUniversalTime().ToString('o')
+        $fixture = New-IdentityControlFixture $control
+        Stop-FixtureProcesses $fixture
+        $control.Process.Refresh()
+        if (-not $fixture.Cleanup.success -or $control.Process.HasExited -or
+                $fixture.Cleanup.reusedPids -notcontains $control.Process.Id -or
+                @($fixture.Cleanup.identityChanges).Count -ne 0 -or @($fixture.Cleanup.remainingPids).Count -ne 0) {
+            throw 'A different creation identity was stopped or mistaken for the original tracked process'
+        }
+        $fixture.Cleanup | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $EvidenceDirectory 'identity-reused-cleanup.json')
+    } finally { if (-not $control.Process.HasExited) { $control.Process.Kill(); $control.Process.WaitForExit() }; $control.Process.Dispose() }
+}
 ConvertTo-Json -InputObject $results.ToArray() | Set-Content (Join-Path $EvidenceDirectory 'verification-results.json')

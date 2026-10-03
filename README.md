@@ -107,7 +107,7 @@ pwsh -NoProfile -File tests/checks/build/verify-haifa-version-baseline.ps1
 
 ### 验收快速反馈
 
-清理在原有共享停止预算内同时等待端口可绑定、Runtime进程退出与已登记子进程（包括浏览器）退出；仍有残留时返回FAIL，不延长预算或重试功能用例。
+清理在原有共享停止预算内同时等待端口可绑定、Runtime进程退出与已登记子进程（包括浏览器）退出；仍有残留时返回FAIL，不延长预算或重试功能用例。进程命令指纹不匹配时拒绝终止该 PID，只在原预算内等待登记的 PID 与创建时间对应的进程自行退出；持续存活仍为 FAIL，已复用 PID 的新进程受保护。`flow-health.json` 的 `cleanup.identityChanges` 记录脱敏身份指纹与退出观察，不记录完整命令。
 
 开发顺序为实现、定向测试或单case冒烟、集中自审修复、稳定版本正式门禁。独立读取批量执行，终端默认只汇总退出码、计数、首个失败和原件路径。按 [交接模板](docs/acceptance-handoff-template.md) 在各worktree的`local-tmp/acceptance-handoff.md`记录短交接；等待构建时做独立检查，保留有界等待和进展更新。
 
