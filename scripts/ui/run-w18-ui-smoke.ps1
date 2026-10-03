@@ -281,6 +281,7 @@ try {
     }
 
     $providerUrl = $null
+    $providerProcess = $null
     if (-not $LiveDeepSeek) {
         $providerScript = Join-Path $root 'tests/ui/smoke/loopback-openai-provider.cjs'
         $providerProcess = Start-FixtureProcess -Fixture $fixture -Name Provider -FilePath (Get-Command node.exe).Source `

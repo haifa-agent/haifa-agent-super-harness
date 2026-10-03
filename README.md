@@ -101,6 +101,8 @@ pwsh -NoProfile -File tests/checks/build/verify-haifa-version-baseline.ps1
 
 验收采用“先核对测试要证明什么，再运行完整门禁”的顺序：开发期间可用定向测试快速排障；正式验收前须核对 Oracle 与实际断言、环境和槽位配置，最终仍要完成全仓验证、真实 smoke、规定的 UI 重复轮次及主控独立复验。同一源码和代理配置下的暖轮可复用已验证的前端构建，但每轮的运行状态、原始证据和失败记录必须独立保留；详细执行规则见 `AGENTS.md` 的“验收提速（不降低门禁）”。
 
+`-LiveDeepSeek` 使用托管凭据直连真实模型，不启动本地受控 Provider；runner 显式将可选 Provider 进程初始化为空，兼容 PowerShell 7 StrictMode 下的诊断输出与清理。真实回答 smoke 与受控模型的 Tool/Artifact 验证分别保留证据，不据此提升完整 W08 验收。
+
 ## W18 冻结前端本地配置
 
 ### 验收快速反馈
