@@ -56,7 +56,10 @@ import org.junit.jupiter.api.io.TempDir;
  * OpenAI-compatible Provider on loopback, not a real model, and no frozen UI is driven.
  */
 class W05ExactGatewayProcessRestartApprovalTest {
-    private static final int GATEWAY_PORT = 20618;
+    // Full gates run alongside isolated work packages; keep the default while allowing
+    // a gate owner to bind this two-process restart test to its assigned slot.
+    private static final int GATEWAY_PORT = Integer.parseInt(
+            System.getenv().getOrDefault("HAIFA_SUPER_HARNESS_W05_TEST_GATEWAY_PORT", "20618"));
     private static final String THREAD_ID = "restart-gateway-thread";
     private static final String ARTIFACT_PATH = "/mnt/user-data/outputs/restart-approved.txt";
     private static final String CONTENT = "restart approved\n";

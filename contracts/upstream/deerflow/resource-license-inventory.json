@@ -2016,24 +2016,26 @@
     },
     {
       "id": "deerflow.skill.consulting-analysis",
-      "category": "non_imported_skill",
+      "category": "bundled_skill",
       "source_path": "skills/public/consulting-analysis/SKILL.md",
       "sha256": "5bc99df7e5f8af5471eaa5d20b85fc46e99895cf3f2642fa9da94108d03ca13e",
-      "import_status": "NOT_IMPORTED",
-      "intended_local_path": "skills/upstream/deerflow/consulting-analysis",
-      "license_expression": "UNKNOWN",
-      "license_basis": "CONTROLLER_EXCERPT",
-      "license_basis_verified": false,
-      "review_status": "UNKNOWN",
-      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "import_status": "BUNDLED",
+      "intended_local_path": "third-party/deerflow/skills/e545c28ac301e6f9feae247c513d8ea8f83df294/5bc99df7e5f8af5471eaa5d20b85fc46e99895cf3f2642fa9da94108d03ca13e/public/consulting-analysis",
+      "license_expression": "MIT",
+      "license_basis": "BUNDLED_LICENSE_TEXT",
+      "license_basis_verified": true,
+      "review_status": "SOURCE_VERIFIED",
+      "review_note": "Frozen complete resource bytes and bundled license provenance verified; execution, safety and legal clearance are separate gates.",
       "evidence": {
-        "kind": "CONTROLLER_EXCERPT",
-        "location": "controller-provided frozen Skill SKILL.md digest",
-        "sha256": "5bc99df7e5f8af5471eaa5d20b85fc46e99895cf3f2642fa9da94108d03ca13e",
-        "sha256_verified_locally": false
+        "kind": "BUNDLED_LICENSE_TEXT",
+        "location": "third-party/deerflow/skills/manifest.json",
+        "license_path": "third-party/deerflow/LICENSES/deer-flow-MIT.txt",
+        "license_sha256": "b23dff4d4bac8d17b6efaaa7e88c2b730149c4dda45699ce676b719cfdffe7e1",
+        "package_version": "sha256:5bc99df7e5f8af5471eaa5d20b85fc46e99895cf3f2642fa9da94108d03ca13e",
+        "file_count": 1
       },
       "skill_md_sha256": "5bc99df7e5f8af5471eaa5d20b85fc46e99895cf3f2642fa9da94108d03ca13e",
-      "manifest_reviewed": false
+      "manifest_reviewed": true
     },
     {
       "id": "deerflow.skill.data-analysis",
@@ -2249,47 +2251,51 @@
     },
     {
       "id": "deerflow.skill.skill-creator",
-      "category": "non_imported_skill",
+      "category": "bundled_skill",
       "source_path": "skills/public/skill-creator/SKILL.md",
       "sha256": "313a95a145d9926693f8c053b63047212dd1db217c061891865b6546c4e70d02",
-      "import_status": "NOT_IMPORTED",
-      "intended_local_path": "skills/upstream/deerflow/skill-creator",
+      "import_status": "BUNDLED",
+      "intended_local_path": "third-party/deerflow/skills/e545c28ac301e6f9feae247c513d8ea8f83df294/4de2ccd3eb4d49c4d1515d92b8d8025fb00d0a77607acb66b8d063d50cb712b5/public/skill-creator",
       "license_expression": "Apache-2.0",
-      "license_basis": "CONTROLLER_EXCERPT",
-      "license_basis_verified": false,
-      "review_status": "REVIEW_NEEDED",
-      "review_note": "Nested Apache-2.0 text is anchored through a controller-provided frozen excerpt, but the full Skill package (assets, scripts, prompts) was not imported or reviewed, so complete obligations remain open.",
+      "license_basis": "BUNDLED_LICENSE_TEXT",
+      "license_basis_verified": true,
+      "review_status": "SOURCE_VERIFIED",
+      "review_note": "Frozen complete resource bytes and bundled license provenance verified; execution, safety and legal clearance are separate gates.",
       "evidence": {
-        "kind": "CONTROLLER_EXCERPT",
-        "location": "controller-provided frozen Skill SKILL.md digest",
-        "sha256": "313a95a145d9926693f8c053b63047212dd1db217c061891865b6546c4e70d02",
-        "sha256_verified_locally": false
+        "kind": "BUNDLED_LICENSE_TEXT",
+        "location": "third-party/deerflow/skills/manifest.json",
+        "license_path": "third-party/deerflow/LICENSES/skill-creator-Apache-2.0.txt",
+        "license_sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+        "package_version": "sha256:4de2ccd3eb4d49c4d1515d92b8d8025fb00d0a77607acb66b8d063d50cb712b5",
+        "file_count": 20
       },
       "skill_md_sha256": "313a95a145d9926693f8c053b63047212dd1db217c061891865b6546c4e70d02",
-      "manifest_reviewed": false,
+      "manifest_reviewed": true,
       "nested_license_path": "skills/public/skill-creator/LICENSE.txt",
       "nested_license_sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"
     },
     {
       "id": "deerflow.skill.skill-reviewer",
-      "category": "non_imported_skill",
+      "category": "bundled_skill",
       "source_path": "skills/public/skill-reviewer/SKILL.md",
       "sha256": "68cff70a729660fed0fbf01b9ff4ec408bab83ea4e5997811508dc394e1c185d",
-      "import_status": "NOT_IMPORTED",
-      "intended_local_path": "skills/upstream/deerflow/skill-reviewer",
-      "license_expression": "UNKNOWN",
-      "license_basis": "CONTROLLER_EXCERPT",
-      "license_basis_verified": false,
-      "review_status": "UNKNOWN",
-      "review_note": "Non-imported public Skill; only the frozen SKILL.md digest is anchored and no license text is supplied, so both the license and the full package contents remain unverified.",
+      "import_status": "BUNDLED",
+      "intended_local_path": "third-party/deerflow/skills/e545c28ac301e6f9feae247c513d8ea8f83df294/15d4ce6da3c6d6c790ca7218b06b2a5c49f83981c612e6dce17543b7d2f5382e/public/skill-reviewer",
+      "license_expression": "MIT",
+      "license_basis": "BUNDLED_LICENSE_TEXT",
+      "license_basis_verified": true,
+      "review_status": "SOURCE_VERIFIED",
+      "review_note": "Frozen complete resource bytes and bundled license provenance verified; execution, safety and legal clearance are separate gates.",
       "evidence": {
-        "kind": "CONTROLLER_EXCERPT",
-        "location": "controller-provided frozen Skill SKILL.md digest",
-        "sha256": "68cff70a729660fed0fbf01b9ff4ec408bab83ea4e5997811508dc394e1c185d",
-        "sha256_verified_locally": false
+        "kind": "BUNDLED_LICENSE_TEXT",
+        "location": "third-party/deerflow/skills/manifest.json",
+        "license_path": "third-party/deerflow/LICENSES/deer-flow-MIT.txt",
+        "license_sha256": "b23dff4d4bac8d17b6efaaa7e88c2b730149c4dda45699ce676b719cfdffe7e1",
+        "package_version": "sha256:15d4ce6da3c6d6c790ca7218b06b2a5c49f83981c612e6dce17543b7d2f5382e",
+        "file_count": 13
       },
       "skill_md_sha256": "68cff70a729660fed0fbf01b9ff4ec408bab83ea4e5997811508dc394e1c185d",
-      "manifest_reviewed": false
+      "manifest_reviewed": true
     },
     {
       "id": "deerflow.skill.surprise-me",
@@ -2465,7 +2471,7 @@
   "known_not_covered": [
     "This inventory does not import, install or download any dependency, license text, image or Skill; it is static provenance only.",
     "Root MIT does not settle dependency, font, image, brand or favicon licensing; no legal clearance is asserted.",
-    "All 23 frozen public Skill packages are recorded as NOT_IMPORTED; only the two with a nested LICENSE.txt carry license text evidence, and no full package assets, scripts or prompts were reviewed or imported.",
-    "Every bundled frontend/public media file (service thumbnails, logo artwork, demo thread outputs and the demo video) is recorded with its SHA-256, but only the plugin logos carry local license evidence; the rest stay UNKNOWN."
+    "Every bundled frontend/public media file (service thumbnails, logo artwork, demo thread outputs and the demo video) is recorded with its SHA-256, but only the plugin logos carry local license evidence; the rest stay UNKNOWN.",
+    "The legacy non_imported_skills field lists all 23 frozen source packages; BUNDLED entries are reconciled to the actual product manifest. Source verification does not prove execution or safety."
   ]
 }

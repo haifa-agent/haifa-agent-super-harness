@@ -335,6 +335,23 @@ const server = http.createServer((request, response) => {
     const probe = offeredTools.includes("connection_check");
     const interaction = offeredTools.includes("mutating_probe");
 
+    // Only synthetic W15 acceptance bytes are allowed by this controlled screen.
+    // Real-model security acceptance uses the managed live Provider separately.
+    const skillScreen = body.stream !== true && offeredTools.length === 0 &&
+      (body.messages ?? []).some((message) => message.role === "system" &&
+        message.content?.startsWith("You are a security reviewer for AI agent skills."));
+    if (skillScreen) {
+      const fixtureFile = /^Location: (?:w15-package-ui\/)?(SKILL\.md|references\/fact\.txt|evals\/evals\.json)$/m.test(rawPrompt);
+      const boundedFixture = fixtureFile && (rawPrompt.includes("W15_CONTROLLED_UI_PACKAGE") ||
+        rawPrompt.includes('"skill_name":"w15-package-ui"'));
+      const decision = boundedFixture ? "allow" : "block";
+      console.log(JSON.stringify({ type: "w15_security_screen", decision, fixtureFile, tools: offeredTools }));
+      sendJson(response, 200, { id: `w15-screen-${Date.now()}`, object: "chat.completion",
+        model: "w18-controlled-model", choices: [{ index: 0, message: { role: "assistant", content: JSON.stringify({ decision }) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 } });
+      return;
+    }
+
     if (isInputPolishRequest(body)) {
       handleInputPolish(request, response, body, prompt);
       return;
@@ -548,6 +565,22 @@ const server = http.createServer((request, response) => {
     // W15 Skill proof: the answer is derived from the SDK's offered Tool and
     // the instructions visible in the resumed model request, not from a local
     // copy of SKILL.md or a hard-coded successful response.
+    const packageMarker = firstUserMatch(body, /w15-package-use-\d+/);
+    if (packageMarker) {
+      const id = `w15-package-${Date.now()}`;
+      const results = toolResultCount(body);
+      const text = JSON.stringify(body.messages ?? []);
+      if (results === 0 && offeredTools.includes("skill_load")) {
+        finishWithToolCall(response, id, `w15-package-load-${Date.now()}`, "skill_load", { skill: "w15-package-ui" });
+      } else if (results === 1 && offeredTools.includes("skill_resource_read")) {
+        finishWithToolCall(response, id, `w15-package-read-${Date.now()}`, "skill_resource_read", { skill: "w15-package-ui", path: "references/fact.txt" });
+      } else {
+        const observed = text.includes("W15_CONTROLLED_UI_PACKAGE_INSTRUCTIONS") && text.includes("W15_CONTROLLED_UI_PACKAGE_FACT=17");
+        finishWithText(response, id, `${packageMarker} ${observed ? "PACKAGE_CONTEXT_AND_RESOURCE_17" : "PACKAGE_CONTEXT_MISSING"}`);
+        console.log(JSON.stringify({ type: "w15_package_context", marker: packageMarker, observed, results }));
+      }
+      return;
+    }
     const skillMarker = firstUserMatch(body, /w15-skill-(?:enabled|disabled)-\d+/);
     if (skillMarker) {
       const id = `w15-skill-${Date.now()}`;

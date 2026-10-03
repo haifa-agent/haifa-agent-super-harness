@@ -37,6 +37,77 @@ async function sendChat(page, marker) {
   return runIdentity(response);
 }
 
+test("W15 frozen Skill UI installs uses and exports a complete custom package", async ({ context, page }, testInfo) => {
+  page.setDefaultTimeout(20_000);
+  page.setDefaultNavigationTimeout(30_000);
+  const { execFileSync } = require("node:child_process");
+  const fixture = path.resolve(__dirname, "../../fixtures/w15/package_archive.py");
+  const archive = execFileSync("python", ["-B", fixture], { timeout: 10_000 });
+  const name = "w15-package-ui";
+  let primaryFailure;
+  try {
+    await page.goto("/workspace/capabilities?tab=skills", { waitUntil: "domcontentloaded" });
+    const uploadResponse = page.waitForResponse((response) => response.request().method() === "POST" &&
+      new URL(response.url()).pathname === "/api/skills/install/upload", { timeout: 45_000 });
+    await page.locator('input[type="file"][accept=".skill"]').setInputFiles({ name: `${name}.skill`, mimeType: "application/zip", buffer: archive });
+    const uploaded = await uploadResponse;
+    expect(uploaded.status(), await uploaded.text()).toBe(200);
+    const toggle = page.getByRole("switch", { name: new RegExp(name) });
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toBeChecked();
+    await toggle.click();
+    await expect(toggle).not.toBeChecked();
+    await expect.poll(async () => (await (await context.request.get(`${APP}/api/skills/${name}`)).json()).enabled).toBe(false);
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+    await expect.poll(async () => (await (await context.request.get(`${APP}/api/skills/${name}`)).json()).enabled).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("w15-package-installed.png"), fullPage: true });
+    await page.getByRole("button", { name: new RegExp(`^(View details|查看详情) ${name}$`) }).click();
+    await page.getByRole("dialog").getByRole("button", { name: /^(Export|导出)$/ }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.locator("summary").click();
+    await expect(dialog.getByText("references/fact.txt", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("evals/evals.json", { exact: true })).toBeVisible();
+    const downloadReady = page.waitForEvent("download", { timeout: 30_000 });
+    await dialog.getByRole("button", { name: /Download \.skill|下载 \.skill/ }).click();
+    const download = await downloadReady;
+    expect(download.suggestedFilename()).toBe(`${name}.skill`);
+    const saved = testInfo.outputPath("w15-export.skill");
+    await download.saveAs(saved);
+    const roundTrip = JSON.parse(execFileSync("python", ["-B", fixture, "--verify", saved], { timeout: 10_000, encoding: "utf8" }));
+    expect(roundTrip.status).toBe("PASS");
+    await saveEvidence(testInfo, "w15-package-round-trip", roundTrip);
+    await page.goto("/workspace/chats/new", { waitUntil: "domcontentloaded" });
+    const marker = `w15-package-use-${Date.now()}`;
+    const input = page.locator('textarea[name="message"]');
+    await expect(input).toBeVisible();
+    const stream = page.waitForResponse((response) => response.request().method() === "POST" && /\/api\/langgraph\/threads\/[^/]+\/runs\/stream$/.test(new URL(response.url()).pathname), { timeout: 30_000 });
+    await input.fill(`${marker}: use w15-package-ui and read its real reference fact`);
+    await input.press("Enter");
+    const response = await stream;
+    expect(response.status(), await response.text()).toBe(200);
+    const identity = runIdentity(response);
+    await waitForSuccess(context.request, identity);
+    await expect(page.locator("#chat").getByText(`${marker} PACKAGE_CONTEXT_AND_RESOURCE_17`, { exact: true })).toBeVisible();
+    const state = await (await context.request.get(`${APP}/api/langgraph/threads/${identity.threadId}/state`)).json();
+    const tools = state.values.messages.filter((message) => message.type === "tool").map((message) => message.name);
+    expect(tools).toEqual(expect.arrayContaining(["skill_load", "skill_resource_read"]));
+    await saveEvidence(testInfo, "w15-package-run", { ...identity, tools, provider: providerEvents().filter((event) => event.type.startsWith("w15_")) });
+    await page.screenshot({ path: testInfo.outputPath("w15-package-used.png"), fullPage: true });
+  } catch (failure) {
+    primaryFailure = failure;
+    throw failure;
+  } finally {
+    try {
+      const deleted = await context.request.delete(`${APP}/api/skills/custom/${name}`, { timeout: 10_000 });
+      expect([200, 404]).toContain(deleted.status());
+    } catch (cleanupFailure) {
+      await saveEvidence(testInfo, "w15-package-cleanup-failure", { message: String(cleanupFailure) });
+      if (!primaryFailure) throw cleanupFailure;
+    }
+  }
+});
+
 async function waitForSuccess(request, { threadId, runId }) {
   let latest;
   await expect.poll(async () => {

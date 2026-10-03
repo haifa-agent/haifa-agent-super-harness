@@ -2,7 +2,7 @@
 param(
     [string]$RepositoryRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)),
     [string]$SourceRepository = 'D:\workspace\haifa-agent-super-harness\deer-flow',
-    [ValidateRange(1, 3)]
+    [ValidateRange(1, 4)]
     [int]$AgentSlot = 2,
     [int]$GatewayPort = 30618,
     [int]$FrontendPort = 35618,
@@ -18,6 +18,9 @@ param(
     [switch]$V2Skill,
     [switch]$V2Diagnostics,
     [switch]$LiveDeepSeek,
+    # W15 representative managed Skill and evaluation-result chain using the real provider.
+    [switch]$W15LiveSkill,
+    [switch]$W15PackageDifferential,
     # UX-V1 joint acceptance: the live DeepSeek model with the DeerFlow default tool chains.
     [switch]$UxV1DefaultTools,
     # UX-V1 M3: the frozen new-agent conversation/save flow with the live managed model.
@@ -43,16 +46,19 @@ if ($SkipServerBuild -and $Interaction) {
 
 $expectedGatewayPort = 10618 + (10000 * $AgentSlot)
 $expectedFrontendPort = 15618 + (10000 * $AgentSlot)
+# W15 controller: additional isolated slot authorized by the user on 2026-10-03.
+if ($AgentSlot -eq 4) { $expectedGatewayPort = 11618; $expectedFrontendPort = 16618 }
 if ($GatewayPort -ne $expectedGatewayPort -or $FrontendPort -ne $expectedFrontendPort -or $ProviderPort -ne 0) {
     throw "W18 slot $AgentSlot requires Gateway=$expectedGatewayPort and Frontend=$expectedFrontendPort; controlled Provider must use OS-assigned port 0."
 }
-if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $LiveDeepSeek).Where({ $_ }).Count -gt 1) {
+if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $LiveDeepSeek, $W15PackageDifferential).Where({ $_ }).Count -gt 1) {
     throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, V2 model-switch, V2 file-context, V2 Skill, V2 diagnostics, and live DeepSeek profiles are mutually exclusive.'
 }
-if ($UxV1DefaultTools -and $UxV1AgentSoul) {
+if ($W15PackageDifferential) { $V2Skill = $true }
+if (@($UxV1DefaultTools, $UxV1AgentSoul, $W15LiveSkill).Where({ $_ }).Count -gt 1) {
     throw 'The UX-V1 default-tools and Agent SOUL profiles are mutually exclusive.'
 }
-if ($UxV1DefaultTools -or $UxV1AgentSoul) {
+if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill) {
     if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $LiveDeepSeek).Where({ $_ }).Count -gt 0) {
         throw 'The UX-V1 profiles are mutually exclusive with the other profiles.'
     }
@@ -70,7 +76,7 @@ $controlledContextWindow = 32768
 $sdk = [pscustomobject]@{ Status = 'NOT_RUN'; HaifaVersion = $null }
 $internalGatewayBaseUrl = "http://127.0.0.1:$GatewayPort"
  . (Join-Path $PSScriptRoot '../lib/run-fixture.ps1')
-$tag = if ($UxV1AgentSoul) { 'ux-v1-soul' } elseif ($UxV1DefaultTools) { 'ux-v1' }
+$tag = if ($W15PackageDifferential) { 'w15-package-differential' } elseif ($W15LiveSkill) { 'w15-live-skill' } elseif ($UxV1AgentSoul) { 'ux-v1-soul' } elseif ($UxV1DefaultTools) { 'ux-v1' }
     elseif ($LiveDeepSeek) { 'w18-deepseek' } elseif ($ActiveReconnect) { 'w05-active-reconnect' }
     elseif ($Interaction) { 'w05-interaction' } elseif ($DemoArtifact) { 'w05-demo-artifact' }
     elseif ($TitleSuggestions) { 'w03-title-suggestions' } elseif ($InputPolish) { 'w03-input-polish-ui' }
@@ -119,8 +125,13 @@ $managedEnvironment = @{
     COREPACK_ENABLE_NETWORK = '0'
     W18_PROVIDER_URL = $null
     UXV1_DEFER_WEB = $(if ($DeferUxV1Web) { '1' } else { $null })
+    W15_DIFFERENTIAL_BACKEND = $(if ($W15PackageDifferential) { 'haifa' } else { $null })
     W18_MODEL_NAME = $(if ($LiveDeepSeek) { 'w18-deepseek-live' } else { 'w18-controlled' })
-    W18_PLAYWRIGHT_SPEC = $(if ($UxV1AgentSoul) {
+    W18_PLAYWRIGHT_SPEC = $(if ($W15PackageDifferential) {
+        'w15-package-differential.spec.cjs'
+    } elseif ($W15LiveSkill) {
+        'w15-live-skill.spec.cjs'
+    } elseif ($UxV1AgentSoul) {
         'ux-v1-agent-soul.spec.cjs'
     } elseif ($UxV1DefaultTools) {
         'ux-v1-default-tools-live.spec.cjs'
@@ -147,7 +158,7 @@ $managedEnvironment = @{
     } else {
         'w18-ui-smoke.spec.cjs'
     })
-    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($UxV1DefaultTools -or $UxV1AgentSoul) { '360000' } elseif ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { '120000' } else { '60000' })
+    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill) { '360000' } elseif ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { '120000' } else { '60000' })
     W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { 'on' } else { 'retain-on-failure' })
     # Kept disabled through the ordinary build/test gate. The runner enables it
     # only immediately before launching the dedicated guarded test process.
@@ -158,6 +169,7 @@ $testExitCode = 1
 $expectedCases = @()
 $selectedCases = @()
 $frontendBuild = 'NOT_RUN'
+$providerProcess = $null
 $serverBuild = $(if ($SkipBuild -or $SkipServerBuild) { 'REUSED' } else { 'NOT_RUN' })
 $preflight = [ordered]@{ result = 'NOT_RUN'; assertions = 'NOT_RUN'; servicesStartedDuringPreflight = $false }
 try {
