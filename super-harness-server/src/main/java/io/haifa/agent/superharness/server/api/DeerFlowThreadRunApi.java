@@ -108,7 +108,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final List<String> SUPPORTED_STREAM_MODES =
             List.of("messages-tuple", "updates", "custom");
     private static final Pattern SSE_CURSOR = Pattern.compile("^(\\d+)-0$");
-    private static final int EVENT_RETENTION_CAPACITY = 8;
+    // The public feed now includes message.committed facts. Keep a prior deferred
+    // assistant turn in the bounded reconnect window alongside the terminal tail.
+    private static final int EVENT_RETENTION_CAPACITY = 16;
     private static final int EVENT_PAGE_SIZE = 4;
     /** A stream that has not looped for this long no longer holds the shared projector back. */
     private static final long LIVE_OBSERVER_STALE_NANOS = Duration.ofSeconds(1).toNanos();

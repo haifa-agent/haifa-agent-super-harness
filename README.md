@@ -138,6 +138,8 @@ pwsh -NoProfile -File tests/checks/frontend/verify-haifa-frontend-profile.ps1
 
 受保护的主工作树拓扑与正式启动流程见下文“启动主工作树供人工验收”；历史 W18 配置设计与验收记录已归档至 `private-docs/prompts/39-deerflow-parity-delivery/W18-Developing/references/`。仅通过上述配置检查，不代表聊天功能或双后端差分验收通过。
 
+SSE 重连投影保留最近 16 条 SDK 事件，包含 `message.committed` 等事实；超出窗口的 cursor 返回 `gap`。保留窗口中的较早 assistant turn 仍按其持久消息读取文本，不能用最后一次回答替代；完整历史从持久会话读取，不受这个事件窗口限制。
+
 验收 `.cjs` 脚本（`tests/**`，含 Playwright 用例、受控 Provider 与 Steer 契约断言）的功能与运行方法见 [验收 .cjs 脚本功能与运行说明](docs/engineering/001-cjs-scripts.md)；相关前端 `.mjs` 脚本见该文附录 A。
 
 `run-w18-ui-smoke.ps1` 的本地受控模型使用 `context_window=32768`，让完整冻结 Lead prompt、生产 Tool catalog 和可选 Skill 正文容纳在同一次真实 SDK 请求中。运行前按 `AGENTS.md`「冻结前端」的使用说明准备依赖、槽位与受控模型配置。
