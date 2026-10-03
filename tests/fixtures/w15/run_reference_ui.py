@@ -110,7 +110,8 @@ def main():
         health["phases"]["preparationSeconds"] = time.monotonic() - start
         built = time.monotonic()
         cache = subprocess.run([sys.executable, str(repo / "scripts/lib/frontend_build_cache.py"), "restore", "--repo", str(repo),
-                                "--gateway", env["DEER_FLOW_INTERNAL_GATEWAY_BASE_URL"]], capture_output=True, text=True, timeout=120)
+                                "--gateway", env["DEER_FLOW_INTERNAL_GATEWAY_BASE_URL"]],
+                               env=env, capture_output=True, text=True, timeout=120)
         if cache.returncode == 3:
             run("frontend-build", [shutil.which("corepack.cmd"), "pnpm", "build"], frontend, 600)
             run("frontend-cache", [sys.executable, str(repo / "scripts/lib/frontend_build_cache.py"), "store", "--repo", str(repo),

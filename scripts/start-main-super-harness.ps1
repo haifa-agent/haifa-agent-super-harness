@@ -7,6 +7,7 @@ param(
     [int]$FrontendPort = 33018,
     [int]$ReadyTimeoutSeconds = 180,
     [switch]$GatewayOnly,
+    [switch]$ProductionFrontend,
     [switch]$Build
 )
 
@@ -63,7 +64,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $root 'frontend/node_modules/.bin/ne
 # Perform the frozen source, pinned toolchain, loopback and same-origin gates before starting either process.
 $null = & $shell.Source -NoProfile -File $launcher -DryRun `
     -RepositoryRoot $root -SourceRepository $sourceRoot -DataDirectory $dataRoot `
-    -GatewayBaseUrl $gatewayUrl -FrontendPort $FrontendPort
+    -GatewayBaseUrl $gatewayUrl -FrontendPort $FrontendPort -Production:$ProductionFrontend
 if ($LASTEXITCODE -ne 0) { throw 'Frozen frontend dry-run gate failed.' }
 
 $logRoot = Join-Path $dataRoot 'logs'
@@ -131,6 +132,7 @@ $frontendArgs = @(
     '-GatewayBaseUrl', $gatewayUrl,
     '-FrontendPort', [string]$FrontendPort
 )
+if ($ProductionFrontend) { $frontendArgs += '-Production' }
 $frontendProcess = Start-Process -FilePath $shell.Source -ArgumentList $frontendArgs `
     -WorkingDirectory $root -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput $frontendOut -RedirectStandardError $frontendErr

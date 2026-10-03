@@ -231,9 +231,9 @@ Gateway 从 `third-party/deerflow/skills/manifest.json` 读取冻结 Skill 完�
 
 冻结前端使用 `GET /api/skills`、`GET/PUT /api/skills/{name}` 与 `POST /api/skills/reload`。启停状态按数据目录原子保存到 `skills_config.json`，只影响后续新 Run；`Agent.skills` 的 `null` 表示全部已启用 Skill，`[]` 表示不使用 Skill，名称列表为允许名单。启动 Gateway 时工作目录须为仓库根；模块测试可从 `super-harness-server/` 运行。缺包、哈希/许可漂移或无法读取 manifest 会拒绝接入，不会回落到 DeerFlow 后端。完整双 Skill HTTP/Run 断言与冻结 UI 两轮仍以 V2 W15/W18 验收记录为准。
 
-用户包通过 `POST /api/skills/install/upload`（multipart 字段 `archive`，`.skill`，最多 100 MiB）或 `/api/skills/install`（当前 Thread 的 `thread_id`、`path`）安装。custom 路由支持读取/编辑/删除、`history`、`rollback`、`export-manifest` 和 `export?expected_revision=<revision>`；revision 过期返回 409。完整用户版本存于数据根 `skills/custom/.versions/`，当前版本、启停及 history 统一由原子发布的 `skills_config.json` 指定。vendor 资源只读，用户来源由 SDK USER scope 绑定本地用户；编辑后新 Run 使用新版本，旧 Run 保留已冻结的完整版本。普通关闭与审查授权撤销是两个操作；显式撤销后旧绑定的后续读取也由公开 SDK grant `matches()` 拒绝。
+用户包通过 `POST /api/skills/install/upload`（multipart 字段 `archive`，`.skill`，最多 100 MiB）或 `/api/skills/install`（当前 Thread 的 `thread_id`、`path`）安装。custom 路由支持读取/编辑/删除、`history`、`rollback`、`export-manifest` 和 `export?expected_revision=<revision>`；revision 过期返回 409，错误 JSON 或字段类型返回 422，超限请求返回 413。导入、管理发布与导出共用可移植路径冲突规则；版本与导出摘要保留空目录和规范化后的文件可执行标记，不恢复特权权限位，支持文件回滚按历史目标路径恢复原始字节。完整用户版本存于数据根 `skills/custom/.versions/`，当前版本、启停及 history 统一由原子发布的 `skills_config.json` 指定。vendor 资源只读，用户来源由 SDK USER scope 绑定本地用户；编辑后新 Run 使用新版本，旧 Run 保留已冻结的完整版本。普通关闭与审查授权撤销是两个操作；显式撤销后旧绑定的后续读取也由公开 SDK grant `matches()` 拒绝。
 
-生产 `skill_manage` 沿用 SDK 文件写入审批；静态 `review_skill_package` 只读取已安装包、`inline://SKILL.md` 或当前 Thread `/mnt/user-data/` 内的归档/包目录，输出证据等级为 `static`，不会激活或执行目标。审查解释器通过进程变量 `HAIFA_SUPER_HARNESS_SKILL_PYTHON` 指定，必须支持 Python 3 和隔离模式 `-I` 下的 PyYAML；不读取用户 site-packages 或安装目标依赖。语义写入筛查使用当前托管模型且不提供 Tools，缺模型、解析失败或脚本无法审查时拒绝发布；无隐藏重试。安全筛查的模型/Provider、耗时、Usage 和输入文件 hash 记录于数据根 `skills/scanner/screen-receipts.jsonl`，不记录原内容或凭据。完整 creator 的脚本评测还依赖真实执行环境；单纯资源导入与静态 review 不证明评测通过。
+生产 `skill_manage` 沿用 SDK 文件写入审批；静态 `review_skill_package` 只读取已安装包、`inline://SKILL.md` 或当前 Thread `/mnt/user-data/` 内的归档/包目录，输出证据等级为 `static`，不会激活或执行目标。审查解释器通过进程变量 `HAIFA_SUPER_HARNESS_SKILL_PYTHON` 指定，必须支持 Python 3 和隔离模式 `-I` 下的 PyYAML；不读取用户 site-packages 或安装目标依赖。写入审查发现明确凭据时在模型调用前拒绝，其他待审文本以脱敏副本构造请求；语义筛查使用当前托管模型且不提供 Tools，缺模型、解析失败或脚本无法审查时拒绝发布，扫描期间取消或超时的 Run 也不得发布版本；无隐藏重试。安全筛查的模型/Provider、耗时、Usage 和输入文件 hash 记录于数据根 `skills/scanner/screen-receipts.jsonl`，不记录原内容或凭据。完整 creator 的脚本评测还依赖真实执行环境；单纯资源导入与静态 review 不证明评测通过。
 
 运行 W15 定向测试或全仓门禁前，在**同一 PowerShell 会话**预检并设置静态审查解释器；普通 `python` 能导入 `yaml` 不代表隔离模式可用。本机冻结 reference venv 已验证 PyYAML 6.0.3。并行工作包占用 W05 旧测试的默认端口 `20618` 时，可把该测试绑定到已分配且实际可绑定的本工作树槽位端口，例如槽位 4 的 `11618`；正式 UI 与全仓门禁仍顺序运行。
 
@@ -311,6 +311,24 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1
 ```
 
 启动脚本会校验冻结 DeerFlow 源码和前端工具链的精确版本；在隐藏窗口中启动 Haifa Gateway 和现有的受保护前端启动器；在有界超时内等待 `/health`、`/api/v1/auth/me` 与前端就绪；最后输出访问地址、精确 PID、数据目录和日志路径。人工验收入口为 `http://127.0.0.1:33018/`。遇到端口占用时，脚本会拒绝启动，不会自行结束未知进程。若尚未运行完整验证，可传入 `-Build`，由脚本执行离线 Maven Reactor `package` 门禁。脚本退出后，服务仍会继续运行。
+
+需要避免开发模式首次打开聊天页时的动态编译，可先在本工作树按固定代理目标构建冻结前端，再用已验证的构建戳启动生产模式。构建失败不得写入构建戳；代理目标、冻结前端源码或 lockfile 变化后必须重新构建。
+
+```powershell
+$env:DEER_FLOW_INTERNAL_GATEWAY_BASE_URL='http://127.0.0.1:18018'
+$env:NEXT_PUBLIC_STATIC_WEBSITE_ONLY='false'
+$env:COREPACK_ENABLE_NETWORK='0'
+Push-Location frontend
+try {
+    corepack pnpm build
+    if ($LASTEXITCODE -ne 0) { throw 'Frozen frontend build failed.' }
+} finally { Pop-Location }
+. scripts/lib/build-stamp.ps1
+Write-FrontendBuildStamp -RepositoryRoot (Get-Location).Path -InternalGatewayBaseUrl $env:DEER_FLOW_INTERNAL_GATEWAY_BASE_URL
+pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -ProductionFrontend
+```
+
+`-ProductionFrontend` 只使用构建戳与当前前端树、lockfile、代理目标及 `NEXT_PUBLIC_STATIC_WEBSITE_ONLY=false` 构建配置完全匹配的 `.next`；预检不符即拒绝启动。构建前必须设置该变量，避免把只读静态站点配置固化到客户端。该模式沿用相同的冻结来源、同源代理、身份与固定端口检查。默认启动方式仍为开发模式。
 
 只需重建或重启 Gateway、而受保护的前端仍在运行时，先核对监听 `18018` 的 Java 进程并只停止该 PID，再运行相关 Maven 测试和 `mvn -o -ntp -pl super-harness-server -am package`，随后执行：
 

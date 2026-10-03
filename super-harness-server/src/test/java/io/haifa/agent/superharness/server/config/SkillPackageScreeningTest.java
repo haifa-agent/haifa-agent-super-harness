@@ -58,6 +58,22 @@ class SkillPackageScreeningTest {
         assertThat(receipt.path("retry").asBoolean()).isFalse();
     }
 
+    @Test void writeScreenRejectsOrdinaryCredentialAssignmentsBeforeAnyModelRequest() throws Exception {
+        var scanner = new SkillPackageScreening(json, temporary.resolve("data"));
+        Path directory = temporary.resolve("package"); Files.createDirectory(directory);
+        String synthetic = "ordinarySyntheticPasswordValue4971";
+        Map<String, byte[]> files = Map.of("SKILL.md", "---\nname: sample-helper\ndescription: A test package\n---\nUse facts.\n".getBytes(StandardCharsets.UTF_8),
+                "references/settings.txt", ("password=" + synthetic + "\n").getBytes(StandardCharsets.UTF_8));
+        for (var file : files.entrySet()) { var target = directory.resolve(file.getKey()); Files.createDirectories(target.getParent()); Files.write(target, file.getValue()); }
+        var model = new ControlledModel((request, count) -> ControlledModel.response(request, "screen", "{\"decision\":\"allow\"}",
+                List.of(), ModelFinishReason.STOP, ModelUsage.unpriced(10, 2)));
+        assertThatThrownBy(() -> scanner.writes(ignored -> LocalProbeModelTestSupport.binding(model)).screen(directory, files))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("credential material");
+        assertThat(model.requests).isEmpty();
+        assertThat(Files.readString(directory.resolve("references/settings.txt"))).contains(synthetic);
+        assertThat(Files.exists(temporary.resolve("data/skills/scanner/screen-receipts.jsonl"))).isFalse();
+    }
+
     @Test void warningForCodeOutsideScriptsStillBlocksAndModelFailureIsRecordedWithoutItsMessage() throws Exception {
         var scanner = new SkillPackageScreening(json, temporary.resolve("data"));
         Path directory = temporary.resolve("package"); Files.createDirectory(directory);

@@ -74,7 +74,7 @@ public final class DeerFlowSkillsApi implements HttpHandler {
                 if ("history".equals(operation) && method.equals("GET")) send(exchange, 200, Map.of("history", store.history(name)));
                 else if ("rollback".equals(operation) && method.equals("POST")) {
                     JsonNode body = body(exchange, MAX_BODY_BYTES);
-                    if (body.has("history_index") && !body.get("history_index").isIntegralNumber()) throw new IllegalArgumentException("history_index must be an integer");
+                    if (body.has("history_index") && !body.get("history_index").isIntegralNumber()) throw new RequestFailure(422, "history_index must be an integer");
                     store.rollback(name, body.path("history_index").asInt(-1)); send(exchange, 200, store.customDetail(name));
                 } else if (operation == null && method.equals("GET")) send(exchange, 200, store.customDetail(name));
                 else if (operation == null && method.equals("PUT")) {
@@ -170,6 +170,8 @@ public final class DeerFlowSkillsApi implements HttpHandler {
             send(exchange, 404, Map.of("detail", "Skill operation is unavailable"));
         } catch (DeerFlowWorkspaceApi.HttpFailure invalid) {
             send(exchange, invalid.status(), Map.of("detail", invalid.getMessage()));
+        } catch (RequestFailure invalid) {
+            send(exchange, invalid.status, Map.of("detail", invalid.getMessage()));
         } catch (java.io.FileNotFoundException missing) {
             send(exchange, 404, Map.of("detail", missing.getMessage()));
         } catch (java.nio.file.FileAlreadyExistsException duplicate) {
@@ -190,15 +192,22 @@ public final class DeerFlowSkillsApi implements HttpHandler {
 
     private JsonNode body(HttpExchange exchange, int limit) throws IOException {
         byte[] bytes = exchange.getRequestBody().readNBytes(limit + 1);
-        if (bytes.length > limit) throw new IllegalArgumentException("Skill request body is too large");
-        JsonNode body = json.readTree(bytes);
-        if (body == null || !body.isObject()) throw new IllegalArgumentException("JSON object is required");
+        if (bytes.length > limit) throw new RequestFailure(413, "Skill request body is too large");
+        JsonNode body;
+        try { body = json.readTree(bytes); }
+        catch (JsonProcessingException invalid) { throw new RequestFailure(422, "Invalid JSON body"); }
+        if (body == null || !body.isObject()) throw new RequestFailure(422, "JSON object is required");
         return body;
     }
 
     private static String requiredText(JsonNode body, String field) {
-        if (!body.path(field).isTextual()) throw new IllegalArgumentException(field + " must be a string");
+        if (!body.path(field).isTextual()) throw new RequestFailure(422, field + " must be a string");
         return body.path(field).asText();
+    }
+
+    private static final class RequestFailure extends RuntimeException {
+        private final int status;
+        private RequestFailure(int status, String message) { super(message); this.status = status; }
     }
 
     private void methodNotAllowed(HttpExchange exchange, String allow) throws IOException {

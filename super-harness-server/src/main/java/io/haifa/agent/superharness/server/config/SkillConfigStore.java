@@ -163,8 +163,15 @@ public final class SkillConfigStore {
 
     public synchronized void manage(String action, String name, String content, String path, String find,
             String replacement, Integer expectedCount, String author, String threadId) throws IOException {
+        manage(action, name, content, path, find, replacement, expectedCount, author, threadId, () -> {});
+    }
+
+    public synchronized void manage(String action, String name, String content, String path, String find,
+            String replacement, Integer expectedCount, String author, String threadId, Runnable admission) throws IOException {
+        admission.run();
         ObjectNode config = readConfiguration();
-        custom.manage(config, action, name, content, path, find, replacement, expectedCount, author, threadId);
+        custom.manage(config, action, name, content, path, find, replacement, expectedCount, author, threadId, admission);
+        admission.run();
         publish(config);
     }
 
@@ -188,16 +195,16 @@ public final class SkillConfigStore {
     }
 
     public synchronized Map<String, Object> exportManifest(String name) throws IOException {
-        return SkillPackageFiles.exportManifest(name, custom.current(readConfiguration(), name));
+        return SkillPackageFiles.exportManifest(name, custom.currentPackage(readConfiguration(), name));
     }
 
     public synchronized byte[] exportArchive(String name, String expectedRevision) throws IOException {
         if (expectedRevision == null || !expectedRevision.matches("[a-f0-9]{64}")) throw new IllegalArgumentException("A valid expected revision is required");
-        Map<String, byte[]> files = custom.current(readConfiguration(), name);
-        var manifest = SkillPackageFiles.exportManifest(name, files);
+        var content = custom.currentPackage(readConfiguration(), name);
+        var manifest = SkillPackageFiles.exportManifest(name, content);
         if (!Boolean.TRUE.equals(manifest.get("can_export"))) throw new IllegalStateException("skill_export_unsupported");
         if (!expectedRevision.equals(manifest.get("revision"))) throw new IllegalStateException("skill_changed");
-        return SkillPackageFiles.export(name, files);
+        return SkillPackageFiles.export(name, content);
     }
 
     public synchronized Map<String, byte[]> reviewFiles(String name) throws IOException {

@@ -33,6 +33,7 @@ $baselineGate = Join-Path $PSScriptRoot 'verify-haifa-version-baseline.ps1'
 $selectionPath = Join-Path $repoRoot 'local-tmp/sdk-selection.json'
 $scratch = Join-Path ([IO.Path]::GetTempPath()) "verify-build-entry-$([guid]::NewGuid().ToString('N'))"
 $null = New-Item -ItemType Directory -Force -Path $scratch
+$previousStaticWebsiteOnly = [Environment]::GetEnvironmentVariable('NEXT_PUBLIC_STATIC_WEBSITE_ONLY', 'Process')
 
 . (Join-Path $repoRoot 'scripts/lib/sdk-selection.ps1')
 . (Join-Path $repoRoot 'scripts/lib/build-stamp.ps1')
@@ -123,6 +124,7 @@ try {
     }
     $gatewayA = 'http://127.0.0.1:20618'
     $gatewayB = 'http://127.0.0.1:30618'
+    $env:NEXT_PUBLIC_STATIC_WEBSITE_ONLY = 'false'
 
     Set-Case 'S4-missing-frontend-stamp-fails' $(if (Test-Throws { Assert-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA } 'stamp is missing') { 'PASS' } else { 'FAIL' })
     Write-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA
@@ -136,6 +138,17 @@ try {
     }
     catch { $reuseError = $_.Exception.Message }
     Set-Case 'S2-same-inputs-reusable' $(if ($reuseError -eq '') { 'PASS' } else { 'FAIL' }) $reuseError
+    $env:NEXT_PUBLIC_STATIC_WEBSITE_ONLY = 'true'
+    $staticRejected = Test-Throws { Write-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA } 'NEXT_PUBLIC_STATIC_WEBSITE_ONLY=false'
+    Set-Case 'S2b-static-build-cannot-be-stamped' $(if ($staticRejected -and -not (Test-Path -LiteralPath (Get-FrontendBuildStampPath $stampRoot))) { 'PASS' } else { 'FAIL' })
+    $env:NEXT_PUBLIC_STATIC_WEBSITE_ONLY = 'false'
+    Write-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA
+    $frontendStampPath = Get-FrontendBuildStampPath $stampRoot
+    $frontendStamp = Get-Content -Raw -LiteralPath $frontendStampPath | ConvertFrom-Json -AsHashtable
+    $null = $frontendStamp.Remove('staticWebsiteOnly')
+    $frontendStamp | ConvertTo-Json | Set-Content -LiteralPath $frontendStampPath -Encoding utf8
+    Set-Case 'S2c-old-stamp-without-profile-fails' $(if (Test-Throws { Assert-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA } "field 'staticWebsiteOnly'") { 'PASS' } else { 'FAIL' })
+    Write-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA
     $proxyMismatch = Test-Throws { Assert-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayB } "built with '$gatewayA', current is '$gatewayB'"
     Set-Case 'S3-proxy-target-mismatch-fails' $(if ($proxyMismatch) { 'PASS' } else { 'FAIL' })
     Set-Case 'S3b-sdk-version-mismatch-fails' $(if (Test-Throws { Assert-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion $labelled } "field 'haifaVersion'") { 'PASS' } else { 'FAIL' })
@@ -188,6 +201,7 @@ try {
     }
 }
 finally {
+    [Environment]::SetEnvironmentVariable('NEXT_PUBLIC_STATIC_WEBSITE_ONLY', $previousStaticWebsiteOnly, 'Process')
     Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
 }
 

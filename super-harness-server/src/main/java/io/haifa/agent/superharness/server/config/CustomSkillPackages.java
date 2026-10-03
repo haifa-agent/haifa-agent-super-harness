@@ -74,8 +74,9 @@ final class CustomSkillPackages {
             for (JsonNode version : record.path("versions")) {
                 String revision = revision(version.path("revision").asText());
                 if (!versions.add(revision)) throw new IOException("Duplicate custom Skill version");
-                Map<String, byte[]> files = files(name, revision);
-                if (!SkillPackageFiles.digest(files).equals(revision)) throw new IOException("Custom Skill package hash mismatch");
+                var content = packageVersion(config, name, revision);
+                Map<String, byte[]> files = content.files();
+                if (!SkillPackageFiles.digest(content).equals(revision)) throw new IOException("Custom Skill package hash mismatch");
                 var parsed = parser.parseFiles(name, files, descriptor(name, revision));
                 if (parsed.parsed().isEmpty()) throw new IOException("Custom Skill package is invalid");
                 var metadata = parsed.parsed().orElseThrow().metadata();
@@ -100,6 +101,38 @@ final class CustomSkillPackages {
         String revision = config.path("custom").path(SkillPackageFiles.name(name)).path("current").asText("");
         if (revision.isEmpty()) throw new java.io.FileNotFoundException("Custom skill '" + name + "' not found");
         return files(name, revision);
+    }
+
+    SkillPackageFiles.PackageContent currentPackage(ObjectNode config, String name) throws IOException {
+        String revision = config.path("custom").path(SkillPackageFiles.name(name)).path("current").asText("");
+        if (revision.isEmpty()) throw new java.io.FileNotFoundException("Custom skill '" + name + "' not found");
+        return packageVersion(config, name, revision);
+    }
+
+    private SkillPackageFiles.PackageContent packageVersion(ObjectNode config, String name, String revision) throws IOException {
+        JsonNode metadata = null;
+        for (JsonNode version : config.path("custom").path(name).path("versions")) {
+            if (version.path("revision").asText().equals(revision)) { metadata = version; break; }
+        }
+        if (metadata == null) throw new IOException("Custom Skill version metadata is missing");
+        java.util.Set<String> directories = new java.util.TreeSet<>(), executable = new java.util.TreeSet<>();
+        for (var entry : Map.of("empty_directories", directories, "executable_files", executable).entrySet()) {
+            JsonNode rows = metadata.path(entry.getKey());
+            if (!rows.isMissingNode() && !rows.isArray()) throw new IOException("Custom Skill entry metadata is invalid");
+            for (JsonNode row : rows) {
+                if (!row.isTextual() || !entry.getValue().add(SkillPackageFiles.path(row.asText()))) {
+                    throw new IOException("Custom Skill entry metadata is invalid");
+                }
+            }
+        }
+        var content = new SkillPackageFiles.PackageContent(files(name, revision), directories, executable);
+        SkillPackageFiles.validatePackagePaths(content);
+        for (String directory : directories) {
+            if (!Files.isDirectory(versionRoot(name, revision).resolve(name).resolve(directory))) {
+                throw new IOException("Custom Skill empty directory is missing");
+            }
+        }
+        return content;
     }
 
     Map<String, byte[]> files(String name, String revision) throws IOException {
@@ -130,7 +163,8 @@ final class CustomSkillPackages {
     }
 
     String install(ObjectNode config, byte[] archive, String author, String thread) throws IOException {
-        Map<String, byte[]> files = SkillPackageFiles.archive(archive);
+        var content = SkillPackageFiles.archivePackage(archive);
+        Map<String, byte[]> files = content.files();
         String markdown = new String(files.get("SKILL.md"), StandardCharsets.UTF_8);
         var match = DECLARED_NAME.matcher(markdown);
         if (!match.find()) throw new IllegalArgumentException("Skill archive requires a valid name in SKILL.md");
@@ -138,14 +172,17 @@ final class CustomSkillPackages {
         if (!config.path("custom").path(name).path("current").asText("").isEmpty()) {
             throw new java.nio.file.FileAlreadyExistsException("Skill '" + name + "' already exists");
         }
-        publishVersion(config, name, files, "install", author, thread, "SKILL.md", null);
+        publishVersion(config, name, content, "install", author, thread, "SKILL.md", null, () -> {});
         return name;
     }
 
     void manage(ObjectNode config, String action, String name, String content, String support,
-            String find, String replacement, Integer expectedCount, String author, String thread) throws IOException {
+            String find, String replacement, Integer expectedCount, String author, String thread, Runnable admission) throws IOException {
         SkillPackageFiles.name(name);
-        Map<String, byte[]> files = action.equals("create") ? new TreeMap<>() : new TreeMap<>(current(config, name));
+        var original = action.equals("create") ? SkillPackageFiles.PackageContent.filesOnly(Map.of()) : currentPackage(config, name);
+        Map<String, byte[]> files = new TreeMap<>(original.files());
+        java.util.Set<String> directories = new java.util.TreeSet<>(original.emptyDirectories());
+        java.util.Set<String> executable = new java.util.TreeSet<>(original.executableFiles());
         if (action.equals("create") && !config.path("custom").path(name).path("current").asText("").isEmpty()) {
             throw new java.nio.file.FileAlreadyExistsException("Skill '" + name + "' already exists");
         }
@@ -183,12 +220,22 @@ final class CustomSkillPackages {
                     throw new IllegalArgumentException("Unsupported Skill supporting file path");
                 }
                 previous = text(files.get(path));
-                if (action.equals("write_file")) files.put(path, required(content, "content").getBytes(StandardCharsets.UTF_8));
-                else if (files.remove(path) == null) throw new java.io.FileNotFoundException("Supporting Skill file not found");
+                if (action.equals("write_file")) {
+                    files.put(path, required(content, "content").getBytes(StandardCharsets.UTF_8));
+                    String supportPath = path;
+                    directories.removeIf(dir -> supportPath.startsWith(dir + "/"));
+                } else {
+                    if (files.remove(path) == null) throw new java.io.FileNotFoundException("Supporting Skill file not found");
+                    executable.remove(path);
+                    String parent = path.substring(0, path.lastIndexOf('/'));
+                    if (files.keySet().stream().noneMatch(file -> file.startsWith(parent + "/"))
+                            && directories.stream().noneMatch(dir -> dir.startsWith(parent + "/"))) directories.add(parent);
+                }
             }
             default -> throw new IllegalArgumentException("Unsupported Skill action");
         }
-        publishVersion(config, name, files, action, author, thread, path, previous);
+        publishVersion(config, name, new SkillPackageFiles.PackageContent(files, directories, executable),
+                action, author, thread, path, previous, admission);
     }
 
     void rollback(ObjectNode config, String name, int index) throws IOException {
@@ -198,21 +245,46 @@ final class CustomSkillPackages {
         if (index < 0) index += history.size();
         if (index < 0 || index >= history.size()) throw new IllegalArgumentException("history_index is out of range");
         JsonNode entry = history.get(index);
-        if (entry.path("prev_content").isNull() || entry.path("prev_content").isMissingNode()) {
-            throw new IllegalArgumentException("Selected history entry has no previous content to roll back to");
-        }
+        String prior = entry.path("previous_revision").asText("");
+        if (prior.isEmpty()) throw new IllegalArgumentException("Selected history entry has no previous package version");
+        var priorPackage = packageVersion(config, name, prior);
+        Map<String, byte[]> priorFiles = priorPackage.files();
+        if (!SkillPackageFiles.digest(priorPackage).equals(prior)) throw new IOException("Custom Skill package hash mismatch");
+        String path = SkillPackageFiles.path(entry.path("file_path").asText());
         Map<String, byte[]> files;
+        java.util.Set<String> directories, executable;
         String current = record(config, name).path("current").asText("");
-        if (current.isEmpty()) files = new TreeMap<>(files(name, entry.path("previous_revision").asText()));
-        else files = new TreeMap<>(current(config, name));
-        String previous = text(files.get("SKILL.md"));
-        files.put("SKILL.md", entry.path("prev_content").asText().getBytes(StandardCharsets.UTF_8));
-        publishVersion(config, name, files, "rollback", "human", null, "SKILL.md", previous);
+        var currentPackage = current.isEmpty() ? priorPackage : currentPackage(config, name);
+        files = new TreeMap<>(currentPackage.files());
+        directories = new java.util.TreeSet<>(currentPackage.emptyDirectories());
+        executable = new java.util.TreeSet<>(currentPackage.executableFiles());
+        String previous = text(files.get(path));
+        if (entry.path("action").asText().equals("delete")) {
+            files = new TreeMap<>(priorFiles);
+            directories = new java.util.TreeSet<>(priorPackage.emptyDirectories());
+            executable = new java.util.TreeSet<>(priorPackage.executableFiles());
+        } else if (priorFiles.containsKey(path)) {
+            files.put(path, priorFiles.get(path));
+            directories.removeIf(dir -> path.startsWith(dir + "/"));
+            if (priorPackage.executableFiles().contains(path)) executable.add(path);
+            else executable.remove(path);
+        } else if (!path.equals("SKILL.md")) {
+            files.remove(path); executable.remove(path);
+            String parent = path.substring(0, path.lastIndexOf('/'));
+            if (files.keySet().stream().noneMatch(file -> file.startsWith(parent + "/"))
+                    && directories.stream().noneMatch(dir -> dir.startsWith(parent + "/"))) directories.add(parent);
+        }
+        else throw new IllegalArgumentException("Selected history entry has no previous SKILL.md");
+        publishVersion(config, name, new SkillPackageFiles.PackageContent(files, directories, executable),
+                "rollback", "human", null, path, previous, () -> {});
     }
 
-    private void publishVersion(ObjectNode config, String name, Map<String, byte[]> files, String action,
-            String author, String thread, String file, String previous) throws IOException {
-        String revision = SkillPackageFiles.digest(files);
+    private void publishVersion(ObjectNode config, String name, SkillPackageFiles.PackageContent content, String action,
+            String author, String thread, String file, String previous, Runnable admission) throws IOException {
+        admission.run();
+        SkillPackageFiles.validatePackagePaths(content);
+        Map<String, byte[]> files = content.files();
+        String revision = SkillPackageFiles.digest(content);
         var parsed = parser.parseFiles(name, files, descriptor(name, revision));
         if (parsed.parsed().isEmpty() || !parsed.parsed().orElseThrow().metadata().name().value().equals(name)) {
             throw new IllegalArgumentException("Invalid Skill package/frontmatter");
@@ -226,11 +298,18 @@ final class CustomSkillPackages {
             for (var entry : files.entrySet()) {
                 Path target = packageDir.resolve(SkillPackageFiles.path(entry.getKey()));
                 Files.createDirectories(target.getParent()); Files.write(target, entry.getValue());
+                if (Files.getFileAttributeView(target, java.nio.file.attribute.PosixFileAttributeView.class) != null) {
+                    String permissions = content.executableFiles().contains(entry.getKey()) ? "rwxr-xr-x" : "rw-r--r--";
+                    Files.setPosixFilePermissions(target, java.nio.file.attribute.PosixFilePermissions.fromString(permissions));
+                }
             }
-            Map<String, byte[]> reviewed = reviewedCurrent(config, name);
+            for (String directory : content.emptyDirectories()) Files.createDirectories(packageDir.resolve(directory));
+            var reviewed = reviewedCurrent(config, name);
             java.util.Set<String> changed = new java.util.HashSet<>(files.keySet());
-            if (reviewed != null) changed.removeIf(path -> java.util.Arrays.equals(files.get(path), reviewed.get(path)));
+            if (reviewed != null) changed.removeIf(path -> java.util.Arrays.equals(files.get(path), reviewed.files().get(path))
+                    && content.executableFiles().contains(path) == reviewed.executableFiles().contains(path));
             JsonNode scan = reviewed == null ? screen.screen(packageDir, files) : screen.screenChanges(packageDir, files, changed);
+            admission.run();
             if (reviewed != null && scan instanceof ObjectNode summary) {
                 summary.put("unchanged_reviewed_revision", config.path("custom").path(name).path("current").asText());
             }
@@ -239,7 +318,7 @@ final class CustomSkillPackages {
             Files.createDirectories(target.getParent());
             requireNoLinks(target.getParent());
             if (!Files.exists(target)) Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE);
-            else if (!SkillPackageFiles.digest(files(name, revision)).equals(revision)) throw new IOException("Immutable Skill version changed");
+            else if (!SkillPackageFiles.digest(packageVersion(config, name, revision)).equals(revision)) throw new IOException("Immutable Skill version changed");
             ObjectNode record = record(config, name);
             ArrayNode versions = record.withArray("versions");
             boolean exists = false;
@@ -249,6 +328,10 @@ final class CustomSkillPackages {
                         .discover(SkillReviewApprovals.discovery()).registrations().getFirst();
                 ObjectNode version = versions.addObject().put("revision", revision)
                         .put("source", author.equals("human") ? "user-upload-or-edit" : "agent-managed");
+                var empty = version.putArray("empty_directories");
+                new java.util.TreeSet<>(content.emptyDirectories()).forEach(empty::add);
+                var executableFiles = version.putArray("executable_files");
+                new java.util.TreeSet<>(content.executableFiles()).forEach(executableFiles::add);
                 version.set("review", SkillReviewApprovals.evidence(json, registration, scan));
             }
             appendHistory(record, action, author, thread, file, previous, text(files.get(file)), scan);
@@ -271,18 +354,18 @@ final class CustomSkillPackages {
     }
 
     /** Reuse only unchanged bytes from an exact SDK-reviewed, non-revoked current package. */
-    private Map<String, byte[]> reviewedCurrent(ObjectNode config, String name) throws IOException {
+    private SkillPackageFiles.PackageContent reviewedCurrent(ObjectNode config, String name) throws IOException {
         JsonNode stored = config.path("custom").path(name);
         String current = stored.path("current").asText("");
         if (current.isEmpty()) return null;
-        Map<String, byte[]> previous = files(name, current);
-        if (!SkillPackageFiles.digest(previous).equals(current)) throw new IOException("Custom Skill package hash mismatch");
+        var packageContent = packageVersion(config, name, current);
+        if (!SkillPackageFiles.digest(packageContent).equals(current)) throw new IOException("Custom Skill package hash mismatch");
         for (JsonNode version : stored.path("versions")) {
             if (!version.path("revision").asText().equals(current)) continue;
-            var registration = new InMemorySkillSource(descriptor(name, current), parser, SkillAvailability.ENABLED, Map.of(name, previous))
+            var registration = new InMemorySkillSource(descriptor(name, current), parser, SkillAvailability.ENABLED, Map.of(name, packageContent.files()))
                     .discover(SkillReviewApprovals.discovery()).registrations().getFirst();
             var grant = SkillReviewApprovals.grant(registration, version.path("review"));
-            if (grant.activeAt(Instant.now())) return previous;
+            if (grant.activeAt(Instant.now())) return packageContent;
         }
         return null;
     }

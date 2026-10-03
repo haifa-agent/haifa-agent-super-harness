@@ -54,6 +54,23 @@ class SkillPackageHttpTest {
                     json.createObjectNode().put("history_index", -1)).statusCode()).isEqualTo(404);
             assertThat(java.nio.file.Files.readAllBytes(data.resolve("skills_config.json"))).containsExactly(publishedConfiguration);
             String prefix = "/api/skills/custom/package-control";
+            for (String invalid : List.of("{", "", "[]")) {
+                for (var route : List.of(Map.entry("/api/skills/install", "POST"), Map.entry(prefix, "PUT"),
+                        Map.entry(prefix + "/rollback", "POST"))) {
+                    var malformed = fixture.client.send(HttpRequest.newBuilder(fixture.base.resolve(route.getKey()))
+                            .header("Content-Type", "application/json")
+                            .method(route.getValue(), HttpRequest.BodyPublishers.ofString(invalid)).build(), HttpResponse.BodyHandlers.ofString());
+                    assertThat(malformed.statusCode()).as(route + " body=" + invalid).isEqualTo(422);
+                }
+            }
+            assertThat(fixture.request("POST", prefix + "/rollback", json.createObjectNode().put("history_index", "last")).statusCode()).isEqualTo(422);
+            assertThat(fixture.request("PUT", prefix, json.createObjectNode().put("content", 3)).statusCode()).isEqualTo(422);
+            assertThat(fixture.request("POST", "/api/skills/install", json.createObjectNode().put("thread_id", 3).put("path", "x.skill")).statusCode()).isEqualTo(422);
+            var oversized = fixture.client.send(HttpRequest.newBuilder(fixture.base.resolve("/api/skills/install"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("x".repeat(8193))).build(), HttpResponse.BodyHandlers.ofString());
+            assertThat(oversized.statusCode()).isEqualTo(413);
+            assertThat(java.nio.file.Files.readAllBytes(data.resolve("skills_config.json"))).containsExactly(publishedConfiguration);
             assertThat(fixture.get("/api/skills/custom").path("skills")).hasSize(1);
             String revision = fixture.get(prefix + "/export-manifest").path("revision").asText();
             var exported = fixture.client.send(HttpRequest.newBuilder(fixture.base.resolve(prefix + "/export?expected_revision=" + revision))
