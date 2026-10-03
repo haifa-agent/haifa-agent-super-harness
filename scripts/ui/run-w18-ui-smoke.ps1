@@ -158,6 +158,7 @@ $testExitCode = 1
 $expectedCases = @()
 $selectedCases = @()
 $frontendBuild = 'NOT_RUN'
+$serverBuild = $(if ($SkipBuild -or $SkipServerBuild) { 'REUSED' } else { 'NOT_RUN' })
 $preflight = [ordered]@{ result = 'NOT_RUN'; assertions = 'NOT_RUN'; servicesStartedDuringPreflight = $false }
 try {
     $selection = Resolve-SmokeCaseSelection -SpecPath (Join-Path $root "tests/ui/smoke/$($managedEnvironment.W18_PLAYWRIGHT_SPEC)") -CaseTitle $CaseTitle
@@ -201,7 +202,21 @@ try {
 
     # The Interaction profile runs the Gateway from the test classpath, not the exec JAR.
     if (-not $SkipBuild) {
-        if (-not $SkipServerBuild) {
+        $serverReusable = $false
+        if (-not $SkipServerBuild -and -not $Interaction) {
+            # Same source and SDK as the stamped JAR (for example the previous round or the full
+            # gate): packaging again would only reproduce it.
+            try {
+                Assert-ServerBuildStamp -RepositoryRoot $root -HaifaVersion $sdk.HaifaVersion
+                $serverReusable = $true
+                $serverBuild = 'REUSED'
+            }
+            catch {
+                $serverReusable = $false
+            }
+        }
+        if (-not $SkipServerBuild -and -not $serverReusable) {
+        $serverBuild = 'BUILT'
         Remove-BuildStamp (Get-ServerBuildStampPath $root)
         Push-Location $root
         try {
@@ -476,6 +491,7 @@ finally {
             acceptanceProfile = $tag; sdkSelection = $sdk.Status; haifaVersion = $sdk.HaifaVersion
             serverBuildReused = [bool]($SkipBuild -or $SkipServerBuild); webDeferred = [bool]$DeferUxV1Web
             frontendBuild = $frontendBuild
+            serverBuild = $serverBuild
             dataRoot = $dataRoot
             executionScope = $(if ($PreflightOnly) { 'preflight-only' } elseif ($CaseTitle) { 'selected-case' } else { 'full-profile' })
             selectedCases = $selectedCases

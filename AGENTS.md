@@ -57,9 +57,9 @@
 - 在仓库根目录使用 Java 21、Maven 3.9.15 和 PowerShell 7（`pwsh`）；也可用 `mvnw.cmd` / `./mvnw`，Wrapper 首次使用需下载分发包，之后可离线复用。
 - 新 Java 验收测试从 `ProductionWriteFileHttpTest` 黄金样例起步，复用 `testsupport` 中的模型、审批、Gateway 与进程夹具；独立数据、证据和端口的配置见 [README「定向测试与 SDK 版本选择」](README.md#定向测试与-sdk-版本选择)。
 - 定向测试：`pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'ProductionWriteFileHttpTest,AcceptanceFixturesTest' -LowMemory`。替换 `-Test` 即可选择用例，其他模块用 `-Module`；入口固定带 `-am`，匹配 0 个测试算失败，不传额外 Maven goal、`-DskipTests` 或 `-Dhaifa.version`。
-- 全仓门禁：`pwsh -NoProfile -File scripts/verify-full.ps1`，先跑秒级预检（SDK 基线门禁、`git diff --check`、对 main 以来改动的 secret scan），失败即停、不启动 Maven；再以两个并行 fork（`-Forks 2`，内存紧张时 `-Forks 1 -LowMemory`）运行离线 `clean verify`，生成 exec JAR、构建戳和摘要 JSON。执行前保存需保留的原始证据，并停止当前 worktree 中占用该 JAR 的精确进程。
+- 全仓门禁：`pwsh -NoProfile -File scripts/verify-full.ps1`，先跑秒级预检（SDK 基线门禁、`git diff --check`、对 main 以来改动的 secret scan），失败即停、不启动 Maven；再以三个并行 fork（`-Forks 3`，内存紧张时 `-Forks 1 -LowMemory`）运行离线 `clean verify`，生成 exec JAR、构建戳和摘要 JSON。执行前保存需保留的原始证据，并停止当前 worktree 中占用该 JAR 的精确进程。
 - SDK 选择沿用「范围与依赖」规则，由入口读取本 worktree 的 `local-tmp/sdk-selection.json`；提交前运行 `pwsh -NoProfile -File tests/checks/build/verify-haifa-version-baseline.ps1`。测试日志位于 `local-tmp/test-targeted/`、`local-tmp/verify-full/`，stdout 输出 JSON 汇总。
-- 同一提交全仓门禁通过后，`scripts/ui/run-w18-ui-smoke.ps1` 的冷轮用 `-SkipServerBuild` 复用 JAR，只构建前端；暖轮用 `-SkipBuild` 复用前后端构建。冻结前端来源校验在源码与 DeerFlow 检出未变时复用本 worktree 的上次 PASS（`local-tmp/cache/frontend-source-gate/`，键见 `scripts/lib/frontend_gate_cache.py`）。复用由构建戳校验源码、SDK 版本、前端依赖和代理目标，输入变化后重新构建验证；每轮仍使用独立数据与证据。
+- `scripts/ui/run-w18-ui-smoke.ps1` 自动避免无意义的构建：后端 JAR 的构建戳（源码 SHA、SDK 版本）仍匹配时直接复用，例如同一提交的全仓门禁或上一轮的产物；前端构建戳只含冻结前端源码树、lockfile 和代理目标，不含仓库 HEAD，匹配就复用本地构建，否则从主检出的共享缓存 `local-tmp/shared/frontend-build/` 恢复（键见 `scripts/lib/frontend_build_cache.py`），两者都没有才执行 `pnpm build` 并存入缓存；`flow-health.json` 的 `serverBuild`/`frontendBuild` 记录 `REUSED`/`RESTORED`/`BUILT`。`-SkipServerBuild`/`-SkipBuild` 仍可用于强制复用并在构建戳不符时失败。冻结前端来源校验在源码与 DeerFlow 检出未变时复用本 worktree 的上次 PASS（`local-tmp/cache/frontend-source-gate/`，键见 `scripts/lib/frontend_gate_cache.py`）。复用由构建戳校验源码、SDK 版本、前端依赖和代理目标，输入变化后重新构建验证；每轮仍使用独立数据与证据。
 
 ### 默认 Web 工具环境代理
 
@@ -99,7 +99,7 @@ $env:no_proxy=$env:NO_PROXY
 
 ### 冻结前端（pnpm / Next.js）
 
-- 每个验收 worktree 使用独立的 `frontend/node_modules`、`.next`、端口和数据目录；主前端继续供人工验收使用。前端来源按「范围与依赖」的冻结版本校验。
+- 每个验收 worktree 使用独立的 `frontend/node_modules`、`.next`、端口和数据目录（`.next` 可由 runner 从共享缓存复制恢复，但不同 worktree 不得共用同一个 `.next` 目录）；主前端继续供人工验收使用。前端来源按「范围与依赖」的冻结版本校验。
 - 在该 worktree 的 `frontend/` 目录准备依赖，先确认版本精确为 `10.26.2`，再安装：
 
 ```powershell

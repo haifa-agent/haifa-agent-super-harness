@@ -77,7 +77,7 @@ SDK 版本规则见 `AGENTS.md`「范围与依赖」。工作包 worktree 消费
 
 UI runner 在构建成功后写入构建戳（`frontend/.next/haifa-build-stamp.json`、`super-harness-server/target/haifa-build-stamp.json`），`-SkipBuild`/`-SkipServerBuild` 复用构建产物前先核对源码 SHA、前端 lockfile、构建时代理目标和 Haifa 版本；不一致时在启动任何进程前失败并点名字段，不会自动重建，需去掉 `-SkipBuild` 重跑。
 
-全仓门禁入口还会先跑秒级预检（`scripts/lib/quick_checks.py`：SDK 基线门禁、`git diff --check`、secret scan），失败时直接输出 `FAIL_PREFLIGHT`，不启动 Maven；Maven 默认两个并行 fork（`-Forks`，1–4）。摘要 JSON 同时写到日志旁的同名 `.json`。`test-targeted.ps1`、`verify-full.ps1` 和 UI runner 遇到含通配符或 CIDR 的 `NO_PROXY` 时，只在本进程内改用 `127.0.0.1,localhost`。
+全仓门禁入口还会先跑秒级预检（`scripts/lib/quick_checks.py`：SDK 基线门禁、`git diff --check`、secret scan），失败时直接输出 `FAIL_PREFLIGHT`，不启动 Maven；Maven 默认三个并行 fork（`-Forks`，1–4）。UI runner 会自动复用构建戳匹配的后端 JAR 和前端构建，前端还可从主检出的共享缓存 `local-tmp/shared/frontend-build/` 恢复，只有都不可用时才重新构建。摘要 JSON 同时写到日志旁的同名 `.json`。`test-targeted.ps1`、`verify-full.ps1` 和 UI runner 遇到含通配符或 CIDR 的 `NO_PROXY` 时，只在本进程内改用 `127.0.0.1,localhost`。
 
 流水线辅助脚本（Python，核心逻辑在脚本内）：
 
