@@ -19,6 +19,7 @@ Nothing is cached or restored while ``frontend/`` has uncommitted or untracked c
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import os
 import shutil
@@ -57,6 +58,24 @@ def ignore_build_cache(directory: str, names: list[str]) -> list[str]:
     return ["cache"] if Path(directory).name == ".next" else []
 
 
+def copy_build_tree(source: Path, target: Path) -> None:
+    # Next emits thousands of small files. On Windows, sequential copy2 can exceed
+    # the reference runner's fixed 120-second restore deadline before any UI starts.
+    futures = []
+    with ThreadPoolExecutor(max_workers=8) as copies:
+        for directory, subdirectories, filenames in os.walk(source):
+            parent = Path(directory)
+            destination = target / parent.relative_to(source)
+            destination.mkdir(parents=True, exist_ok=True)
+            for name in subdirectories + filenames:
+                if (parent / name).is_symlink():
+                    raise OSError(f"Frontend build cache contains a symbolic link: {parent / name}")
+            for name in filenames:
+                futures.append(copies.submit(shutil.copy2, parent / name, destination / name))
+        for future in futures:
+            future.result()
+
+
 def restore(repo: Path, gateway: str) -> int:
     key = cache_key(repo, gateway)
     source = cache_root(repo) / key / ".next" if key else None
@@ -66,7 +85,7 @@ def restore(repo: Path, gateway: str) -> int:
     target = repo / "frontend" / ".next"
     if target.exists():
         shutil.rmtree(target)
-    shutil.copytree(source, target)
+    copy_build_tree(source, target)
     print("RESTORED")
     return 0
 
