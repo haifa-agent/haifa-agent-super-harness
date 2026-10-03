@@ -84,8 +84,9 @@ Check 'release-waits-for-tracked-child-without-runtime-or-ports' {
     [IO.File]::WriteAllText($scriptFile, 'Start-Sleep -Milliseconds 1500')
     $child = Start-Process -FilePath (Get-Command pwsh).Source -ArgumentList @('-NoProfile','-File',$scriptFile) -WindowStyle Hidden -PassThru
     try {
+        $owned = Get-FixtureProcessFact (Get-CimInstance Win32_Process -Filter "ProcessId=$($child.Id)" -ErrorAction Stop)
         $started = [Diagnostics.Stopwatch]::GetTimestamp()
-        $null = Wait-FixturePortsReleased -Ports @() -Started $started -TimeoutSec 5 -OwnedPids @($child.Id)
+        $null = Wait-FixturePortsReleased -Ports @() -Started $started -TimeoutSec 5 -OwnedFacts @($owned)
         $child.Refresh()
         if (-not $child.HasExited -or [Diagnostics.Stopwatch]::GetElapsedTime($started).TotalMilliseconds -lt 1000) {
             throw 'Release returned while a tracked non-runtime child was still exiting'
@@ -97,10 +98,12 @@ Check 'tracked-child-timeout-retains-original-deadline' {
     [IO.File]::WriteAllText($scriptFile, 'Start-Sleep -Seconds 10')
     $child = Start-Process -FilePath (Get-Command pwsh).Source -ArgumentList @('-NoProfile','-File',$scriptFile) -WindowStyle Hidden -PassThru
     try {
+        $owned = Get-FixtureProcessFact (Get-CimInstance Win32_Process -Filter "ProcessId=$($child.Id)" -ErrorAction Stop)
         $started = [Diagnostics.Stopwatch]::GetTimestamp()
         $rejected = $false
-        try { $null = Wait-FixturePortsReleased -Ports @() -Started $started -TimeoutSec 1 -OwnedPids @($child.Id) }
+        try { $null = Wait-FixturePortsReleased -Ports @() -Started $started -TimeoutSec 1 -OwnedFacts @($owned) }
         catch { $rejected = $_.Exception.Message -like "*Cleanup exceeded 1s*trackedPids=$($child.Id)*" }
+        $child.Refresh()
         if (-not $rejected -or $child.HasExited -or [Diagnostics.Stopwatch]::GetElapsedTime($started).TotalSeconds -gt 3) {
             throw 'Tracked child escaped timeout or changed the deadline'
         }
