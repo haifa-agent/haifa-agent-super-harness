@@ -63,6 +63,8 @@ if ($UxV1DefaultTools -or $UxV1AgentSoul) {
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 . (Join-Path $PSScriptRoot '../lib/sdk-selection.ps1')
 . (Join-Path $PSScriptRoot '../lib/build-stamp.ps1')
+. (Join-Path $PSScriptRoot '../lib/preflight.ps1')
+Use-SafeNoProxy
 . (Join-Path $PSScriptRoot '../lib/smoke-preflight.ps1')
 $controlledContextWindow = 32768
 $sdk = [pscustomobject]@{ Status = 'NOT_RUN'; HaifaVersion = $null }

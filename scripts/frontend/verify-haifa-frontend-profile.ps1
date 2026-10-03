@@ -144,9 +144,16 @@ $sourceArguments = @{ RepositoryRoot = $root }
 if (-not [string]::IsNullOrWhiteSpace($SourceRepository)) {
     $sourceArguments.SourceRepository = $SourceRepository
 }
-$sourceGateOutput = (& $sourceVerifier @sourceArguments *>&1 | Out-String)
-if ([string]::IsNullOrWhiteSpace($sourceGateOutput)) {
-    throw 'Frozen frontend source gate produced no verification evidence.'
+. (Join-Path $root 'scripts/lib/frontend-gate-cache.ps1')
+$sourceGateCacheKey = Get-FrontendSourceGateCacheKey -RepositoryRoot $root -SourceRepository $SourceRepository
+$sourceGateOutput = Read-FrontendSourceGateCache -RepositoryRoot $root -Key $sourceGateCacheKey
+$sourceGateCache = if ($null -eq $sourceGateCacheKey) { 'OFF' } elseif ($sourceGateOutput) { 'HIT' } else { 'MISS' }
+if (-not $sourceGateOutput) {
+    $sourceGateOutput = (& $sourceVerifier @sourceArguments *>&1 | Out-String)
+    if ([string]::IsNullOrWhiteSpace($sourceGateOutput)) {
+        throw 'Frozen frontend source gate produced no verification evidence.'
+    }
+    Write-FrontendSourceGateCache -RepositoryRoot $root -Key $sourceGateCacheKey -Output $sourceGateOutput
 }
 
 $configurationText = @(
@@ -178,6 +185,7 @@ $configurationHash = [Convert]::ToHexString(
     trustedOrigin = $expectedFrontendOrigin
     dataRoot = $dataRoot
     frontendSourceGate = 'PASS'
+    frontendSourceGateCache = $sourceGateCache
     deerFlowBackendFallback = $false
     publicSecrets = $false
     configurationSha256 = $configurationHash

@@ -42,6 +42,8 @@ if ($patterns.Count -eq 0) {
 
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/sdk-selection.ps1')
+. (Join-Path $PSScriptRoot 'lib/preflight.ps1')
+Use-SafeNoProxy
 $sdk = Resolve-HaifaSdkSelection -RepositoryRoot $root
 
 $mavenArguments = @('-o', '-ntp', '-pl', $Module, '-am', "-Dtest=$($patterns -join ',')", '-Dsurefire.failIfNoSpecifiedTests=false')
