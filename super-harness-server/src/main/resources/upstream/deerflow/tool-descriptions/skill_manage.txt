@@ -1,0 +1,10 @@
+Manage custom skills under skills/custom/.
+
+Args:
+    action: One of create, patch, edit, delete, write_file, remove_file.
+    name: Skill name in hyphen-case.
+    content: New file content for create, edit, or write_file.
+    path: Supporting file path for write_file or remove_file.
+    find: Existing text to replace for patch.
+    replace: Replacement text for patch.
+    expected_count: Optional expected number of replacements for patch.

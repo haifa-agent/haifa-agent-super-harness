@@ -118,7 +118,6 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 ? new SkillConfigStore(
                         objectMapper, dataDirectory, SkillConfigStore.repositoryRootFromWorkingDirectory())
                 : testSkillStore;
-        this.skillsApi = new DeerFlowSkillsApi(objectMapper, skillStore);
         PersistentProjectWorkspaceService projects = new PersistentProjectWorkspaceService(
                 dataDirectory.resolve("workspace"), WorkspaceLimits.defaults(), WorkspaceChangeLimits.defaults());
         RestrictedWorkspaceService toolWorkspace = new RestrictedWorkspaceService(
@@ -127,6 +126,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 testRunModelResolver == null
                         ? configurationApi::resolveRunModel
                         : testRunModelResolver;
+        var skillScreening = new io.haifa.agent.superharness.server.config.SkillPackageScreening(objectMapper, dataDirectory);
+        if (testSkillStore == null) skillStore.configureWriteScreening(skillScreening.writes(modelResolver));
         this.threadRunApi = new DeerFlowThreadRunApi(
                 objectMapper,
                 modelResolver,
@@ -134,7 +135,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 projects,
                 dataDirectory,
                 continuationKey,
-                scope -> promptReadyTools(testRunTools, projects, toolWorkspace, scope, configurationApi, skillStore),
+                scope -> promptReadyTools(testRunTools, projects, toolWorkspace, scope, configurationApi, skillStore, skillScreening),
                 new DeerFlowThreadRunApi.McpProjectionProvider() {
                     @Override
                     public McpRunTools.Projection forRun(JsonNode body) {
@@ -162,6 +163,11 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                             public SkillRunTools.Projection forRecovery(SkillRunTools.Selection selection) {
                                 return skillStore.recoveryProjection(selection);
                             }
+
+                            @Override
+                            public SkillRunTools.Projection forRecovery(SkillRunTools.Selection selection, Map<String, String> versions) {
+                                return skillStore.recoveryProjection(selection, versions);
+                            }
                         },
                 new DeerFlowUploadContext(toolWorkspace),
                 configurationApi::resolveAgentPromptContext,
@@ -185,6 +191,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 });
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
+        this.skillsApi = new DeerFlowSkillsApi(objectMapper, skillStore, workspaceApi);
         this.projectApi = new DeerFlowProjectApi(objectMapper, projects, threadRunApi, workspaceApi);
         this.trashApi = new DeerFlowTrashApi(objectMapper, projects);
         this.inputPolishApi = new DeerFlowInputPolishApi(objectMapper, modelResolver);
@@ -203,7 +210,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             RestrictedWorkspaceService toolWorkspace,
             DeerFlowThreadRunApi.ThreadToolScope scope,
             DeerFlowConfigurationApi configuration,
-            SkillConfigStore skills) {
+            SkillConfigStore skills,
+            io.haifa.agent.superharness.server.config.SkillPackageScreening skillScreening) {
         List<JavaTool<?, ?>> tools = new java.util.ArrayList<>(configured);
         for (JavaTool<?, ?> tool : fileTools(scope, projects, toolWorkspace)) {
             if (tools.stream().noneMatch(existing -> existing.spec().name().equals(tool.spec().name()))) {
@@ -223,7 +231,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             // Pure M2 composition checks the complete registered catalog and SDK instruction limit
             // before the existing ConfigurationStore performs its single atomic replacement.
             HaifaRunBridge.promptSignatureFor(
-                    promptReadyTools(configured, projects, toolWorkspace, nextScope, configuration, skills),
+                    promptReadyTools(configured, projects, toolWorkspace, nextScope, configuration, skills, skillScreening),
                     skills.projection(selectedSkills), nextAgent);
         };
         if (agent.bootstrap()) {
@@ -237,6 +245,15 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 configuration.updateAgentForTool(agent.agentName(), input, validateCandidate);
                 return new ProductionUpdateAgentTool.Output(true,
                         "Agent '" + agent.agentName() + "' updated successfully!");
+            }));
+        }
+        if (tools.stream().noneMatch(tool -> tool.spec().name().equals("skill_manage"))) {
+            tools.add(new io.haifa.agent.superharness.server.tool.skill.ProductionSkillManageTool(skills, scope.threadId()));
+        }
+        if (tools.stream().noneMatch(tool -> tool.spec().name().equals("review_skill_package"))) {
+            tools.add(new io.haifa.agent.superharness.server.tool.skill.ProductionReviewSkillPackageTool(skills, skillScreening, path -> {
+                try { return DeerFlowWorkspaceApi.readSkillReviewTarget(projects, toolWorkspace, scope.threadId(), path); }
+                catch (IOException invalid) { throw new java.io.UncheckedIOException(invalid); }
             }));
         }
         return tools;

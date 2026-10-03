@@ -249,7 +249,7 @@ public final class HaifaRunBridge implements AutoCloseable {
                     .collect(java.util.stream.Collectors.toSet()));
             if (skillProjection != null && skillProjection.installTools()) {
                 builder.skillPlatform(new SkillPlatformContribution(
-                                skillProjection.catalog(), skillProjection.loader()))
+                                skillProjection.catalog(), skillProjection.loader(), skillProjection.trust()))
                         .toolRegistrations(SkillToolContributions.createRegistrations(
                                 foundation.persistence(), skillProjection.loader(), Instant::now));
             }

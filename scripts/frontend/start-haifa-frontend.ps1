@@ -5,6 +5,7 @@ param(
     [int]$FrontendPort = 33018,
     [string]$DataDirectory,
     [string]$SourceRepository,
+    [switch]$Production,
     [switch]$DryRun
 )
 
@@ -139,11 +140,21 @@ if ("pnpm@$pnpmVersion" -cne $expectedPackageManager) {
 }
 
 $launch = [ordered]@{
-    executable = $pnpmCommand.Source
+    executable = $(if ($Production) { $nodeCommand.Source } else { $pnpmCommand.Source })
     nodeVersion = $nodeVersion
     packageManager = "pnpm@$pnpmVersion"
     workingDirectory = $frontendRoot
-    arguments = @('dev', '--', '--hostname', '127.0.0.1', '--port', [string]$FrontendPort)
+    arguments = $(if ($Production) {
+        $next = Join-Path $frontendRoot 'node_modules/next/dist/bin/next'
+        if (-not (Test-Path -LiteralPath $next -PathType Leaf)) {
+            throw 'Repo-local Next.js executable is missing.'
+        }
+        . (Join-Path $root 'scripts/lib/build-stamp.ps1')
+        Assert-FrontendBuildStamp -RepositoryRoot $root -InternalGatewayBaseUrl $GatewayBaseUrl.TrimEnd('/')
+        @($next, 'start', '--hostname', '127.0.0.1', '--port', [string]$FrontendPort)
+    } else {
+        @('dev', '--', '--hostname', '127.0.0.1', '--port', [string]$FrontendPort)
+    })
 }
 
 if ($DryRun) {
@@ -172,7 +183,7 @@ catch {
 
 Push-Location $frontendRoot
 try {
-    & $pnpmCommand.Source @($launch.arguments)
+    & $launch.executable @($launch.arguments)
     if ($LASTEXITCODE -ne 0) {
         throw "Frozen frontend exited with code $LASTEXITCODE."
     }

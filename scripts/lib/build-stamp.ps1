@@ -8,7 +8,8 @@
     reusing that output. A stamp records only what makes the output reusable:
 
       frontend (frontend/.next):   HEAD:frontend tree, pnpm-lock.yaml hash and the
-                                   DEER_FLOW_INTERNAL_GATEWAY_BASE_URL baked into the build; the
+                                   DEER_FLOW_INTERNAL_GATEWAY_BASE_URL and the non-static
+                                   NEXT_PUBLIC_STATIC_WEBSITE_ONLY=false build profile; the
                                    repository HEAD is deliberately not part of it, because the
                                    build output does not depend on commits outside frontend/
       server (exec JAR directory): HEAD and the Haifa SDK version it was built against
@@ -57,6 +58,7 @@ function Get-FrontendStampFields {
         frontendTree = Invoke-StampGit $RepositoryRoot @('rev-parse', 'HEAD:frontend')
         lockfileSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $RepositoryRoot 'frontend/pnpm-lock.yaml')).Hash.ToLowerInvariant()
         internalGatewayBaseUrl = $InternalGatewayBaseUrl
+        staticWebsiteOnly = 'false'
     }
 }
 
@@ -94,6 +96,10 @@ function Write-FrontendBuildStamp {
         [Parameter(Mandatory = $true)][string]$InternalGatewayBaseUrl
     )
     $path = Get-FrontendBuildStampPath $RepositoryRoot
+    if ([Environment]::GetEnvironmentVariable('NEXT_PUBLIC_STATIC_WEBSITE_ONLY', 'Process') -cne 'false') {
+        Remove-BuildStamp $path
+        throw 'Frontend production build must set NEXT_PUBLIC_STATIC_WEBSITE_ONLY=false before building and stamping.'
+    }
     if (Test-StampSourcesDirty $RepositoryRoot @('frontend')) {
         Remove-BuildStamp $path
         return

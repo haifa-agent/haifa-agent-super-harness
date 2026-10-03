@@ -11,6 +11,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -28,6 +29,7 @@ quick_checks = load("scripts/lib/quick_checks.py")
 record_gates = load("scripts/governance/shpm_record_gates.py")
 dispatch = load("scripts/governance/shpm_dispatch.py")
 gate_cache = load("scripts/lib/frontend_gate_cache.py")
+build_cache = load("scripts/lib/frontend_build_cache.py")
 
 
 class ChangeScopeTest(unittest.TestCase):
@@ -157,6 +159,39 @@ class FrontendGateCacheTest(unittest.TestCase):
             import os
             os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10_000_000_000))
             self.assertNotEqual(gate_cache.cache_key(repo, None), first)
+
+
+class FrontendBuildCacheTest(unittest.TestCase):
+    def test_cache_requires_non_static_build_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            frontend = repo / "frontend"
+            frontend.mkdir()
+            (frontend / "pnpm-lock.yaml").write_text("lockfile", encoding="utf-8")
+            with patch.object(build_cache, "run", side_effect=lambda *args: "" if "status" in args else "value"):
+                with patch.dict(build_cache.os.environ, {"NEXT_PUBLIC_STATIC_WEBSITE_ONLY": "true"}):
+                    self.assertIsNone(build_cache.cache_key(repo, "http://127.0.0.1:11619"))
+                with patch.dict(build_cache.os.environ, {"NEXT_PUBLIC_STATIC_WEBSITE_ONLY": "false"}):
+                    self.assertIsNotNone(build_cache.cache_key(repo, "http://127.0.0.1:11619"))
+
+    def test_restore_copies_complete_build_and_removes_previous_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "shared" / "key" / ".next"
+            (source / "server" / "app").mkdir(parents=True)
+            (source / "BUILD_ID").write_text("reference", encoding="utf-8")
+            (source / "server" / "app" / "route.js").write_bytes(b"frozen route")
+            repo = root / "repo"
+            target = repo / "frontend" / ".next"
+            target.mkdir(parents=True)
+            (target / "obsolete.js").write_bytes(b"old build")
+            with patch.object(build_cache, "cache_key", return_value="key"), \
+                    patch.object(build_cache, "cache_root", return_value=root / "shared"):
+                self.assertEqual(build_cache.restore(repo, "http://127.0.0.1:11619"), 0)
+            self.assertEqual((target / "BUILD_ID").read_text(encoding="utf-8"), "reference")
+            self.assertEqual((target / "server" / "app" / "route.js").read_bytes(), b"frozen route")
+            self.assertFalse((target / "obsolete.js").exists())
+            self.assertEqual((source / "server" / "app" / "route.js").read_bytes(), b"frozen route")
 
 
 if __name__ == "__main__":

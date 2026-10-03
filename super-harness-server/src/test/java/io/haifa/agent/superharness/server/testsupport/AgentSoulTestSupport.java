@@ -21,7 +21,8 @@ import java.util.UUID;
 public final class AgentSoulTestSupport {
 
     public static final Set<String> BASE_TOOLS = Set.of("read_file", "write_file", "str_replace", "ls", "glob", "grep",
-            "list_uploaded_files", "present_files", "ask_clarification", "web_search", "web_fetch", "image_search");
+            "list_uploaded_files", "present_files", "ask_clarification", "web_search", "web_fetch", "image_search",
+            "skill_manage", "review_skill_package");
 
     private AgentSoulTestSupport() {}
 

@@ -85,6 +85,20 @@
       "source_function": "image_search_tool",
       "source_lineno": 77,
       "description_sha256": "3398f1de8ce20f78de3cb3d3eda85db4262fc3ed4a40180cad1a87c479844d8d"
+    },
+    {
+      "tool": "skill_manage",
+      "source_file": "deerflow/tools/skill_manage_tool.py",
+      "source_function": "skill_manage_tool",
+      "source_lineno": 263,
+      "description_sha256": "9750eac602f71ae0da033d67253adc837bcbc4dd1ae62564258307da79b7d0fd"
+    },
+    {
+      "tool": "review_skill_package",
+      "source_file": "deerflow/tools/builtins/review_skill_package_tool.py",
+      "source_function": "review_skill_package",
+      "source_lineno": 27,
+      "description_sha256": "492cfc8785a9abfae142835130d42bc32e3694212ccc46c828a68f4eb15a8dfd"
     }
   ]
 }

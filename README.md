@@ -257,11 +257,24 @@ pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 
 
 `-SkipServerBuild` 只在本轮源码已经完成全仓门禁、exec JAR 已生成时使用。脚本固定 retries=0，将 trace、截图、前后端原始日志和 `flow-health.json` 保存到 `local-tmp/slot-2-ux-v1-soul/evidence/run-<时间戳>/`，结束后核对端口和子进程清理。trace 包含实际合成 SOUL 的浏览器流量；派生 JSON 只记录 hash、长度与 ID。命令和局部测试通过不自动结算阶段 PASS。
 
-## W15 V2 最小 Skill 承载
+## W15 Skill 整包管理
 
-Gateway 从 `third-party/deerflow/skills/manifest.json` 读取受信、不可变的 Skill 版本目录，核对整包文件及来源许可哈希后，交由本地发布的 Haifa Agent `0.1.2-SNAPSHOT` 公开 Skill API 执行发现、激活与 Run Context 注入。当前生产 manifest 只登记冻结 DeerFlow `consulting-analysis`；`contracts/customer-demo-v2/fixtures/skills/v2-format-control/` 只供独立测试数据目录使用，不会在生产配置中启用。旧版本目录须随发行物保留，以便重启后的旧 Run 校验原 binding；不可原位覆盖。
+Gateway 从 `third-party/deerflow/skills/manifest.json` 读取冻结 Skill 完整资源及来源许可哈希，交由已发布的 Haifa Agent 公开 Skill API 负责发现、激活和 Run Context。生产资源包含默认启用的 `consulting-analysis`，以及默认关闭的完整 `skill-creator`、`skill-reviewer`；测试用 `v2-format-control` 不进入生产配置。带脚本包启用前须取得配置的安全审查结果，精确绑定 SDK 包与注册 digest；该审查不授予脚本执行权限。旧版本资源必须保留，不可原位覆盖。
 
 冻结前端使用 `GET /api/skills`、`GET/PUT /api/skills/{name}` 与 `POST /api/skills/reload`。启停状态按数据目录原子保存到 `skills_config.json`，只影响后续新 Run；`Agent.skills` 的 `null` 表示全部已启用 Skill，`[]` 表示不使用 Skill，名称列表为允许名单。启动 Gateway 时工作目录须为仓库根；模块测试可从 `super-harness-server/` 运行。缺包、哈希/许可漂移或无法读取 manifest 会拒绝接入，不会回落到 DeerFlow 后端。完整双 Skill HTTP/Run 断言与冻结 UI 两轮仍以 V2 W15/W18 验收记录为准。
+
+用户包通过 `POST /api/skills/install/upload`（multipart 字段 `archive`，`.skill`，最多 100 MiB）或 `/api/skills/install`（当前 Thread 的 `thread_id`、`path`）安装。custom 路由支持读取/编辑/删除、`history`、`rollback`、`export-manifest` 和 `export?expected_revision=<revision>`；revision 过期返回 409，错误 JSON 或字段类型返回 422，超限请求返回 413。导入、管理发布与导出共用可移植路径冲突规则；版本与导出摘要保留空目录和规范化后的文件可执行标记，不恢复特权权限位，支持文件回滚按历史目标路径恢复原始字节。完整用户版本存于数据根 `skills/custom/.versions/`，当前版本、启停及 history 统一由原子发布的 `skills_config.json` 指定。vendor 资源只读，用户来源由 SDK USER scope 绑定本地用户；编辑后新 Run 使用新版本，旧 Run 保留已冻结的完整版本。普通关闭与审查授权撤销是两个操作；显式撤销后旧绑定的后续读取也由公开 SDK grant `matches()` 拒绝。
+
+生产 `skill_manage` 沿用 SDK 文件写入审批；静态 `review_skill_package` 只读取已安装包、`inline://SKILL.md` 或当前 Thread `/mnt/user-data/` 内的归档/包目录，输出证据等级为 `static`，不会激活或执行目标。审查解释器通过进程变量 `HAIFA_SUPER_HARNESS_SKILL_PYTHON` 指定，必须支持 Python 3 和隔离模式 `-I` 下的 PyYAML；不读取用户 site-packages 或安装目标依赖。写入审查发现明确凭据时在模型调用前拒绝，其他待审文本以脱敏副本构造请求；语义筛查使用当前托管模型且不提供 Tools，缺模型、解析失败或脚本无法审查时拒绝发布，扫描期间取消或超时的 Run 也不得发布版本；无隐藏重试。安全筛查的模型/Provider、耗时、Usage 和输入文件 hash 记录于数据根 `skills/scanner/screen-receipts.jsonl`，不记录原内容或凭据。完整 creator 的脚本评测还依赖真实执行环境；单纯资源导入与静态 review 不证明评测通过。
+
+运行 W15 定向测试或全仓门禁前，在**同一 PowerShell 会话**预检并设置静态审查解释器；普通 `python` 能导入 `yaml` 不代表隔离模式可用。本机冻结 reference venv 已验证 PyYAML 6.0.3。并行工作包占用 W05 旧测试的默认端口 `20618` 时，可把该测试绑定到已分配且实际可绑定的本工作树槽位端口，例如槽位 4 的 `11618`；正式 UI 与全仓门禁仍顺序运行。
+
+```powershell
+$env:HAIFA_SUPER_HARNESS_SKILL_PYTHON='D:/workspace/haifa-agent-super-harness/deer-flow/backend/.venv/Scripts/python.exe'
+& $env:HAIFA_SUPER_HARNESS_SKILL_PYTHON -I -B -c 'import yaml; print(yaml.__version__)'
+$env:HAIFA_SUPER_HARNESS_W05_TEST_GATEWAY_PORT='11618'
+pwsh -NoProfile -File scripts/verify-full.ps1 -Forks 1 -LowMemory
+```
 
 W15 冻结 UI 回归从独立槽位运行，先在该 worktree 的 `frontend/` 用 `COREPACK_ENABLE_NETWORK=0` 执行 `corepack pnpm install --offline --frozen-lockfile`，确认版本为 `10.26.2` 且 `downloaded 0`，再在仓库根执行同一脚本两轮：
 
@@ -271,6 +284,21 @@ pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 
 ```
 
 第二轮 `-SkipBuild` 仅在首轮已按 Gateway `30618` 构建成功后使用。每轮脚本在结束时清理槽位进程，Playwright trace、截图及前后端/受控 Provider 日志写到 `local-tmp/slot-2-w15-v2-skill/evidence/ui/run-<时间戳>/`；测试需检查 `skill_load` ToolCall、启用后的模型 Context 和禁用后新 Run 的隔离。完整验收仍以开发报告的实际运行结果为准。
+
+真实模型代表性链路使用同一 runner 的 `-W15LiveSkill`：托管 `deepseek-v4-pro`、`https://api.deepseek.com` 和 `os://DEEPSEEK_API_KEY`，验证生产 `skill_manage` 审批/编辑、后续新会话 `skill_load` 与完整资源读取、实际评测 JSON 的 Artifact 下载/hash 及只读 review。该用例会产生真实模型调用；脚本评测仍按 W14 的实际能力单独验收。独立额外槽位 4 的入口如下，运行前需设置上述扫描解释器变量：
+
+```powershell
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 4 -GatewayPort 11618 -FrontendPort 16618 -W15LiveSkill
+```
+
+同一份 `w15-package-differential.spec.cjs` 在冻结 DeerFlow 后端和 Haifa 后端分别运行，核对上传、开关、编辑、rollback、history 与删除。冻结参考后端在 Windows 缺少安全目录捕获所需的 POSIX 能力，导出 manifest 明确返回 `422 skill_export_unsupported`；用例将它记录为平台限制，不能计作导出通过。Haifa 后端另须通过全字节导出及过期 revision `409` 断言。参考端使用独立的 `11619` Gateway、`11628` 受控 Provider、槽位 4 的 `16618` 前端和独立 data-root；两端顺序运行，不能同时占用前端端口。参考入口由 Python 管理有界就绪、原始日志和精确进程清理，Haifa 入口沿用现有 UI runner：
+
+```powershell
+python -B tests/fixtures/w15/run_reference_ui.py --repo (Get-Location).Path --source D:/workspace/haifa-agent-super-harness/deer-flow
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 4 -GatewayPort 11618 -FrontendPort 16618 -W15PackageDifferential
+```
+
+两轮完整受控 Skill UI 回归使用 `-V2Skill` 且每轮独立 data-root；实际 `flow-health.json`、trace、截图、Provider 原件及端口清理结果决定验收状态。独立参考差分与真实模型代表链均不代替本工作包的最终 SDK 基线和全仓门禁。
 
 ## 默认 Web 工具的环境代理
 
@@ -315,6 +343,24 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1
 ```
 
 启动脚本会校验冻结 DeerFlow 源码和前端工具链的精确版本；在隐藏窗口中启动 Haifa Gateway 和现有的受保护前端启动器；在有界超时内等待 `/health`、`/api/v1/auth/me` 与前端就绪；最后输出访问地址、精确 PID、数据目录和日志路径。人工验收入口为 `http://127.0.0.1:33018/`。遇到端口占用时，脚本会拒绝启动，不会自行结束未知进程。若尚未运行完整验证，可传入 `-Build`，由脚本执行离线 Maven Reactor `package` 门禁。脚本退出后，服务仍会继续运行。
+
+需要避免开发模式首次打开聊天页时的动态编译，可先在本工作树按固定代理目标构建冻结前端，再用已验证的构建戳启动生产模式。构建失败不得写入构建戳；代理目标、冻结前端源码或 lockfile 变化后必须重新构建。
+
+```powershell
+$env:DEER_FLOW_INTERNAL_GATEWAY_BASE_URL='http://127.0.0.1:18018'
+$env:NEXT_PUBLIC_STATIC_WEBSITE_ONLY='false'
+$env:COREPACK_ENABLE_NETWORK='0'
+Push-Location frontend
+try {
+    corepack pnpm build
+    if ($LASTEXITCODE -ne 0) { throw 'Frozen frontend build failed.' }
+} finally { Pop-Location }
+. scripts/lib/build-stamp.ps1
+Write-FrontendBuildStamp -RepositoryRoot (Get-Location).Path -InternalGatewayBaseUrl $env:DEER_FLOW_INTERNAL_GATEWAY_BASE_URL
+pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -ProductionFrontend
+```
+
+`-ProductionFrontend` 只使用构建戳与当前前端树、lockfile、代理目标及 `NEXT_PUBLIC_STATIC_WEBSITE_ONLY=false` 构建配置完全匹配的 `.next`；预检不符即拒绝启动。构建前必须设置该变量，避免把只读静态站点配置固化到客户端。该模式沿用相同的冻结来源、同源代理、身份与固定端口检查。默认启动方式仍为开发模式。
 
 只需重建或重启 Gateway、而受保护的前端仍在运行时，先核对监听 `18018` 的 Java 进程并只停止该 PID，再运行相关 Maven 测试和 `mvn -o -ntp -pl super-harness-server -am package`，随后执行：
 

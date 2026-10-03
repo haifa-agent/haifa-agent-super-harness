@@ -2,7 +2,7 @@
 
 The frozen frontend almost never changes, yet every new worktree used to rebuild it (about two
 minutes). A production build depends only on the frozen sources, the lockfile, the Node version
-and the Gateway URL that ``next.config.js`` bakes into its rewrites, so builds are cached under
+and the Gateway URL and non-static public profile baked into the build, so builds are cached under
 that key in the main checkout (``local-tmp/shared/frontend-build/<key>/``) and restored into any
 worktree that needs the same build. ``.next/cache`` (build-time cache, not needed by
 ``next start``) is left out.
@@ -19,6 +19,7 @@ Nothing is cached or restored while ``frontend/`` has uncommitted or untracked c
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import os
 import shutil
@@ -40,14 +41,17 @@ def cache_root(repo: Path) -> Path:
 
 
 def cache_key(repo: Path, gateway: str) -> str | None:
+    if os.environ.get("NEXT_PUBLIC_STATIC_WEBSITE_ONLY") != "false":
+        return None
     if run("git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all", "--", "frontend"):
         return None
     lockfile = hashlib.sha256((repo / "frontend" / "pnpm-lock.yaml").read_bytes()).hexdigest()
     parts = [
-        "frozen-frontend-build-v1",
+        "frozen-frontend-build-v2",
         run("git", "-C", str(repo), "rev-parse", "HEAD:frontend"),
         lockfile,
         gateway.rstrip("/"),
+        "NEXT_PUBLIC_STATIC_WEBSITE_ONLY=false",
         run("node", "--version"),
     ]
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:32]
@@ -55,6 +59,24 @@ def cache_key(repo: Path, gateway: str) -> str | None:
 
 def ignore_build_cache(directory: str, names: list[str]) -> list[str]:
     return ["cache"] if Path(directory).name == ".next" else []
+
+
+def copy_build_tree(source: Path, target: Path) -> None:
+    # Next emits thousands of small files. On Windows, sequential copy2 can exceed
+    # the reference runner's fixed 120-second restore deadline before any UI starts.
+    futures = []
+    with ThreadPoolExecutor(max_workers=8) as copies:
+        for directory, subdirectories, filenames in os.walk(source):
+            parent = Path(directory)
+            destination = target / parent.relative_to(source)
+            destination.mkdir(parents=True, exist_ok=True)
+            for name in subdirectories + filenames:
+                if (parent / name).is_symlink():
+                    raise OSError(f"Frontend build cache contains a symbolic link: {parent / name}")
+            for name in filenames:
+                futures.append(copies.submit(shutil.copy2, parent / name, destination / name))
+        for future in futures:
+            future.result()
 
 
 def restore(repo: Path, gateway: str) -> int:
@@ -66,7 +88,7 @@ def restore(repo: Path, gateway: str) -> int:
     target = repo / "frontend" / ".next"
     if target.exists():
         shutil.rmtree(target)
-    shutil.copytree(source, target)
+    copy_build_tree(source, target)
     print("RESTORED")
     return 0
 
