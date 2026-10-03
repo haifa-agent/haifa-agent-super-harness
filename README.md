@@ -172,6 +172,19 @@ Thread 仅保存服务器维护的 digest 索引，用于拒绝 Steer 改参，�
 目录 `supports_thinking`、`supports_reasoning_effort` 暂保持 false，直到 SDK 038-14 发布、联调以及
 W07 默认 pro 路径通过发布验收。显式 thinking 后端接线已开发，完整 UI、真实模型 smoke、
 Gateway 审批恢复和最终门禁待流程/CI 优化完成后执行。本切片不提供计划、子 Agent 或思考正文展示。
+## W08 子智能体目录
+
+Gateway 提供 `GET/POST /api/subagents`、`PUT/DELETE /api/subagents/{name}`，managed 定义按现有 owner 配置布局保存到 `<data-root>/owners/default/subagents/<name>.json`。创建名称转小写，更新仅应用实际出现的字段；`tools=null` 保留继承语义，`tools=[]` 保留空集。创建拒绝覆盖同名文件，更新在同目录原子替换；损坏定义警告并跳过，不隐藏其他条目。读写每次读取文件，不新增运行状态或缓存。
+
+本地 profile 沿用 `/api/v1/auth/me` 的固定管理员身份；角色判定会对非管理员隐藏 `system_prompt` 并禁止写入，但当前无真实非管理员 HTTP 身份入口。内置目录只列 `general-purpose`（`max_turns=150`）；因无生产 shell 工具，暂不列 `bash`。SQL managed 存储、config.yaml 来源及 config overrides 未接入。本切片提供只读目录与稳定内容指纹，不表示已实现 Child 执行或冻结 UI 验收。
+
+目录真实 HTTP 定向测试与 CRUD smoke：
+
+```powershell
+pwsh -NoProfile -File scripts/test-targeted.ps1 -Test DeerFlowSubagentCatalogApiTest -LowMemory
+```
+
+原始合成请求/响应保存在当前 worktree 的 `local-tmp/acceptance-fixtures/evidence/`；可在启动测试的会话设置 `ENG_ACCEPTANCE_DATA_ROOT`、`ENG_ACCEPTANCE_EVIDENCE_ROOT` 指向该槽位的独立目录。目录测试不调用模型；完整 W08 的 SDK、Run、回放与 UI 门禁由对应任务验收。
 
 ## W03 后续建议配置
 

@@ -350,6 +350,10 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         send(exchange, 200, json.createObjectNode().set("models", models));
     }
 
+    boolean isConfiguredModel(String name) {
+        return store.models().stream().anyMatch(model -> model.path("name").asText().equals(name));
+    }
+
     private void saveManagedModel(HttpExchange exchange) throws IOException {
         ObjectNode request = readObject(exchange);
         validateModelRequest(request);

@@ -12,6 +12,7 @@ import io.haifa.agent.superharness.server.config.McpConfigStore;
 import io.haifa.agent.superharness.server.config.McpRunTools;
 import io.haifa.agent.superharness.server.config.SkillConfigStore;
 import io.haifa.agent.superharness.server.config.SkillRunTools;
+import io.haifa.agent.superharness.server.config.SubagentCatalogStore;
 import io.haifa.agent.superharness.server.prompt.AgentPromptContext;
 import io.haifa.agent.superharness.server.run.HaifaRunBridge;
 import io.haifa.agent.superharness.server.tool.agent.ProductionSetupAgentTool;
@@ -58,6 +59,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     static final String DEFAULT_CONTINUATION_KEY_REFERENCE =
             "os://HAIFA_SUPER_HARNESS_CONTINUATION_KEY";
     public static final String DEFAULT_USER_ID = "default";
+    static final String DEFAULT_SYSTEM_ROLE = "admin";
     static final String DEFAULT_USER_EMAIL = "default@test.local";
     static final List<String> DEFAULT_PERMISSIONS =
             List.of(
@@ -76,6 +78,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final ObjectMapper objectMapper;
     private final DeerFlowThreadRunApi threadRunApi;
     private final DeerFlowConfigurationApi configurationApi;
+    private final SubagentCatalogStore subagentCatalog;
     private final DeerFlowMcpApi mcpApi;
     private final DeerFlowSkillsApi skillsApi;
     private final DeerFlowWorkspaceApi workspaceApi;
@@ -98,6 +101,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.executor = executor;
         this.objectMapper = new ObjectMapper();
         this.configurationApi = new DeerFlowConfigurationApi(objectMapper, dataDirectory);
+        this.subagentCatalog = new SubagentCatalogStore(objectMapper, dataDirectory);
         McpConfigStore mcpStore = new McpConfigStore(objectMapper, dataDirectory);
         this.mcpApi = new DeerFlowMcpApi(objectMapper, mcpStore);
         SkillConfigStore skillStore = testSkillStore == null
@@ -492,6 +496,11 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         return threadRunApi;
     }
 
+    /** Read-only product definitions for the public SDK assembly; no execution state. */
+    public SubagentCatalogStore.RuntimeSnapshot subagentCatalogSnapshot() throws IOException {
+        return subagentCatalog.runtimeSnapshot();
+    }
+
     int cachedRunCount() {
         return threadRunApi.cachedRunCount();
     }
@@ -528,7 +537,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                         "email",
                         DEFAULT_USER_EMAIL,
                         "system_role",
-                        "admin",
+                        DEFAULT_SYSTEM_ROLE,
                         "needs_setup",
                         false,
                         "oauth_provider",
@@ -561,6 +570,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         server.createContext("/api/models", configurationApi);
         server.createContext("/api/managed-models", configurationApi);
         server.createContext("/api/agents", configurationApi);
+        server.createContext("/api/subagents", new DeerFlowSubagentCatalogApi(objectMapper, subagentCatalog,
+                configurationApi::isConfiguredModel, ignored -> DEFAULT_SYSTEM_ROLE.equals("admin")));
         server.createContext("/api/mcp", mcpApi);
         server.createContext("/api/skills", skillsApi);
         server.createContext(DeerFlowInputPolishApi.PATH, inputPolishApi);
@@ -602,7 +613,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         send(exchange, 404, Map.of("detail", "Not Found"));
     }
 
-    private boolean isLoopbackPeer(HttpExchange exchange) {
+    static boolean isLoopbackPeer(HttpExchange exchange) {
         return exchange.getRemoteAddress() != null
                 && exchange.getRemoteAddress().getAddress() != null
                 && exchange.getRemoteAddress().getAddress().isLoopbackAddress();
