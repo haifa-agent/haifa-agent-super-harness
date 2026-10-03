@@ -22,6 +22,8 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot '../lib/w18-differential-results.ps1')
+. (Join-Path $PSScriptRoot '../lib/preflight.ps1')
+Use-SafeNoProxy
 
 function Wait-Endpoint([string]$Url, [string]$ExpectedStatus, [System.Diagnostics.Process]$Process, [int]$Seconds) {
     $deadline = (Get-Date).AddSeconds($Seconds)
@@ -66,7 +68,7 @@ function Set-W18ManagedModel([int]$Port, [string]$Name, [string]$Display, [strin
             name = $Name; display_name = $Display
             provider = 'openai-compatible'; model = $Model
             base_url = "http://127.0.0.1:$ProviderPort/v1"; enabled = $Enabled
-            supports_vision = $false; context_window = 8192; max_tokens = 1024
+            supports_vision = $false; context_window = 32768; max_tokens = 1024
             api_key = 'w18-loopback-only'
         }
         expected_revision = $(if ($existing) { $existing.revision } else { $null })
@@ -195,6 +197,8 @@ try {
         $env:SUPER_HARNESS_ENVIRONMENT = 'development'
         $env:HAIFA_FRONTEND_BIND_ADDRESS = '127.0.0.1'
         $env:HAIFA_FRONTEND_PORT = [string]$FrontendPort
+        $env:NO_PROXY = '127.0.0.1,localhost'
+        $env:no_proxy = '127.0.0.1,localhost'
         & (Join-Path $root 'scripts/frontend/verify-haifa-frontend-profile.ps1') -RepositoryRoot $root -SourceRepository $source |
             Set-Content -LiteralPath (Join-Path $evidenceRoot 'frontend-profile.json') -Encoding utf8
         if ($LASTEXITCODE -ne 0) { throw 'Frozen Haifa frontend profile gate failed.' }
