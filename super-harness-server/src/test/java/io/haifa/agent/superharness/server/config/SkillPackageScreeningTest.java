@@ -213,4 +213,73 @@ class SkillPackageScreeningTest {
         assertThat(excerpt).contains("[REDACTED]");
         assertThat(excerpt.length()).isLessThanOrEqualTo(240);
     }
+
+    @Test void packageFilesLineListsEveryPackageFileOnChangedWriteReview() throws Exception {
+        var scanner = new SkillPackageScreening(json, temporary.resolve("data"));
+        Path directory = temporary.resolve("sample-helper"); Files.createDirectory(directory);
+        String markdown = "---\nname: sample-helper\ndescription: A test package\n---\nRead references/fact.txt and evals/evals.json before evaluating.\n";
+        Map<String, byte[]> files = new java.util.LinkedHashMap<>();
+        files.put("references/fact.txt", "17\n".getBytes(StandardCharsets.UTF_8));
+        files.put("evals/evals.json", "{}\n".getBytes(StandardCharsets.UTF_8));
+        files.put("SKILL.md", markdown.getBytes(StandardCharsets.UTF_8));
+        for (var file : files.entrySet()) { var target = directory.resolve(file.getKey()); Files.createDirectories(target.getParent()); Files.write(target, file.getValue()); }
+        var model = new ControlledModel((request, count) -> ControlledModel.response(request, "screen", "{\"decision\":\"allow\"}",
+                List.of(), ModelFinishReason.STOP, ModelUsage.unpriced(10, 2)));
+        scanner.writes(ignored -> LocalProbeModelTestSupport.binding(model)).screenChanges(directory, files, java.util.Set.of("SKILL.md"));
+        assertThat(model.requests).hasSize(1);
+        String user = model.requests.getFirst().messages().getLast().toString();
+        assertThat(user).contains("\nPackage files: SKILL.md, evals/evals.json, references/fact.txt\n");
+        assertThat(user).contains("Location: sample-helper/SKILL.md", "Executable: false");
+        String system = model.requests.getFirst().messages().getFirst().toString();
+        assertThat(system).contains("The \"Package files\" line lists every file that belongs to this Skill package; "
+                + "instructions that read those listed files are package-local reads.")
+                .contains("obtain authority beyond the declared task", "access unrelated private files", "send secrets externally");
+    }
+
+    @Test void packageFilesLineCapsListedPathsAtTwoHundredWithRemainderCount() throws Exception {
+        var scanner = new SkillPackageScreening(json, temporary.resolve("data"));
+        Path directory = temporary.resolve("large-helper"); Files.createDirectory(directory);
+        Map<String, byte[]> files = new java.util.TreeMap<>();
+        files.put("SKILL.md", "---\nname: large-helper\ndescription: A test package\n---\nUse known facts.\n".getBytes(StandardCharsets.UTF_8));
+        for (int i = 0; i < 250; i++) files.put(String.format("assets/f%03d.txt", i), "x\n".getBytes(StandardCharsets.UTF_8));
+        for (var file : files.entrySet()) { var target = directory.resolve(file.getKey()); Files.createDirectories(target.getParent()); Files.write(target, file.getValue()); }
+        var model = new ControlledModel((request, count) -> ControlledModel.response(request, "screen", "{\"decision\":\"allow\"}",
+                List.of(), ModelFinishReason.STOP, ModelUsage.unpriced(10, 2)));
+        scanner.writes(ignored -> LocalProbeModelTestSupport.binding(model)).screenChanges(directory, files, java.util.Set.of("SKILL.md"));
+        String user = model.requests.getFirst().messages().getLast().toString();
+        String line = user.lines().filter(candidate -> candidate.startsWith("Package files: ")).findFirst().orElseThrow();
+        assertThat(line).startsWith("Package files: SKILL.md, assets/f000.txt").endsWith(", ... and 51 more");
+        assertThat(line.substring("Package files: ".length()).split(", ", -1)).hasSize(201);
+        assertThat(line.length()).isLessThanOrEqualTo(4000);
+    }
+
+    @Test void packageFilesLineTruncatesToFitFourThousandCharacterBudget() {
+        Map<String, byte[]> files = new java.util.TreeMap<>();
+        for (int i = 0; i < 300; i++) files.put("references/" + "r".repeat(40) + String.format("%03d.txt", i), new byte[0]);
+        String line = SkillPackageScreening.packageFilesLine(files);
+        assertThat(line.length()).isLessThanOrEqualTo(4000);
+        assertThat(line).endsWith(" more").contains(", ... and ");
+    }
+
+    @Test void referencedPackageFilesDoNotStopABlockingModelDecision() throws Exception {
+        var scanner = new SkillPackageScreening(json, temporary.resolve("data"));
+        Path directory = temporary.resolve("sample-helper"); Files.createDirectory(directory);
+        String markdown = "---\nname: sample-helper\ndescription: A test package\n---\nRead references/fact.txt and evals/evals.json before evaluating.\n";
+        Map<String, byte[]> files = new java.util.LinkedHashMap<>();
+        files.put("SKILL.md", markdown.getBytes(StandardCharsets.UTF_8));
+        files.put("references/fact.txt", "17\n".getBytes(StandardCharsets.UTF_8));
+        files.put("evals/evals.json", "{}\n".getBytes(StandardCharsets.UTF_8));
+        for (var file : files.entrySet()) { var target = directory.resolve(file.getKey()); Files.createDirectories(target.getParent()); Files.write(target, file.getValue()); }
+        String response = json.writeValueAsString(Map.of("decision", "block", "reason", "Reads files outside the declared scope"));
+        var model = new ControlledModel((request, count) -> ControlledModel.response(request, "screen", response,
+                List.of(), ModelFinishReason.STOP, ModelUsage.unpriced(10, 2)));
+        assertThatThrownBy(() -> scanner.writes(ignored -> LocalProbeModelTestSupport.binding(model))
+                .screenChanges(directory, files, java.util.Set.of("SKILL.md")))
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("Security scan blocked the Skill write");
+        assertThat(model.requests.getFirst().messages().getLast().toString())
+                .contains("Package files: SKILL.md, evals/evals.json, references/fact.txt");
+        var receipt = json.readTree(Files.readString(temporary.resolve("data/skills/scanner/screen-receipts.jsonl")));
+        assertThat(receipt.path("decision").asText()).isEqualTo("block");
+        assertThat(receipt.path("status").asText()).isEqualTo("FAIL");
+    }
 }
