@@ -230,7 +230,9 @@ public final class SkillPackageScreening {
     private static String redact(String text) {
         // The optional quote covers JSON-style assignments such as "password":"value".
         return text.replaceAll("(?im)(\\b(?:token|password|passwd|api[_-]?key|secret|credential)s?\\b[\"']?\\s*[:=]\\s*)[^\\r\\n]+", "$1[REDACTED]")
-                .replaceAll("(?i)\\b(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]{12,}\\b", "[REDACTED]")
+                // Same high-confidence token families as the frozen static scanner's secret-cloud-token rule.
+                .replaceAll("(?i)\\b(?:sk-|gh[pousr]_|github_pat_|xox[baprs]-)[A-Za-z0-9_-]{12,}\\b", "[REDACTED]")
+                .replaceAll("\\b(?:AKIA|ASIA)[A-Z0-9]{16}\\b", "[REDACTED]")
                 .replaceAll("(?is)-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", "[REDACTED PRIVATE KEY]")
                 .replaceAll("(?i)(\\bBearer\\s+)[A-Za-z0-9._~+/=-]+", "$1[REDACTED]");
     }

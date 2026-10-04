@@ -282,9 +282,17 @@ class SkillPackageScreeningTest {
         String token = "sk-" + "controlledFakePathToken1234567890";
         files.put("assets/" + token + ".txt", new byte[0]);
         files.put("assets/token=controlled-fake-value", new byte[0]);
+        // The other high-confidence families of the frozen secret-cloud-token rule; fake values built by concatenation.
+        String aws = "AK" + "IA" + "CONTROLLEDFAKE01";
+        String github = "gho" + "_" + "controlledFakeGithubToken0001";
+        String slack = "xox" + "b-" + "controlled-fake-slack-0001";
+        files.put("assets/" + aws + ".txt", new byte[0]);
+        files.put("assets/" + github + ".txt", new byte[0]);
+        files.put("assets/" + slack + ".txt", new byte[0]);
         files.put("references/fact.txt", new byte[0]);
         String line = SkillPackageScreening.packageFilesLine(files, "Read references/fact.txt.");
-        assertThat(line).doesNotContain(token, "controlled-fake-value").contains("[REDACTED]", "SKILL.md", "references/fact.txt");
+        assertThat(line).doesNotContain(token, "controlled-fake-value", aws, github, slack)
+                .contains("[REDACTED]", "SKILL.md", "references/fact.txt");
     }
 
     @Test void reasonExcerptRedactsQuotedJsonStyleAssignments() {
