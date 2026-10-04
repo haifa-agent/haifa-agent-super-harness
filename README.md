@@ -211,6 +211,18 @@ after_seq 为非负 JavaScript 安全整数。未知 task 返回 `[]`，未知�
 公开事件，不读取当前目录推测历史。该接线消费公开 SDK 的 `RunMessage*` API；完整
 HTTP/SSE、重启与冻结 UI 验收以工作包证据为准；接口静态实现不表示 W08 全部通过。
 
+Oracle 12 通过冻结原函数分别检查步骤内容一致性（12A）与原始 wire 截断正确性（12B）。12A 只允许 `truncated`、Tool call 的 `args_truncated` 在两个消费者输出间不对称；12B 保留原始 HTTP/SSE 的标记、8192 Unicode code point 上限、结构化参数和原始 Provider 长输出前缀检查。完整对象相等仍记录为诊断项，不影响这两项断言。运行器需要 Node 22.22.3（本机已验证，可加载冻结 TypeScript）及 Python，不修改前端，不启动模型或服务：
+
+```powershell
+python -X utf8 -B scripts/check_w08_oracle12.py `
+  --fixtures '<全仓或定向测试外置 evidence>/cases' `
+  --fixture-source-sha '<产生这些 HTTP fixture 的源码 SHA>'
+python -X utf8 -B -m unittest discover -s tests/checks/build -p test_w08_oracle12.py
+```
+
+输入至少包含普通、长内容和两个交错 Child 的四组 fixture，以及长内容 case 的原始 `provider-response-*.sse`。缺少长正文/参数的独立来源不能记 PASS；产品代码、POM、冻结前端或协议资源与 fixture 来源 SHA 不同时停止。每次生成独立 `oracle12-v2-*` 证据目录，单组 Node 进程预算 30 秒，无自动重试；原 FAIL 原件保留。该检查不代替完整浏览器、双后端或身份验收。
+
+
 ## W03 后续建议配置
 
 Gateway 通过 `GET /api/suggestions/config` 暴露冻结前端的后续建议全局配置。以下两个环境变量在进程启动时读取一次，均为可选：
@@ -430,6 +442,6 @@ pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 `
 
 `-CaseTitle` 必须与 spec 中的静态标题完整一致；`-PreflightOnly` 只做预检。完整目录轮次去掉 `-CaseTitle`，同一稳定源码/SDK 上运行两轮，每轮使用新的 `-DataDirectory`；只有构建戳一致时第二轮可使用 `-SkipBuild`。该 profile 与其他 W18 profile 互斥，沿用 runner 的端口、依赖、Provider、构建和进程清理，证据位于 `local-tmp/slot-1-w08-catalog/evidence/run-<时间戳>/`，包含 trace、截图、真实请求响应、前后目录和流程健康度。未执行的轮次保持 `NOT_RUN`。
 
-目录 profile 只覆盖 W08 UI-01–05及补充保存用例，不发送委托 Run。Ultra 的真实 thinking/plan/subagent 载荷须另行验收：最新 W03 已接通思考执行，但 W07 plan/pro/ultra 门禁及 UI 能力发布前置仍需满足；被阻断的委托 UI 用例保持 `NOT_RUN`。本 profile 不改变 Task4 Oracle12 的既有 `FAIL`，也不声明整个 Task5 或 W08 完成。
+目录 profile 只覆盖 W08 UI-01–05及补充保存用例，不发送委托 Run。Ultra 的真实 thinking/plan/subagent 载荷须另行验收：最新 W03 已接通思考执行，但 W07 plan/pro/ultra 门禁及 UI 能力发布前置仍需满足；被阻断的委托 UI 用例保持 `NOT_RUN`。本 profile 不执行 Task4 Oracle12，也不声明整个 Task5 或 W08 完成。
 
 `scripts/ui/run-w18-ui-smoke.ps1` 通过 `scripts/lib/run-fixture.ps1` 管理完整槽位绑定预检、脱离调用方管道的启动、15/30/60 秒 Provider/Gateway/前端就绪等待及精确 PID 清理。所有模式的证据写入 `local-tmp/slot-<N>-<任务标签>/evidence/run-<时间戳>/`，包含原始日志、`managed-processes.json`、`flow-health.json`、`case-results.json` 和 Playwright 原件；冷暖轮分别建目录和数据，不覆盖首次失败。清理必须在原停止预算内实际绑定端口成功，失败时 runner 返回非零。MCP 启动器使用同一脱离管道的启动函数；共享库只转述 case 结果，不登记 SHPM 或提升验收状态。
