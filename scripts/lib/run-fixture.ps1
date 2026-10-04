@@ -320,15 +320,20 @@ function Stop-FixtureProcesses {
     }
     catch { $released = @($_.Exception.Data['portFacts']); $failures.Add($_.Exception.Message) }
     # Post-cleanup verification shares one bulk snapshot instead of one query per PID.
-    $snapshot = Get-FixtureProcessSnapshot
+    # A failed snapshot must still leave the cleanup record on disk: report it and treat every
+    # tracked PID as unverified instead of throwing before the evidence is written.
+    $snapshot = $null
+    try { $snapshot = Get-FixtureProcessSnapshot } catch { $failures.Add("Process snapshot failed: $($_.Exception.Message)") }
     $remaining = @(foreach ($fact in $ownedFacts) {
+        if ($null -eq $snapshot) { $fact.pid; continue }
         $current = $snapshot[[int]$fact.pid]
         if ($null -ne $current -and $current.CreationDate.ToUniversalTime().ToString('o') -eq $fact.created) { $fact.pid }
     })
     $remaining = @($remaining | Select-Object -Unique)
     foreach ($change in $identityChanges) {
-        $current = $snapshot[[int]$change.pid]
         $change.resolvedMs = [Diagnostics.Stopwatch]::GetElapsedTime($started).TotalMilliseconds
+        if ($null -eq $snapshot) { continue } # Disposition stays WAITING; the snapshot failure is already recorded.
+        $current = $snapshot[[int]$change.pid]
         if ($null -eq $current) { $change.disposition = 'ORIGINAL_EXITED' }
         elseif ($current.CreationDate.ToUniversalTime().ToString('o') -ne $change.expectedCreated) {
             $change.disposition = 'PID_REUSED'; $reusedPids.Add($change.pid)
