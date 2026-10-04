@@ -49,6 +49,11 @@ async function chat(page, context, prompt, testInfo, previousRun) {
     expect(["error", "timeout"], `Run ${identity.runId} failed`).not.toContain(status);
     const approve = page.getByTestId("human-input-card").getByRole("button", { name: /^(Approve|批准)$/ });
     if (await approve.count() && await approve.last().isEnabled()) {
+      if (previousRun) {
+        const unpublished = await context.request.get(`${APP}/api/threads/${identity.threadId}/artifacts/mnt/user-data/outputs/w15-evaluation.json`, { timeout: 10_000 });
+        expect(unpublished.status(), "the evaluation file must not exist before its write approval").toBe(404);
+        expect((await state(context.request, identity)).values.artifacts).not.toContain("/mnt/user-data/outputs/w15-evaluation.json");
+      }
       const resumed = page.waitForResponse(value => value.request().method() === "POST" &&
         Boolean(value.request().postDataJSON()?.input?.messages?.at(-1)?.additional_kwargs?.human_input_response), { timeout: 15_000 });
       await approve.last().click();
@@ -104,7 +109,7 @@ test("W15 real model edits a Skill and evaluates its actual resources in a new R
   expect(readOnly.approvals).toBe(0);
   expect(results(readOnly.state, "skill_resource_read").at(-1)?.additional_kwargs?.haifa_tool_result?.content).toContain("17");
   const evaluated = await chat(page, context,
-    `Load ${NAME} using skill_load. Read both references/fact.txt and evals/evals.json using skill_resource_read. ` +
+    `请使用 ${NAME}，读取 references/fact.txt 和 evals/evals.json，执行编号 1 的评测。请根据实际文件内容判断，不要猜测。` +
     `Evaluate case id 1 by comparing the actual resource fact with the expected_output in the actual eval file. ` +
     `Write ${report} using write_file with JSON fields skill_name, case_id (integer), observed (string), expected (string), passed (boolean). ` +
     `Use the actual tool results, do not invent a score. Call present_files for that JSON. ` +
@@ -116,6 +121,9 @@ test("W15 real model edits a Skill and evaluates its actual resources in a new R
   const sequence = calls(evaluationState).map(call => call.name);
   for (const name of ["skill_load", "skill_resource_read", "write_file", "present_files", "review_skill_package"]) expect(sequence).toContain(name);
   const reads = calls(evaluationState).filter(call => call.name === "skill_resource_read");
+  expect(results(evaluationState, "skill_resource_read").every(message => message.additional_kwargs?.haifa_tool_status === "completed" &&
+    typeof message.additional_kwargs?.haifa_tool_result?.content === "string"), "all reads in the next Run must succeed after its own activation").toBe(true);
+  expect(results(evaluationState, "skill_resource_read").length).toBeGreaterThanOrEqual(2);
   expect(JSON.stringify(reads)).toContain("references/fact.txt");
   expect(JSON.stringify(reads)).toContain("evals/evals.json");
   const load = results(evaluated.state, "skill_load").at(-1);

@@ -200,6 +200,7 @@ public final class LeadPromptComposer {
                 .append("You have access to skills that provide optimized workflows for specific tasks.\n\n")
                 .append("**Loading Pattern:**\n")
                 .append("1. When a user query matches a skill's use case, call `skill_load` with that skill's name in the `skill` argument.\n")
+                .append("Skill activation applies only to the current Run. Load the skill again in each new Run, even when earlier messages in this conversation show it was loaded. Wait for `skill_load` to succeed before reading its resources; do not load and read in parallel.\n")
                 .append("2. Read and follow the returned instructions precisely.\n")
                 .append("3. Call `skill_resource_read` with the `skill` and `path` arguments for referenced resources only when needed during execution.\n\n")
                 .append("<available_skills>\n");
