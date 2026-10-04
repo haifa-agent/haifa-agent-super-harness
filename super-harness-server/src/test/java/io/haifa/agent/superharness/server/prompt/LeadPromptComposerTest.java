@@ -97,7 +97,8 @@ class LeadPromptComposerTest {
                 "<description>Analyze &lt;market&gt;</description>",
                 "skill_load",
                 "skill_resource_read", "activation applies only to the current Run",
-                "Load the skill again in each new Run", "do not load and read in parallel");
+                "Load the skill again in each new Run", "do not load and read in parallel",
+                "result AFTER the latest user request before calling `skill_resource_read`");
         assertThat(composition.mentionedToolNames())
                 .contains("skill_load", "skill_resource_read", "read_file", "write_file");
         System.out.println("W03_PROMPT_SKILL_SIGNATURE=" + composition.signature()
