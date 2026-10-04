@@ -169,10 +169,7 @@ public final class SkillPackageScreening {
                 if (executable || file.getKey().equals("SKILL.md")) throw new IllegalArgumentException("Executable Skill content must be reviewable UTF-8 text");
                 continue; // Opaque non-executable assets remain bytes and never become instructions.
             }
-            String redacted = decoded.replaceAll("(?im)(\\b(?:token|password|passwd|api[_-]?key|secret|credential)s?\\b\\s*[:=]\\s*)[^\\r\\n]+", "$1[REDACTED]")
-                    .replaceAll("(?i)\\b(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]{12,}\\b", "[REDACTED]")
-                    .replaceAll("(?is)-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", "[REDACTED PRIVATE KEY]")
-                    .replaceAll("(?i)(\\bBearer\\s+)[A-Za-z0-9._~+/=-]+", "$1[REDACTED]");
+            String redacted = redact(decoded);
             // Match frozen security_scanner.py: static report caveats are not findings,
             // and the location identifies package-local references rather than arbitrary files.
             String content = "Location: " + directory.getFileName() + "/" + file.getKey() + "\nExecutable: " + executable
@@ -183,7 +180,8 @@ public final class SkillPackageScreening {
             java.time.Instant started = java.time.Instant.now();
             var receipt = json.createObjectNode().put("model_call_id", id).put("started_at", started.toString())
                     .put("provider", binding.snapshot().providerId().value()).put("model", binding.snapshot().providerModelId())
-                    .put("file_sha256", SkillPackageFiles.hash(file.getValue())).put("retry", false).put("status", "FAIL");
+                    .put("file", file.getKey()).put("file_sha256", SkillPackageFiles.hash(file.getValue()))
+                    .put("executable", executable).put("retry", false).put("status", "FAIL");
             try {
             var response = binding.model().invoke(new AgentChatRequest(new ModelCallId(id), new AgentRunId(id), 1, 1,
                     binding.snapshot(), List.of(ModelMessage.text(ModelMessageRole.SYSTEM, RUBRIC + REVIEW_SCOPE),
@@ -197,9 +195,13 @@ public final class SkillPackageScreening {
                 throw new IOException("Skill semantic security scanner returned no valid decision");
             }
             receipt.put("decision", decision.path("decision").asText());
-            // Retain a bounded diagnostic category, never model prose that can quote package contents.
+            // Retain a bounded diagnostic category plus a redacted, length-bounded excerpt of the model reason.
+            // The receipt file stays inside the local data directory and is never returned through any API.
             receipt.put("reason_category", decision.path("decision").asText().equals("allow")
                     ? "none" : reasonCategory(decision.path("reason").asText("")));
+            if (!decision.path("decision").asText().equals("allow")) {
+                receipt.put("reason_excerpt", reasonExcerpt(decision.path("reason").asText("")));
+            }
             if (decision.path("decision").asText().equals("block") || (executable && !decision.path("decision").asText().equals("allow"))) {
                 throw new IllegalArgumentException("Security scan blocked the Skill write");
             }
@@ -217,6 +219,18 @@ public final class SkillPackageScreening {
             summary.set("static_findings", facts.path("findings"));
             summary.set("semantic_files", json.valueToTree(new java.util.TreeSet<>(changed)));
             return summary;
+    }
+
+    private static String redact(String text) {
+        return text.replaceAll("(?im)(\\b(?:token|password|passwd|api[_-]?key|secret|credential)s?\\b\\s*[:=]\\s*)[^\\r\\n]+", "$1[REDACTED]")
+                .replaceAll("(?i)\\b(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]{12,}\\b", "[REDACTED]")
+                .replaceAll("(?is)-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", "[REDACTED PRIVATE KEY]")
+                .replaceAll("(?i)(\\bBearer\\s+)[A-Za-z0-9._~+/=-]+", "$1[REDACTED]");
+    }
+
+    static String reasonExcerpt(String reason) {
+        String text = redact(reason == null ? "" : reason).replaceAll("\\s+", " ").strip();
+        return text.length() <= 240 ? text : text.substring(0, 240);
     }
 
     static String formatStaticFindings(JsonNode findings) {

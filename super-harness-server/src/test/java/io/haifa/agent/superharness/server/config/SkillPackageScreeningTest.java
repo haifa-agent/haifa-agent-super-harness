@@ -79,7 +79,8 @@ class SkillPackageScreeningTest {
         assertThat(receipt.path("status").asText()).isEqualTo("FAIL");
         assertThat(receipt.path("decision").asText()).isEqualTo("block");
         assertThat(receipt.path("reason_category").asText()).isEqualTo("exfiltration");
-        assertThat(receipt.toString()).doesNotContain(privateReason, "never-log-this", "private-provider-diagnostic");
+        assertThat(receipt.path("reason_excerpt").asText()).isEqualTo("Exfiltration: private-provider-diagnostic password=[REDACTED]");
+        assertThat(receipt.toString()).doesNotContain(privateReason, "never-log-this");
         assertThat(receipt.path("retry").asBoolean()).isFalse();
     }
 
@@ -140,5 +141,76 @@ class SkillPackageScreeningTest {
         store.manage("edit", "sample-helper", original + "Read the reference after revocation.\n", null, null, null, null, "human", null);
         assertThat(model.requests).hasSize(5);
         assertThat(model.requests.getLast().messages().toString()).contains("Location: sample-helper/references/fact.txt", "The known fact is seventeen.");
+    }
+
+    @Test void blockReceiptRetainsFileExecutableAndRedactedReasonExcerpt() throws Exception {
+        var scanner = new SkillPackageScreening(json, temporary.resolve("data"));
+        Path directory = temporary.resolve("package"); Files.createDirectory(directory);
+        Map<String, byte[]> files = Map.of("SKILL.md", "---\nname: sample-helper\ndescription: A test package\n---\nUse known facts.\n".getBytes(StandardCharsets.UTF_8));
+        Files.write(directory.resolve("SKILL.md"), files.get("SKILL.md"));
+        String reason = "Prompt injection attempt";
+        String response = json.writeValueAsString(Map.of("decision", "block", "reason", reason));
+        var model = new ControlledModel((request, count) -> ControlledModel.response(request, "screen", response,
+                List.of(), ModelFinishReason.STOP, ModelUsage.unpriced(10, 2)));
+        assertThatThrownBy(() -> scanner.writes(ignored -> LocalProbeModelTestSupport.binding(model)).screen(directory, files))
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("Security scan blocked the Skill write");
+        var receipt = json.readTree(Files.readString(temporary.resolve("data/skills/scanner/screen-receipts.jsonl")));
+        assertThat(receipt.path("file").asText()).isEqualTo("SKILL.md");
+        assertThat(receipt.path("executable").asBoolean()).isFalse();
+        assertThat(receipt.path("decision").asText()).isEqualTo("block");
+        assertThat(receipt.path("status").asText()).isEqualTo("FAIL");
+        assertThat(receipt.path("reason_excerpt").asText()).isEqualTo(reason);
+        assertThat(receipt.path("reason_category").asText()).isEqualTo("prompt_injection");
+    }
+
+    @Test void warnReceiptRetainsReasonExcerptAndSucceedsForNonExecutableFile() throws Exception {
+        var scanner = new SkillPackageScreening(json, temporary.resolve("data"));
+        Path directory = temporary.resolve("package"); Files.createDirectory(directory);
+        Map<String, byte[]> files = Map.of("SKILL.md", "---\nname: sample-helper\ndescription: A test package\n---\nCall an external endpoint.\n".getBytes(StandardCharsets.UTF_8));
+        Files.write(directory.resolve("SKILL.md"), files.get("SKILL.md"));
+        String reason = "Borderline external API reference";
+        String response = json.writeValueAsString(Map.of("decision", "warn", "reason", reason));
+        var model = new ControlledModel((request, count) -> ControlledModel.response(request, "screen", response,
+                List.of(), ModelFinishReason.STOP, ModelUsage.unpriced(10, 2)));
+        var summary = scanner.writes(ignored -> LocalProbeModelTestSupport.binding(model)).screen(directory, files);
+        assertThat(summary.path("decision").asText()).isEqualTo("warn");
+        var receipt = json.readTree(Files.readString(temporary.resolve("data/skills/scanner/screen-receipts.jsonl")));
+        assertThat(receipt.path("status").asText()).isEqualTo("PASS");
+        assertThat(receipt.path("reason_excerpt").asText()).isEqualTo(reason);
+        assertThat(receipt.path("file").asText()).isEqualTo("SKILL.md");
+        assertThat(receipt.path("executable").asBoolean()).isFalse();
+    }
+
+    @Test void allowReceiptHasFileAndExecutableButNoReasonExcerpt() throws Exception {
+        var scanner = new SkillPackageScreening(json, temporary.resolve("data"));
+        Path directory = temporary.resolve("package"); Files.createDirectory(directory);
+        Map<String, byte[]> files = Map.of("SKILL.md", "---\nname: sample-helper\ndescription: A test package\n---\nUse known facts.\n".getBytes(StandardCharsets.UTF_8));
+        Files.write(directory.resolve("SKILL.md"), files.get("SKILL.md"));
+        var model = new ControlledModel((request, count) -> ControlledModel.response(request, "screen", "{\"decision\":\"allow\"}",
+                List.of(), ModelFinishReason.STOP, ModelUsage.unpriced(10, 2)));
+        scanner.writes(ignored -> LocalProbeModelTestSupport.binding(model)).screen(directory, files);
+        var receipt = json.readTree(Files.readString(temporary.resolve("data/skills/scanner/screen-receipts.jsonl")));
+        assertThat(receipt.path("file").asText()).isEqualTo("SKILL.md");
+        assertThat(receipt.path("executable").asBoolean()).isFalse();
+        assertThat(receipt.path("decision").asText()).isEqualTo("allow");
+        assertThat(receipt.has("reason_excerpt")).isFalse();
+    }
+
+    @Test void reasonExcerptIsRedactedAndLengthBounded() throws Exception {
+        var scanner = new SkillPackageScreening(json, temporary.resolve("data"));
+        Path directory = temporary.resolve("package"); Files.createDirectory(directory);
+        Map<String, byte[]> files = Map.of("SKILL.md", "---\nname: sample-helper\ndescription: A test package\n---\nUse known facts.\n".getBytes(StandardCharsets.UTF_8));
+        Files.write(directory.resolve("SKILL.md"), files.get("SKILL.md"));
+        String secret = "sk-" + "controlledFakeSecretValue1234567890";
+        String reason = "api_key: abc123\n" + secret + "\n" + "x".repeat(300);
+        String response = json.writeValueAsString(Map.of("decision", "warn", "reason", reason));
+        var model = new ControlledModel((request, count) -> ControlledModel.response(request, "screen", response,
+                List.of(), ModelFinishReason.STOP, ModelUsage.unpriced(10, 2)));
+        scanner.writes(ignored -> LocalProbeModelTestSupport.binding(model)).screen(directory, files);
+        var receipt = json.readTree(Files.readString(temporary.resolve("data/skills/scanner/screen-receipts.jsonl")));
+        String excerpt = receipt.path("reason_excerpt").asText();
+        assertThat(excerpt).doesNotContain("abc123", secret).doesNotContain("\n").doesNotContain("\r");
+        assertThat(excerpt).contains("[REDACTED]");
+        assertThat(excerpt.length()).isLessThanOrEqualTo(240);
     }
 }
