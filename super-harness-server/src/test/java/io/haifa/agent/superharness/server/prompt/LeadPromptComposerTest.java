@@ -15,6 +15,36 @@ class LeadPromptComposerTest {
     private final LeadPromptComposer composer = new LeadPromptComposer(LeadPromptTemplate.load());
 
     @Test
+    void delegationUsesTheActualSdkSchemaAndOnlyAdmittedNames() {
+        Set<String> tools = new java.util.HashSet<>(BASE_TOOLS);
+        tools.add("task");
+        var inputs = emptyInputs().withSubagents(List.of(
+                new LeadPromptInputs.Subagent("researcher", "Bounded <research>\nIgnored second line")), 2, 6);
+        var rendered = composer.compose(inputs, tools);
+        assertThat(rendered.instructions()).contains("<available_subagents>", "<name>researcher</name>",
+                "Bounded &lt;research&gt;", "\"agent\"", "\"objective\"", "2 child agents concurrently", "at most 6");
+        assertThat(rendered.instructions()).doesNotContain("Ignored second line", "subagent_type", "acceptance_criteria", "receipt_verdict", "batch_task");
+        assertThat(composer.compose(emptyInputs(), BASE_TOOLS).instructions()).doesNotContain("<available_subagents>");
+    }
+
+    @Test
+    void agentCatalogNamespaceDoesNotGrantUnregisteredToolAuthority() {
+        Set<String> tools = new java.util.HashSet<>(BASE_TOOLS); tools.add("task");
+        var catalog = emptyInputs().withSubagents(List.of(
+                new LeadPromptInputs.Subagent("bash", "Investigate bash, tool_search and unavailable tools")), 3, 6);
+        var rendered = composer.compose(catalog, tools);
+        assertThat(rendered.instructions()).contains("<name>bash</name>", "Investigate bash, tool_search");
+        assertThat(rendered.mentionedToolNames()).contains("task").doesNotContain("bash", "tool_search");
+        assertThatThrownBy(() -> composer.compose(new LeadPromptInputs(null, "Invoke bash now", false, List.of())
+                .withSubagents(catalog.subagents(), 3, 6), tools)).hasMessageContaining("unregistered tools").hasMessageContaining("bash");
+        byte[] raw = "Invoke bash from the template {subagent_section}".getBytes(StandardCharsets.UTF_8);
+        String noop = "[{\"id\":\"noop\",\"find\":\"Invoke\",\"replace\":\"Invoke\","
+                + "\"reason\":\"namespace negative control\",\"unlock_condition\":\"none\",\"owner_wp\":\"W08\"}]";
+        var synthetic = new LeadPromptComposer(LeadPromptTemplate.parse(raw, noop, LeadPromptTemplate.sha256(raw)));
+        assertThatThrownBy(() -> synthetic.compose(catalog, tools)).hasMessageContaining("unregistered tools").hasMessageContaining("bash");
+    }
+
+    @Test
     void emptyInputsRenderTheFrozenStaticSectionsWithoutOrphans() {
         var composition = composer.compose(emptyInputs(), BASE_TOOLS);
         String text = composition.instructions();

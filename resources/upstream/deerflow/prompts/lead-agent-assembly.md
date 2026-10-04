@@ -22,13 +22,15 @@
 
 interactive 系统段原文字节来自 `agents/interaction_policy.py:22-90`，保存为 `interactive-clarification-system.txt` 并校验伴随 SHA；两条单行 guidance/reminder 分别对照同文件 129/142 行。主模板双花括号按 Python format 还原。
 
-soul/self_update 留给 M3，当前为空/false；subagent、memory tool、deferred tools、MCP routing、ACP/custom mounts 为空；Skill First 沿用冻结 legacy 文案。动态日期/项目/用户内容不进入 instructions。
+soul/self_update 按已选 Custom Agent 渲染。W08 的 subagent 三个既有占位符仅在 task 实际声明且有效名单非空时渲染；memory tool、deferred tools、MCP routing、ACP/custom mounts 仍为空；Skill First 沿用冻结 legacy 文案。动态日期/项目/用户内容不进入 instructions。
+
+W08 动态委托段对照冻结 `prompt.py:304-540` 的名单与成本收益指引：保留直接执行优先、专业能力/上下文隔离/独立并行收益、共享状态与依赖否决、明确范围/预期输出、核验结果。名单 description 仅取首行并转义，general-purpose 使用冻结简述。删除未装配的 receipts、acceptance_criteria、context_mode、batch 指令和 bash 示例；SDK 排队替代冻结丢弃超额调用的文案。模型示例使用公开 SDK 的 `agent/objective`，前端 `subagent_type/prompt` 仅对外投影。这是明确产品适配，不宣称动态段与冻结后端逐字相同；原 SYSTEM_PROMPT_TEMPLATE 字节和伴随 SHA 保持不变。
 
 ## 适配与工具对账
 
 M1 后撤销 A1（write_file/str_replace）、A2（present_files）、A4（历史上传/grep）、A5（citations），恢复原文。剩余 A3 两项仅移除 skill_manage，保留 present_files；A7 三项将普通英语 task 改写为 work/request/Parallelism，避免未注册 Tool 整词假命中。D1 已兑现，不启用 A6。
 
-门禁扫描全文，包括代码块和无反引号引用；命中 Tool 必须属于本 Bridge 实际注册集合，不设负向白名单。默认命中 read_file、write_file、str_replace、present_files、list_uploaded_files、grep、web_search、web_fetch、ask_clarification；启用 Skill 增加 skill_load、skill_resource_read。其余默认工具仍注册，但静态提示词未必提及。
+门禁扫描同一模板生成的工具指引全文，包括代码块和无反引号引用；命中 Tool 必须属于本 Bridge 实际注册集合，不设负向白名单。W08 新生成的 available_subagents 名称/description 属于 Agent 数据命名空间：仅对账渲染时通过相同 renderSubagents(includeCatalogData=false) 留空该数据，其他指引与模板、SOUL、Skill 字段仍全部检查，不用正则删除用户区块。真实 instructions 与 hash 始终包含完整目录数据；Composition.mentionedToolNames 表示实际 Tool 指令引用集合。这样合法 Agent 名称 bash 或描述中的工具字词不冒充 Tool 授权。默认命中 read_file、write_file、str_replace、present_files、list_uploaded_files、grep、web_search、web_fetch、ask_clarification；启用 Skill 增加 skill_load、skill_resource_read，启用委托增加 task。其余默认工具仍注册，但静态提示词未必提及。
 
 ## 恢复与失败
 

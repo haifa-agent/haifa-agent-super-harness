@@ -20,15 +20,45 @@ public final class ControlledProvider implements AutoCloseable {
     @FunctionalInterface public interface Responder { ObjectNode respond(JsonNode request, int call) throws Exception; }
     private static final ObjectMapper JSON = new ObjectMapper();
     final HttpServer server;
+    private final java.util.concurrent.ExecutorService executor;
     final Path evidence;
     public final List<JsonNode> requests = new CopyOnWriteArrayList<>();
     public final List<Map<String, Object>> responseDiagnostics = new CopyOnWriteArrayList<>();
     public final AtomicInteger calls = new AtomicInteger();
+    public final AtomicInteger expectedResponseAborts = new AtomicInteger();
     public final AtomicReference<Throwable> failure = new AtomicReference<>();
 
     public ControlledProvider(Path evidence, boolean rawEvidence, Responder responder) throws Exception {
+        this(evidence, rawEvidence, responder, (request, authorization) -> true);
+    }
+
+    /** Explicit negative fixture: otherwise complete HTTP 200 responses may omit usage. */
+    public ControlledProvider(Path evidence, boolean rawEvidence, Responder responder,
+            boolean allowMissingUsage) throws Exception {
+        this(evidence, rawEvidence, responder, (request, authorization) -> true,
+                request -> false, allowMissingUsage);
+    }
+
+    /** Synthetic credential assertions return a boolean; headers never enter evidence or errors. */
+    public ControlledProvider(Path evidence, boolean rawEvidence, Responder responder,
+            java.util.function.BiPredicate<JsonNode, String> authorizationAccepted) throws Exception {
+        this(evidence, rawEvidence, responder, authorizationAccepted, request -> false);
+    }
+
+    /** Only response-write IO failures for explicitly selected cancellation requests are expected. */
+    public ControlledProvider(Path evidence, boolean rawEvidence, Responder responder,
+            java.util.function.BiPredicate<JsonNode, String> authorizationAccepted,
+            java.util.function.Predicate<JsonNode> expectedResponseAbort) throws Exception {
+        this(evidence, rawEvidence, responder, authorizationAccepted, expectedResponseAbort, false);
+    }
+
+    private ControlledProvider(Path evidence, boolean rawEvidence, Responder responder,
+            java.util.function.BiPredicate<JsonNode, String> authorizationAccepted,
+            java.util.function.Predicate<JsonNode> expectedResponseAbort, boolean allowMissingUsage) throws Exception {
         this.evidence = Files.createDirectories(evidence);
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        server.setExecutor(executor);
         server.createContext("/v1/chat/completions", exchange -> {
             try {
                 if (!exchange.getRequestMethod().equals("POST")
@@ -37,18 +67,21 @@ public final class ControlledProvider implements AutoCloseable {
                     return;
                 }
                 JsonNode request = JSON.readTree(exchange.getRequestBody());
+                if (!authorizationAccepted.test(request, exchange.getRequestHeaders().getFirst("Authorization"))) {
+                    throw new AssertionError("Controlled Provider authorization did not match synthetic model identity");
+                }
                 requests.add(request);
                 int call = calls.incrementAndGet();
                 ObjectNode response = responder.respond(request, call);
-                validate(response);
+                validate(response, allowMissingUsage);
                 boolean streaming = request.path("stream").asBoolean();
-                byte[] bytes = encode(response, streaming);
+                byte[] bytes = encode(response, streaming, allowMissingUsage);
                 var diagnostic = Map.<String, Object>of("call", call,
                         "response_kind", streaming ? "openai-compatible-sse" : "openai-compatible-json",
                         "choices_count", response.path("choices").size(),
                         "finish_reason", response.path("choices").get(0).path("finish_reason").asText(),
                         "tool_calls_count", response.path("choices").get(0).path("message").path("tool_calls").size(),
-                        "usage_present", true, "response_bytes", bytes.length,
+                        "usage_present", response.has("usage"), "response_bytes", bytes.length,
                         "response_sha256", "sha256:" + GatewayFixture.hash(new String(bytes, StandardCharsets.UTF_8)));
                 responseDiagnostics.add(diagnostic);
                 Files.writeString(evidence.resolve("provider-response-" + call + ".summary.json"),
@@ -57,16 +90,25 @@ public final class ControlledProvider implements AutoCloseable {
                         "provider_call_count", call, "request_chars", request.toString().length(),
                         "request_sha256", GatewayFixture.hash(request.toString()), "response_bytes", bytes.length,
                         "response_sha256", GatewayFixture.hash(new String(bytes, StandardCharsets.UTF_8)),
-                        "response_has_usage", true)));
+                        "response_has_usage", response.has("usage"))));
                 if (rawEvidence) {
                     // Synthetic requests only; never persist Authorization or managed-model credentials.
                     Files.writeString(evidence.resolve("provider-request-" + call + ".json"), request.toPrettyString());
                     Files.write(evidence.resolve("provider-response-" + call + (streaming ? ".sse" : ".json")), bytes);
                 }
-                exchange.getResponseHeaders().set("Content-Type", streaming
-                        ? "text/event-stream; charset=utf-8" : "application/json");
-                exchange.sendResponseHeaders(200, bytes.length);
-                try (var output = exchange.getResponseBody()) { output.write(bytes); }
+                try {
+                    exchange.getResponseHeaders().set("Content-Type", streaming
+                            ? "text/event-stream; charset=utf-8" : "application/json");
+                    exchange.sendResponseHeaders(200, bytes.length);
+                    try (var output = exchange.getResponseBody()) { output.write(bytes); }
+                } catch (java.io.IOException responseWriteFailure) {
+                    if (!expectedResponseAbort.test(request)) throw responseWriteFailure;
+                    expectedResponseAborts.incrementAndGet();
+                    Files.writeString(evidence.resolve("provider-response-abort-" + call + ".json"),
+                            JSON.writeValueAsString(Map.of("call", call, "phase", "response-write",
+                                    "error_class", responseWriteFailure.getClass().getName(),
+                                    "explicitly_expected", true, "response_bytes", bytes.length)));
+                }
             } catch (Exception | AssertionError handlerFailure) {
                 failure.compareAndSet(null, handlerFailure);
                 try {
@@ -116,19 +158,22 @@ public final class ControlledProvider implements AutoCloseable {
         return response;
     }
 
-    private static void validate(ObjectNode response) {
-        if (response == null || !response.path("usage").isObject()) {
+    private static void validate(ObjectNode response, boolean allowMissingUsage) {
+        if (response == null || (!response.path("usage").isObject()
+                && !(allowMissingUsage && !response.has("usage")))) {
             throw new IllegalArgumentException("Controlled Provider response requires usage");
         }
-        JsonNode usage = response.path("usage");
-        for (String field : List.of("prompt_tokens", "completion_tokens", "total_tokens")) {
-            if (!usage.path(field).isIntegralNumber() || usage.path(field).asLong() < 0) {
-                throw new IllegalArgumentException("Controlled Provider usage requires nonnegative " + field);
+        if (response.has("usage")) {
+            JsonNode usage = response.path("usage");
+            for (String field : List.of("prompt_tokens", "completion_tokens", "total_tokens")) {
+                if (!usage.path(field).isIntegralNumber() || usage.path(field).asLong() < 0) {
+                    throw new IllegalArgumentException("Controlled Provider usage requires nonnegative " + field);
+                }
             }
-        }
-        if (usage.path("total_tokens").asLong() != usage.path("prompt_tokens").asLong()
-                + usage.path("completion_tokens").asLong()) {
-            throw new IllegalArgumentException("Controlled Provider usage total is inconsistent");
+            if (usage.path("total_tokens").asLong() != usage.path("prompt_tokens").asLong()
+                    + usage.path("completion_tokens").asLong()) {
+                throw new IllegalArgumentException("Controlled Provider usage total is inconsistent");
+            }
         }
         if (response.path("id").asText().isBlank() || response.path("model").asText().isBlank()
                 || !response.path("choices").isArray() || response.path("choices").size() != 1
@@ -139,7 +184,11 @@ public final class ControlledProvider implements AutoCloseable {
     }
 
     static byte[] encode(ObjectNode response, boolean streaming) throws Exception {
-        validate(response);
+        return encode(response, streaming, false);
+    }
+
+    private static byte[] encode(ObjectNode response, boolean streaming, boolean allowMissingUsage) throws Exception {
+        validate(response, allowMissingUsage);
         if (!streaming) return JSON.writeValueAsBytes(response);
         ObjectNode chunk = response.deepCopy();
         chunk.put("object", "chat.completion.chunk");
@@ -149,6 +198,9 @@ public final class ControlledProvider implements AutoCloseable {
         int index = 0;
         for (JsonNode tool : delta.path("tool_calls")) ((ObjectNode) tool).put("index", index++);
         choice.set("delta", delta);
+        if (!response.has("usage")) {
+            return ("data: " + chunk + "\n\ndata: [DONE]\n\n").getBytes(StandardCharsets.UTF_8);
+        }
         ObjectNode usage = response.deepCopy();
         usage.putArray("choices");
         usage.put("object", "chat.completion.chunk");
@@ -162,7 +214,14 @@ public final class ControlledProvider implements AutoCloseable {
     }
 
     @Override public void close() throws Exception {
-        try { server.stop(0); }
+        try {
+            server.stop(0);
+            executor.shutdown();
+            if (!executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+                throw new AssertionError("Controlled Provider handlers did not settle before the close deadline");
+            }
+        }
         finally {
             try {
                 Files.writeString(evidence.resolve("provider-final.summary.json"), JSON.writeValueAsString(Map.of(

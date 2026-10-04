@@ -96,18 +96,21 @@ public final class LeadPromptComposer {
         values.put("interaction_thinking_guidance", interactive
                 ? "- **PRIORITY CHECK: If anything is unclear, missing, or has multiple interpretations, you MUST ask for clarification FIRST - do NOT proceed with work**"
                 : "");
-        values.put("subagent_thinking", "");
+        boolean delegation = !inputs.subagents().isEmpty() && registeredToolNames.contains("task");
+        values.put("subagent_thinking", delegation
+                ? "- Before delegating, verify a clear benefit from specialist capability, context isolation, or independent parallel execution." : "");
         values.put("clarification_system", interactive ? template.interactiveClarification() : "");
         values.put("skills_section", renderSkills(inputs.skills()));
         values.put("memory_tool_section", "");
         values.put("deferred_tools_section", "");
         values.put("mcp_routing_hints_section", "");
-        values.put("subagent_section", "");
+        values.put("subagent_section", delegation ? renderSubagents(inputs, true) : "");
         values.put("acp_section", "");
         values.put("clarification_reminder", interactive
                 ? "- **Clarification First**: ALWAYS clarify unclear/missing/ambiguous requirements BEFORE starting work - never assume or guess"
                 : "");
-        values.put("subagent_reminder", "");
+        values.put("subagent_reminder", delegation
+                ? "- Execute directly by default. Delegate only bounded, independent work with clear benefit; wait for the returned result and verify it." : "");
         values.put("skill_first_reminder", LEGACY_SKILL_FIRST_REMINDER);
 
         String instructions = format(template.adaptedTemplate(), values);
@@ -117,7 +120,12 @@ public final class LeadPromptComposer {
                     "composed lead-agent instructions are " + trimmed.length() + " characters, over the SDK limit of "
                             + SDK_MAX_INSTRUCTIONS_CHARS);
         }
-        Set<String> mentioned = mentionedTools(instructions);
+        // Catalog names/descriptions are data in the Agent namespace. Validate the same
+        // template and all guidance, SOUL/Skill/other inputs with just that generated data
+        // omitted. Never regex-remove blocks from user-controlled rendered text.
+        Map<String, String> toolInstructionValues = new LinkedHashMap<>(values);
+        if (delegation) toolInstructionValues.put("subagent_section", renderSubagents(inputs, false));
+        Set<String> mentioned = mentionedTools(format(template.adaptedTemplate(), toolInstructionValues));
         Set<String> unregistered = new LinkedHashSet<>(mentioned);
         unregistered.removeAll(registeredToolNames);
         if (!unregistered.isEmpty()) {
@@ -209,7 +217,29 @@ public final class LeadPromptComposer {
         return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
-    /** Rendered instructions, the SHA-256 of the SDK-trimmed text, and the tool names mentioned. */
+    /** Adapted frozen prompt.py delegation guidance, rendered through its existing placeholders. */
+    private static String renderSubagents(LeadPromptInputs inputs, boolean includeCatalogData) {
+        StringBuilder out = new StringBuilder("<subagent_system>\n")
+                .append("Execute directly by default. Delegate only when specialist capability, context isolation, or independent parallel execution provides a clear benefit.\n")
+                .append("Do not delegate tightly coupled steps, shared mutable state, or work whose dependencies prevent independent execution.\n")
+                .append("Give each child a bounded objective, necessary context, constraints, and a precise expected output.\n")
+                .append("You may run up to ").append(inputs.parallelSubagents())
+                .append(" child agents concurrently and delegate at most ").append(inputs.totalSubagents())
+                .append(" times in this Run. Excess concurrent calls wait for SDK admission; do not repeat them.\n")
+                .append("The `task` tool waits for the child result. No polling is needed. Review the result before responding.\n")
+                .append("Use the actual SDK arguments: {\"agent\":\"a name from available_subagents\",\"objective\":\"A bounded objective with necessary context\"}.\n")
+                .append("<available_subagents>\n");
+        for (var child : includeCatalogData ? inputs.subagents() : List.<LeadPromptInputs.Subagent>of()) {
+            String description = child.name().equals("general-purpose")
+                    ? "For bounded work with clear delegation benefit from specialist capability, context isolation, or independent parallel execution."
+                    : child.description().lines().findFirst().orElse("");
+            out.append("  <subagent><name>").append(escape(child.name())).append("</name><description>")
+                    .append(escape(description)).append("</description></subagent>\n");
+        }
+        return out.append("</available_subagents>\n</subagent_system>").toString();
+    }
+
+    /** Full instructions/hash, with Tool instruction references excluding generated Agent catalog data. */
     public record Composition(String instructions, String signature, Set<String> mentionedToolNames) {}
 
 }

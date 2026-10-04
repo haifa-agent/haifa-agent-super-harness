@@ -101,11 +101,13 @@ pwsh -NoProfile -File tests/checks/build/verify-haifa-version-baseline.ps1
 
 验收采用“先核对测试要证明什么，再运行完整门禁”的顺序：开发期间可用定向测试快速排障；正式验收前须核对 Oracle 与实际断言、环境和槽位配置，最终仍要完成全仓验证、真实 smoke、规定的 UI 重复轮次及主控独立复验。同一源码和代理配置下的暖轮可复用已验证的前端构建，但每轮的运行状态、原始证据和失败记录必须独立保留；详细执行规则见 `AGENTS.md` 的“验收提速（不降低门禁）”。
 
+`-LiveDeepSeek` 使用托管凭据直连真实模型，不启动本地受控 Provider；runner 显式将可选 Provider 进程初始化为空，兼容 PowerShell 7 StrictMode 下的诊断输出与清理。真实回答 smoke 与受控模型的 Tool/Artifact 验证分别保留证据，不据此提升完整 W08 验收。
+
 ## W18 冻结前端本地配置
 
 ### 验收快速反馈
 
-清理在原有共享停止预算内同时等待端口可绑定、Runtime进程退出与已登记子进程（包括浏览器）退出；仍有残留时返回FAIL，不延长预算或重试功能用例。
+清理在原有共享停止预算内同时等待端口可绑定、Runtime进程退出与已登记子进程（包括浏览器）退出；仍有残留时返回FAIL，不延长预算或重试功能用例。进程命令指纹不匹配时拒绝终止该 PID，只在原预算内等待登记的 PID 与创建时间对应的进程自行退出；持续存活仍为 FAIL，已复用 PID 的新进程受保护。`flow-health.json` 的 `cleanup.identityChanges` 记录脱敏身份指纹与退出观察，不记录完整命令。
 
 开发顺序为实现、定向测试或单case冒烟、集中自审修复、稳定版本正式门禁。独立读取批量执行，终端默认只汇总退出码、计数、首个失败和原件路径。按 [交接模板](docs/acceptance-handoff-template.md) 在各worktree的`local-tmp/acceptance-handoff.md`记录短交接；等待构建时做独立检查，保留有界等待和进展更新。
 
@@ -174,6 +176,40 @@ Thread 仅保存服务器维护的 digest 索引，用于拒绝 Steer 改参，�
 目录 `supports_thinking`、`supports_reasoning_effort` 暂保持 false，直到 SDK 038-14 发布、联调以及
 W07 默认 pro 路径通过发布验收。显式 thinking 后端接线已开发，完整 UI、真实模型 smoke、
 Gateway 审批恢复和最终门禁待流程/CI 优化完成后执行。本切片不提供计划、子 Agent 或思考正文展示。
+## W08 子智能体目录
+
+Gateway 提供 `GET/POST /api/subagents`、`PUT/DELETE /api/subagents/{name}`，managed 定义按现有 owner 配置布局保存到 `<data-root>/owners/default/subagents/<name>.json`。创建名称转小写，更新仅应用实际出现的字段；`tools=null` 保留继承语义，`tools=[]` 保留空集。创建拒绝覆盖同名文件，更新在同目录原子替换；损坏定义警告并跳过，不隐藏其他条目。读写每次读取文件，不新增运行状态或缓存。
+
+目录定义所在文件系统须支持同目录硬链接和原子替换：创建通过硬链接发布完整文件且不覆盖同名条目，更新通过原子替换发布。FAT/exFAT 或拒绝硬链接的共享卷不在该目录存储的支持范围；具体卷的能力预检和等价回退方案记录在私有 W08 TODO，不以可能暴露部分 JSON 或覆盖现有条目的写法回退。
+
+本地 profile 沿用 `/api/v1/auth/me` 的固定管理员身份；角色判定会对非管理员隐藏 `system_prompt` 并禁止写入，但当前无真实非管理员 HTTP 身份入口。内置目录只列 `general-purpose`（`max_turns=150`）；因无生产 shell 工具，暂不列 `bash`。SQL managed 存储、config.yaml 来源及 config overrides 未接入。本切片提供只读目录与稳定内容指纹，不表示已实现 Child 执行或冻结 UI 验收。
+
+目录真实 HTTP 定向测试与 CRUD smoke：
+
+```powershell
+pwsh -NoProfile -File scripts/test-targeted.ps1 -Test DeerFlowSubagentCatalogApiTest -LowMemory
+```
+
+原始合成请求/响应保存在当前 worktree 的 `local-tmp/acceptance-fixtures/evidence/`；可在启动测试的会话设置 `ENG_ACCEPTANCE_DATA_ROOT`、`ENG_ACCEPTANCE_EVIDENCE_ROOT` 指向该槽位的独立目录。目录测试不调用模型；完整 W08 的 SDK、Run、回放与 UI 门禁由对应任务验收。
+
+生产 Run 的 `context.subagent_enabled=true` 才声明 SDK Child 与 `task`；未提供、null、false 或 bootstrap 时关闭。Custom Agent 的 `allowed_subagents=null` 表示全部有效定义，`[]` 表示禁止全部，列表取有效目录交集。每次新 Run 读取目录、模型和实际 Tool 声明生成快照与指纹；正在执行的 Run 沿用已冻结声明，重启历史读取公开 SDK 事实。新启用委托的 Parent 使用 `haifa-super-harness:lead` 定义 ID，避免与合法 Child 名称冲突；未启用及历史恢复保留原定义 ID，历史 Run 不改名。
+
+每个 Gateway 以公开 SDK `ChildRunCapacity` 持有一个共享容量，全部 Thread、后续 Bridge 重建与恢复 Bridge 复用同一实例；不同 Gateway/data-root 独立，准入、等待唤醒、取消与实际执行结束后的容量释放由 SDK 管理。
+
+进程启动配置 `HAIFA_SUPER_HARNESS_SUBAGENT_MAX_RUNNING` 默认 3，`HAIFA_SUPER_HARNESS_SUBAGENT_MAX_CONCURRENT` 默认取进程容量；并发夹取到 1–64 且不超过容量。`HAIFA_SUPER_HARNESS_SUBAGENT_MAX_TOTAL_PER_RUN` 默认 6，夹取到 1–50。非法整数启动失败；本期不支持 context 覆盖。Child 的 `timeout_seconds`、`max_turns` 通过公开 profile 映射到 SDK，深度绝对上限 1；`tools=null` 继承 Parent 实际 Tool 集后减禁用项，`[]` 保持空集，Child 的需审批操作由 SDK 非交互策略拒绝。`skills` 存储保留，但本期不装配。
+
+启用委托的 Parent wall 授权为 `120000 + max_total_per_run * 最大有效 Child timeout_ms`，以免原 120 秒 Parent wall 提前终止委托等待。Parent 原有 16 次迭代、模型/Tool 调用预算等限制仍生效；执行限额与终止由 SDK 拥有。默认内置 timeout900秒、总量6时 wall 授权为5520000毫秒。未启用委托仍使用原120秒授权。
+
+生产装配定向验证：`pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'DeerFlowTaskDelegationApiTest,SubagentRunConfigurationTest,LeadPromptComposerTest' -LowMemory`。测试按本 worktree 的 SDK 选择规则消费公开 JAR，主线使用从上游 `dev` 发布的基线；完整回放/UI/全仓门禁仍须独立验收，未合入上游 `dev` 的 SDK 候选不能使分支合入 `main`。协议与验证入口见 [委托兼容手册](docs/w08-delegation-transcript.md)。
+
+W08 子任务步骤兼容层通过公开 SDK 的 `messages` 持久游标和 `subscribe` 信号投影既有 Parent SSE
+`custom` 流；不新增步骤存储或执行线程。刷新回放入口为
+`GET /api/threads/{thread_id}/runs/{run_id}/events?event_types=subagent.step&task_id={task_id}&limit=500&after_seq=0`。
+`task_id` 必填且使用 Parent 的 Runtime task Tool Call ID；只支持 `subagent.step`，limit 为 1–500，
+after_seq 为非负 JavaScript 安全整数。未知 task 返回 `[]`，未知或不属于该线程的 Parent 返回 404。
+步骤正文与序列化参数最多 8192 个 Unicode 字符并保留截断标记；模型与已知累计 Usage 来自该 Child 的
+公开事件，不读取当前目录推测历史。该接线消费公开 SDK 的 `RunMessage*` API；完整
+HTTP/SSE、重启与冻结 UI 验收以工作包证据为准；接口静态实现不表示 W08 全部通过。
 
 ## W03 后续建议配置
 
@@ -379,5 +415,21 @@ Utility 使用另一项目 `D:/workspace/haifa-ai-deerflow/utility-mcp-server` �
 
 
 新增 UI 验收从 `tests/ui/smoke/w05-demo-artifact.spec.cjs` 起步：该黄金样例使用生产 `write_file`、真实批准卡片、Artifact 下载及刷新重连。共享 `fixtures.cjs` 提供 runner 环境、进入工作区、Run 状态等待、当前批准卡片与截图/JSON/下载字节归档；默认 smoke 使用同一 fixtures，保留 4 个用例。
+
+### W08 独立目录 UI 验收
+
+`-W08Catalog` 选择 `tests/ui/smoke/w08-subagent-catalog.spec.cjs` 的 8 个用例，使用未修改的冻结设置页与真实 `/api/subagents`：内置条目不可编辑、表单创建及刷新、完整编辑表单、单独 enabled 局部 PUT、非法名称禁止提交、重名 409、删除 204，以及显式模型和长合法名称的保存。每个用例使用独立条目，编辑/删除等前置通过真实 REST 建立；不拦截请求、不模拟后端。显式模型保存不代表 Child 模型执行，长目录名称不替代 UI-14 的 task 标题验收。
+
+主控确认完整槽位和 SDK 选择后，先执行受影响单 case：
+
+```powershell
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 `
+  -W08Catalog -AgentSlot 1 -GatewayPort 20618 -FrontendPort 25618 -ProviderPort 0 `
+  -CaseTitle 'W08 UI-02 creates a managed subagent and survives reload'
+```
+
+`-CaseTitle` 必须与 spec 中的静态标题完整一致；`-PreflightOnly` 只做预检。完整目录轮次去掉 `-CaseTitle`，同一稳定源码/SDK 上运行两轮，每轮使用新的 `-DataDirectory`；只有构建戳一致时第二轮可使用 `-SkipBuild`。该 profile 与其他 W18 profile 互斥，沿用 runner 的端口、依赖、Provider、构建和进程清理，证据位于 `local-tmp/slot-1-w08-catalog/evidence/run-<时间戳>/`，包含 trace、截图、真实请求响应、前后目录和流程健康度。未执行的轮次保持 `NOT_RUN`。
+
+目录 profile 只覆盖 W08 UI-01–05及补充保存用例，不发送委托 Run。Ultra 的真实 thinking/plan/subagent 载荷须另行验收：最新 W03 已接通思考执行，但 W07 plan/pro/ultra 门禁及 UI 能力发布前置仍需满足；被阻断的委托 UI 用例保持 `NOT_RUN`。本 profile 不改变 Task4 Oracle12 的既有 `FAIL`，也不声明整个 Task5 或 W08 完成。
 
 `scripts/ui/run-w18-ui-smoke.ps1` 通过 `scripts/lib/run-fixture.ps1` 管理完整槽位绑定预检、脱离调用方管道的启动、15/30/60 秒 Provider/Gateway/前端就绪等待及精确 PID 清理。所有模式的证据写入 `local-tmp/slot-<N>-<任务标签>/evidence/run-<时间戳>/`，包含原始日志、`managed-processes.json`、`flow-health.json`、`case-results.json` 和 Playwright 原件；冷暖轮分别建目录和数据，不覆盖首次失败。清理必须在原停止预算内实际绑定端口成功，失败时 runner 返回非零。MCP 启动器使用同一脱离管道的启动函数；共享库只转述 case 结果，不登记 SHPM 或提升验收状态。
