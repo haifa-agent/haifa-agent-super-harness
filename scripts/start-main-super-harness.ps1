@@ -85,6 +85,8 @@ $env:DEER_FLOW_AUTH_DISABLED = '1'
 $env:DEER_FLOW_ENV = 'development'
 $env:ENVIRONMENT = 'development'
 $env:DEER_FLOW_TRUSTED_ORIGINS = $frontendUrl
+$env:NO_PROXY = '127.0.0.1,localhost'
+$env:no_proxy = '127.0.0.1,localhost'
 
 $gatewayProcess = Start-Process -FilePath $java.Source -ArgumentList "-jar `"$jar`"" `
     -WorkingDirectory $root -WindowStyle Hidden -PassThru `
