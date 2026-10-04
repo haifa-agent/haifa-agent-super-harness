@@ -16,6 +16,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -80,6 +81,11 @@ class DeerFlowThinkingIntegrationTest {
                 assertThat(provider.calls).hasValue(2);
                 var approved = restarted.approve("thinking-thread", pendingLocation);
                 assertPublicBody(approved.body());
+                if (provider.calls.get() != 3) {
+                    Files.writeString(evidence.resolve("restart-approval-failure.sse"), approved.body());
+                    Files.writeString(evidence.resolve("restart-approval-failure.safe-diagnostics.json"),
+                            GatewayFixture.safeRunSummary(restarted.get(pendingLocation)).toString());
+                }
                 assertThat(provider.calls).hasValue(3);
                 JsonNode resumedRequest = provider.requests.get(2);
                 assertThat(resumedRequest.path("thinking").path("type").asText()).isEqualTo("enabled");

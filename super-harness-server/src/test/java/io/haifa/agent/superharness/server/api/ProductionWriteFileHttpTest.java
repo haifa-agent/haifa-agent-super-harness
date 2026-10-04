@@ -249,8 +249,9 @@ class ProductionWriteFileHttpTest {
             assertThat(http.request(base, "POST", "/api/threads", "{\"thread_id\":\"production-file-other\"}")
                     .statusCode()).isEqualTo(200);
             String crossThread = SseEvents.PendingApproval.reply(requestId, "approve");
-            assertThat(http.request(base, "POST", "/api/threads/production-file-other/runs/stream", crossThread)
-                    .statusCode()).isEqualTo(409);
+            HttpResponse<String> crossThreadResponse = http.request(base, "POST",
+                    "/api/threads/production-file-other/runs/stream", crossThread);
+            assertThat(crossThreadResponse.statusCode()).as(crossThreadResponse.body()).isEqualTo(409);
             assertThat(http.download(artifact).statusCode()).isEqualTo(404);
 
             String approval = SseEvents.PendingApproval.reply(requestId, "approve");

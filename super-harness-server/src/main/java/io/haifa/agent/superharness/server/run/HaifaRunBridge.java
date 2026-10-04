@@ -8,6 +8,7 @@ import io.haifa.agent.core.run.AgentRunBudget;
 import io.haifa.agent.core.run.AgentRunId;
 import io.haifa.agent.core.run.AgentRunLimits;
 import io.haifa.agent.core.run.AgentRunStatus;
+import io.haifa.agent.core.run.AgentRunType;
 import io.haifa.agent.core.session.AgentSessionId;
 import io.haifa.agent.model.api.AgentChatModel;
 import io.haifa.agent.model.api.ModelAdapterCoordinate;
@@ -23,10 +24,12 @@ import io.haifa.agent.runtime.api.InteractionView;
 import io.haifa.agent.runtime.api.RunEventCursor;
 import io.haifa.agent.runtime.api.RunEventPage;
 import io.haifa.agent.runtime.api.ToolCallView;
+import io.haifa.agent.runtime.api.ChildRunView;
 import io.haifa.agent.sdk.api.AgentMetadata;
 import io.haifa.agent.sdk.api.HaifaAgent;
 import io.haifa.agent.sdk.api.HaifaAgentBuilder;
 import io.haifa.agent.sdk.api.HaifaAgents;
+import io.haifa.agent.sdk.product.ChildAgentSpec;
 import io.haifa.agent.sdk.api.RunInputCommand;
 import io.haifa.agent.sdk.api.RunInputResult;
 import io.haifa.agent.sdk.api.SdkCallerProvider;
@@ -43,6 +46,7 @@ import io.haifa.agent.sdk.diagnostics.PromptDiagnostics;
 import io.haifa.agent.sdk.product.ProductId;
 import io.haifa.agent.sdk.product.ProductProfile;
 import io.haifa.agent.sdk.product.ProductRunProfileRef;
+import io.haifa.agent.sdk.product.ProductRunProfile;
 import io.haifa.agent.sdk.product.ProductVersion;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.starter.HaifaAgentStarter;
@@ -50,6 +54,7 @@ import io.haifa.agent.starter.McpServerSpec;
 import io.haifa.agent.starter.McpToolPlatforms;
 import io.haifa.agent.superharness.server.config.McpRunTools;
 import io.haifa.agent.superharness.server.config.SkillRunTools;
+import io.haifa.agent.superharness.server.config.SubagentRunConfiguration;
 import io.haifa.agent.superharness.server.prompt.AgentPromptContext;
 import io.haifa.agent.superharness.server.prompt.LeadPromptComposer;
 import io.haifa.agent.superharness.server.prompt.LeadPromptInputs;
@@ -77,6 +82,8 @@ public final class HaifaRunBridge implements AutoCloseable {
     private final String mcpSignature;
     private final String skillSignature;
     private final String promptSignature;
+    private final String delegationSignature;
+    private final Set<String> mcpToolNames;
     private final AgentPromptContext agentContext;
     private final AtomicLong turnPageReads = new AtomicLong();
 
@@ -90,6 +97,8 @@ public final class HaifaRunBridge implements AutoCloseable {
         this.mcpSignature = "";
         this.skillSignature = "";
         this.promptSignature = "";
+        this.delegationSignature = "";
+        this.mcpToolNames = Set.of();
         this.agentContext = AgentPromptContext.defaults();
         this.agent = HaifaAgentStarter.builder()
                 .name("Super Harness local compatibility agent")
@@ -131,72 +140,140 @@ public final class HaifaRunBridge implements AutoCloseable {
             McpRunTools.Projection mcpProjection,
             SkillRunTools.Projection skillProjection,
             AgentPromptContext agentContext) {
+        this(binding, tools, foundation, mcpProjection, skillProjection, agentContext,
+                SubagentRunConfiguration.disabled());
+    }
+
+    public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation) {
+        this(binding, tools, foundation, mcpProjection, skillProjection, agentContext, delegation,
+                new io.haifa.agent.runtime.api.ChildRunCapacity(delegation.settings().runningCapacity()));
+    }
+
+    public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity) {
+        java.util.Objects.requireNonNull(childRunCapacity, "childRunCapacity");
         this.agentContext = java.util.Objects.requireNonNull(agentContext, "agent context must not be null");
         List<McpServerSpec> mcpSpecs = mcpProjection.specs();
         this.binding = binding;
         // MCP ToolLifecycle events are projected by the frozen transcript only when the
         // bridge advertises tools; a bridge whose only tools come from MCP still does.
-        this.hasTools = !tools.isEmpty() || !mcpSpecs.isEmpty()
+        this.hasTools = delegation.enabled() || !tools.isEmpty() || !mcpSpecs.isEmpty()
                 || (skillProjection != null && skillProjection.installTools());
         // The canonical fingerprint covers every field that shaped the SDK declaration, so
         // a header credential reference or timeout change forces a later Run to rebuild.
         this.mcpSignature = mcpProjection.fingerprint();
         this.skillSignature = skillProjection == null ? "" :
                 (skillProjection.recovery() ? "recovery:" : "") + skillProjection.fingerprint();
-        ModelContribution models = new ModelContribution(
-                Map.of(ModelAdapterCoordinate.from(binding.snapshot()), binding.model()),
-                binding.snapshot(),
-                Map.of(binding.name(), binding.snapshot()));
-        Set<String> allowedTools = registeredToolNames(tools, skillProjection);
-        // The frozen lead prompt is rendered once per Bridge; its signature drives the later-Run
-        // rebuild criterion in DeerFlowThreadRunApi, exactly like the MCP/Skill fingerprints.
-        LeadPromptComposer.Composition prompt = composePrompt(allowedTools, skillProjection, agentContext);
-        this.promptSignature = prompt.signature();
-        HaifaAgentBuilder builder = HaifaAgents.builder(profile(
-                        binding.snapshot(), prompt.instructions(), allowedTools,
-                        skillProjection == null ? Set.of() : skillProjection.allowedSkills()))
-                .metadata(new AgentMetadata("Super Harness local compatibility agent"))
-                .callerProvider(SdkCallerProvider.defaultPublicUser())
-                .model(models)
-                .persistence(foundation.persistence())
-                .conversation(foundation.conversation())
-                .tools(tools)
-                .policy(new PolicyPlatformContribution(
-                        PolicyPresets.standardApproval(), new DefaultPolicyDecisionService()));
-        // Human B1 decision: only these production read-only network tools skip the
-        // standard network ASK. All other network/MCP and writing tools retain their policy.
-        builder.autoApproveReadOnlyNetworkTools(tools.stream()
-                .filter(tool -> tool instanceof ProductionWebSearchTool
-                        || tool instanceof ProductionWebFetchTool || tool instanceof ProductionImageSearchTool)
-                .map(tool -> tool.spec().name())
-                .collect(java.util.stream.Collectors.toSet()));
-        builder.autoApproveStandardFileWriteTools(tools.stream()
-                .filter(tool -> tool instanceof ProductionSetupAgentTool || tool instanceof ProductionUpdateAgentTool)
-                .map(tool -> tool.spec().name())
-                .collect(java.util.stream.Collectors.toSet()));
-        if (skillProjection != null && skillProjection.installTools()) {
-            builder.skillPlatform(new SkillPlatformContribution(
-                            skillProjection.catalog(), skillProjection.loader()))
-                    .toolRegistrations(SkillToolContributions.createRegistrations(
-                            foundation.persistence(), skillProjection.loader(), Instant::now));
-        }
-        McpToolPlatforms.McpToolPlatform platform = null;
-        if (!mcpSpecs.isEmpty()) {
-            // The SDK owns per-server connection isolation, discovery, naming, invocation
-            // and release; SH only declares the projections. applyTo sets the builder's
-            // credentials contribution, so SH must not set another one.
-            platform = McpToolPlatforms.connect(
-                    mcpSpecs,
-                    new TenantRef(McpRunTools.TENANT_ID),
-                    new PrincipalRef(McpRunTools.PRINCIPAL_ID, McpRunTools.PRINCIPAL_TYPE));
-            platform.applyTo(builder);
-        }
+        McpToolPlatforms.McpToolPlatform platform = mcpSpecs.isEmpty() ? null : McpToolPlatforms.connect(
+                mcpSpecs, new TenantRef(McpRunTools.TENANT_ID),
+                new PrincipalRef(McpRunTools.PRINCIPAL_ID, McpRunTools.PRINCIPAL_TYPE));
         try {
+            this.mcpToolNames = platform == null ? Set.of() : Set.copyOf(platform.toolNames());
+            this.delegationSignature = delegation.signature(tools, this.mcpSignature, this.skillSignature, this.mcpToolNames);
+            Map<ModelAdapterCoordinate, AgentChatModel> adapters = new java.util.LinkedHashMap<>();
+            Map<String, ModelBinding> admittedModels = new java.util.LinkedHashMap<>();
+            Map<String, ResolvedModelSnapshot> snapshots = new java.util.LinkedHashMap<>();
+            admittedModels.put(binding.name(), binding);
+            snapshots.put(binding.name(), binding.snapshot());
+            for (var child : delegation.children()) {
+                admittedModels.put(child.model().name(), child.model());
+                snapshots.put(child.model().name(), child.model().snapshot());
+            }
+            // The public registry groups adapters by type/version. Managed configurations
+            // may use the same adapter coordinate with distinct credentials; dispatch to
+            // the already-frozen binding instead of reusing Parent's credential resolver.
+            Map<String, ModelBinding> frozenModels = Map.copyOf(admittedModels);
+            AgentChatModel configuredModels = new AgentChatModel() {
+                private AgentChatModel delegate(io.haifa.agent.model.api.AgentChatRequest request) {
+                    ModelBinding selected = frozenModels.get(request.model().modelId().value());
+                    // Recovery registers the same managed revision with a read-only default
+                    // policy. The SDK resumes with the original Run's frozen invocation
+                    // options, which legitimately have a different digest.
+                    // All other frozen fields must still match the credential-owning adapter.
+                    if (selected == null || !matchesFrozenModelConfiguration(selected.snapshot(), request.model())) {
+                        throw new IllegalArgumentException("Model request does not match an admitted configuration");
+                    }
+                    return selected.model();
+                }
+                @Override public io.haifa.agent.model.api.AgentChatResponse invoke(io.haifa.agent.model.api.AgentChatRequest request) {
+                    return delegate(request).invoke(request);
+                }
+                @Override public io.haifa.agent.model.api.AgentChatResponse invokeStreaming(
+                        io.haifa.agent.model.api.AgentChatRequest request, io.haifa.agent.model.api.ModelStreamSink sink) {
+                    return delegate(request).invokeStreaming(request, sink);
+                }
+            };
+            admittedModels.values().forEach(model -> adapters.put(ModelAdapterCoordinate.from(model.snapshot()), configuredModels));
+            ModelContribution models = new ModelContribution(adapters, binding.snapshot(), snapshots);
+            Set<String> allowedTools = registeredToolNames(tools, skillProjection);
+            allowedTools.addAll(this.mcpToolNames);
+            allowedTools.remove("task");
+            // Runtime adds its built-in task Tool from the Child authorization. It is not
+            // a ToolPlatform catalog alias and must not enter ProductProfile.allowedTools.
+            Set<String> promptTools = new LinkedHashSet<>(allowedTools);
+            if (delegation.enabled()) promptTools.add("task");
+            // The frozen lead prompt is rendered once per Bridge; its signature drives the later-Run
+            // rebuild criterion in DeerFlowThreadRunApi, exactly like the MCP/Skill fingerprints.
+            LeadPromptComposer.Composition prompt = composePrompt(promptTools, skillProjection, agentContext, delegation);
+            this.promptSignature = prompt.signature();
+            HaifaAgentBuilder builder = HaifaAgents.builder(profile(
+                            binding.snapshot(), prompt.instructions(), allowedTools,
+                            skillProjection == null ? Set.of() : skillProjection.allowedSkills(), delegation))
+                    .metadata(new AgentMetadata("Super Harness local compatibility agent"))
+                    .callerProvider(SdkCallerProvider.defaultPublicUser())
+                    .model(models)
+                    .persistence(foundation.persistence())
+                    .conversation(foundation.conversation())
+                    .tools(tools)
+                    .policy(new PolicyPlatformContribution(
+                            PolicyPresets.standardApproval(), new DefaultPolicyDecisionService()));
+            if (delegation.enabled()) {
+                builder.childRunCapacity(childRunCapacity).nonInteractiveChildTools();
+                for (var child : delegation.children()) {
+                    Set<String> childTools = child.allowedTools(allowedTools);
+                    builder.runProfile(new ProductRunProfile(child.profileId(), "1.0.0", child.model().name(),
+                            AgentRunType.CHAT, AgentRunBudget.disabled(),
+                            new AgentRunLimits(child.turns(), 1, 1, child.timeoutMillis(),
+                                    child.timeoutMillis(), child.turns(), Long.MAX_VALUE, 0),
+                            Map.of(), Optional.of(childTools)));
+                    builder.childAgent(new ChildAgentSpec(child.name(), child.description(), child.instructions(),
+                            Optional.of(new ProductRunProfileRef(child.profileId(), "1.0.0")), childTools));
+                }
+            }
+            // Human B1 decision: only these production read-only network tools skip the
+            // standard network ASK. All other network/MCP and writing tools retain their policy.
+            builder.autoApproveReadOnlyNetworkTools(tools.stream()
+                    .filter(tool -> tool instanceof ProductionWebSearchTool
+                            || tool instanceof ProductionWebFetchTool || tool instanceof ProductionImageSearchTool)
+                    .map(tool -> tool.spec().name())
+                    .collect(java.util.stream.Collectors.toSet()));
+            builder.autoApproveStandardFileWriteTools(tools.stream()
+                    .filter(tool -> tool instanceof ProductionSetupAgentTool || tool instanceof ProductionUpdateAgentTool)
+                    .map(tool -> tool.spec().name())
+                    .collect(java.util.stream.Collectors.toSet()));
+            if (skillProjection != null && skillProjection.installTools()) {
+                builder.skillPlatform(new SkillPlatformContribution(
+                                skillProjection.catalog(), skillProjection.loader(), skillProjection.trust()))
+                        .toolRegistrations(SkillToolContributions.createRegistrations(
+                                foundation.persistence(), skillProjection.loader(), Instant::now));
+            }
+            if (platform != null) {
+                // The SDK owns per-server connection isolation, discovery, naming, invocation
+                // and release; SH only declares the projections. applyTo sets the builder's
+                // credentials contribution, so SH must not set another one.
+                platform.applyTo(builder);
+            }
             this.agent = builder.build();
         } catch (RuntimeException | Error failure) {
             // The agent never took ownership, so the caller closes the connected platform.
             if (platform != null) {
-                platform.close();
+                try { platform.close(); }
+                catch (RuntimeException | Error closing) { failure.addSuppressed(closing); }
             }
             throw failure;
         }
@@ -214,6 +291,9 @@ public final class HaifaRunBridge implements AutoCloseable {
         return promptSignature;
     }
 
+    public String delegationSignature() { return delegationSignature; }
+    public Set<String> mcpToolNames() { return mcpToolNames; }
+
     /** Tool callbacks retain the admitted identity even when two identities render the same prompt. */
     public boolean matchesAgentIdentity(AgentPromptContext candidate) {
         return java.util.Objects.equals(agentContext.agentName(), candidate.agentName())
@@ -228,7 +308,22 @@ public final class HaifaRunBridge implements AutoCloseable {
 
     public static String promptSignatureFor(List<? extends JavaTool<?, ?>> tools,
             SkillRunTools.Projection skillProjection, AgentPromptContext agentContext) {
-        return composePrompt(registeredToolNames(tools, skillProjection), skillProjection, agentContext).signature();
+        return promptSignatureFor(tools, skillProjection, agentContext, SubagentRunConfiguration.disabled());
+    }
+
+    public static String promptSignatureFor(List<? extends JavaTool<?, ?>> tools,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation) {
+        return promptSignatureFor(tools, skillProjection, agentContext, delegation, Set.of());
+    }
+
+    public static String promptSignatureFor(List<? extends JavaTool<?, ?>> tools,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation, Set<String> platformToolNames) {
+        Set<String> names = registeredToolNames(tools, skillProjection);
+        names.addAll(platformToolNames);
+        if (delegation.enabled()) names.add("task");
+        return composePrompt(names, skillProjection, agentContext, delegation).signature();
     }
 
     private static Set<String> registeredToolNames(
@@ -244,13 +339,16 @@ public final class HaifaRunBridge implements AutoCloseable {
     }
 
     private static LeadPromptComposer.Composition composePrompt(
-            Set<String> registeredTools, SkillRunTools.Projection skillProjection, AgentPromptContext agentContext) {
+            Set<String> registeredTools, SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation) {
         List<LeadPromptInputs.Skill> skills = skillProjection == null
                 ? List.of()
                 : skillProjection.selectedPackages().stream()
                         .map(pkg -> new LeadPromptInputs.Skill(pkg.name(), pkg.description()))
                         .toList();
-        LeadPromptInputs inputs = agentContext.promptInputs(skills);
+        LeadPromptInputs inputs = agentContext.promptInputs(skills).withSubagents(
+                delegation.children().stream().map(child -> new LeadPromptInputs.Subagent(
+                        child.name(), child.description())).toList(), delegation.settings().parallel(), delegation.settings().total());
         return LeadPromptComposer.classpath().compose(inputs, registeredTools);
     }
 
@@ -265,6 +363,17 @@ public final class HaifaRunBridge implements AutoCloseable {
     public boolean matchesModelBinding(ModelBinding candidate) {
         return bindingIdentity().equals(candidate.name() + "@" + candidate.revision())
                 && binding.snapshot().configurationDigest().equals(candidate.snapshot().configurationDigest());
+    }
+
+    /** Recovery preserves SDK-owned Run options without relaxing adapter or credential identity. */
+    static boolean matchesFrozenModelConfiguration(ResolvedModelSnapshot selected, ResolvedModelSnapshot request) {
+        ResolvedModelSnapshot normalized = ResolvedModelSnapshot.create(
+                selected.providerId(), selected.providerVersion(), selected.modelId(), selected.modelVersion(),
+                selected.providerModelId(), selected.adapterType(), selected.adapterVersion(), selected.apiStyle(),
+                selected.dialect(), selected.endpoint(), selected.credentialRef(), selected.nativeStreaming(),
+                selected.capabilities(), selected.contextWindow(), selected.maxOutputTokens(),
+                selected.providerOptions(), request.invocationOptions());
+        return normalized.configurationDigest().equals(request.configurationDigest());
     }
 
     public boolean hasTools() {
@@ -300,6 +409,43 @@ public final class HaifaRunBridge implements AutoCloseable {
         return agent.runs().find(runId);
     }
 
+    /** Authoritative SDK facts; also available on a read bridge with no current declarations. */
+    public List<ChildRunView> children(AgentRunId parent) { return agent.runs().children(parent); }
+
+    public Optional<ToolCallView> runtimeToolCall(AgentRunId parent, String runtimeToolCallId) {
+        return toolCalls(parent).stream().filter(call -> call.id().value().equals(runtimeToolCallId)).findFirst();
+    }
+
+    /** Exact SDK lifecycle association to the same Runtime ID used on Parent SSE/history. */
+    public Optional<String> childTaskId(AgentRunId parent, AgentRunId child) {
+        return Optional.ofNullable(childTaskIds(parent, children(parent)).get(child));
+    }
+
+    /** Resolve a caller-visible child batch with one bounded Parent scan and one Tool read. */
+    public java.util.Map<AgentRunId, String> childTaskIds(AgentRunId parent, List<ChildRunView> children) {
+        var visible = children.stream().filter(view -> view.parentRunId().equals(parent))
+                .map(ChildRunView::runId).collect(java.util.stream.Collectors.toSet());
+        if (visible.isEmpty()) return java.util.Map.of();
+        var tasks = toolCalls(parent).stream().filter(call -> call.runId().equals(parent)
+                        && "task".equals(call.toolName()))
+                .map(call -> call.id().value()).collect(java.util.stream.Collectors.toSet());
+        java.util.Map<AgentRunId, String> associations = new java.util.HashMap<>();
+        RunEventCursor cursor = beforeFirstEvent(parent);
+        for (int pages = 0; pages < 128; pages++) {
+            RunEventPage page = events(parent, cursor, 256);
+            for (var event : page.items()) {
+                if (event.payload() instanceof io.haifa.agent.runtime.api.RunEventPayloads.ChildRunLifecycle lifecycle
+                        && tasks.contains(lifecycle.toolCallId())) {
+                    var child = new AgentRunId(lifecycle.childRunId());
+                    if (visible.contains(child)) associations.putIfAbsent(child, lifecycle.toolCallId());
+                }
+            }
+            if (!page.hasMore() || associations.size() == visible.size()) return java.util.Map.copyOf(associations);
+            cursor = page.nextCursor();
+        }
+        throw new IllegalStateException("Child association exceeds the bounded event query budget");
+    }
+
     public Optional<ConversationRecord> findConversation(AgentSessionId sessionId) {
         return agent.conversations().find(sessionId);
     }
@@ -327,6 +473,16 @@ public final class HaifaRunBridge implements AutoCloseable {
 
     public RunEventPage events(AgentRunId runId, RunEventCursor cursor, int limit) {
         return agent.runs().events(runId, cursor, limit);
+    }
+
+    public io.haifa.agent.runtime.api.RunMessagePage messages(AgentRunId runId,
+            io.haifa.agent.runtime.api.RunMessageCursor cursor, int limit) {
+        return agent.runs().messages(runId, cursor, limit);
+    }
+
+    public io.haifa.agent.runtime.api.RunEventSubscription subscribe(AgentRunId runId,
+            RunEventCursor cursor, io.haifa.agent.runtime.api.AgentRunEventListener listener) {
+        return agent.runs().subscribe(runId, cursor, listener);
     }
 
     public Optional<InteractionView> pendingInteraction(AgentRunId runId) {
@@ -376,18 +532,32 @@ public final class HaifaRunBridge implements AutoCloseable {
             ResolvedModelSnapshot snapshot,
             String instructions,
             Set<String> allowedTools,
-            Set<String> allowedSkills) {
+            Set<String> allowedSkills,
+            SubagentRunConfiguration delegation) {
+        long wall = 120_000;
+        if (delegation.enabled()) {
+            long childWall = delegation.children().stream().mapToLong(SubagentRunConfiguration.Child::timeoutMillis).max().orElseThrow();
+            // Directory seconds are positive int values; total is clamped to 50. Reject any
+            // unsupported declaration rather than silently overflow or create an unbounded limit.
+            if (childWall < 1 || childWall > Math.multiplyExact((long) Integer.MAX_VALUE, 1000L)) {
+                throw new IllegalArgumentException("Child timeout is outside the supported configuration range");
+            }
+            wall = Math.addExact(wall, Math.multiplyExact(delegation.settings().total(), childWall));
+        }
         return ProductProfile.create(
                 new ProductId("haifa-super-harness"),
                 new ProductVersion("1.0.0"),
-                new AgentDefinitionId("haifa-super-harness-agent"),
+                // A colon is outside the managed Child namespace. Existing disabled/recovery
+                // profiles retain their historical ID; no stored Run is renamed.
+                new AgentDefinitionId(delegation.enabled() ? "haifa-super-harness:lead" : "haifa-super-harness-agent"),
                 new AgentDefinitionVersion(1, 0, 0),
                 instructions,
                 new ProductRunProfileRef(snapshot.modelId().value(), "1.0.0"),
-                new AgentRunBudget(0, 8_192, 65_536, 16, 16, 0, "USD", 100),
-                new AgentRunLimits(16, 0, 1, 120_000, 60_000, 16, 16, 0),
+                new AgentRunBudget(0, 8_192, 65_536, 16, 16, delegation.enabled() ? delegation.settings().total() : 0, "USD", 100),
+                new AgentRunLimits(16, delegation.enabled() ? 1 : 0, delegation.enabled() ? delegation.settings().parallel() : 1, wall,
+                        60_000, 16, 16, delegation.enabled() ? delegation.settings().total() : 0),
                 allowedTools,
-                allowedSkills);
+                allowedSkills).withAllowedChildAgents(delegation.names());
     }
 
     public record ModelBinding(

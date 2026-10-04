@@ -4,19 +4,28 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * The only per-Bridge inputs that shape the frozen lead-agent system prompt in this slice.
- *
- * <p>Segments that stay empty until their capability exists (subagent / memory tool / deferred
- * tools / MCP routing hints / ACP+mounts / the three clarification strings) are deliberately not
- * fields; the composer renders them as empty. {@code selfUpdate} is reserved for the paired
- * {@code W03-AgentSoulPromptLoop} slice, which owns agent identity; this slice always passes
- * {@code agentName == null} (default name), {@code soul == null} and {@code selfUpdate == false}.
+ * Product inputs frozen with a Bridge: selected identity, Skill list and admitted Child list.
+ * Runtime execution, messages and permission decisions remain SDK-owned.
  */
-public record LeadPromptInputs(String agentName, String soul, boolean selfUpdate, List<Skill> skills) {
+public record LeadPromptInputs(String agentName, String soul, boolean selfUpdate, List<Skill> skills,
+        List<Subagent> subagents, int parallelSubagents, int totalSubagents) {
     public static final String DEFAULT_AGENT_NAME = "DeerFlow 2.0";
 
     public LeadPromptInputs {
         skills = List.copyOf(Objects.requireNonNull(skills, "skills"));
+        subagents = List.copyOf(Objects.requireNonNull(subagents, "subagents"));
+    }
+
+    public LeadPromptInputs(String agentName, String soul, boolean selfUpdate, List<Skill> skills) {
+        this(agentName, soul, selfUpdate, skills, List.of(), 3, 6);
+    }
+
+    public LeadPromptInputs withSubagents(List<Subagent> children, int parallel, int total) {
+        return new LeadPromptInputs(agentName, soul, selfUpdate, skills, children, parallel, total);
+    }
+
+    public record Subagent(String name, String description) {
+        public Subagent { Objects.requireNonNull(name); description = description == null ? "" : description; }
     }
 
     public String agentNameOrDefault() {

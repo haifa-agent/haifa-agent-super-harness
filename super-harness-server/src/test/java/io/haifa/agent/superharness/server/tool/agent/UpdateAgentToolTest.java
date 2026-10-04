@@ -423,7 +423,9 @@ class UpdateAgentToolTest {
             assertThat(results.size()).isEqualTo(2);
             assertThat(results.getFirst().path("content").asText().contains("updated successfully!")).isTrue();
             assertThat(results.getLast().path("content").asText().contains("Error:")).isTrue();
-            fixture.completed(fixture.run("update-boundary", "agent-a", false));
+            // Isolate the saved prompt boundary from the preceding update Tool-call history.
+            fixture.thread("update-boundary-fresh");
+            fixture.completed(fixture.run("update-boundary-fresh", "agent-a", false));
             assertThat(instructions(model.requests.getLast()).trim().length()).isEqualTo(32000);
             soulEquals(instructions(model.requests.getLast()), boundary);
         }

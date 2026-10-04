@@ -108,7 +108,7 @@ class V2SkillConfigStoreTest {
     }
 
     @Test
-    void frozenRestReturnsOneSkillAndProcessReloadResponse() throws Exception {
+    void frozenRestReturnsCompleteBundledPackagesAndProcessReloadResponse() throws Exception {
         var store = new SkillConfigStore(
                 json, dataDirectory, SkillConfigStore.repositoryRootFromWorkingDirectory());
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -117,7 +117,9 @@ class V2SkillConfigStoreTest {
         try {
             URI base = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
             JsonNode list = json.readTree(request(base, "GET", "/api/skills", null).body());
-            assertThat(list.path("skills")).hasSize(1);
+            assertThat(list.path("skills")).hasSize(3);
+            assertThat(store.detail("skill-creator").orElseThrow()).containsEntry("enabled", false).containsEntry("editable", false);
+            assertThat(store.detail("skill-reviewer").orElseThrow()).containsEntry("enabled", false).containsEntry("editable", false);
             JsonNode detail = json.readTree(request(base, "GET", "/api/skills/consulting-analysis", null).body());
             assertThat(detail.path("source").asText()).isEqualTo("bytedance/deer-flow");
             assertThat(detail.path("license").asText()).isEqualTo("MIT");

@@ -277,6 +277,63 @@ final class DeerFlowWorkspaceApi {
         return parseMultipart(exchange, fieldName, 1).getFirst();
     }
 
+    MultipartFile parseSkillArchive(HttpExchange exchange) throws IOException {
+        return parseMultipart(exchange, "archive", 1,
+                io.haifa.agent.superharness.server.config.SkillPackageFiles.MAX_ARCHIVE_BYTES,
+                io.haifa.agent.superharness.server.config.SkillPackageFiles.MAX_ARCHIVE_BYTES).getFirst();
+    }
+
+    byte[] readThreadSkillArchive(String threadId, String path) throws IOException {
+        if (!threadExists.test(threadId)) throw new java.io.FileNotFoundException("Thread not found");
+        if (path == null || !path.startsWith("/mnt/user-data/") || !path.toLowerCase(Locale.ROOT).endsWith(".skill")) {
+            throw new IllegalArgumentException("Skill archive requires a thread user-data .skill path");
+        }
+        WorkspaceBinding binding = workspace.bind(OWNER_ID, threadId);
+        return workspace.readVerifiedBytes(OWNER_ID, binding.workspaceId(), path);
+    }
+
+    static Map<String, byte[]> readSkillReviewTarget(
+            io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService projects,
+            RestrictedWorkspaceService workspace, String threadId, String requested) throws IOException {
+        if (requested == null || !requested.startsWith("/mnt/user-data/")) throw new IllegalArgumentException("Review target must belong to the current Thread");
+        var binding = projects.requireThreadWorkspace(OWNER_ID, threadId);
+        if (requested.endsWith(".skill")) return io.haifa.agent.superharness.server.config.SkillPackageFiles.archive(
+                workspace.readVerifiedBytes(OWNER_ID, binding.workspaceId(), requested));
+        String relative = RestrictedWorkspaceService.normalizeLogicalPath(requested);
+        WorkspacePath root = new WorkspacePath(binding.workspaceId(), ProjectPath.of(relative));
+        WorkspaceFileService files = workspace.workspaceFiles(OWNER_ID, binding.workspaceId());
+        if (files.stat(root, false).type() != FileType.DIRECTORY) throw new IllegalArgumentException("Review requires a package directory or .skill archive");
+        var queue = new java.util.ArrayDeque<WorkspacePath>(); queue.add(root);
+        Map<String, byte[]> result = new java.util.TreeMap<>();
+        int entries = 0; long bytes = 0;
+        java.time.Instant deadline = java.time.Instant.now().plusSeconds(15);
+        while (!queue.isEmpty()) {
+            WorkspacePath directory = queue.remove(); int offset = 0;
+            while (true) {
+                if (!java.time.Instant.now().isBefore(deadline)) throw new IOException("Review target enumeration timed out");
+                FileListPage page = files.list(new FileListRequest(directory, offset, LIST_PAGE_SIZE));
+                for (FileEntry entry : page.entries()) {
+                    if (++entries > 4096) throw new IOException("Review target has too many entries");
+                    String path = entry.metadata().path().projectPath().value();
+                    String member = path.substring(relative.length() + 1);
+                    if (member.split("/", -1).length > 32) throw new IOException("Review target is too deep");
+                    if (entry.metadata().type() == FileType.DIRECTORY) queue.add(entry.metadata().path());
+                    else if (entry.metadata().type() == FileType.FILE) {
+                        if (entry.metadata().size() > 64L * 1024 * 1024 || (bytes += entry.metadata().size()) > 100L * 1024 * 1024) {
+                            throw new IOException("Review target exceeds size limits");
+                        }
+                        result.put(member, workspace.readVerifiedBytes(OWNER_ID, binding.workspaceId(), "/mnt/user-data/" + path));
+                    } else throw new IOException("Linked or special review target is unavailable");
+                }
+                if (!page.truncated()) break;
+                if (page.nextOffset() <= offset) throw new IOException("Review enumeration did not advance");
+                offset = page.nextOffset();
+            }
+        }
+        if (!result.containsKey("SKILL.md")) throw new IllegalArgumentException("Review directory requires a root SKILL.md");
+        return result;
+    }
+
     boolean tryAcquireUploadSlot() {
         return uploadSlot.tryAcquire();
     }
@@ -302,6 +359,11 @@ final class DeerFlowWorkspaceApi {
 
     private List<MultipartFile> parseMultipart(HttpExchange exchange, String expectedField, int maxFiles)
             throws IOException {
+        return parseMultipart(exchange, expectedField, maxFiles, limits.maxUploadBytes(), MAX_TOTAL_BYTES);
+    }
+
+    private List<MultipartFile> parseMultipart(HttpExchange exchange, String expectedField, int maxFiles,
+            long maxFileBytes, long maxTotalBytes) throws IOException {
         String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
         if (contentType == null || !contentType.toLowerCase(Locale.ROOT).startsWith("multipart/form-data")) {
             throw new HttpFailure(422, "Content-Type must be multipart/form-data");
@@ -315,7 +377,7 @@ final class DeerFlowWorkspaceApi {
                 || boundary.chars().anyMatch(character -> character < 33 || character > 126)) {
             throw new HttpFailure(422, "Multipart boundary is invalid");
         }
-        long maxBody = MAX_TOTAL_BYTES + MAX_MULTIPART_OVERHEAD;
+        long maxBody = maxTotalBytes + MAX_MULTIPART_OVERHEAD;
         long declaredLength = -1;
         String contentLength = exchange.getRequestHeaders().getFirst("Content-Length");
         if (contentLength != null) {
@@ -341,11 +403,11 @@ final class DeerFlowWorkspaceApi {
         }
         long total = 0;
         for (MultipartFile file : files) {
-            if (file.content.length > limits.maxUploadBytes()) {
+            if (file.content.length > maxFileBytes) {
                 throw new HttpFailure(413, "File exceeds the per-file size limit: " + file.filename);
             }
             total = Math.addExact(total, file.content.length);
-            if (total > MAX_TOTAL_BYTES) {
+            if (total > maxTotalBytes) {
                 throw new HttpFailure(413, "Files exceed the total size limit");
             }
         }

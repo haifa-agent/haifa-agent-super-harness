@@ -48,13 +48,26 @@ class DeerFlowReasoningSettingsTest {
     @Test
     void rejectsInvalidUnsupportedAndUndeliveredExecutionPaths() {
         for (String context : new String[]{"{\"mode\":\"turbo\"}", "{\"mode\":\"pro\"}",
-                "{\"subagent_enabled\":true}", "{\"reasoning_effort\":\"max\"}",
+                "{\"subagent_enabled\":\"true\"}", "{\"reasoning_effort\":\"max\"}",
                 "{\"thinking_enabled\":\"false\"}", "{\"mode\":\"flash\",\"thinking_enabled\":true}"}) {
             assertThatThrownBy(() -> DeerFlowReasoningSettings.resolve(node(context), null, true))
                     .isInstanceOf(IllegalArgumentException.class);
         }
         assertThatThrownBy(() -> DeerFlowReasoningSettings.resolve(node("{\"mode\":\"thinking\"}"), null, false))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("support thinking");
+    }
+
+    @Test
+    void delegationKeepsReasoningPolicyAndPlanPrerequisiteIndependent() throws Exception {
+        assertThat(DeerFlowReasoningSettings.resolve(
+                node("{\"mode\":\"flash\",\"subagent_enabled\":true}"), null, true).frozenOptions())
+                .containsExactlyEntriesOf(Map.of("thinking", "disabled"));
+        assertThat(DeerFlowReasoningSettings.resolve(
+                node("{\"mode\":\"thinking\",\"subagent_enabled\":true}"), null, true).frozenOptions())
+                .containsEntry("thinking", "enabled").containsEntry("reasoning_effort", "low");
+        assertThatThrownBy(() -> DeerFlowReasoningSettings.resolve(
+                node("{\"mode\":\"ultra\",\"subagent_enabled\":true,\"is_plan_mode\":true}"), null, true))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("W07 plan execution");
     }
 
     private JsonNode node(String value) throws Exception {

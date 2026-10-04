@@ -210,7 +210,7 @@ function Wait-FixtureExit {
 }
 
 function Wait-FixturePortsReleased {
-    param([int[]]$Ports, [long]$Started, [int]$TimeoutSec, [string]$Root = '', [int[]]$OwnedPids = @())
+    param([int[]]$Ports, [long]$Started, [int]$TimeoutSec, [string]$Root = '', [object[]]$OwnedFacts = @())
     $facts = @{}; $first = @{}
     do {
         foreach ($port in $Ports) {
@@ -226,7 +226,12 @@ function Wait-FixturePortsReleased {
             }
         }
         $owned = @($(if ($Root) { Get-FixtureOwnedRuntimeProcesses $Root }))
-        $remaining = @($OwnedPids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+        $remaining = @(foreach ($fact in $OwnedFacts) {
+            $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($fact.pid)" -ErrorAction SilentlyContinue
+            # A changed command view does not prove the original process has exited.
+            # Wait for the exact creation identity to disappear; never stop a mismatching view.
+            if ($null -ne $current -and $current.CreationDate.ToUniversalTime().ToString('o') -eq $fact.created) { $fact.pid }
+        })
         if ($facts.Count -eq $Ports.Count -and $owned.Count -eq 0 -and $remaining.Count -eq 0 -and
             [Diagnostics.Stopwatch]::GetElapsedTime($Started).TotalSeconds -le $TimeoutSec) {
             return @($Ports | ForEach-Object { $facts[$_] })
@@ -254,38 +259,68 @@ function Stop-FixtureProcesses {
     # Original W18 allows 10 seconds for each managed process; binding consumes this same total budget.
     $budget = [Math]::Max(1, @($Fixture.Processes | Where-Object Name -ne 'Playwright').Count) * 10
     $failures = [Collections.Generic.List[string]]::new()
+    $reusedPids = [Collections.Generic.List[int]]::new()
+    $identityChanges = [Collections.Generic.List[object]]::new()
     foreach ($entry in @($Fixture.Processes | Sort-Object Started -Descending)) {
         try { Update-FixtureProcessTree $entry } catch { $failures.Add($_.Exception.Message) }
         foreach ($fact in @($entry.Owned.Values | Sort-Object created -Descending)) {
             try {
                 $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($fact.pid)" -ErrorAction Stop
                 if ($null -eq $current) { continue }
-                if ((Get-FixtureCommandHash $current.CommandLine) -ne $fact.identityHash -or
-                    $current.CreationDate.ToUniversalTime().ToString('o') -ne $fact.created) {
-                    throw "Refusing changed process identity pid=$($fact.pid)"
+                # The original child exited and Windows reused its PID. Never stop the new owner.
+                if ($current.CreationDate.ToUniversalTime().ToString('o') -ne $fact.created) {
+                    $reusedPids.Add($fact.pid); continue
+                }
+                $currentHash = Get-FixtureCommandHash $current.CommandLine
+                if ($currentHash -ne $fact.identityHash) {
+                    # Refuse to stop this PID. Its command view may change while it exits;
+                    # the shared cleanup deadline still requires the original creation to end.
+                    $identityChanges.Add([ordered]@{ pid = $fact.pid
+                        expectedName = $fact.name; expectedCreated = $fact.created; expectedHash = $fact.identityHash
+                        currentName = [string]$current.Name
+                        currentCreated = $current.CreationDate.ToUniversalTime().ToString('o')
+                        currentHash = $currentHash; currentCommandLineNull = $null -eq $current.CommandLine
+                        observedMs = [Diagnostics.Stopwatch]::GetElapsedTime($started).TotalMilliseconds
+                        stopRefused = $true; disposition = 'WAITING'; resolvedMs = $null })
+                    continue
                 }
                 Stop-Process -Id $fact.pid -Force -ErrorAction Stop
             } catch { $failures.Add($_.Exception.Message) }
         }
     }
     $ports = @($Fixture.Ports | Select-Object -Unique)
-    $ownedPids = @($Fixture.Processes | ForEach-Object { $_.Owned.Keys } | Select-Object -Unique)
+    $ownedFacts = @($Fixture.Processes | ForEach-Object { $_.Owned.Values })
     $released = @()
     try {
         if ($Fixture.Processes.Count) {
-            $released = @(Wait-FixturePortsReleased -Ports $ports -Started $started -TimeoutSec $budget -Root $Fixture.Root -OwnedPids $ownedPids)
+            $released = @(Wait-FixturePortsReleased -Ports $ports -Started $started -TimeoutSec $budget -Root $Fixture.Root -OwnedFacts $ownedFacts)
         } else {
             # Preflight can reject another owner's port. We created no process and must not stop that owner.
             $released = @(foreach ($port in $ports) { @{ port = $port; bindable = Test-FixtureLoopbackBind $port; managed = $false } })
         }
     }
     catch { $released = @($_.Exception.Data['portFacts']); $failures.Add($_.Exception.Message) }
-    $remaining = @($Fixture.Processes | ForEach-Object { $_.Owned.Keys } | Select-Object -Unique |
-        Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    $remaining = @(foreach ($fact in $ownedFacts) {
+        $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($fact.pid)" -ErrorAction SilentlyContinue
+        if ($null -ne $current -and $current.CreationDate.ToUniversalTime().ToString('o') -eq $fact.created) { $fact.pid }
+    })
+    $remaining = @($remaining | Select-Object -Unique)
+    foreach ($change in $identityChanges) {
+        $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($change.pid)" -ErrorAction SilentlyContinue
+        $change.resolvedMs = [Diagnostics.Stopwatch]::GetElapsedTime($started).TotalMilliseconds
+        if ($null -eq $current) { $change.disposition = 'ORIGINAL_EXITED' }
+        elseif ($current.CreationDate.ToUniversalTime().ToString('o') -ne $change.expectedCreated) {
+            $change.disposition = 'PID_REUSED'; $reusedPids.Add($change.pid)
+        } else {
+            $change.disposition = 'ORIGINAL_STILL_PRESENT'
+            $failures.Add("Refusing changed process identity pid=$($change.pid)")
+        }
+    }
     if ($remaining.Count) { $failures.Add("Managed process PIDs remain: $($remaining -join ',')") }
     $Fixture.Cleanup = [ordered]@{ success = $failures.Count -eq 0; budgetMs = $budget * 1000
         elapsedMs = [Diagnostics.Stopwatch]::GetElapsedTime($started).TotalMilliseconds
-        ports = $released; remainingPids = $remaining; failures = $failures.ToArray() }
+        ports = $released; remainingPids = $remaining; reusedPids = @($reusedPids | Select-Object -Unique)
+        failures = $failures.ToArray(); identityChanges = $identityChanges.ToArray() }
     $registry = @($Fixture.Processes | ForEach-Object {
         [ordered]@{ name = $_.Name; actualPid = $_.Id; wrapperPid = $_.WrapperPid; ports = $_.Ports
             stdout = $_.Stdout; stderr = $_.Stderr; owned = @($_.Owned.Values) }

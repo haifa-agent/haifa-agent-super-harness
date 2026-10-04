@@ -80,7 +80,8 @@ public final class SkillRunTools {
             Set<String> allowedSkills,
             String fingerprint,
             List<Package> selectedPackages,
-            boolean recovery) {
+            boolean recovery,
+            io.haifa.agent.skill.api.SkillTrustSnapshot trust) {
         public Projection {
             allowedSkills = Set.copyOf(allowedSkills);
             selectedPackages = List.copyOf(selectedPackages);
@@ -96,11 +97,16 @@ public final class SkillRunTools {
         }
 
         public Projection forRecovery() {
-            return new Projection(catalog, loader, allowedSkills, fingerprint, selectedPackages, true);
+            return new Projection(catalog, loader, allowedSkills, fingerprint, selectedPackages, true, trust);
         }
     }
 
     static Projection projection(List<Package> packages, Map<String, Boolean> enabled, Selection selection) {
+        return projection(packages, enabled, selection, io.haifa.agent.skill.api.SkillTrustSnapshot.empty());
+    }
+
+    static Projection projection(List<Package> packages, Map<String, Boolean> enabled, Selection selection,
+            io.haifa.agent.skill.api.SkillTrustSnapshot trust) {
         List<Package> selected = packages.stream()
                 .filter(Package::active)
                 .filter(pkg -> enabled.getOrDefault(pkg.name(), pkg.enabledByDefault()))
@@ -111,11 +117,7 @@ public final class SkillRunTools {
         // Retain every immutable published version in the loader. A persisted SDK Run
         // already holds its frozen binding, even when a later catalog is empty.
         List<SkillSource> retainedSources = packages.stream().map(Package::source).toList();
-        SkillVisibilityContext visibility = new SkillVisibilityContext(
-                new TenantRef(McpRunTools.TENANT_ID),
-                new PrincipalRef(McpRunTools.PRINCIPAL_ID, McpRunTools.PRINCIPAL_TYPE),
-                Optional.empty(), false, Set.of(SkillScope.PRODUCT));
-        SkillDiscoveryContext discovery = new SkillDiscoveryContext(visibility);
+        SkillDiscoveryContext discovery = SkillReviewApprovals.discovery();
         // LocalDirectorySkillSource records the exact immutable package location
         // during discover(). A retained source absent from today's catalog still
         // needs that index when a persisted Run validates its frozen binding.
@@ -125,19 +127,20 @@ public final class SkillRunTools {
             }
         }
         SkillCatalog catalog = new SkillCatalogBuilder(currentSources,
-                new SkillResolutionPolicy("super-harness-bundled-skills", List.of(SkillScope.PRODUCT), false))
+                new SkillResolutionPolicy("super-harness-bundled-skills", List.of(SkillScope.USER, SkillScope.PRODUCT), false),
+                trust, SkillReviewApprovals.subject(), java.time.Clock.systemUTC())
                 .build(discovery);
         if (catalog.snapshot().bindings().size() != selected.size()) {
-            throw new IllegalStateException("enabled Skill catalog is incomplete or ambiguous");
+            throw new IllegalStateException("enabled Skill catalog is incomplete or ambiguous: " + catalog.snapshot().diagnostics());
         }
         Set<String> allowed = selected.stream().map(Package::name)
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
-        StringBuilder canonical = new StringBuilder();
+        StringBuilder canonical = new StringBuilder(trust.manifestDigest()).append('\n');
         selected.forEach(pkg -> canonical.append(pkg.name()).append('\n')
                 .append(pkg.sourceName()).append('\n').append(pkg.version()).append('\n')
                 .append(pkg.contentHash()).append('\n'));
         return new Projection(catalog, new CompositeSkillContentLoader(retainedSources),
-                allowed, fingerprint(canonical.toString()), selected, false);
+                allowed, fingerprint(canonical.toString()), selected, false, trust);
     }
 
     private static String fingerprint(String value) {

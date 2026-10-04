@@ -59,7 +59,9 @@ public final class DeerFlowToolTranscriptProjection {
         Map<String, Object> toolCall = new LinkedHashMap<>();
         toolCall.put("id", call.id().value());
         toolCall.put("name", call.toolName());
-        toolCall.put("args", call.arguments().values());
+        toolCall.put("args", "task".equals(call.toolName())
+                ? DeerFlowDelegationProjection.arguments(call.arguments().values())
+                : call.arguments().values());
         toolCall.put("type", "tool_call");
 
         Map<String, Object> message = baseMessage(call, "request", "ai");
@@ -90,6 +92,33 @@ public final class DeerFlowToolTranscriptProjection {
             message.put("content", result.summary().text());
             additional.put("haifa_tool_result", result.structuredData().values());
             additional.put("haifa_tool_result_truncated", result.truncated());
+            if (call.toolName().equals("review_skill_package")) {
+                Object carrier = result.structuredData().values().get("review");
+                String raw = carrier instanceof String text ? text : carrier instanceof List<?> chunks
+                        && chunks.stream().allMatch(String.class::isInstance)
+                        ? chunks.stream().map(String.class::cast).collect(java.util.stream.Collectors.joining()) : "";
+                // SDK externalization sets result.truncated even when this bounded view retains all fields.
+                // Only reassemble an intact public view; never project partially clipped JSON as full facts.
+                if (!result.structuredData().truncated() && !raw.isEmpty() && raw.length() <= 1024 * 1024) {
+                    try {
+                        var payload = JSON.readTree(raw);
+                        if (payload.path("untrusted_review_data").asBoolean() && payload.path("evidence_level").asText().equals("static")
+                                && !payload.path("target_executed").asBoolean(true)) {
+                            var subject = payload.path("facts").path("subject");
+                            Map<String, Object> entry = new LinkedHashMap<>();
+                            entry.put("display_ref", subject.path("display_ref").asText());
+                            entry.put("package_digest", subject.path("package_digest").asText());
+                            entry.put("profile", call.arguments().values().getOrDefault("profile", "deerflow"));
+                            entry.put("scope", call.arguments().values().getOrDefault("scope", List.of("all")));
+                            additional.put("review_subject_entry", Map.copyOf(entry));
+                            message.put("artifact", JSON.convertValue(payload, Map.class));
+                            message.put("content", raw);
+                        }
+                    } catch (JsonProcessingException invalid) {
+                        // A malformed carrier retains the ordinary SDK result; it is never a review artifact.
+                    }
+                }
+            }
             additional.put(
                     "haifa_artifact_refs",
                     result.artifacts().stream()
@@ -105,6 +134,15 @@ public final class DeerFlowToolTranscriptProjection {
                     .map(notice -> "Error: " + error + ". " + notice)
                     .orElse(error));
             additional.put("haifa_tool_error", error);
+        }
+        if ("task".equals(call.toolName())) {
+            ToolResultView result = call.result().orElse(null);
+            additional.putAll(DeerFlowDelegationProjection.result(
+                    call.status().name(),
+                    result == null ? null : result.successful(),
+                    result == null ? Map.of() : result.structuredData().values(),
+                    result != null && result.structuredData().truncated(),
+                    call.error().map(value -> value.wireCode()).orElse(null)));
         }
         message.put("additional_kwargs", Map.copyOf(additional));
         return Optional.of(message);

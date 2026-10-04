@@ -84,6 +84,8 @@ $env:no_proxy=$env:NO_PROXY
 
 ### 真实模型诊断
 
+- W15 静态 review 使用 `python -I -B`，隔离模式不加载用户 site-packages。系统 Python 普通导入 `yaml` 成功，不能证明隔离子进程可用；检查：`<python> -I -B -c 'import yaml; print(yaml.__version__)'`。缺 PyYAML 时 review 拒绝，不能去掉 `-I` 或在线安装目标依赖绕过。以进程变量 `HAIFA_SUPER_HARNESS_SKILL_PYTHON` 指向已经具备该依赖的解释器；本机冻结 reference 的 `backend/.venv/Scripts/python.exe` 已验证 PyYAML 6.0.3，仅用于运行纯静态审查模块，不启用其后端或目标脚本。首次失败原件保留于 W15 独立证据目录。
+
 - 2026-09-30 实测：managed model 的 `base_url` 会影响 SDK 方言；`DeerFlowConfigurationApi.binding` 仅在 endpoint 精确为 `https://api.deepseek.com` 时使用 DeepSeek 方言并固定 `thinking=disabled`。把真实模型临时改到本地 `/w16-live` 代理，实际落盘 SDK 的 standard 方言会在发 HTTP 前拒绝（`provider endpoint path must be /v1`，Run 为 `MODEL_CALL_FAILED`）；改 `/v1` 虽可发出本地请求，standard 请求缺少原 DeepSeek thinking 选项，不能视为同语义采集。检查：核对实际 model config、SDK bytecode `validateSnapshot`、原 `model.call.failed` 与 Provider 是否收到 HTTP；本地无真实凭据定向证明见 W16 `local-tmp/slot-2-w16/evidence/phase2-scheme-b-preflight-20260930-144134/a-only-capture-diagnostic/sdk-local-endpoint-proof/`。最小处理：恢复直接 HTTPS 配置并把采集前置 FAIL 单独保留，不从它解释此前 `PARTIAL_RESPONSE`，不以代理改写请求或更换方言掩盖差异；后续采集须先证明保持原请求语义。
 
 ### Windows 快照目录观察
@@ -114,6 +116,8 @@ corepack pnpm install --offline --frozen-lockfile
 - 冻结文件按 Git 提交的原始字节落盘，来源 / 哈希校验必须通过。需要重新落盘时，仅在全新、相关路径 clean 的 worktree 使用 `git archive` 导出 `HEAD` 的 `frontend`、`third-party`、`contracts` 并解包；不修改固定哈希、冻结资源或全局 Git 配置。完整启动与验收命令见 [README](README.md)。
 
 ### 端口
+
+- 2026-10-03 W15 全仓门禁在并行工作包运行时发现 `W05ExactGatewayProcessRestartApprovalTest` 默认固定端口 `20618` 可能被其它槽位短时占用；症状为用例入口 `requirePortAvailable` 抛 `Address already in use`，即使事后 `Get-NetTCPConnection -LocalPort 20618` 为空也不能倒推当时未占用。原件见 W15 `local-tmp/w15-package/evidence/fullgate-third-fail-20261003-1840/`。先核对 `Get-NetTCPConnection -LocalPort 20618`、`netsh interface ipv4 show excludedportrange protocol=tcp`，再对本任务已分配端口做 loopback bind 预检。在启动门禁的同一 PowerShell 会话设置进程变量 `HAIFA_SUPER_HARNESS_W05_TEST_GATEWAY_PORT=11618`，W05 测试的两个精确 Gateway 进程将共用该槽位端口；不得停止其它工作包服务或占用主服务端口。修复后用该变量定向复测 W05 类并重跑全仓门禁，结束确认端口释放。
 
 - 2026-10-01 实测：Windows 子进程 `waitFor` 完成且 `isAlive=false` 后，TCP 栈仍可能短暂保留该已退出 PID 的 `LISTEN`，同端口即时 `ServerSocket.bind` 会失败。真实 Gateway 的失败现场由现有 JNA `GetExtendedTcpTable` 在失败后 1 微秒启动采集确认；不能把约数秒后的空表或客户端 `TIME_WAIT` 倒推成失败瞬间的唯一原因。验收停止阶段须在原有共享停止 deadline 内等待**同一精确端口的默认 loopback bind 实际成功**，记录首次 bind 错误、原生安全 TCP 状态、探测次数和释放耗时；超时仍 FAIL。不得延长原停止预算、启用 `SO_REUSEADDR` 掩盖占用、换端口、跳过绑定断言或把资源释放探测冒充功能重试。诊断只记录状态、PID 与端口，不记录请求、凭据或内容。
 - Windows 的 Hyper-V/WSL/NAT（`winnat`）会动态排除 TCP 端口（本机动态范围从 `49152` 起，曾有排除段覆盖旧端口导致 Next.js `listen EACCES`）；现行子槽位均低于 `49152`，但排除范围仍可能变化。每次派工和启动前先执行 `netsh interface ipv4 show dynamicport tcp`、`netsh interface ipv4 show excludedportrange protocol=tcp`，并对分配的全部端口逐个用 loopback `TcpListener.Start()` 做实际绑定预检；`Get-NetTCPConnection` 只能发现监听者，不能排除 NAT 保留。预检失败时保留端口/进程/排除段证据，由主控重新裁决整组槽位或把 UI 标为 `NOT_RUN`；不得私自重启 NAT、提权、随意改单个脚本端口或停止主服务。修复后按同一完整端口组重复预检、服务就绪和 Playwright，并核实端口释放。

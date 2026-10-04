@@ -10,17 +10,25 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Optional;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
 
 /** One ordered parser for the frozen SSE projection, including unknown and non-JSON data. */
 public final class SseEvents {
     private static final ObjectMapper JSON = new ObjectMapper()
             .enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
-    record Event(String name, JsonNode data, String rawData) {}
+    public record Event(String name, JsonNode data, String rawData) {}
     final List<Event> events;
 
     private SseEvents(List<Event> events) { this.events = List.copyOf(events); }
 
-    static SseEvents read(String body) {
+    public static SseEvents read(String body) {
         List<Event> events = new ArrayList<>();
         List<String> data = new ArrayList<>();
         String name = "message";
@@ -48,7 +56,49 @@ public final class SseEvents {
         return new SseEvents(events);
     }
 
-    List<Event> named(String name) { return events.stream().filter(event -> event.name().equals(name)).toList(); }
+    public List<Event> named(String name) { return events.stream().filter(event -> event.name().equals(name)).toList(); }
+
+    public record Prefix(String body, Optional<String> lastEventId) {}
+
+    /** Read complete real frames to a named assertion, preserving the stream for a following drain. */
+    public static Prefix readUntil(InputStream input, Predicate<SseEvents> reached, Duration timeout) throws Exception {
+        return readUntil(input, reached, timeout, null);
+    }
+
+    /** Preserve actual bytes read even when EOF precedes the required assertion. */
+    public static Prefix readUntil(InputStream input, Predicate<SseEvents> reached, Duration timeout,
+            Path evidence) throws Exception {
+        var executor = Executors.newVirtualThreadPerTaskExecutor();
+        var task = executor.submit(() -> {
+            var bytes = new ByteArrayOutputStream();
+            try {
+                int value;
+                // No reader read-ahead: a subsequent drain must retain every byte after this frame.
+                while ((value = input.read()) >= 0) {
+                    bytes.write(value);
+                    if (bytes.size() > 1_048_576) throw new IllegalStateException("SSE prefix exceeds fixture bound");
+                    if (value == '\n') {
+                        String body = bytes.toString(StandardCharsets.UTF_8);
+                        if ((body.endsWith("\n\n") || body.endsWith("\r\n\r\n")) && reached.test(read(body))) {
+                            Optional<String> id = body.lines().filter(line -> line.startsWith("id:"))
+                                    .map(line -> line.substring(3).stripLeading()).reduce((first, last) -> last);
+                            return new Prefix(body, id);
+                        }
+                    }
+                }
+                throw new IllegalStateException("SSE ended before the required prefix");
+            } finally {
+                if (evidence != null) Files.write(evidence, bytes.toByteArray());
+            }
+        });
+        try {
+            return task.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } finally {
+            if (!task.isDone()) input.close();
+            task.cancel(true);
+            executor.shutdownNow();
+        }
+    }
 
     JsonNode event(String name) {
         var matches = named(name);

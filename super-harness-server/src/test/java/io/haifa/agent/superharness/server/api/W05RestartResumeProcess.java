@@ -33,8 +33,12 @@ import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
 import io.haifa.agent.store.sqlite.SqliteSdkContributions;
 import io.haifa.agent.store.sqlite.SqliteStoreConfiguration;
+import io.haifa.agent.superharness.server.config.SkillConfigStore;
+import io.haifa.agent.superharness.server.config.SkillPackageScreening;
 import io.haifa.agent.superharness.server.run.HaifaPublicInteractionSpikeTest;
 import io.haifa.agent.superharness.server.tool.file.CurrentRunUploads;
+import io.haifa.agent.superharness.server.tool.skill.ProductionReviewSkillPackageTool;
+import io.haifa.agent.superharness.server.tool.skill.ProductionSkillManageTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionImageSearchTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionWebFetchTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionWebSearchTool;
@@ -44,6 +48,7 @@ import io.haifa.agent.superharness.workspace.WorkspaceChangeLimits;
 import io.haifa.agent.superharness.workspace.WorkspaceLimits;
 import io.haifa.agent.tool.api.ToolSideEffect;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -153,7 +158,7 @@ public final class W05RestartResumeProcess {
             ResolvedModelSnapshot snapshot,
             SqliteSdkContributions sqlite,
             Path dataRoot,
-            JavaTool<?, ?> tool) {
+            JavaTool<?, ?> tool) throws IOException {
         var models = new ModelContribution(
                 Map.of(ModelAdapterCoordinate.from(snapshot), new FinalAnswerModel()),
                 snapshot,
@@ -168,6 +173,17 @@ public final class W05RestartResumeProcess {
         tools.add(tool);
         tools.addAll(DeerFlowBootstrapApi.fileTools(new DeerFlowThreadRunApi.ThreadToolScope(
                 "w05-cross-process", Optional.empty(), new CurrentRunUploads()), projects, toolWorkspace));
+        // The Gateway now registers these Skill tools for every Run. The child must
+        // restore the same public Tool bindings even though this case invokes only MarkerTool.
+        ObjectMapper json = new ObjectMapper();
+        SkillConfigStore skills = new SkillConfigStore(json, dataRoot,
+                SkillConfigStore.repositoryRootFromWorkingDirectory());
+        SkillPackageScreening screening = new SkillPackageScreening(json, dataRoot);
+        tools.add(new ProductionSkillManageTool(skills, "cross-process-thread"));
+        tools.add(new ProductionReviewSkillPackageTool(skills, screening, path -> {
+            try { return DeerFlowWorkspaceApi.readSkillReviewTarget(projects, toolWorkspace, "cross-process-thread", path); }
+            catch (IOException invalid) { throw new UncheckedIOException(invalid); }
+        }));
         Set<String> names = tools.stream().map(item -> item.spec().name().value())
                 .collect(java.util.stream.Collectors.toSet());
         ProductProfile profile = ProductProfile.create(

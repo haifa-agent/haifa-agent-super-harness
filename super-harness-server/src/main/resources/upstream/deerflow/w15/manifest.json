@@ -1,0 +1,84 @@
+{
+  "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+  "files": [
+    {
+      "path": "package_files.py",
+      "source": "backend/packages/harness/deerflow/skills/package_files.py",
+      "sha256": "759e08084a7029f87bcdd83b5e1c857b76206d660a0ad22802b3aa4e9ec48e46"
+    },
+    {
+      "path": "package_paths.py",
+      "source": "backend/packages/harness/deerflow/skills/package_paths.py",
+      "sha256": "1bbced73b9d707a22845416cf29195e382fa508cd4acbcb0431a645db1f42f0e"
+    },
+    {
+      "path": "skillscan/models.py",
+      "source": "backend/packages/harness/deerflow/skills/skillscan/models.py",
+      "sha256": "4c1bdc4c03c7e3b44ea0e1a38d41dc80d2a992aa98f914e6ca5c893f0df6b715"
+    },
+    {
+      "path": "skillscan/orchestrator.py",
+      "source": "backend/packages/harness/deerflow/skills/skillscan/orchestrator.py",
+      "sha256": "d7b084ceff7ed413e6c7c086b5b9e66330d46c7ba69d69a0f138f61b5b9002b9"
+    },
+    {
+      "path": "frontmatter.py",
+      "source": "backend/packages/harness/deerflow/skills/frontmatter.py",
+      "sha256": "f8547329f165b2a6fcb23b2958fd9d1399b5de6b4f1fff42b448fda11bf72f00"
+    },
+    {
+      "path": "review/models.py",
+      "source": "backend/packages/harness/deerflow/skills/review/models.py",
+      "sha256": "3d5d2541b083ecf43e1808f1fb6853a0117a671ce49c36768c7c622b4bcefbe2"
+    },
+    {
+      "path": "review/digest.py",
+      "source": "backend/packages/harness/deerflow/skills/review/digest.py",
+      "sha256": "9a6a840867992cada776ca4855ac39696dbfe459122f1cb9909a0139292381a7"
+    },
+    {
+      "path": "review/eval_schema.py",
+      "source": "backend/packages/harness/deerflow/skills/review/eval_schema.py",
+      "sha256": "1a5809ec8d8ae2eb56119ca9891bfdf763f77d57267aea7192a4718ee89d94ee"
+    },
+    {
+      "path": "review/resource_graph.py",
+      "source": "backend/packages/harness/deerflow/skills/review/resource_graph.py",
+      "sha256": "53b01d5484ac15ca9268f3049c2f56a728a4cbb213baaf5ffd6a8eeb20a04f27"
+    },
+    {
+      "path": "review/readers.py",
+      "source": "backend/packages/harness/deerflow/skills/review/readers.py",
+      "sha256": "729af0ab073df59d28448d1003f03e1f674c3231f65457ac71750bac1e1c96a0"
+    },
+    {
+      "path": "review/analyzer.py",
+      "source": "backend/packages/harness/deerflow/skills/review/analyzer.py",
+      "sha256": "ed59c84b5e46ed0b9131512127bbb74a79e8b7a349e09c91dbb909e5fd1bdbf5"
+    },
+    {
+      "path": "review/renderer.py",
+      "source": "backend/packages/harness/deerflow/skills/review/renderer.py",
+      "sha256": "03caa36b2d4a0d37bdfd9813eba8a03a78221381190c63ceec4be71ef8df5d69"
+    },
+    {
+      "path": "../tool-descriptions/skill_manage.txt",
+      "source": "backend/packages/harness/deerflow/tools/skill_manage_tool.py",
+      "source_sha256": "b3a81644712f72832f289518c0e5883b4bba9e6864042433ce496d666b80eef0",
+      "sha256": "9750eac602f71ae0da033d67253adc837bcbc4dd1ae62564258307da79b7d0fd"
+    },
+    {
+      "path": "../tool-descriptions/review_skill_package.txt",
+      "source": "backend/packages/harness/deerflow/tools/builtins/review_skill_package_tool.py",
+      "source_sha256": "2ebc8914fee175b905c2768e8bb94e7ea6409088b5dc9d547d9d180a8ea7e806",
+      "sha256": "492cfc8785a9abfae142835130d42bc32e3694212ccc46c828a68f4eb15a8dfd"
+    },
+    {
+      "path": "review_declarations.py",
+      "source": "backend/packages/harness/deerflow/skills/parser.py",
+      "source_sha256": "78fb20706df917ba56d66eaa3c9213e0a46005a3d43fda1d651afc1719c9d7a7",
+      "sha256": "fc9007ee165ffd9faddce8ebb1927190d224a7b745458c25b6f7611855efac83",
+      "extraction": "diagnostic declaration helpers only"
+    }
+  ]
+}

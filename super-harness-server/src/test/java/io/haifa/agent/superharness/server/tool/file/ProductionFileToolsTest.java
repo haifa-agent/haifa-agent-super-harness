@@ -17,7 +17,11 @@ import io.haifa.agent.runtime.api.display.BoundedText;
 import io.haifa.agent.sdk.tool.JavaRecordSchemaGenerator;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.superharness.server.api.DeerFlowToolTranscriptProjection;
+import io.haifa.agent.superharness.server.config.SkillConfigStore;
+import io.haifa.agent.superharness.server.config.SkillPackageScreening;
 import io.haifa.agent.superharness.server.tool.clarification.ProductionAskClarificationTool;
+import io.haifa.agent.superharness.server.tool.skill.ProductionReviewSkillPackageTool;
+import io.haifa.agent.superharness.server.tool.skill.ProductionSkillManageTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionImageSearchTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionWebFetchTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionWebSearchTool;
@@ -69,6 +73,9 @@ class ProductionFileToolsTest {
     @Test
     void importedDescriptionsMatchTheJavaSpecAndTheLedger() throws Exception {
         Fixture fixture = new Fixture(dataRoot.resolve("workspace"), "thread-descriptions");
+        SkillConfigStore skills = new SkillConfigStore(JSON, dataRoot,
+                SkillConfigStore.repositoryRootFromWorkingDirectory());
+        SkillPackageScreening screening = new SkillPackageScreening(JSON, dataRoot);
         Map<String, String> actual = Map.ofEntries(
                 Map.entry("read_file", fixture.read.spec().description()),
                 Map.entry("write_file", fixture.write.spec().description()),
@@ -84,7 +91,10 @@ class ProductionFileToolsTest {
                 Map.entry("web_fetch",
                         new ProductionWebFetchTool(WebToolConfig.defaults()).spec().description()),
                 Map.entry("image_search",
-                        new ProductionImageSearchTool(WebToolConfig.defaults()).spec().description()));
+                        new ProductionImageSearchTool(WebToolConfig.defaults()).spec().description()),
+                Map.entry("skill_manage", new ProductionSkillManageTool(skills, "thread-descriptions").spec().description()),
+                Map.entry("review_skill_package", new ProductionReviewSkillPackageTool(skills, screening,
+                        ignored -> Map.of()).spec().description()));
         JsonNode manifest = JSON.readTree(getClass().getClassLoader()
                 .getResourceAsStream("upstream/deerflow/tool-descriptions/manifest.json"));
         for (JsonNode entry : manifest.path("descriptions")) {
