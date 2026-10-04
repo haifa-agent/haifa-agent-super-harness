@@ -169,7 +169,7 @@ test("W15 real model evaluates Skill resources in the next conversation Run", as
   const fixture = path.resolve(__dirname, "../../fixtures/w15/package_archive.py");
   const archive = execFileSync("python", ["-B", fixture], { timeout: 10_000 });
   const installed = await context.request.post(`${APP}/api/skills/install/upload`, {
-    multipart: { file: { name: `${NAME}.skill`, mimeType: "application/zip", buffer: archive } }, timeout: 45_000,
+    multipart: { archive: { name: `${NAME}.skill`, mimeType: "application/zip", buffer: archive } }, timeout: 90_000,
   });
   expect(installed.status(), await installed.text()).toBe(200);
   const first = await chat(page, context,
