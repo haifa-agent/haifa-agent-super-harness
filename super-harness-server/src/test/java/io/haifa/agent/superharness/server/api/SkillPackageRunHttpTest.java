@@ -53,6 +53,12 @@ class SkillPackageRunHttpTest {
             var pending = fixture.run(thread, null, null);
             location = pending.headers().firstValue("content-location").orElseThrow();
             assertThat(fixture.get(location).path("diagnostics").path("sdk_status").asText()).isEqualTo("WAITING_APPROVAL");
+            for (int request : List.of(0, 3)) {
+                assertThat(model.requests.get(request).tools()).extracting(tool -> tool.name())
+                        .contains("skill_load").doesNotContain("skill_resource_read");
+                assertThat(model.requests.get(request + 1).tools()).extracting(tool -> tool.name())
+                        .contains("skill_load", "skill_resource_read");
+            }
             assertThat(fixture.request("GET", "/api/threads/" + thread + "/artifacts" + output, null).statusCode()).isEqualTo(404);
             pendingRows = fixture.get("/api/threads/" + thread + "/messages/page?limit=20").path("data");
             java.nio.file.Files.writeString(evidence.resolve("pending-message-page.json"), pendingRows.toPrettyString(), StandardCharsets.UTF_8);
