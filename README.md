@@ -138,6 +138,8 @@ pwsh -NoProfile -File tests/checks/frontend/verify-haifa-frontend-profile.ps1
 
 受保护的主工作树拓扑与正式启动流程见下文“启动主工作树供人工验收”；历史 W18 配置设计与验收记录已归档至 `private-docs/prompts/39-deerflow-parity-delivery/W18-Developing/references/`。仅通过上述配置检查，不代表聊天功能或双后端差分验收通过。
 
+SSE 重连投影保留最近 8 条兼容事件；没有冻结 UI 投影的 `message.committed` 通知不占这个窗口，SDK feed cursor 仍按完整分页推进。超出窗口的 cursor 返回 `gap`；保留窗口中的较早 assistant turn 仍按其持久消息读取文本，不能用最后一次回答替代。完整历史从持久会话读取，不受这个事件窗口限制。
+
 验收 `.cjs` 脚本（`tests/**`，含 Playwright 用例、受控 Provider 与 Steer 契约断言）的功能与运行方法见 [验收 .cjs 脚本功能与运行说明](docs/engineering/001-cjs-scripts.md)；相关前端 `.mjs` 脚本见该文附录 A。
 
 `run-w18-ui-smoke.ps1` 的本地受控模型使用 `context_window=32768`，让完整冻结 Lead prompt、生产 Tool catalog 和可选 Skill 正文容纳在同一次真实 SDK 请求中。运行前按 `AGENTS.md`「冻结前端」的使用说明准备依赖、槽位与受控模型配置。
@@ -233,7 +235,7 @@ Gateway 从 `third-party/deerflow/skills/manifest.json` 读取冻结 Skill 完�
 
 用户包通过 `POST /api/skills/install/upload`（multipart 字段 `archive`，`.skill`，最多 100 MiB）或 `/api/skills/install`（当前 Thread 的 `thread_id`、`path`）安装。custom 路由支持读取/编辑/删除、`history`、`rollback`、`export-manifest` 和 `export?expected_revision=<revision>`；revision 过期返回 409，错误 JSON 或字段类型返回 422，超限请求返回 413。导入、管理发布与导出共用可移植路径冲突规则；版本与导出摘要保留空目录和规范化后的文件可执行标记，不恢复特权权限位，支持文件回滚按历史目标路径恢复原始字节。完整用户版本存于数据根 `skills/custom/.versions/`，当前版本、启停及 history 统一由原子发布的 `skills_config.json` 指定。vendor 资源只读，用户来源由 SDK USER scope 绑定本地用户；编辑后新 Run 使用新版本，旧 Run 保留已冻结的完整版本。普通关闭与审查授权撤销是两个操作；显式撤销后旧绑定的后续读取也由公开 SDK grant `matches()` 拒绝。
 
-生产 `skill_manage` 沿用 SDK 文件写入审批；静态 `review_skill_package` 只读取已安装包、`inline://SKILL.md` 或当前 Thread `/mnt/user-data/` 内的归档/包目录，输出证据等级为 `static`，不会激活或执行目标。审查解释器通过进程变量 `HAIFA_SUPER_HARNESS_SKILL_PYTHON` 指定，必须支持 Python 3 和隔离模式 `-I` 下的 PyYAML；不读取用户 site-packages 或安装目标依赖。写入审查发现明确凭据时在模型调用前拒绝，其他待审文本以脱敏副本构造请求；语义筛查使用当前托管模型且不提供 Tools，缺模型、解析失败或脚本无法审查时拒绝发布，扫描期间取消或超时的 Run 也不得发布版本；无隐藏重试。安全筛查的模型/Provider、耗时、Usage 和输入文件 hash 记录于数据根 `skills/scanner/screen-receipts.jsonl`，不记录原内容或凭据。完整 creator 的脚本评测还依赖真实执行环境；单纯资源导入与静态 review 不证明评测通过。
+生产 `skill_manage` 沿用 SDK 文件写入审批；静态 `review_skill_package` 只读取已安装包、`inline://SKILL.md` 或当前 Thread `/mnt/user-data/` 内的归档/包目录，输出证据等级为 `static`，不会激活或执行目标。审查解释器通过进程变量 `HAIFA_SUPER_HARNESS_SKILL_PYTHON` 指定，必须支持 Python 3 和隔离模式 `-I` 下的 PyYAML；不读取用户 site-packages 或安装目标依赖。写入审查发现明确凭据时在模型调用前拒绝，其他待审文本以脱敏副本构造请求；语义筛查使用当前托管模型且不提供 Tools，缺模型、解析失败或脚本无法审查时拒绝发布，扫描期间取消或超时的 Run 也不得发布版本；无隐藏重试。扫描输入与冻结 DeerFlow 一致：标明包名/相对文件路径，只传具体静态 findings；`target_executed=false`、`safety_proven=false` 等报告边界字段保留在静态报告中，不作为语义风险 findings。安全筛查的模型/Provider、耗时、Usage、输入文件 hash 和从解释归类的 `reason_category` 记录于数据根 `skills/scanner/screen-receipts.jsonl`，类别无法识别时为 `unspecified`，不记录原内容、模型解释原文或凭据。完整 creator 的脚本评测还依赖真实执行环境；单纯资源导入与静态 review 不证明评测通过。
 
 运行 W15 定向测试或全仓门禁前，在**同一 PowerShell 会话**预检并设置静态审查解释器；普通 `python` 能导入 `yaml` 不代表隔离模式可用。本机冻结 reference venv 已验证 PyYAML 6.0.3。并行工作包占用 W05 旧测试的默认端口 `20618` 时，可把该测试绑定到已分配且实际可绑定的本工作树槽位端口，例如槽位 4 的 `11618`；正式 UI 与全仓门禁仍顺序运行。
 

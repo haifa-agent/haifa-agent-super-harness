@@ -19,6 +19,27 @@ class SkillPackageScreeningTest {
     @TempDir Path temporary;
     private final ObjectMapper json = new ObjectMapper();
 
+    @Test void benignPackageReferencesUseFrozenFindingsOnlyInputAndPackageLocalLocation() throws Exception {
+        var scanner = new SkillPackageScreening(json, temporary.resolve("data"));
+        Path directory = temporary.resolve("sample-helper"); Files.createDirectory(directory);
+        String markdown = "---\nname: sample-helper\ndescription: A test package\n---\nRead references/fact.txt and evals/evals.json before evaluating.\n";
+        Map<String, byte[]> files = Map.of("SKILL.md", markdown.getBytes(StandardCharsets.UTF_8),
+                "references/fact.txt", "17\n".getBytes(StandardCharsets.UTF_8),
+                "evals/evals.json", "{}\n".getBytes(StandardCharsets.UTF_8));
+        for (var file : files.entrySet()) { var target = directory.resolve(file.getKey()); Files.createDirectories(target.getParent()); Files.write(target, file.getValue()); }
+        var model = new ControlledModel((request, count) -> ControlledModel.response(request, "screen", "{\"decision\":\"allow\"}",
+                List.of(), ModelFinishReason.STOP, ModelUsage.unpriced(10, 2)));
+        scanner.writes(ignored -> LocalProbeModelTestSupport.binding(model)).screenChanges(directory, files, java.util.Set.of("SKILL.md"));
+        assertThat(model.requests).hasSize(1);
+        assertThat(model.requests.getFirst().messages().getLast().toString())
+                .contains("Location: sample-helper/SKILL.md", "Deterministic SkillScan findings:\nNone.\n\nReview this content:", markdown)
+                .doesNotContain("safety_proven", "target_executed", "evidence_level", "untrusted data");
+        assertThat(model.requests.getFirst().tools()).isEmpty();
+        var findings = json.readTree("[{\"rule_id\":\"external-link\",\"severity\":\"low\",\"file\":\"SKILL.md\",\"line\":7,\"message\":\"Review link\",\"remediation\":\"Check destination\"}]");
+        assertThat(SkillPackageScreening.formatStaticFindings(findings))
+                .isEqualTo("- external-link (low): Review link at SKILL.md:7. Evidence: <none>. Remediation: Check destination");
+    }
+
     @Test void readonlyReviewRedactsSecretsAndNeverExecutesTargetScripts() throws Exception {
         var scanner = new SkillPackageScreening(json, temporary.resolve("data"));
         Path marker = temporary.resolve("executed.txt");
@@ -45,7 +66,9 @@ class SkillPackageScreeningTest {
         Path directory = temporary.resolve("package"); Files.createDirectory(directory);
         Map<String, byte[]> files = Map.of("SKILL.md", "---\nname: sample-helper\ndescription: A test package\n---\nUse known facts.\n".getBytes(StandardCharsets.UTF_8));
         Files.write(directory.resolve("SKILL.md"), files.get("SKILL.md"));
-        var model = new ControlledModel((request, count) -> ControlledModel.response(request, "screen", "{\"decision\":\"block\"}",
+        String privateReason = "Exfiltration: private-provider-diagnostic password=never-log-this";
+        String response = json.writeValueAsString(Map.of("decision", "block", "reason", privateReason));
+        var model = new ControlledModel((request, count) -> ControlledModel.response(request, "screen", response,
                 List.of(), ModelFinishReason.STOP, ModelUsage.unpriced(10, 2)));
         assertThatThrownBy(() -> scanner.writes(ignored -> LocalProbeModelTestSupport.binding(model)).screen(directory, files))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("blocked");
@@ -55,6 +78,8 @@ class SkillPackageScreeningTest {
         var receipt = json.readTree(Files.readString(temporary.resolve("data/skills/scanner/screen-receipts.jsonl")));
         assertThat(receipt.path("status").asText()).isEqualTo("FAIL");
         assertThat(receipt.path("decision").asText()).isEqualTo("block");
+        assertThat(receipt.path("reason_category").asText()).isEqualTo("exfiltration");
+        assertThat(receipt.toString()).doesNotContain(privateReason, "never-log-this", "private-provider-diagnostic");
         assertThat(receipt.path("retry").asBoolean()).isFalse();
     }
 
@@ -108,12 +133,12 @@ class SkillPackageScreeningTest {
         assertThat(model.requests).hasSize(2);
         store.manage("edit", "sample-helper", original + "Read the reference first.\n", null, null, null, null, "human", null);
         assertThat(model.requests).hasSize(3);
-        assertThat(model.requests.getLast().messages().toString()).contains("Location: SKILL.md").doesNotContain("The known fact is seventeen.");
+        assertThat(model.requests.getLast().messages().toString()).contains("Location: sample-helper/SKILL.md").doesNotContain("The known fact is seventeen.");
         String revision = store.exportManifest("sample-helper").get("revision").toString();
         assertThat(SkillPackageFiles.archive(store.exportArchive("sample-helper", revision)).get("references/fact.txt")).containsExactly(fact);
         store.revokePackageReview("sample-helper");
         store.manage("edit", "sample-helper", original + "Read the reference after revocation.\n", null, null, null, null, "human", null);
         assertThat(model.requests).hasSize(5);
-        assertThat(model.requests.getLast().messages().toString()).contains("Location: references/fact.txt", "The known fact is seventeen.");
+        assertThat(model.requests.getLast().messages().toString()).contains("Location: sample-helper/references/fact.txt", "The known fact is seventeen.");
     }
 }

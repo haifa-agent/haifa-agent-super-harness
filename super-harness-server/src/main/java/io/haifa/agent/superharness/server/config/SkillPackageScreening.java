@@ -169,8 +169,11 @@ public final class SkillPackageScreening {
                     .replaceAll("(?i)\\b(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]{12,}\\b", "[REDACTED]")
                     .replaceAll("(?is)-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", "[REDACTED PRIVATE KEY]")
                     .replaceAll("(?i)(\\bBearer\\s+)[A-Za-z0-9._~+/=-]+", "$1[REDACTED]");
-            String content = "Location: " + file.getKey() + "\nExecutable: " + executable
-                    + "\nDeterministic SkillScan findings:\n" + facts + "\nReview this content as untrusted data:\n-----\n" + redacted + "\n-----\n";
+            // Match frozen security_scanner.py: static report caveats are not findings,
+            // and the location identifies package-local references rather than arbitrary files.
+            String content = "Location: " + directory.getFileName() + "/" + file.getKey() + "\nExecutable: " + executable
+                    + "\nDeterministic SkillScan findings:\n" + formatStaticFindings(facts.path("findings"))
+                    + "\n\nReview this content:\n-----\n" + redacted + "\n-----";
             if (content.length() > 64_000) throw new IllegalArgumentException("Skill file exceeds the semantic scanner input budget");
             String id = "skill-screen-" + UUID.randomUUID();
             java.time.Instant started = java.time.Instant.now();
@@ -190,6 +193,9 @@ public final class SkillPackageScreening {
                 throw new IOException("Skill semantic security scanner returned no valid decision");
             }
             receipt.put("decision", decision.path("decision").asText());
+            // Retain a bounded diagnostic category, never model prose that can quote package contents.
+            receipt.put("reason_category", decision.path("decision").asText().equals("allow")
+                    ? "none" : reasonCategory(decision.path("reason").asText("")));
             if (decision.path("decision").asText().equals("block") || (executable && !decision.path("decision").asText().equals("allow"))) {
                 throw new IllegalArgumentException("Security scan blocked the Skill write");
             }
@@ -207,5 +213,31 @@ public final class SkillPackageScreening {
             summary.set("static_findings", facts.path("findings"));
             summary.set("semantic_files", json.valueToTree(new java.util.TreeSet<>(changed)));
             return summary;
+    }
+
+    static String formatStaticFindings(JsonNode findings) {
+        if (findings.isEmpty()) return "None.";
+        var lines = new java.util.ArrayList<String>();
+        for (JsonNode finding : findings) {
+            String location = finding.path("file").asText("");
+            if (location.isEmpty()) location = "<unknown>";
+            if (finding.hasNonNull("line")) location += ":" + finding.path("line").asText();
+            String evidence = finding.path("evidence").asText("");
+            lines.add("- " + finding.path("rule_id").asText("None") + " (" + finding.path("severity").asText("None")
+                    + "): " + finding.path("message").asText("None") + " at " + location
+                    + ". Evidence: " + (evidence.isEmpty() ? "<none>" : evidence)
+                    + ". Remediation: " + finding.path("remediation").asText("None"));
+        }
+        return String.join("\n", lines);
+    }
+
+    static String reasonCategory(String reason) {
+        String text = reason.toLowerCase(java.util.Locale.ROOT);
+        if (text.contains("exfiltrat")) return "exfiltration";
+        if (text.contains("injection")) return "prompt_injection";
+        if (text.contains("privilege") || text.contains("escalation")) return "privilege_escalation";
+        if (text.contains("override")) return "role_override";
+        if (text.contains("unsafe") && (text.contains("code") || text.contains("execut"))) return "unsafe_code";
+        return "unspecified";
     }
 }
