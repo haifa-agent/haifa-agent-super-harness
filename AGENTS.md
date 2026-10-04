@@ -101,6 +101,8 @@ $env:no_proxy=$env:NO_PROXY
 
 ### 冻结前端（pnpm / Next.js）
 
+- 2026-10-04 实测：新 worktree 在 `core.autocrlf=true` 下可把 `super-harness-server/src/main/resources/upstream/deerflow/w15/` 的冻结 Python 资源检出为 CRLF，Gateway 构造时报告 `Frozen Skill scanner resource hash mismatch`。检查：逐项比对该目录 `manifest.json` 中的 SHA-256 与实际字节；修复使用仓库 `.gitattributes` 的 `text eol=lf` 规则，在相关路径原先 clean 的独立 worktree 用 `git archive HEAD <该目录>` 恢复提交原始字节，再重建。不能改 manifest 哈希或关闭校验；首次错误保留为环境前置 FAIL。
+
 - 每个验收 worktree 使用独立的 `frontend/node_modules`、`.next`、端口和数据目录（`.next` 可由 runner 从共享缓存复制恢复，但不同 worktree 不得共用同一个 `.next` 目录）；主前端继续供人工验收使用。前端来源按「范围与依赖」的冻结版本校验。
 - 在该 worktree 的 `frontend/` 目录准备依赖，先确认版本精确为 `10.26.2`，再安装：
 
