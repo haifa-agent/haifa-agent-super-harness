@@ -84,15 +84,20 @@ public final class McpRunTools {
      * {@code mcp_plugins} selection, together with the canonical fingerprint used to
      * decide whether a later Run must rebuild its bridge.
      */
-    public record Projection(List<McpServerSpec> specs, String fingerprint, Selection selection) {
+    public record Projection(
+            List<McpServerSpec> specs,
+            String fingerprint,
+            Selection selection,
+            Set<String> readOnlyToolNames) {
         public Projection {
             specs = List.copyOf(specs);
             fingerprint = fingerprint == null ? "" : fingerprint;
             selection = selection == null ? Selection.all() : selection;
+            readOnlyToolNames = readOnlyToolNames == null ? Set.of() : Set.copyOf(readOnlyToolNames);
         }
 
         public static Projection empty() {
-            return new Projection(List.of(), "", Selection.all());
+            return new Projection(List.of(), "", Selection.all(), Set.of());
         }
 
         boolean isEmpty() {
@@ -103,6 +108,7 @@ public final class McpRunTools {
     public static Projection projection(
             Map<String, ObjectNode> servers, Selection selection, List<String> diagnostics) {
         List<McpServerSpec> specs = new ArrayList<>();
+        Set<String> readOnlyToolNames = new LinkedHashSet<>();
         StringBuilder canonical = new StringBuilder();
         // Stable server order so a re-serialized configuration cannot perturb the fingerprint.
         for (Map.Entry<String, ObjectNode> entry : new TreeMap<>(servers).entrySet()) {
@@ -138,7 +144,8 @@ public final class McpRunTools {
                 if (isLoopbackHttp(endpoint)) {
                     spec = spec.allowLoopbackHttp();
                 }
-                if (server.path("read_only").asBoolean(false)) {
+                boolean readOnly = server.path("read_only").asBoolean(false);
+                if (readOnly) {
                     spec = spec.readOnly();
                 }
                 if (connectTimeout != null) {
@@ -151,6 +158,14 @@ public final class McpRunTools {
                 // Per-server isolation: one unreachable or uncredentialed server must
                 // degrade to a diagnostic instead of removing its siblings' tools.
                 specs.add(spec.optional());
+                if (readOnly) {
+                    // The host's read_only declaration lowers these tools to the SDK read-only
+                    // network preset; their local names let the bridge auto-approve only if the
+                    // tool actually registers (the bridge intersects with the live alias set).
+                    for (String remote : allowed) {
+                        readOnlyToolNames.add(spec.localToolName(remote));
+                    }
+                }
                 canonical.append(canonicalServer(
                                 id, server, type, endpoint, allowed, connectTimeout, requestTimeout))
                         .append('\n');
@@ -161,7 +176,7 @@ public final class McpRunTools {
         }
         // No declaration -> no fingerprint, matching a bridge built with no MCP projection.
         String fingerprint = specs.isEmpty() ? "" : sha256Hex(canonical.toString());
-        return new Projection(specs, fingerprint, selection);
+        return new Projection(specs, fingerprint, selection, readOnlyToolNames);
     }
 
     /** Convenience view used by the L1 mapping contract tests; the projection is authoritative. */

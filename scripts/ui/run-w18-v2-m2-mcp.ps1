@@ -169,6 +169,9 @@ $mcpConfigPath = Join-Path $evidenceRoot 'mcp-config.json'
 $mcpStarted = $false
 # A public, fixture-only sentinel. No customer or provider credential is used.
 $fixtureBearer = 'Bearer w18-fixture-only'
+# read_only = $true makes the Haifa bridge auto-approve these host-trusted MCP Tools
+# (SDK read-only network preset), so the spec expects no approval card on either
+# backend; the reference profile ignores the flag and already executes them directly.
 $mcpServers = [ordered]@{
     'v2-reporting' = [ordered]@{
         type = 'http'; url = "http://127.0.0.1:$ReportingPort/mcp"

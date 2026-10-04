@@ -58,7 +58,8 @@ import org.junit.jupiter.api.io.TempDir;
  * {@code ask_clarification} Java tool. The controlled Provider scripts the model by protocol shape
  * (a same-turn pair of tool calls), and the test records the authoritative ToolCall / Interaction /
  * Provider-request / MCP {@code tools/call} facts. MCP is read-only but still traverses the standard
- * approval policy, so an unapproved sibling can never reach {@code tools/call}.</p>
+ * approval policy (non-read-only), so an unapproved sibling can never reach {@code tools/call}.
+ * A host-declared read-only MCP server would instead be auto-approved by the bridge.</p>
  */
 class ClarificationSdkSiblingRunHttpTest {
     private static final String SKILL = "consulting-analysis";
@@ -274,6 +275,36 @@ class ClarificationSdkSiblingRunHttpTest {
         assertThat(observed.mcpToolStatus()).isEqualTo("COMPLETED");
         assertThat(observed.httpStatus()).isEqualTo("success");
         System.out.println(observed.evidence("approved-mcp-baseline", threadId, run, false));
+    }
+
+    // ---- Baseline: a host-declared read-only MCP tool is auto-approved ---------------------------
+
+    @Test
+    void readOnlyMcpToolRunsWithoutApprovalCard() throws Exception {
+        startProvider(request -> {
+            if (hasToolResult(request)) {
+                return text("FINAL_AFTER_READONLY_MCP");
+            }
+            String mcpTool = mcpToolNameOrNull(request);
+            if (mcpTool == null) {
+                return text("MCP_TOOL_NOT_OFFERED");
+            }
+            return singleToolCall(mcpTool, "{}");
+        });
+        startGatewayAndRegister(true);
+        String threadId = "sdk-readonly-mcp";
+        createThread(threadId);
+
+        RunResult run = streamRun(threadId, "W05_SDK read-only mcp");
+        assertOffered(MCP_TOOL_SUFFIX);
+        assertThat(humanInputRequestId(run.body()))
+                .as("a host-declared read-only MCP tool must not require approval: " + run.body())
+                .isEmpty();
+        assertThat(mcp.toolsCallCount()).as("the read-only MCP tool must execute once").isEqualTo(1);
+        Observed observed = observe(threadId, run).requiredSettled();
+        assertThat(observed.mcpToolStatus()).isEqualTo("COMPLETED");
+        assertThat(observed.httpStatus()).isEqualTo("success");
+        System.out.println(observed.evidence("readonly-mcp-auto", threadId, run, false));
     }
 
     // ---- controlled Provider -------------------------------------------------------------------
@@ -511,6 +542,10 @@ class ClarificationSdkSiblingRunHttpTest {
     // ---- HTTP helpers --------------------------------------------------------------------------
 
     private void startGatewayAndRegister() throws Exception {
+        startGatewayAndRegister(false);
+    }
+
+    private void startGatewayAndRegister(boolean mcpReadOnly) throws Exception {
         api = DeerFlowBootstrapApi.create(
                 new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
                 dataRoot,
@@ -532,10 +567,10 @@ class ClarificationSdkSiblingRunHttpTest {
 
         mcp = new LocalMcpServer();
         String servers = """
-                {"mcp_servers":{"%s":{"type":"http","url":"%s","read_only":true,
+                {"mcp_servers":{"%s":{"type":"http","url":"%s","read_only":%s,
                 "tool_name_prefix":true,"session_init_timeout":20,"tool_call_timeout":20,
                 "tools":{"%s":{}}}}}
-                """.formatted(MCP_SERVER, mcp.url(), MCP_TOOL);
+                """.formatted(MCP_SERVER, mcp.url(), mcpReadOnly, MCP_TOOL);
         HttpResponse<String> configured = request("POST", "/api/mcp/config/servers", servers);
         assertThat(configured.statusCode()).as(configured.body()).isEqualTo(200);
     }

@@ -174,6 +174,21 @@ class V2McpConfigApiTest {
     }
 
     @Test
+    void readOnlyServerProjectsAutoApprovableLocalToolNamesWhileWritableServerDoesNot() {
+        Map<String, ObjectNode> servers = new LinkedHashMap<>();
+        servers.put("ro", serverNode("https://ro.example/mcp", true, true, "{\"get_status\":{},\"get_more\":{}}"));
+        servers.put("rw", serverNode("https://rw.example/mcp", true, false, "{\"get_status\":{}}"));
+        servers.put("disabled", serverNode("https://off.example/mcp", false, true, "{\"get_status\":{}}"));
+        List<String> diagnostics = new ArrayList<>();
+
+        McpRunTools.Projection projection =
+                McpRunTools.projection(servers, McpRunTools.Selection.all(), diagnostics);
+
+        assertThat(projection.readOnlyToolNames())
+                .containsExactlyInAnyOrder("ro_get_status", "ro_get_more");
+    }
+
+    @Test
     void canonicalFingerprintCoversCredentialRefsTimeoutsAndReadOnlyWithoutPlaintext() {
         ObjectNode baseline = serverNode(
                 "https://reporting.example/mcp", true, true, "{\"get_status\":{}}");

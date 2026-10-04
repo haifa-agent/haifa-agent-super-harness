@@ -63,6 +63,7 @@ import io.haifa.agent.superharness.server.tool.agent.ProductionUpdateAgentTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionImageSearchTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionWebFetchTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionWebSearchTool;
+import io.haifa.agent.tool.api.ToolName;
 import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -247,11 +248,20 @@ public final class HaifaRunBridge implements AutoCloseable {
             }
             // Human B1 decision: only these production read-only network tools skip the
             // standard network ASK. All other network/MCP and writing tools retain their policy.
-            builder.autoApproveReadOnlyNetworkTools(tools.stream()
+            Set<ToolName> autoApproveReadOnlyNetwork = new LinkedHashSet<>(tools.stream()
                     .filter(tool -> tool instanceof ProductionWebSearchTool
                             || tool instanceof ProductionWebFetchTool || tool instanceof ProductionImageSearchTool)
                     .map(tool -> tool.spec().name())
                     .collect(java.util.stream.Collectors.toSet()));
+            // Host-declared read_only MCP servers lower their tools to the SDK read-only network
+            // preset; SH auto-approves exactly the imported aliases that actually registered.
+            // A non-read-only MCP tool stays on its mandatory-approval policy.
+            for (String name : mcpProjection.readOnlyToolNames()) {
+                if (mcpToolNames.contains(name)) {
+                    autoApproveReadOnlyNetwork.add(new ToolName(name));
+                }
+            }
+            builder.autoApproveReadOnlyNetworkTools(autoApproveReadOnlyNetwork);
             builder.autoApproveStandardFileWriteTools(tools.stream()
                     .filter(tool -> tool instanceof ProductionSetupAgentTool || tool instanceof ProductionUpdateAgentTool)
                     .map(tool -> tool.spec().name())
