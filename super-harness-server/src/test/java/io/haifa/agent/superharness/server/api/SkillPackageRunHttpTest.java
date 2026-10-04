@@ -31,6 +31,71 @@ class SkillPackageRunHttpTest {
                 new SecretKeySpec(new byte[32], "AES"), ignored -> LocalProbeModelTestSupport.binding(model), List.of(), store), evidence);
     }
 
+    @Test void nextTurnApprovalFollowsItsHumanAfterSkillToolsAndSurvivesRestart() throws Exception {
+        Path data = GatewayFixture.dataDirectory(), evidence = GatewayFixture.evidenceDirectory();
+        var store = store(data);
+        store.install(SkillPackageFiles.export("package-control", Map.of(
+                "SKILL.md", markdown("Read the supplied reference before answering").getBytes(StandardCharsets.UTF_8),
+                "references/fact.txt", "FACT=17\n".getBytes(StandardCharsets.UTF_8))), null);
+        String thread = "skill-next-turn-approval";
+        String output = "/mnt/user-data/outputs/next-turn.json";
+        var model = new ControlledModel((request, count) -> switch (count) {
+            case 1, 4 -> call(request, "skill_load", Map.of("skill", "package-control"));
+            case 2, 5 -> call(request, "skill_resource_read", Map.of("skill", "package-control", "path", "references/fact.txt"));
+            case 6 -> call(request, "write_file", Map.of("path", output, "content", "{\"observed\":17,\"passed\":true}\n"));
+            default -> stop(request);
+        });
+        String location;
+        com.fasterxml.jackson.databind.JsonNode pendingRows;
+        try (var fixture = gateway(data, store, model, evidence)) {
+            fixture.thread(thread);
+            fixture.completed(fixture.run(thread, null, null));
+            var pending = fixture.run(thread, null, null);
+            location = pending.headers().firstValue("content-location").orElseThrow();
+            assertThat(fixture.get(location).path("diagnostics").path("sdk_status").asText()).isEqualTo("WAITING_APPROVAL");
+            assertThat(fixture.request("GET", "/api/threads/" + thread + "/artifacts" + output, null).statusCode()).isEqualTo(404);
+            pendingRows = fixture.get("/api/threads/" + thread + "/messages/page?limit=20").path("data");
+            java.nio.file.Files.writeString(evidence.resolve("pending-message-page.json"), pendingRows.toPrettyString(), StandardCharsets.UTF_8);
+            assertThat(pendingRows).hasSize(4);
+            assertThat(pendingRows.get(0).path("content").path("type").asText()).isEqualTo("human");
+            assertThat(pendingRows.get(1).path("content").path("type").asText()).isEqualTo("ai");
+            assertThat(pendingRows.get(2).path("content").path("type").asText()).isEqualTo("human");
+            assertThat(pendingRows.get(3).path("content").path("name").asText()).isEqualTo("ask_clarification");
+            assertThat(pendingRows.get(3).path("run_id")).isEqualTo(pendingRows.get(2).path("run_id"));
+            assertThat(pendingRows.findValuesAsText("seq")).doesNotHaveDuplicates();
+        }
+        try (var fixture = gateway(data, store(data), model, evidence.resolve("restart"))) {
+            assertThat(fixture.get("/api/threads/" + thread + "/messages/page?limit=20").path("data")).isEqualTo(pendingRows);
+            fixture.approve(thread, location);
+            assertThat(fixture.get(location).path("status").asText()).isEqualTo("success");
+            var downloaded = fixture.request("GET", "/api/threads/" + thread + "/artifacts" + output, null);
+            assertThat(downloaded.statusCode()).isEqualTo(200);
+            assertThat(json.readTree(downloaded.body()).path("observed").asInt()).isEqualTo(17);
+            var completedRows = fixture.get("/api/threads/" + thread + "/messages/page?limit=20").path("data");
+            assertThat(completedRows).hasSize(6);
+            assertThat(completedRows.findValuesAsText("seq")).doesNotHaveDuplicates();
+            for (int i = 0; i < pendingRows.size(); i++) {
+                assertThat(completedRows.get(i).path("seq")).isEqualTo(pendingRows.get(i).path("seq"));
+            }
+            assertThat(completedRows.get(4).path("content").path("additional_kwargs").path("human_input_response").path("option_id").asText()).isEqualTo("approve");
+            assertThat(completedRows.get(5).path("content").path("type").asText()).isEqualTo("ai");
+            var backwards = new java.util.ArrayList<String>();
+            Long before = null;
+            for (int i = 0; i < completedRows.size(); i++) {
+                var page = fixture.get("/api/threads/" + thread + "/messages/page?limit=1" + (before == null ? "" : "&before_seq=" + before));
+                assertThat(page.path("data")).hasSize(1);
+                var row = page.path("data").get(0);
+                backwards.add(row.path("content").path("id").asText());
+                before = row.path("seq").asLong();
+                assertThat(page.path("has_more").asBoolean()).isEqualTo(i < completedRows.size() - 1);
+            }
+            java.util.Collections.reverse(backwards);
+            assertThat(backwards).containsExactlyElementsOf(java.util.stream.StreamSupport.stream(completedRows.spliterator(), false)
+                    .map(row -> row.path("content").path("id").asText()).toList());
+        }
+        System.out.println("W15_NEXT_TURN_APPROVAL_EVIDENCE thread=" + thread + " same_run=" + location + " restart=true download_observed=17 evidence=" + evidence);
+    }
+
     @Test void largeReviewCrossesSdkCarrierWithoutTruncationOrSkillActivation() throws Exception {
         Path data = GatewayFixture.dataDirectory(), evidence = GatewayFixture.evidenceDirectory();
         var store = store(data);

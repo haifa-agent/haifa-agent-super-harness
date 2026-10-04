@@ -303,7 +303,7 @@ pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 
 
 第二轮 `-SkipBuild` 仅在首轮已按 Gateway `30618` 构建成功后使用。每轮脚本在结束时清理槽位进程，Playwright trace、截图及前后端/受控 Provider 日志写到 `local-tmp/slot-2-w15-v2-skill/evidence/ui/run-<时间戳>/`；测试需检查 `skill_load` ToolCall、启用后的模型 Context 和禁用后新 Run 的隔离。完整验收仍以开发报告的实际运行结果为准。
 
-真实模型代表性链路使用同一 runner 的 `-W15LiveSkill`：托管 `deepseek-v4-pro`、`https://api.deepseek.com` 和 `os://DEEPSEEK_API_KEY`，验证生产 `skill_manage` 审批/编辑、后续新会话 `skill_load` 与完整资源读取、实际评测 JSON 的 Artifact 下载/hash 及只读 review。该用例会产生真实模型调用；脚本评测仍按 W14 的实际能力单独验收。独立额外槽位 4 的入口如下，运行前需设置上述扫描解释器变量：
+真实模型代表性链路使用同一 runner 的 `-W15LiveSkill`：托管 `deepseek-v4-pro`、`https://api.deepseek.com` 和 `os://DEEPSEEK_API_KEY`，验证生产 `skill_manage` 审批/编辑、后续新会话 `skill_load` 与完整资源读取，再在同一会话的下一轮执行评测和写文件审批，验证实际评测 JSON 的 Artifact 下载/hash 及只读 review。审批卡必须位于本轮用户输入之后并可操作，不能把本轮输入误判成已回答；审批前没有输出文件。该用例会产生真实模型调用；脚本评测仍按 W14 的实际能力单独验收。独立额外槽位 4 的入口如下，运行前需设置上述扫描解释器变量：
 
 ```powershell
 pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 4 -GatewayPort 11618 -FrontendPort 16618 -W15LiveSkill

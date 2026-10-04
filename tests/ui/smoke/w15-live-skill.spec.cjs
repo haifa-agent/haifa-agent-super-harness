@@ -20,8 +20,8 @@ async function state(request, identity) {
   return response.json();
 }
 
-async function chat(page, context, prompt, testInfo) {
-  await page.goto("/workspace/chats/new", { waitUntil: "domcontentloaded" });
+async function chat(page, context, prompt, testInfo, previousRun) {
+  if (!previousRun) await page.goto("/workspace/chats/new", { waitUntil: "domcontentloaded" });
   const input = page.locator('textarea[name="message"]');
   await expect(input).toBeVisible();
   const stream = page.waitForResponse(response => response.request().method() === "POST" &&
@@ -34,6 +34,10 @@ async function chat(page, context, prompt, testInfo) {
   const match = location?.match(/\/api\/threads\/([^/]+)\/runs\/([^/]+)$/);
   expect(match, "production stream must identify the real Run").toBeTruthy();
   const identity = { threadId: match[1], runId: match[2], location };
+  if (previousRun) {
+    expect(identity.threadId).toBe(previousRun.threadId);
+    expect(identity.runId).not.toBe(previousRun.runId);
+  }
   runs.push(identity);
   const deadline = Date.now() + 90_000;
   let approvals = 0;
@@ -94,18 +98,24 @@ test("W15 real model edits a Skill and evaluates its actual resources in a new R
   expect(after.revision).not.toBe(before.revision);
   expect((await (await context.request.get(`${APP}/api/skills/custom/${NAME}`)).json()).content).toBe(editedContent);
   const report = "/mnt/user-data/outputs/w15-evaluation.json";
+  const readOnly = await chat(page, context,
+    `Load ${NAME} using skill_load, read references/fact.txt using skill_resource_read, and report its actual fact. ` +
+    `Do not create any output file or edit the package.`, testInfo);
+  expect(readOnly.approvals).toBe(0);
+  expect(results(readOnly.state, "skill_resource_read").at(-1)?.additional_kwargs?.haifa_tool_result?.content).toContain("17");
   const evaluated = await chat(page, context,
     `Load ${NAME} using skill_load. Read both references/fact.txt and evals/evals.json using skill_resource_read. ` +
     `Evaluate case id 1 by comparing the actual resource fact with the expected_output in the actual eval file. ` +
     `Write ${report} using write_file with JSON fields skill_name, case_id (integer), observed (string), expected (string), passed (boolean). ` +
     `Use the actual tool results, do not invent a score. Call present_files for that JSON. ` +
     `Then call review_skill_package on skill://custom/${NAME}, profile deerflow, include_content facts-only, scope ["all"]. ` +
-    `Do not execute package code. Summarize the real outcome.`, testInfo);
+    `Do not execute package code. Summarize the real outcome.`, testInfo, readOnly.identity);
   expect(evaluated.identity.threadId).not.toBe(edited.identity.threadId);
   expect(evaluated.approvals).toBeGreaterThan(0);
-  const sequence = calls(evaluated.state).map(call => call.name);
+  const evaluationState = { values: { messages: evaluated.state.values.messages.filter(message => message.run_id === evaluated.identity.runId) } };
+  const sequence = calls(evaluationState).map(call => call.name);
   for (const name of ["skill_load", "skill_resource_read", "write_file", "present_files", "review_skill_package"]) expect(sequence).toContain(name);
-  const reads = calls(evaluated.state).filter(call => call.name === "skill_resource_read");
+  const reads = calls(evaluationState).filter(call => call.name === "skill_resource_read");
   expect(JSON.stringify(reads)).toContain("references/fact.txt");
   expect(JSON.stringify(reads)).toContain("evals/evals.json");
   const load = results(evaluated.state, "skill_load").at(-1);
@@ -139,7 +149,7 @@ test("W15 real model edits a Skill and evaluates its actual resources in a new R
   const observed = JSON.parse(bytes.toString("utf8"));
   expect(observed).toMatchObject({ skill_name: NAME, case_id: 1, observed: "17", expected: "17", passed: true });
   await save(testInfo, "w15-live-evaluation", { started, finished: new Date().toISOString(), provider: "https://api.deepseek.com",
-    model: "deepseek-v4-pro", runnerRetry: false, writeAttempts, editedRun: edited.identity, evaluatedRun: evaluated.identity,
+    model: "deepseek-v4-pro", runnerRetry: false, writeAttempts, editedRun: edited.identity, readOnlyRun: readOnly.identity, evaluatedRun: evaluated.identity,
     revisions: { before: before.revision, after: after.revision }, sequence, approvals: edited.approvals + evaluated.approvals,
     artifact, sha256, actualEvaluation: observed, scriptExecution: "NOT_RUN - W14 dependency" });
   await page.screenshot({ path: testInfo.outputPath("w15-live-evaluation.png"), fullPage: true });
