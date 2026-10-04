@@ -673,32 +673,12 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
         int pageLimit = limit.orElseThrow();
         Long beforeSequence = before;
-        List<ConversationTurn> durableTurns = scanTurns(
-                thread, pageLimit + 2 * TERMINAL_RUN_CACHE_LIMIT + 3, beforeSequence);
+        // before_seq belongs to the display feed, not the SDK transcript. Project its
+        // positions before trimming the requested window (the SDK scan is already bounded).
+        List<ConversationTurn> durableTurns = scanTurns(thread, Integer.MAX_VALUE);
         restorePendingInteractionRuns(thread, durableTurns);
         Map<Long, Integer> ordinals = computeTurnOrdinals(thread);
-        List<Map<String, Object>> eligible = new ArrayList<>(
-                durableTurns.stream()
-                        .map(turn -> messageRow(thread, turn, ordinals.getOrDefault(turn.sequence(), 0)))
-                        .toList());
-        Set<String> durableHumanRuns = durableHumanRunIds(durableTurns);
-        for (RunRecord run : runs.values()) {
-            if (!run.threadId.equals(threadId)) continue;
-            if (isInFlightWithoutDurableHuman(run, durableHumanRuns)) {
-                eligible.add(messageRow(run, run.humanSequence, run.createdAt, pendingHumanMessage(run)));
-            }
-        }
-        synchronized (thread) {
-            for (var display : thread.interactionDisplays) {
-                if (!isVisibleInteractionDisplay(thread, display)) continue;
-                eligible.add(messageRow(display.runId(), display.requestSequence(),
-                        display.createdAt(), requestMessage(display)));
-                if (display.answeredOption() != null) {
-                    eligible.add(messageRow(display.runId(), display.requestSequence() + 1,
-                            display.createdAt(), responseMessage(display)));
-                }
-            }
-        }
+        List<Map<String, Object>> eligible = paginatedMessageRows(thread, durableTurns, ordinals);
         eligible.removeIf(row -> beforeSequence != null && ((Long) row.get("seq")) >= beforeSequence);
         eligible.sort((left, right) -> Long.compare((Long) left.get("seq"), (Long) right.get("seq")));
         int from = Math.max(0, eligible.size() - pageLimit);
@@ -709,6 +689,75 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         response.put("has_more", hasMore);
         response.put("next_before_seq", hasMore ? page.getFirst().get("seq") : null);
         sendJson(exchange, 200, response);
+    }
+
+    /**
+     * SDK sequences include Tool turns; the saved card counter does not. Give the frozen
+     * feed one order by inserting each card after its Run's human turn, reserving both
+     * request and hidden-response slots. Later SDK turns receive the same two-slot offset
+     * even while a reply is pending or a stale card is hidden. This also repairs legacy
+     * saved card positions without changing Runtime state or the persisted catalog.
+     */
+    private List<Map<String, Object>> paginatedMessageRows(
+            ThreadRecord thread, List<ConversationTurn> turns, Map<Long, Integer> ordinals) {
+        List<PersistentThreadCatalog.InteractionDisplay> displays;
+        synchronized (thread) { displays = List.copyOf(thread.interactionDisplays); }
+        Map<Long, List<PersistentThreadCatalog.InteractionDisplay>> anchored = new HashMap<>();
+        Set<String> anchoredRequests = new HashSet<>();
+        for (var display : displays) {
+            List<ConversationTurn> humans = turns.stream()
+                    .filter(turn -> turn.role() == io.haifa.agent.core.message.MessageRole.USER
+                            && turn.runId().map(AgentRunId::value).filter(display.runId()::equals).isPresent())
+                    .toList();
+            if (humans.isEmpty()) continue;
+            ConversationTurn anchor = humans.stream()
+                    .filter(turn -> !turn.createdAt().isAfter(display.createdAt()))
+                    .reduce((left, right) -> right).orElse(humans.getFirst());
+            anchored.computeIfAbsent(anchor.sequence(), ignored -> new ArrayList<>()).add(display);
+            anchoredRequests.add(display.requestId());
+        }
+        List<Map<String, Object>> rows = new ArrayList<>();
+        long offset = 0;
+        for (ConversationTurn turn : turns) {
+            long sequence = turn.sequence() + offset;
+            Map<String, Object> row = messageRow(thread, turn, ordinals.getOrDefault(turn.sequence(), 0));
+            row.put("seq", sequence);
+            rows.add(row);
+            List<PersistentThreadCatalog.InteractionDisplay> cards = anchored.getOrDefault(turn.sequence(), List.of());
+            offset += appendInteractionRows(thread, cards, sequence, rows);
+        }
+        Set<String> durableHumanRuns = durableHumanRunIds(turns);
+        long latest = turns.isEmpty() ? 0 : turns.getLast().sequence();
+        for (RunRecord run : runs.values().stream()
+                .filter(candidate -> candidate.threadId.equals(thread.threadId))
+                .sorted((left, right) -> left.createdAt.compareTo(right.createdAt)).toList()) {
+            if (!isInFlightWithoutDurableHuman(run, durableHumanRuns)) continue;
+            long baseSequence = Math.max(run.humanSequence, latest + 1);
+            long sequence = baseSequence + offset;
+            rows.add(messageRow(run, sequence, run.createdAt, pendingHumanMessage(run)));
+            List<PersistentThreadCatalog.InteractionDisplay> cards = displays.stream()
+                    .filter(display -> display.runId().equals(run.runId.value())
+                            && !anchoredRequests.contains(display.requestId())).toList();
+            offset += appendInteractionRows(thread, cards, sequence, rows);
+            latest = baseSequence;
+        }
+        return rows;
+    }
+
+    private long appendInteractionRows(
+            ThreadRecord thread, List<PersistentThreadCatalog.InteractionDisplay> displays,
+            long humanSequence, List<Map<String, Object>> rows) {
+        long offset = 0;
+        for (var display : displays) {
+            long requestSequence = humanSequence + offset + 1;
+            offset += 2;
+            if (!isVisibleInteractionDisplay(thread, display)) continue;
+            rows.add(messageRow(display.runId(), requestSequence, display.createdAt(), requestMessage(display)));
+            if (display.answeredOption() != null) {
+                rows.add(messageRow(display.runId(), requestSequence + 1, display.createdAt(), responseMessage(display)));
+            }
+        }
+        return offset;
     }
 
     private void searchThreads(HttpExchange exchange) throws IOException {
