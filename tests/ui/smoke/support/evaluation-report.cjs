@@ -1,9 +1,13 @@
-// Normalize the model-reported observed value to the bare fact value produced by the package.
-function observedValue(raw) {
+// The report's observed field must be the bare fact value. The only tolerated variation is the model
+// copying the exact fact record it read (`<key>=<value>`); any other prefixed or altered text is returned
+// unchanged so the caller's comparison with the expected value fails.
+function observedValue(raw, factRecord) {
   if (typeof raw !== "string") return null;
-  const equals = raw.lastIndexOf("=");
-  const value = equals >= 0 ? raw.slice(equals + 1) : raw;
-  return value.trim();
+  const text = raw.trim();
+  if (typeof factRecord === "string" && factRecord.includes("=") && text === factRecord.trim()) {
+    return text.slice(text.indexOf("=") + 1).trim();
+  }
+  return text;
 }
 
 module.exports = { observedValue };

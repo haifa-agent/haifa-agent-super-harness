@@ -74,6 +74,11 @@ async function chat(page, context, prompt, testInfo, previousRun, report) {
 
 function calls(value) { return value.values.messages.flatMap(message => message.tool_calls ?? []); }
 function results(value, name) { return value.values.messages.filter(message => message.type === "tool" && message.name === name); }
+// The fact record exactly as this Run read it from the package; the report may quote it instead of the bare value.
+function factRecord(value) {
+  return results(value, "skill_resource_read").map(message => message.additional_kwargs?.haifa_tool_result)
+    .find(result => result?.path === "references/fact.txt" && typeof result.content === "string")?.content;
+}
 
 // Each case owns the sample package: a clean removal before upload and a verified removal afterwards.
 async function removePackage(context) {
@@ -176,7 +181,7 @@ test("W15 real model edits a Skill and evaluates its actual resources in a new R
   expect(observed.case_id).toBe(1);
   expect(observed.expected).toBe("17");
   expect(observed.passed).toBe(true);
-  expect(observedValue(observed.observed)).toBe("17");
+  expect(observedValue(observed.observed, factRecord(evaluationState))).toBe("17");
   await save(testInfo, "w15-live-evaluation", { started, finished: new Date().toISOString(), provider: "https://api.deepseek.com",
     model: "deepseek-v4-pro", runnerRetry: false, writeAttempts, editedRun: edited.identity, readOnlyRun: readOnly.identity, evaluatedRun: evaluated.identity,
     revisions: { before: before.revision, after: after.revision }, sequence, approvals: edited.approvals + evaluated.approvals,
@@ -210,7 +215,7 @@ test("W15 real model evaluates Skill resources in the next conversation Run", as
   const own = { values: { messages: evaluated.state.values.messages.filter(message => message.run_id === evaluated.identity.runId) } };
   const resourceReads = results(own, "skill_resource_read");
   expect(resourceReads.length).toBeGreaterThanOrEqual(2);
-  expect(resourceReads.map(message => message.additional_kwargs.haifa_tool_result.path)).toEqual(expect.arrayContaining(["references/fact.txt", "evals/evals.json"]));
+  expect(resourceReads.map(message => message.additional_kwargs?.haifa_tool_result?.path)).toEqual(expect.arrayContaining(["references/fact.txt", "evals/evals.json"]));
   const write = results(own, "write_file").at(-1);
   const artifact = write?.additional_kwargs?.haifa_tool_result;
   expect(artifact).toMatchObject({ path: report, runId: evaluated.identity.runId, artifactExecutionRef: write.tool_call_id });
@@ -227,7 +232,7 @@ test("W15 real model evaluates Skill resources in the next conversation Run", as
   expect(actualEvaluation.case_id).toBe(1);
   expect(actualEvaluation.expected).toBe("17");
   expect(actualEvaluation.passed).toBe(true);
-  expect(observedValue(actualEvaluation.observed)).toBe("17");
+  expect(observedValue(actualEvaluation.observed, factRecord(own))).toBe("17");
   const readOrder = verifySkillReads(own.values.messages, ["references/fact.txt", "evals/evals.json"]);
   await save(testInfo, "w15-next-turn-evaluation", { provider: "https://api.deepseek.com", model: "deepseek-v4-pro",
     firstRun: first.identity, evaluatedRun: evaluated.identity, approvals: evaluated.approvals, artifact, sha256,

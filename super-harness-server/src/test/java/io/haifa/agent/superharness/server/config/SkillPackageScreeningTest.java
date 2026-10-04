@@ -231,9 +231,55 @@ class SkillPackageScreeningTest {
         assertThat(user).contains("\nPackage files: SKILL.md, evals/evals.json, references/fact.txt\n");
         assertThat(user).contains("Location: sample-helper/SKILL.md", "Executable: false");
         String system = model.requests.getFirst().messages().getFirst().toString();
-        assertThat(system).contains("The \"Package files\" line lists every file that belongs to this Skill package; "
-                + "instructions that read those listed files are package-local reads.")
+        assertThat(system).contains("The \"Package files\" line lists files that belong to this Skill package; "
+                + "when it ends with \"... and N more\" the list is truncated and the package has further files. "
+                + "Instructions that read the listed files are package-local reads.")
+                .doesNotContain("lists every file")
                 .contains("obtain authority beyond the declared task", "access unrelated private files", "send secrets externally");
+    }
+
+    @Test void truncatedPackageFilesLineKeepsPathsNamedByTheReviewedText() {
+        Map<String, byte[]> files = new java.util.TreeMap<>();
+        files.put("SKILL.md", new byte[0]);
+        for (int i = 0; i < 250; i++) files.put(String.format("assets/f%03d.txt", i), new byte[0]);
+        files.put("references/zz-last.txt", new byte[0]);
+        // Lexicographically last, so a plain prefix of the sorted list would omit it.
+        String line = SkillPackageScreening.packageFilesLine(files, "Read references/zz-last.txt before answering.");
+        assertThat(line).startsWith("Package files: references/zz-last.txt, SKILL.md, assets/f000.txt").endsWith(", ... and 52 more");
+        assertThat(line.substring("Package files: ".length()).split(", ", -1)).hasSize(201);
+        String unreferenced = SkillPackageScreening.packageFilesLine(files, "Use known facts.");
+        assertThat(unreferenced).doesNotContain("references/zz-last.txt").endsWith(", ... and 52 more");
+    }
+
+    @Test void packageFilesLineDoesNotReduceTheReviewedContentBudget() throws Exception {
+        var scanner = new SkillPackageScreening(json, temporary.resolve("data"));
+        Path directory = temporary.resolve("budget-helper"); Files.createDirectory(directory);
+        String header = "---\nname: budget-helper\ndescription: A test package\n---\n";
+        Map<String, byte[]> files = new java.util.TreeMap<>();
+        for (int i = 0; i < 300; i++) files.put("references/" + "r".repeat(40) + String.format("%03d.txt", i), "x\n".getBytes(StandardCharsets.UTF_8));
+        var model = new ControlledModel((request, count) -> ControlledModel.response(request, "screen", "{\"decision\":\"allow\"}",
+                List.of(), ModelFinishReason.STOP, ModelUsage.unpriced(10, 2)));
+        // Without the package file line this prompt is 63,9xx characters: inside the 64,000 budget on its own.
+        String fitting = header + "word ".repeat(12_740) + "\n";
+        files.put("SKILL.md", fitting.getBytes(StandardCharsets.UTF_8));
+        for (var file : files.entrySet()) { var target = directory.resolve(file.getKey()); Files.createDirectories(target.getParent()); Files.write(target, file.getValue()); }
+        scanner.writes(ignored -> LocalProbeModelTestSupport.binding(model)).screenChanges(directory, files, java.util.Set.of("SKILL.md"));
+        String user = model.requests.getLast().messages().getLast().toString();
+        String line = user.lines().filter(candidate -> candidate.startsWith("Package files: ")).findFirst().orElseThrow();
+        assertThat(line.length()).isBetween(3_000, 4_000);
+        assertThat(user.length()).isGreaterThan(64_000);
+        // The original limit still applies to the reviewed file itself.
+        files.put("SKILL.md", (header + "word ".repeat(12_800) + "\n").getBytes(StandardCharsets.UTF_8));
+        Files.write(directory.resolve("SKILL.md"), files.get("SKILL.md"));
+        assertThatThrownBy(() -> scanner.writes(ignored -> LocalProbeModelTestSupport.binding(model))
+                .screenChanges(directory, files, java.util.Set.of("SKILL.md")))
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("Skill file exceeds the semantic scanner input budget");
+    }
+
+    @Test void reasonExcerptRedactsQuotedJsonStyleAssignments() {
+        String excerpt = SkillPackageScreening.reasonExcerpt("credentials were {\"password\":\"never-log-this\"} in the file");
+        assertThat(excerpt).doesNotContain("never-log-this").contains("[REDACTED]");
+        assertThat(SkillPackageScreening.reasonExcerpt("uses 'api_key' = 'abc123def' inline")).doesNotContain("abc123def");
     }
 
     @Test void packageFilesLineCapsListedPathsAtTwoHundredWithRemainderCount() throws Exception {
@@ -256,7 +302,7 @@ class SkillPackageScreeningTest {
     @Test void packageFilesLineTruncatesToFitFourThousandCharacterBudget() {
         Map<String, byte[]> files = new java.util.TreeMap<>();
         for (int i = 0; i < 300; i++) files.put("references/" + "r".repeat(40) + String.format("%03d.txt", i), new byte[0]);
-        String line = SkillPackageScreening.packageFilesLine(files);
+        String line = SkillPackageScreening.packageFilesLine(files, "");
         assertThat(line.length()).isLessThanOrEqualTo(4000);
         assertThat(line).endsWith(" more").contains(", ... and ");
     }
