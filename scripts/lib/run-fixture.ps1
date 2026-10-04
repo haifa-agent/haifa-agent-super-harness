@@ -188,6 +188,17 @@ function Wait-FixtureReady {
     throw "$( $Entry.Name ) failed readiness for $ObjectName within ${TimeoutSec}s: $last`n$tail"
 }
 
+function Get-FixtureProcessSnapshot {
+    # One bulk CIM read per observation. This is intentionally not filtered by PID so callers
+    # can resolve every registered identity from a single query. A failed query must surface as
+    # an error, never as an empty table that would falsely satisfy "no processes remain".
+    $snapshot = @{}
+    foreach ($process in @(Get-CimInstance Win32_Process -Property ProcessId, CreationDate, Name, CommandLine -ErrorAction Stop)) {
+        $snapshot[[int]$process.ProcessId] = $process
+    }
+    $snapshot
+}
+
 function Get-FixtureOwnedRuntimeProcesses {
     param([string]$Root)
     @(Get-CimInstance Win32_Process -Filter "Name='java.exe' or Name='node.exe'" -ErrorAction Stop |
@@ -225,9 +236,17 @@ function Wait-FixturePortsReleased {
                     Select-Object State, OwningProcess, LocalPort)
             }
         }
-        $owned = @($(if ($Root) { Get-FixtureOwnedRuntimeProcesses $Root }))
+        # One bulk query per iteration backs both the owned-runtime and tracked-identity checks.
+        $snapshot = Get-FixtureProcessSnapshot
+        $owned = @()
+        if ($Root) {
+            $owned = @(foreach ($process in $snapshot.Values) {
+                if ($process.Name -in @('java.exe', 'node.exe') -and $process.CommandLine -and
+                    $process.CommandLine.Contains($Root, [StringComparison]::OrdinalIgnoreCase)) { $process }
+            })
+        }
         $remaining = @(foreach ($fact in $OwnedFacts) {
-            $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($fact.pid)" -ErrorAction SilentlyContinue
+            $current = $snapshot[[int]$fact.pid]
             # A changed command view does not prove the original process has exited.
             # Wait for the exact creation identity to disappear; never stop a mismatching view.
             if ($null -ne $current -and $current.CreationDate.ToUniversalTime().ToString('o') -eq $fact.created) { $fact.pid }
@@ -300,13 +319,15 @@ function Stop-FixtureProcesses {
         }
     }
     catch { $released = @($_.Exception.Data['portFacts']); $failures.Add($_.Exception.Message) }
+    # Post-cleanup verification shares one bulk snapshot instead of one query per PID.
+    $snapshot = Get-FixtureProcessSnapshot
     $remaining = @(foreach ($fact in $ownedFacts) {
-        $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($fact.pid)" -ErrorAction SilentlyContinue
+        $current = $snapshot[[int]$fact.pid]
         if ($null -ne $current -and $current.CreationDate.ToUniversalTime().ToString('o') -eq $fact.created) { $fact.pid }
     })
     $remaining = @($remaining | Select-Object -Unique)
     foreach ($change in $identityChanges) {
-        $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($change.pid)" -ErrorAction SilentlyContinue
+        $current = $snapshot[[int]$change.pid]
         $change.resolvedMs = [Diagnostics.Stopwatch]::GetElapsedTime($started).TotalMilliseconds
         if ($null -eq $current) { $change.disposition = 'ORIGINAL_EXITED' }
         elseif ($current.CreationDate.ToUniversalTime().ToString('o') -ne $change.expectedCreated) {
