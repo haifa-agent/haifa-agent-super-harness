@@ -276,6 +276,17 @@ class SkillPackageScreeningTest {
                 .isInstanceOf(IllegalArgumentException.class).hasMessage("Skill file exceeds the semantic scanner input budget");
     }
 
+    @Test void packageFilesLineRedactsCredentialLikePathTokens() {
+        Map<String, byte[]> files = new java.util.TreeMap<>();
+        files.put("SKILL.md", new byte[0]);
+        String token = "sk-" + "controlledFakePathToken1234567890";
+        files.put("assets/" + token + ".txt", new byte[0]);
+        files.put("assets/token=controlled-fake-value", new byte[0]);
+        files.put("references/fact.txt", new byte[0]);
+        String line = SkillPackageScreening.packageFilesLine(files, "Read references/fact.txt.");
+        assertThat(line).doesNotContain(token, "controlled-fake-value").contains("[REDACTED]", "SKILL.md", "references/fact.txt");
+    }
+
     @Test void reasonExcerptRedactsQuotedJsonStyleAssignments() {
         String excerpt = SkillPackageScreening.reasonExcerpt("credentials were {\"password\":\"never-log-this\"} in the file");
         assertThat(excerpt).doesNotContain("never-log-this").contains("[REDACTED]");

@@ -77,7 +77,7 @@ function results(value, name) { return value.values.messages.filter(message => m
 // The fact record exactly as this Run read it from the package; the report may quote it instead of the bare value.
 function factRecord(value) {
   return results(value, "skill_resource_read").map(message => message.additional_kwargs?.haifa_tool_result)
-    .find(result => result?.path === "references/fact.txt" && typeof result.content === "string")?.content;
+    .find(result => result?.skill === NAME && result?.path === "references/fact.txt" && typeof result.content === "string")?.content;
 }
 
 // Each case owns the sample package: a clean removal before upload and a verified removal afterwards.
@@ -143,7 +143,7 @@ test("W15 real model edits a Skill and evaluates its actual resources in a new R
   const sequence = calls(evaluationState).map(call => call.name);
   for (const name of ["skill_load", "skill_resource_read", "write_file", "present_files", "review_skill_package"]) expect(sequence).toContain(name);
   const reads = calls(evaluationState).filter(call => call.name === "skill_resource_read");
-  const readOrder = verifySkillReads(evaluationState.values.messages, ["references/fact.txt", "evals/evals.json"]);
+  const readOrder = verifySkillReads(evaluationState.values.messages, ["references/fact.txt", "evals/evals.json"], NAME);
   expect(readOrder.ok, readOrder.reason).toBe(true);
   expect(results(evaluationState, "skill_resource_read").length).toBeGreaterThanOrEqual(2);
   expect(JSON.stringify(reads)).toContain("references/fact.txt");
@@ -233,7 +233,7 @@ test("W15 real model evaluates Skill resources in the next conversation Run", as
   expect(actualEvaluation.expected).toBe("17");
   expect(actualEvaluation.passed).toBe(true);
   expect(observedValue(actualEvaluation.observed, factRecord(own))).toBe("17");
-  const readOrder = verifySkillReads(own.values.messages, ["references/fact.txt", "evals/evals.json"]);
+  const readOrder = verifySkillReads(own.values.messages, ["references/fact.txt", "evals/evals.json"], NAME);
   await save(testInfo, "w15-next-turn-evaluation", { provider: "https://api.deepseek.com", model: "deepseek-v4-pro",
     firstRun: first.identity, evaluatedRun: evaluated.identity, approvals: evaluated.approvals, artifact, sha256,
     actualEvaluation, resourceReadFailures: resourceReads.filter(message => message.additional_kwargs?.haifa_tool_status !== "completed").length,

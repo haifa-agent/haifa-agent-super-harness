@@ -1,12 +1,14 @@
 // Validate one Run's own Skill message order under the D7 relaxation: a resource
 // read rejected before activation (SKILL_NOT_ACTIVATED) is tolerated, but the
-// Run must activate the Skill and then successfully read every required path.
-function verifySkillReads(messages, requiredPaths) {
+// Run must activate the expected Skill and then successfully read every required
+// path from that same Skill. Results for other Skills never satisfy a requirement.
+function verifySkillReads(messages, requiredPaths, skillName) {
   const results = (messages ?? []).filter(message => message?.type === "tool");
+  const toolResult = message => message.additional_kwargs?.haifa_tool_result;
   const loadIndex = results.findIndex(message => message.name === "skill_load" &&
-    message.additional_kwargs?.haifa_tool_result?.activated === true);
+    toolResult(message)?.activated === true && toolResult(message)?.skill === skillName);
   if (loadIndex < 0) {
-    return { ok: false, reason: "no skill_load tool result reports activated=true",
+    return { ok: false, reason: `no skill_load tool result reports activated=true for ${skillName}`,
       preActivationRejectedReads: 0, completedPaths: [] };
   }
   let preActivationRejectedReads = 0;
@@ -30,11 +32,11 @@ function verifySkillReads(messages, requiredPaths) {
       return { ok: false, reason: `resource read at index ${index} did not complete after activation`,
         preActivationRejectedReads, completedPaths };
     }
-    completedPaths.push(kwargs.haifa_tool_result.path);
+    if (kwargs.haifa_tool_result.skill === skillName) completedPaths.push(kwargs.haifa_tool_result.path);
   }
   for (const required of requiredPaths ?? []) {
     if (!completedPaths.includes(required)) {
-      return { ok: false, reason: `required path ${required} was not read after activation`,
+      return { ok: false, reason: `required path ${required} was not read from ${skillName} after activation`,
         preActivationRejectedReads, completedPaths };
     }
   }

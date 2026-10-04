@@ -238,7 +238,7 @@ public final class SkillPackageScreening {
     /**
      * Lists package paths for the reviewer, at most 200 paths and 4000 characters. When the list must be
      * truncated, paths named by the reviewed text come first so a referenced package file is not omitted
-     * in favour of an unrelated one; the suffix states how many paths are left out.
+     * in favour of an unrelated one; the suffix states how many paths are left out. Each path is redacted.
      */
     static String packageFilesLine(Map<String, byte[]> files, String reviewedText) {
         var sorted = new java.util.ArrayList<>(files.keySet());
@@ -250,7 +250,8 @@ public final class SkillPackageScreening {
         while (true) {
             // A complete list stays in plain lexicographic order.
             var shown = listed == sorted.size() ? sorted : ordered.subList(0, listed);
-            String line = "Package files: " + String.join(", ", shown);
+            // Paths go to the reviewer provider too, so a credential-like path token is redacted like file content.
+            String line = "Package files: " + String.join(", ", shown.stream().map(SkillPackageScreening::redact).toList());
             if (listed < sorted.size()) line += (listed == 0 ? "" : ", ") + "... and " + (sorted.size() - listed) + " more";
             if (line.length() <= 4000 || listed == 0) return line;
             listed--;
