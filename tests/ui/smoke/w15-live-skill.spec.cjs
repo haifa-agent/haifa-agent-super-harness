@@ -162,3 +162,49 @@ test("W15 real model edits a Skill and evaluates its actual resources in a new R
     artifact, sha256, actualEvaluation: observed, scriptExecution: "NOT_RUN - W14 dependency" });
   await page.screenshot({ path: testInfo.outputPath("w15-live-evaluation.png"), fullPage: true });
 });
+
+test("W15 real model evaluates Skill resources in the next conversation Run", async ({ context, page }, testInfo) => {
+  page.setDefaultTimeout(15_000);
+  page.setDefaultNavigationTimeout(30_000);
+  const fixture = path.resolve(__dirname, "../../fixtures/w15/package_archive.py");
+  const archive = execFileSync("python", ["-B", fixture], { timeout: 10_000 });
+  const installed = await context.request.post(`${APP}/api/skills/install/upload`, {
+    multipart: { file: { name: `${NAME}.skill`, mimeType: "application/zip", buffer: archive } }, timeout: 45_000,
+  });
+  expect(installed.status(), await installed.text()).toBe(200);
+  const first = await chat(page, context,
+    `请加载 ${NAME}，读取它的 references/fact.txt，告诉我文件里记录的数值，并说明依据。`, testInfo);
+  expect(first.approvals).toBe(0);
+  expect(results(first.state, "skill_resource_read").at(-1)?.additional_kwargs?.haifa_tool_result?.content).toContain("17");
+  const report = "/mnt/user-data/outputs/w15-evaluation.json";
+  const evaluated = await chat(page, context,
+    `请使用 ${NAME}，读取 references/fact.txt 和 evals/evals.json，执行编号 1 的评测。` +
+    `将实际值、预期值和是否通过写入 ${report}，并提供下载链接。请根据实际文件内容判断，不要猜测。` +
+    `JSON字段使用 skill_name、case_id（整数）、observed（字符串）、expected（字符串）、passed（布尔值）。请通过 present_files 提供文件。`,
+    testInfo, first.identity);
+  expect(evaluated.approvals).toBe(1);
+  const own = { values: { messages: evaluated.state.values.messages.filter(message => message.run_id === evaluated.identity.runId) } };
+  const resourceReads = results(own, "skill_resource_read");
+  expect(resourceReads.length).toBeGreaterThanOrEqual(2);
+  expect(resourceReads.every(message => message.additional_kwargs?.haifa_tool_status === "completed" &&
+    typeof message.additional_kwargs?.haifa_tool_result?.content === "string"), "next request must load before every resource read").toBe(true);
+  expect(calls(own).filter(call => ["skill_load", "skill_resource_read"].includes(call.name))[0].name).toBe("skill_load");
+  expect(resourceReads.map(message => message.additional_kwargs.haifa_tool_result.path)).toEqual(expect.arrayContaining(["references/fact.txt", "evals/evals.json"]));
+  const write = results(own, "write_file").at(-1);
+  const artifact = write?.additional_kwargs?.haifa_tool_result;
+  expect(artifact).toMatchObject({ path: report, runId: evaluated.identity.runId, artifactExecutionRef: write.tool_call_id });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByTestId("artifact-trigger").first().click();
+  const ready = page.waitForEvent("download", { timeout: 15_000 });
+  await page.getByRole("link", { name: /^(Download|下载)$/ }).first().click();
+  const download = await ready;
+  const bytes = fs.readFileSync(await download.path());
+  const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+  expect(`sha256:${sha256}`).toBe(artifact.artifactSha256);
+  const actualEvaluation = JSON.parse(bytes.toString("utf8"));
+  expect(actualEvaluation).toMatchObject({ skill_name: NAME, case_id: 1, observed: "17", expected: "17", passed: true });
+  await save(testInfo, "w15-next-turn-evaluation", { provider: "https://api.deepseek.com", model: "deepseek-v4-pro",
+    firstRun: first.identity, evaluatedRun: evaluated.identity, approvals: evaluated.approvals, artifact, sha256,
+    actualEvaluation, resourceReadFailures: 0, runnerRetry: false });
+  await page.screenshot({ path: testInfo.outputPath("w15-next-turn-evaluation.png"), fullPage: true });
+});
