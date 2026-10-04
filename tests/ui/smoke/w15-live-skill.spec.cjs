@@ -186,9 +186,6 @@ test("W15 real model evaluates Skill resources in the next conversation Run", as
   const own = { values: { messages: evaluated.state.values.messages.filter(message => message.run_id === evaluated.identity.runId) } };
   const resourceReads = results(own, "skill_resource_read");
   expect(resourceReads.length).toBeGreaterThanOrEqual(2);
-  expect(resourceReads.every(message => message.additional_kwargs?.haifa_tool_status === "completed" &&
-    typeof message.additional_kwargs?.haifa_tool_result?.content === "string"), "next request must load before every resource read").toBe(true);
-  expect(calls(own).filter(call => ["skill_load", "skill_resource_read"].includes(call.name))[0].name).toBe("skill_load");
   expect(resourceReads.map(message => message.additional_kwargs.haifa_tool_result.path)).toEqual(expect.arrayContaining(["references/fact.txt", "evals/evals.json"]));
   const write = results(own, "write_file").at(-1);
   const artifact = write?.additional_kwargs?.haifa_tool_result;
@@ -205,6 +202,11 @@ test("W15 real model evaluates Skill resources in the next conversation Run", as
   expect(actualEvaluation).toMatchObject({ skill_name: NAME, case_id: 1, observed: "17", expected: "17", passed: true });
   await save(testInfo, "w15-next-turn-evaluation", { provider: "https://api.deepseek.com", model: "deepseek-v4-pro",
     firstRun: first.identity, evaluatedRun: evaluated.identity, approvals: evaluated.approvals, artifact, sha256,
-    actualEvaluation, resourceReadFailures: 0, runnerRetry: false });
+    actualEvaluation, resourceReadFailures: resourceReads.filter(message => message.additional_kwargs?.haifa_tool_status !== "completed").length,
+    skillSequence: calls(own).filter(call => ["skill_load", "skill_resource_read"].includes(call.name)).map(call => call.name), runnerRetry: false });
   await page.screenshot({ path: testInfo.outputPath("w15-next-turn-evaluation.png"), fullPage: true });
+  // Keep the loading-order oracle, but collect the independent approval/download evidence first.
+  expect(resourceReads.every(message => message.additional_kwargs?.haifa_tool_status === "completed" &&
+    typeof message.additional_kwargs?.haifa_tool_result?.content === "string"), "next request must load before every resource read").toBe(true);
+  expect(calls(own).filter(call => ["skill_load", "skill_resource_read"].includes(call.name))[0].name).toBe("skill_load");
 });
