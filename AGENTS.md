@@ -54,6 +54,8 @@
 
 ### Maven 与构建
 
+- 2026-10-04 实测：新 worktree 在 `core.autocrlf=true` 下可把 `super-harness-server/src/main/resources/upstream/deerflow/w15/` 的冻结 Python 资源检出为 CRLF，Gateway 构造时报告 `Frozen Skill scanner resource hash mismatch`。检查：逐项比对该目录 `manifest.json` 中的 SHA-256 与实际字节；修复使用仓库 `.gitattributes` 的 `text eol=lf` 规则，在相关路径原先 clean 的独立 worktree 用 `git archive HEAD <该目录>` 恢复提交原始字节，再重建。不能改 manifest 哈希或关闭校验；首次错误保留为环境前置 FAIL。
+
 - 在仓库根目录使用 Java 21、Maven 3.9.15 和 PowerShell 7（`pwsh`）；也可用 `mvnw.cmd` / `./mvnw`，Wrapper 首次使用需下载分发包，之后可离线复用。
 - 新 Java 验收测试从 `ProductionWriteFileHttpTest` 黄金样例起步，复用 `testsupport` 中的模型、审批、Gateway 与进程夹具；独立数据、证据和端口的配置见 [README「定向测试与 SDK 版本选择」](README.md#定向测试与-sdk-版本选择)。
 - 定向测试：`pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'ProductionWriteFileHttpTest,AcceptanceFixturesTest' -LowMemory`。替换 `-Test` 即可选择用例，其他模块用 `-Module`；入口固定带 `-am`，匹配 0 个测试算失败，不传额外 Maven goal、`-DskipTests` 或 `-Dhaifa.version`。
@@ -100,8 +102,6 @@ $env:no_proxy=$env:NO_PROXY
 - 2026-09-29 实测：脚本顶部开 `Set-StrictMode -Version Latest` 后，访问不存在的属性会抛 `PropertyNotFoundException`，**包括对空数组取 `.X`**（`@().X` 也抛）。取集合字段一律写 `@($arr | ForEach-Object { $_.X })`。另：`param([string]$Foo)` 会对变量 `$Foo` 加类型约束，后续把解析出的 `PSCustomObject` 赋给同名 `$Foo` 会被强制转成字符串并按路径误用；JSON 解析结果变量须另起名（如 `$ManifestPath` 参数 + `$manifest` 局部变量）。
 
 ### 冻结前端（pnpm / Next.js）
-
-- 2026-10-04 实测：新 worktree 在 `core.autocrlf=true` 下可把 `super-harness-server/src/main/resources/upstream/deerflow/w15/` 的冻结 Python 资源检出为 CRLF，Gateway 构造时报告 `Frozen Skill scanner resource hash mismatch`。检查：逐项比对该目录 `manifest.json` 中的 SHA-256 与实际字节；修复使用仓库 `.gitattributes` 的 `text eol=lf` 规则，在相关路径原先 clean 的独立 worktree 用 `git archive HEAD <该目录>` 恢复提交原始字节，再重建。不能改 manifest 哈希或关闭校验；首次错误保留为环境前置 FAIL。
 
 - 每个验收 worktree 使用独立的 `frontend/node_modules`、`.next`、端口和数据目录（`.next` 可由 runner 从共享缓存复制恢复，但不同 worktree 不得共用同一个 `.next` 目录）；主前端继续供人工验收使用。前端来源按「范围与依赖」的冻结版本校验。
 - 在该 worktree 的 `frontend/` 目录准备依赖，先确认版本精确为 `10.26.2`，再安装：

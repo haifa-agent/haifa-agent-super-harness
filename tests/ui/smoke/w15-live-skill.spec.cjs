@@ -4,6 +4,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const { expect, test } = require(path.resolve(__dirname, "../../../frontend/node_modules/@playwright/test"));
+const { verifyPendingWrite } = require("./support/pending-write.cjs");
 const APP = process.env.E2E_APP_URL;
 const NAME = "w15-package-ui";
 const runs = [];
@@ -20,7 +21,7 @@ async function state(request, identity) {
   return response.json();
 }
 
-async function chat(page, context, prompt, testInfo, previousRun) {
+async function chat(page, context, prompt, testInfo, previousRun, report) {
   if (!previousRun) await page.goto("/workspace/chats/new", { waitUntil: "domcontentloaded" });
   const input = page.locator('textarea[name="message"]');
   await expect(input).toBeVisible();
@@ -49,10 +50,10 @@ async function chat(page, context, prompt, testInfo, previousRun) {
     expect(["error", "timeout"], `Run ${identity.runId} failed`).not.toContain(status);
     const approve = page.getByTestId("human-input-card").getByRole("button", { name: /^(Approve|批准)$/ });
     if (await approve.count() && await approve.last().isEnabled()) {
-      if (previousRun) {
-        const unpublished = await context.request.get(`${APP}/api/threads/${identity.threadId}/artifacts/mnt/user-data/outputs/w15-evaluation.json`, { timeout: 10_000 });
-        expect(unpublished.status(), "the evaluation file must not exist before its write approval").toBe(404);
-        expect((await state(context.request, identity)).values.artifacts).not.toContain("/mnt/user-data/outputs/w15-evaluation.json");
+      if (report) {
+        const observation = await verifyPendingWrite({ request: context.request, app: APP, identity,
+          state: await state(context.request, identity), report });
+        await save(testInfo, `${identity.runId}-pending-write-${approvals + 1}`, observation);
       }
       const resumed = page.waitForResponse(value => value.request().method() === "POST" &&
         Boolean(value.request().postDataJSON()?.input?.messages?.at(-1)?.additional_kwargs?.human_input_response), { timeout: 15_000 });
@@ -114,7 +115,7 @@ test("W15 real model edits a Skill and evaluates its actual resources in a new R
     `Write ${report} using write_file with JSON fields skill_name, case_id (integer), observed (string), expected (string), passed (boolean). ` +
     `Use the actual tool results, do not invent a score. Call present_files for that JSON. ` +
     `Then call review_skill_package on skill://custom/${NAME}, profile deerflow, include_content facts-only, scope ["all"]. ` +
-    `Do not execute package code. Summarize the real outcome.`, testInfo, readOnly.identity);
+    `Do not execute package code. Summarize the real outcome.`, testInfo, readOnly.identity, report);
   expect(evaluated.identity.threadId).not.toBe(edited.identity.threadId);
   expect(evaluated.approvals).toBeGreaterThan(0);
   const evaluationState = { values: { messages: evaluated.state.values.messages.filter(message => message.run_id === evaluated.identity.runId) } };
@@ -181,7 +182,7 @@ test("W15 real model evaluates Skill resources in the next conversation Run", as
     `请使用 ${NAME}，读取 references/fact.txt 和 evals/evals.json，执行编号 1 的评测。` +
     `将实际值、预期值和是否通过写入 ${report}，并提供下载链接。请根据实际文件内容判断，不要猜测。` +
     `JSON字段使用 skill_name、case_id（整数）、observed（字符串）、expected（字符串）、passed（布尔值）。请通过 present_files 提供文件。`,
-    testInfo, first.identity);
+    testInfo, first.identity, report);
   expect(evaluated.approvals).toBe(1);
   const own = { values: { messages: evaluated.state.values.messages.filter(message => message.run_id === evaluated.identity.runId) } };
   const resourceReads = results(own, "skill_resource_read");

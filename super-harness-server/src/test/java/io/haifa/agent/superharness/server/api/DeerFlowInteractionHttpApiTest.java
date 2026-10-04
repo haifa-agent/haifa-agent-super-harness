@@ -36,6 +36,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
@@ -326,6 +327,16 @@ class DeerFlowInteractionHttpApiTest {
         assertThat(toolInvocations).hasValue(1);
         // Simulate the exact crash boundary: the SDK commit survived, while the
         // catalog still contains the pre-response unanswered presentation.
+        JsonNode approvedPage = getJson("/api/threads/accepted-with-display-fault/messages/page?limit=20").path("data");
+        List<JsonNode> visibleWithoutCards = new ArrayList<>();
+        for (JsonNode row : approvedPage) {
+            JsonNode content = row.path("content");
+            if (!content.path("artifact").has("human_input")
+                    && !content.path("additional_kwargs").has("human_input_response")) {
+                visibleWithoutCards.add(row);
+            }
+        }
+        assertThat(visibleWithoutCards).hasSize(2);
         api.close();
         Files.copy(staleCatalog, catalog, StandardCopyOption.REPLACE_EXISTING);
         startServer();
@@ -333,6 +344,64 @@ class DeerFlowInteractionHttpApiTest {
                 .path("values").path("messages").findValuesAsText("request_id"))
                 .doesNotContain(requestId);
         assertThat(toolInvocations).hasValue(1);
+        JsonNode hiddenPage = getJson("/api/threads/accepted-with-display-fault/messages/page?limit=20").path("data");
+        assertThat(hiddenPage).containsExactlyElementsOf(visibleWithoutCards);
+        // The invisible stale card still reserves two slots: later turns and cursors stay stable.
+        assertThat(postJson("/api/threads/accepted-with-display-fault/runs/stream",
+                ordinaryRunBody("continue after stale card")).body()).contains("event: end");
+        JsonNode continuedPage = getJson("/api/threads/accepted-with-display-fault/messages/page?limit=20").path("data");
+        assertThat(continuedPage).hasSize(4);
+        assertThat(continuedPage.get(0)).isEqualTo(hiddenPage.get(0));
+        assertThat(continuedPage.get(1)).isEqualTo(hiddenPage.get(1));
+        Long before = null;
+        for (int index = continuedPage.size() - 1; index >= 0; index--) {
+            JsonNode page = getJson("/api/threads/accepted-with-display-fault/messages/page?limit=1"
+                    + (before == null ? "" : "&before_seq=" + before));
+            assertThat(page.path("data")).hasSize(1);
+            assertThat(page.path("data").get(0)).isEqualTo(continuedPage.get(index));
+            assertThat(page.path("has_more").asBoolean()).isEqualTo(index > 0);
+            before = page.path("next_before_seq").isNull() ? null : page.path("next_before_seq").asLong();
+        }
+        Path evidence = io.haifa.agent.superharness.server.testsupport.GatewayFixture.evidenceDirectory();
+        Files.writeString(evidence.resolve("approved-page.json"), approvedPage.toPrettyString());
+        Files.writeString(evidence.resolve("hidden-page.json"), hiddenPage.toPrettyString());
+        Files.writeString(evidence.resolve("continued-page.json"), continuedPage.toPrettyString());
+        System.out.println("W15_STALE_CARD_PAGINATION_EVIDENCE=" + evidence.toAbsolutePath());
+    }
+
+    @Test
+    void pendingHumanProjectionWithoutADurableTurnKeepsItsCardAndWireIdentity() throws Exception {
+        createThread("in-flight-page");
+        HttpResponse<String> pending = postJson("/api/threads/in-flight-page/runs/stream",
+                ordinaryRunBody("approve pending write"));
+        String location = pending.headers().firstValue("content-location").orElseThrow();
+        JsonNode durablePage = getJson("/api/threads/in-flight-page/messages/page?limit=20").path("data");
+        assertThat(durablePage).hasSize(2);
+
+        // Exercise the adapter's missing-human read input using a real waiting SDK Run.
+        // This is a projection branch test; it does not manufacture or alter Runtime state.
+        var projection = java.util.Arrays.stream(DeerFlowThreadRunApi.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("paginatedMessageRows")).findFirst().orElseThrow();
+        projection.setAccessible(true);
+        var threadsField = DeerFlowThreadRunApi.class.getDeclaredField("threads");
+        threadsField.setAccessible(true);
+        Object thread = ((Map<?, ?>) threadsField.get(api.threadRunApi())).get("in-flight-page");
+        JsonNode inFlightPage = json.valueToTree(projection.invoke(api.threadRunApi(), thread, List.of(), Map.of()));
+        assertThat(inFlightPage).hasSize(2);
+        for (int index = 0; index < 2; index++) {
+            assertThat(inFlightPage.get(index).path("seq").asLong()).isEqualTo(durablePage.get(index).path("seq").asLong());
+            assertThat(inFlightPage.get(index).path("run_id")).isEqualTo(durablePage.get(index).path("run_id"));
+            assertThat(inFlightPage.get(index).path("content")).isEqualTo(durablePage.get(index).path("content"));
+        }
+        assertThat(inFlightPage.get(0).path("content").path("type").asText()).isEqualTo("human");
+        assertThat(inFlightPage.get(1).path("content").path("artifact").path("human_input").isObject()).isTrue();
+        assertThat(getJson(location).path("diagnostics").path("sdk_status").asText()).isEqualTo("WAITING_APPROVAL");
+        assertThat(toolInvocations).hasValue(0);
+        assertThat(getJson("/api/threads/in-flight-page/messages/page?limit=20").path("data")).isEqualTo(durablePage);
+        Path evidence = io.haifa.agent.superharness.server.testsupport.GatewayFixture.evidenceDirectory();
+        Files.writeString(evidence.resolve("in-flight-projection.json"), inFlightPage.toPrettyString());
+        Files.writeString(evidence.resolve("durable-page.json"), durablePage.toPrettyString());
+        System.out.println("W15_IN_FLIGHT_PROJECTION_EVIDENCE=" + evidence.toAbsolutePath());
     }
 
     private Path makeCatalogUnavailable(Path catalog) throws Exception {

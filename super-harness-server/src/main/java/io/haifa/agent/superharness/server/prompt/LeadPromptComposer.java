@@ -199,8 +199,7 @@ public final class LeadPromptComposer {
         out.append("<skill_system>\n")
                 .append("You have access to skills that provide optimized workflows for specific tasks.\n\n")
                 .append("**Loading Pattern:**\n")
-                .append("1. For EVERY new user request matching a skill's use case, your FIRST Skill tool call must be `skill_load` with that skill's name in the `skill` argument, in a separate tool round. A `skill_load` result BEFORE the latest user request is NOT evidence of activation for this request. You MUST obtain a successful `skill_load` result AFTER the latest user request before calling `skill_resource_read`.\n")
-                .append("Skill activation applies only to the current Run. Load the skill again in each new Run, even when earlier messages in this conversation show it was loaded. Wait for `skill_load` to succeed before reading its resources; do not load and read in parallel.\n")
+                .append("1. For each new user request matching a skill's use case, first call `skill_load` with that skill's name in the `skill` argument, in a separate tool round. Skill activation applies only to the current Run, so load again even if an earlier request loaded it. Obtain a successful `skill_load` result after the latest user request before calling `skill_resource_read`; do not load and read in parallel.\n")
                 .append("2. Read and follow the returned instructions precisely.\n")
                 .append("3. Call `skill_resource_read` with the `skill` and `path` arguments for referenced resources only when needed during execution.\n\n")
                 .append("<available_skills>\n");
