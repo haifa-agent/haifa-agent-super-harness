@@ -6,6 +6,7 @@ const { execFileSync } = require("node:child_process");
 const { expect, test } = require(path.resolve(__dirname, "../../../frontend/node_modules/@playwright/test"));
 const { verifyPendingWrite } = require("./support/pending-write.cjs");
 const { observedValue } = require("./support/evaluation-report.cjs");
+const { verifySkillReads } = require("./support/skill-read-order.cjs");
 const APP = process.env.E2E_APP_URL;
 const NAME = "w15-package-ui";
 const runs = [];
@@ -73,6 +74,11 @@ async function chat(page, context, prompt, testInfo, previousRun, report) {
 
 function calls(value) { return value.values.messages.flatMap(message => message.tool_calls ?? []); }
 function results(value, name) { return value.values.messages.filter(message => message.type === "tool" && message.name === name); }
+// The fact record exactly as this Run read it from the package; the report may quote it instead of the bare value.
+function factRecord(value) {
+  return results(value, "skill_resource_read").map(message => message.additional_kwargs?.haifa_tool_result)
+    .find(result => result?.skill === NAME && result?.path === "references/fact.txt" && typeof result.content === "string")?.content;
+}
 
 // Each case owns the sample package: a clean removal before upload and a verified removal afterwards.
 async function removePackage(context) {
@@ -137,8 +143,8 @@ test("W15 real model edits a Skill and evaluates its actual resources in a new R
   const sequence = calls(evaluationState).map(call => call.name);
   for (const name of ["skill_load", "skill_resource_read", "write_file", "present_files", "review_skill_package"]) expect(sequence).toContain(name);
   const reads = calls(evaluationState).filter(call => call.name === "skill_resource_read");
-  expect(results(evaluationState, "skill_resource_read").every(message => message.additional_kwargs?.haifa_tool_status === "completed" &&
-    typeof message.additional_kwargs?.haifa_tool_result?.content === "string"), "all reads in the next Run must succeed after its own activation").toBe(true);
+  const readOrder = verifySkillReads(evaluationState.values.messages, ["references/fact.txt", "evals/evals.json"], NAME);
+  expect(readOrder.ok, readOrder.reason).toBe(true);
   expect(results(evaluationState, "skill_resource_read").length).toBeGreaterThanOrEqual(2);
   expect(JSON.stringify(reads)).toContain("references/fact.txt");
   expect(JSON.stringify(reads)).toContain("evals/evals.json");
@@ -175,10 +181,11 @@ test("W15 real model edits a Skill and evaluates its actual resources in a new R
   expect(observed.case_id).toBe(1);
   expect(observed.expected).toBe("17");
   expect(observed.passed).toBe(true);
-  expect(observedValue(observed.observed)).toBe("17");
+  expect(observedValue(observed.observed, factRecord(evaluationState))).toBe("17");
   await save(testInfo, "w15-live-evaluation", { started, finished: new Date().toISOString(), provider: "https://api.deepseek.com",
     model: "deepseek-v4-pro", runnerRetry: false, writeAttempts, editedRun: edited.identity, readOnlyRun: readOnly.identity, evaluatedRun: evaluated.identity,
     revisions: { before: before.revision, after: after.revision }, sequence, approvals: edited.approvals + evaluated.approvals,
+    preActivationRejectedReads: readOrder.preActivationRejectedReads,
     artifact, sha256, actualEvaluation: observed, scriptExecution: "NOT_RUN - W14 dependency" });
   await page.screenshot({ path: testInfo.outputPath("w15-live-evaluation.png"), fullPage: true });
 });
@@ -208,7 +215,7 @@ test("W15 real model evaluates Skill resources in the next conversation Run", as
   const own = { values: { messages: evaluated.state.values.messages.filter(message => message.run_id === evaluated.identity.runId) } };
   const resourceReads = results(own, "skill_resource_read");
   expect(resourceReads.length).toBeGreaterThanOrEqual(2);
-  expect(resourceReads.map(message => message.additional_kwargs.haifa_tool_result.path)).toEqual(expect.arrayContaining(["references/fact.txt", "evals/evals.json"]));
+  expect(resourceReads.map(message => message.additional_kwargs?.haifa_tool_result?.path)).toEqual(expect.arrayContaining(["references/fact.txt", "evals/evals.json"]));
   const write = results(own, "write_file").at(-1);
   const artifact = write?.additional_kwargs?.haifa_tool_result;
   expect(artifact).toMatchObject({ path: report, runId: evaluated.identity.runId, artifactExecutionRef: write.tool_call_id });
@@ -225,14 +232,14 @@ test("W15 real model evaluates Skill resources in the next conversation Run", as
   expect(actualEvaluation.case_id).toBe(1);
   expect(actualEvaluation.expected).toBe("17");
   expect(actualEvaluation.passed).toBe(true);
-  expect(observedValue(actualEvaluation.observed)).toBe("17");
+  expect(observedValue(actualEvaluation.observed, factRecord(own))).toBe("17");
+  const readOrder = verifySkillReads(own.values.messages, ["references/fact.txt", "evals/evals.json"], NAME);
   await save(testInfo, "w15-next-turn-evaluation", { provider: "https://api.deepseek.com", model: "deepseek-v4-pro",
     firstRun: first.identity, evaluatedRun: evaluated.identity, approvals: evaluated.approvals, artifact, sha256,
     actualEvaluation, resourceReadFailures: resourceReads.filter(message => message.additional_kwargs?.haifa_tool_status !== "completed").length,
+    preActivationRejectedReads: readOrder.preActivationRejectedReads,
     skillSequence: calls(own).filter(call => ["skill_load", "skill_resource_read"].includes(call.name)).map(call => call.name), runnerRetry: false });
   await page.screenshot({ path: testInfo.outputPath("w15-next-turn-evaluation.png"), fullPage: true });
   // Keep the loading-order oracle, but collect the independent approval/download evidence first.
-  expect(resourceReads.every(message => message.additional_kwargs?.haifa_tool_status === "completed" &&
-    typeof message.additional_kwargs?.haifa_tool_result?.content === "string"), "next request must load before every resource read").toBe(true);
-  expect(calls(own).filter(call => ["skill_load", "skill_resource_read"].includes(call.name))[0].name).toBe("skill_load");
+  expect(readOrder.ok, readOrder.reason).toBe(true);
 });

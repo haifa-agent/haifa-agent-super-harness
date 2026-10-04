@@ -3,6 +3,7 @@ package io.haifa.agent.superharness.server.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static io.haifa.agent.superharness.server.testsupport.ControlledModel.*;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.haifa.agent.superharness.server.config.*;
 import io.haifa.agent.superharness.server.testsupport.*;
@@ -227,5 +228,80 @@ class SkillPackageRunHttpTest {
             assertThat(fixture.results("skill-persisted", "write_file")).hasSize(1);
         }
         System.out.println("W15_PACKAGE_RECOVERY_EVIDENCE source=frozen-original after=edit+restart evidence=" + evidence);
+    }
+
+    @Test void laterRunReadBeforeActivationIsRejectedThenRepairedAfterLoad() throws Exception {
+        Path data = GatewayFixture.dataDirectory(), evidence = GatewayFixture.evidenceDirectory();
+        var store = store(data);
+        store.install(SkillPackageFiles.export("package-control", Map.of(
+                "SKILL.md", markdown("Read the supplied reference before answering").getBytes(StandardCharsets.UTF_8),
+                "references/fact.txt", "FACT=17\n".getBytes(StandardCharsets.UTF_8))), null);
+        String thread = "skill-read-after-load";
+        // Run 1 activates then reads; Run 2 reads before activating, is rejected, then repairs itself.
+        var model = new ControlledModel((request, count) -> switch (count) {
+            case 1 -> call(request, "skill_load", Map.of("skill", "package-control"));
+            case 2 -> call(request, "skill_resource_read", Map.of("skill", "package-control", "path", "references/fact.txt"));
+            case 4 -> call(request, "skill_resource_read", Map.of("skill", "package-control", "path", "references/fact.txt"));
+            case 5 -> call(request, "skill_load", Map.of("skill", "package-control"));
+            case 6 -> call(request, "skill_resource_read", Map.of("skill", "package-control", "path", "references/fact.txt"));
+            default -> stop(request);
+        });
+        try (var fixture = gateway(data, store, model, evidence)) {
+            fixture.thread(thread);
+            fixture.completed(fixture.run(thread, null, null));
+            assertThat(model.requests.get(0).tools()).extracting(tool -> tool.name())
+                    .contains("skill_load").doesNotContain("skill_resource_read");
+            assertThat(model.requests.get(1).tools()).extracting(tool -> tool.name())
+                    .contains("skill_load", "skill_resource_read");
+
+            var second = fixture.run(thread, null, null);
+            String location = fixture.completed(second);
+            String runId = location.substring(location.lastIndexOf('/') + 1);
+            // Disclosure stays activation-driven: the later Run's first request must still hide the reader,
+            // and only the request issued after skill_load may expose skill_resource_read.
+            assertThat(model.requests.get(3).tools()).extracting(tool -> tool.name())
+                    .contains("skill_load").doesNotContain("skill_resource_read");
+            assertThat(model.requests.get(4).tools()).extracting(tool -> tool.name())
+                    .contains("skill_load").doesNotContain("skill_resource_read");
+            assertThat(model.requests.get(5).tools()).extracting(tool -> tool.name())
+                    .contains("skill_load", "skill_resource_read");
+
+            var messages = new java.util.ArrayList<JsonNode>();
+            for (JsonNode message : fixture.state(thread).path("values").path("messages")) {
+                if (runId.equals(message.path("run_id").asText())) messages.add(message);
+            }
+            var reads = new java.util.ArrayList<JsonNode>();
+            var readPositions = new java.util.ArrayList<Integer>();
+            int loadPosition = -1;
+            boolean loadActivated = false;
+            for (int position = 0; position < messages.size(); position++) {
+                var message = messages.get(position);
+                if (!"tool".equals(message.path("type").asText())) continue;
+                if ("skill_resource_read".equals(message.path("name").asText())) {
+                    reads.add(message);
+                    readPositions.add(position);
+                } else if (loadPosition < 0 && "skill_load".equals(message.path("name").asText())) {
+                    loadPosition = position;
+                    loadActivated = message.path("additional_kwargs").path("haifa_tool_result").path("activated").asBoolean();
+                }
+            }
+            assertThat(loadPosition).isGreaterThanOrEqualTo(0);
+            assertThat(loadActivated).as("skill_load result must report activated=true").isTrue();
+            assertThat(reads).hasSizeGreaterThanOrEqualTo(2);
+            var firstRead = reads.getFirst();
+            assertThat(firstRead.path("additional_kwargs").path("haifa_tool_status").asText()).isEqualTo("failed");
+            assertThat(firstRead.path("additional_kwargs").path("haifa_tool_result").path("failureCode").asText())
+                    .isEqualTo("SKILL_NOT_ACTIVATED");
+            int repairedReads = 0;
+            for (int index = 0; index < reads.size(); index++) {
+                if (readPositions.get(index) <= loadPosition) continue;
+                var read = reads.get(index);
+                assertThat(read.path("additional_kwargs").path("haifa_tool_status").asText()).isEqualTo("completed");
+                assertThat(read.path("additional_kwargs").path("haifa_tool_result").path("content").asText()).contains("FACT=17");
+                repairedReads++;
+            }
+            assertThat(repairedReads).as("at least one read must succeed after activation").isGreaterThanOrEqualTo(1);
+        }
+        System.out.println("W15_GATED_READER_EVIDENCE later_run_pre_activation_read_rejected_then_repaired=true evidence=" + evidence);
     }
 }
