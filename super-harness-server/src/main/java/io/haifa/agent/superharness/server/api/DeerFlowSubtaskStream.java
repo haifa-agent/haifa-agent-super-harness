@@ -12,6 +12,7 @@ import io.haifa.agent.superharness.server.run.HaifaRunBridge;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -24,6 +25,9 @@ final class DeerFlowSubtaskStream implements AutoCloseable {
     private static final long PERSISTENCE_RECHECK_NANOS = Duration.ofMillis(100).toNanos();
     private final HaifaRunBridge bridge;
     private final AgentRunId parent;
+    private final java.util.function.Supplier<List<ChildRunView>> childQuery;
+    private final java.util.function.LongSupplier clock;
+    private long nextChildrenReadNanos = Long.MIN_VALUE;
     private final Map<AgentRunId, ChildCursor> cursors = new LinkedHashMap<>();
 
     @FunctionalInterface
@@ -32,25 +36,38 @@ final class DeerFlowSubtaskStream implements AutoCloseable {
     }
 
     DeerFlowSubtaskStream(HaifaRunBridge bridge, AgentRunId parent) {
+        this(bridge, parent, () -> bridge.children(parent), System::nanoTime);
+    }
+
+    /** Package-private query/clock observation seam; production always reads the public SDK. */
+    DeerFlowSubtaskStream(HaifaRunBridge bridge, AgentRunId parent,
+            java.util.function.Supplier<List<ChildRunView>> childQuery, java.util.function.LongSupplier clock) {
         this.bridge = bridge;
         this.parent = parent;
+        this.childQuery = childQuery;
+        this.clock = clock;
     }
 
     /** False at Parent end means actual Children or their persistent message prefix still need draining. */
     boolean drain(boolean parentTerminal, Frames frames) throws IOException {
+        long now = clock.getAsLong();
+        if (!parentTerminal && now < nextChildrenReadNanos
+                && cursors.values().stream().noneMatch(cursor -> !cursor.terminalSent && cursor.dirty.get())) {
+            return false;
+        }
+        nextChildrenReadNanos = now + PERSISTENCE_RECHECK_NANOS;
+        List<ChildRunView> children = childQuery.get();
+        List<ChildRunView> unseen = children.stream().filter(child -> !cursors.containsKey(child.runId())).toList();
+        Map<AgentRunId, String> taskIds = unseen.isEmpty() ? Map.of() : bridge.childTaskIds(parent, unseen);
         boolean complete = true;
-        for (ChildRunView child : bridge.children(parent)) {
+        for (ChildRunView child : children) {
             if (!child.parentRunId().equals(parent)) throw new IllegalStateException("Child belongs to a different Parent");
             ChildCursor cursor = cursors.get(child.runId());
             if (cursor == null) {
                 if (cursors.size() >= MAX_CONNECTED_CHILDREN) throw new IllegalStateException("Subtask connection limit exceeded");
-                String taskId = bridge.childTaskId(parent, child.runId())
-                        .orElseThrow(() -> new IllegalStateException("Child has no exact task Tool identity"));
-                var call = bridge.runtimeToolCall(parent, taskId)
-                        .orElseThrow(() -> new IllegalStateException("Child task Tool is unavailable"));
-                if (!call.runId().equals(parent) || !"task".equals(call.toolName())) {
-                    throw new IllegalStateException("Child identity is not a Parent task Tool");
-                }
+                // The public Bridge association verifies Parent task Tools once for this batch.
+                String taskId = taskIds.get(child.runId());
+                if (taskId == null) throw new IllegalStateException("Child has no exact task Tool identity");
                 cursor = new ChildCursor(child.runId(), taskId);
                 ChildCursor registered = cursor;
                 // Register before reading any durable prefix. Listener callbacks never write HTTP frames.
@@ -59,7 +76,6 @@ final class DeerFlowSubtaskStream implements AutoCloseable {
                 cursors.put(child.runId(), cursor);
             }
             if (cursor.terminalSent) continue;
-            long now = System.nanoTime();
             if (!parentTerminal && !child.status().isTerminal()
                     && !cursor.dirty.getAndSet(false) && now < cursor.nextReadNanos) {
                 complete = false;

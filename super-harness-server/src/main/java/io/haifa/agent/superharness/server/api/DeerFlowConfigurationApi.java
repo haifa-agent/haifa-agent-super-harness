@@ -209,7 +209,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
 
     HaifaRunBridge.ModelBinding resolveChildModel(String name) {
         return binding(store.executableModel(name).orElseThrow(
-                () -> new IllegalStateException("Child model is unavailable")));
+                () -> new IllegalArgumentException("Child model is unavailable")));
     }
 
     /** Frozen Agent.skills: null selects all enabled packages, [] selects none. */

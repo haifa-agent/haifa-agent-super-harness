@@ -89,6 +89,13 @@ class DeerFlowTaskDelegationApiTest {
                 assertThat(run.path("lead_agent_tokens").asLong()).isEqualTo(17);
                 assertThat(run.path("subagent_tokens").asLong()).isEqualTo(24);
                 assertThat(run.path("total_tokens").asLong()).isEqualTo(41);
+                JsonNode threadUsage = http.get(gateway.base, "/api/threads/identity/token-usage", "thread-usage.json");
+                assertThat(threadUsage.path("total_input_tokens").asLong()).isEqualTo(18);
+                assertThat(threadUsage.path("total_output_tokens").asLong()).isEqualTo(23);
+                assertThat(threadUsage.path("total_tokens").asLong()).isEqualTo(41);
+                assertThat(threadUsage.path("total_runs").asInt()).isEqualTo(1);
+                assertThat(threadUsage.path("by_model").elements().next().path("tokens").asLong()).isEqualTo(41);
+                assertThat(threadUsage.path("by_model").elements().next().path("runs").asInt()).isEqualTo(1);
                 history = http.get(gateway.base, "/api/threads/identity/state", "state.json");
                 List<JsonNode> messages = messages(history);
                 JsonNode invocation = messages.stream().filter(message -> !message.path("tool_calls").isEmpty()).findFirst().orElseThrow().path("tool_calls").get(0);
@@ -112,6 +119,8 @@ class DeerFlowTaskDelegationApiTest {
                 JsonNode replay = http.get(restarted.base, "/api/threads/identity/state", "restart-state.json");
                 assertThat(replay.path("values").path("messages")).isEqualTo(history.path("values").path("messages"));
                 assertThat(http.get(restarted.base, location, "restart-run.json").path("subagent_tokens").asLong()).isEqualTo(24);
+                assertThat(http.get(restarted.base, "/api/threads/identity/token-usage", "thread-usage-restart.json")
+                        .path("total_tokens").asLong()).isEqualTo(41);
                 assertThat(provider.calls.get()).isEqualTo(calls);
             }
             assertThat(provider.failure.get()).isNull();
@@ -151,6 +160,7 @@ class DeerFlowTaskDelegationApiTest {
                         assertThat(metadata.has("subagent_token_usage")).isFalse();
                         assertThat(run.path("total_tokens").isNull()).isTrue();
                         assertThat(run.has("subagent_tokens")).isFalse();
+                        assertThat(http.get(gateway.base, "/api/threads/" + thread + "/token-usage", thread + "-thread-usage.json").isNull()).isTrue();
                         assertThat(Files.readString(evidence.resolve(thread + ".sse"))).doesNotContain("subagent_token_usage");
                     } else {
                         assertThat(metadata.path("subagent_token_usage").path("total_tokens").isIntegralNumber()).isTrue();
@@ -158,6 +168,8 @@ class DeerFlowTaskDelegationApiTest {
                         assertThat(run.path("subagent_tokens").isIntegralNumber()).isTrue();
                         assertThat(run.path("subagent_tokens").asLong()).isZero();
                         assertThat(run.path("total_tokens").asLong()).isEqualTo(14);
+                        assertThat(http.get(gateway.base, "/api/threads/" + thread + "/token-usage", thread + "-thread-usage.json")
+                                .path("total_tokens").asLong()).isEqualTo(14);
                         var stream = SseEvents.read(Files.readString(evidence.resolve(thread + ".sse")));
                         var totals = java.util.stream.Stream.of("messages", "messages/partial", "messages/complete", "custom")
                                 .flatMap(name -> stream.named(name).stream())
@@ -187,9 +199,12 @@ class DeerFlowTaskDelegationApiTest {
                     if (thread.endsWith("omitted")) {
                         assertThat(run.path("total_tokens").isNull()).isTrue();
                         assertThat(run.has("subagent_tokens")).isFalse();
+                        assertThat(http.get(restarted.base, "/api/threads/" + thread + "/token-usage", thread + "-thread-usage-restart.json").isNull()).isTrue();
                     } else {
                         assertThat(run.path("subagent_tokens").isIntegralNumber()).isTrue();
                         assertThat(run.path("subagent_tokens").asLong()).isZero();
+                        assertThat(http.get(restarted.base, "/api/threads/" + thread + "/token-usage", thread + "-thread-usage-restart.json")
+                                .path("total_tokens").asLong()).isEqualTo(14);
                     }
                 }
                 assertThat(provider.calls.get()).isEqualTo(calls);
@@ -322,6 +337,16 @@ class DeerFlowTaskDelegationApiTest {
             String location = execute(gateway.base, "alternate", input(true));
             assertThat(http.get(gateway.base, location, "run.json").path("status").asText()).isEqualTo("success");
             assertThat(provider.requests.stream().filter(DelegationHttpFixture::isChild).count()).isEqualTo(1);
+            JsonNode threadUsage = http.get(gateway.base, "/api/threads/alternate/token-usage", "alternate-thread-usage.json");
+            assertThat(threadUsage.path("total_tokens").asLong()).isEqualTo(21);
+            assertThat(threadUsage.path("by_model").size()).isEqualTo(2);
+            var models = threadUsage.path("by_model").fields();
+            while (models.hasNext()) {
+                var model = models.next();
+                assertThat(model.getValue().path("tokens").asLong())
+                        .isEqualTo(model.getKey().endsWith("alternate-provider-model") ? 7 : 14);
+                assertThat(model.getValue().path("runs").asInt()).isEqualTo(1);
+            }
             assertThat(provider.failure.get()).isNull();
         }
     }

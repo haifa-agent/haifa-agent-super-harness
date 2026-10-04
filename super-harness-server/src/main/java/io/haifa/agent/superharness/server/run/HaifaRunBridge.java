@@ -418,17 +418,29 @@ public final class HaifaRunBridge implements AutoCloseable {
 
     /** Exact SDK lifecycle association to the same Runtime ID used on Parent SSE/history. */
     public Optional<String> childTaskId(AgentRunId parent, AgentRunId child) {
-        if (children(parent).stream().noneMatch(view -> view.runId().equals(child))) return Optional.empty();
+        return Optional.ofNullable(childTaskIds(parent, children(parent)).get(child));
+    }
+
+    /** Resolve a caller-visible child batch with one bounded Parent scan and one Tool read. */
+    public java.util.Map<AgentRunId, String> childTaskIds(AgentRunId parent, List<ChildRunView> children) {
+        var visible = children.stream().filter(view -> view.parentRunId().equals(parent))
+                .map(ChildRunView::runId).collect(java.util.stream.Collectors.toSet());
+        if (visible.isEmpty()) return java.util.Map.of();
+        var tasks = toolCalls(parent).stream().filter(call -> call.runId().equals(parent)
+                        && "task".equals(call.toolName()))
+                .map(call -> call.id().value()).collect(java.util.stream.Collectors.toSet());
+        java.util.Map<AgentRunId, String> associations = new java.util.HashMap<>();
         RunEventCursor cursor = beforeFirstEvent(parent);
         for (int pages = 0; pages < 128; pages++) {
             RunEventPage page = events(parent, cursor, 256);
             for (var event : page.items()) {
                 if (event.payload() instanceof io.haifa.agent.runtime.api.RunEventPayloads.ChildRunLifecycle lifecycle
-                        && lifecycle.childRunId().equals(child.value())) {
-                    return runtimeToolCall(parent, lifecycle.toolCallId()).map(call -> call.id().value());
+                        && tasks.contains(lifecycle.toolCallId())) {
+                    var child = new AgentRunId(lifecycle.childRunId());
+                    if (visible.contains(child)) associations.putIfAbsent(child, lifecycle.toolCallId());
                 }
             }
-            if (!page.hasMore()) return Optional.empty();
+            if (!page.hasMore() || associations.size() == visible.size()) return java.util.Map.copyOf(associations);
             cursor = page.nextCursor();
         }
         throw new IllegalStateException("Child association exceeds the bounded event query budget");

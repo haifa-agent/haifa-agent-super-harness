@@ -176,18 +176,19 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                     if (!DeerFlowConfigurationApi.subagentEnabled(body)) {
                         return io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled();
                     }
+                    SubagentCatalogStore.RuntimeSnapshot catalog;
                     try {
-                        return io.haifa.agent.superharness.server.config.SubagentRunConfiguration.project(
-                                subagentCatalog.runtimeSnapshot(), configurationApi.resolveAllowedSubagents(body),
-                                parent, configurationApi::resolveChildModel,
-                                delegationSettings);
-                    } catch (IOException | RuntimeException unavailable) {
-                        // Safe degradation applies only to configuration reads; SDK declaration
-                        // validation happens later and must retain its own failure boundary.
+                        catalog = subagentCatalog.runtimeSnapshot();
+                    } catch (IOException unavailable) {
+                        // Only an unreadable directory can disable delegation. Selected Agent,
+                        // Child model and declaration errors retain their admission failure.
                         System.getLogger(DeerFlowBootstrapApi.class.getName()).log(System.Logger.Level.WARNING,
                                 "Subagent configuration unavailable; admitting Run without delegation");
                         return io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled();
                     }
+                    return io.haifa.agent.superharness.server.config.SubagentRunConfiguration.project(
+                            catalog, configurationApi.resolveAllowedSubagents(body),
+                            parent, configurationApi::resolveChildModel, delegationSettings);
                 }, new io.haifa.agent.runtime.api.ChildRunCapacity(delegationSettings.runningCapacity()));
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);

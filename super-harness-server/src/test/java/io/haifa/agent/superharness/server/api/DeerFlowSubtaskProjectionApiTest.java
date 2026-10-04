@@ -48,6 +48,7 @@ class DeerFlowSubtaskProjectionApiTest {
         String location;
         String taskId;
         String original;
+        String terminalCursor;
         var environment = environment();
         try (var provider = new ControlledProvider(evidence, true, DelegationHttpFixture.readSequence("researcher"))) {
             try (var gateway = GatewayFixture.production(data, 0, environment, evidence)) {
@@ -62,6 +63,9 @@ class DeerFlowSubtaskProjectionApiTest {
                 JsonNode replay = GatewayFixture.JSON.readTree(original);
                 assertSteps(replay, taskId);
                 List<JsonNode> custom = customs(Files.readString(evidence.resolve("steps.sse")));
+                terminalCursor = Files.readString(evidence.resolve("steps.sse")).lines()
+                        .filter(line -> line.startsWith("id: ")).map(line -> line.substring(4))
+                        .reduce((left, right) -> right).orElseThrow();
                 assertThat(custom.stream().filter(event -> event.path("type").asText().equals("task_started")))
                         .hasSize(1).allSatisfy(event -> {
                             assertThat(event.path("task_id").asText()).isEqualTo(taskId);
@@ -93,13 +97,139 @@ class DeerFlowSubtaskProjectionApiTest {
                 assertThat(combined).isEqualTo(replay);
                 assertThat(http.request(gateway.base, "GET", events(location, taskId), "", "steps-repeat.json").body()).isEqualTo(original);
                 assertValidationAndOwnership(gateway.base, location, taskId);
+                assertCompletedJoin(gateway.base, location, terminalCursor, replay, taskId, "steps-cached-join.sse");
+                // Evict the original terminal Run from the actual eight-entry cache.
+                for (int index = 0; index < 9; index++) {
+                    DelegationHttpFixture.execute(http, gateway.base, "evict-" + index, DelegationHttpFixture.input(false));
+                }
+                assertCompletedJoin(gateway.base, location, terminalCursor, replay, taskId, "steps-evicted-join.sse");
                 assertThat(provider.failure.get()).isNull();
             }
             try (var reopened = GatewayFixture.production(data, 0, environment, evidence)) {
                 assertThat(http.request(reopened.base, "GET", events(location, taskId), "", "steps-reopened.json").body())
                         .isEqualTo(original);
                 assertParentHistory(http.get(reopened.base, "/api/threads/steps/state", "parent-state-reopened.json"), taskId, "completed");
+                assertCompletedJoin(reopened.base, location, terminalCursor,
+                        GatewayFixture.JSON.readTree(original), taskId, "steps-restarted-join.sse");
             }
+        }
+    }
+
+    private void assertCompletedJoin(URI base, String location, String cursor, JsonNode replay,
+            String taskId, String name) throws Exception {
+        var response = http.client.send(HttpRequest.newBuilder(base.resolve(location + "/stream"))
+                .timeout(Duration.ofSeconds(40)).header("Last-Event-ID", cursor).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        Files.writeString(evidence.resolve(name), response.body());
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.body()).contains("event: end").doesNotContain("event: error");
+        var custom = customs(response.body());
+        assertThat(custom.stream().filter(event -> "task_started".equals(event.path("type").asText()))).hasSize(1);
+        assertThat(custom.stream().filter(event -> "task_completed".equals(event.path("type").asText()))).hasSize(1);
+        assertLiveReplay(custom, replay, taskId);
+    }
+
+    @Test void unrequestedCustomModeStaysDisabledAfterEvictionAndRestart() throws Exception {
+        String location;
+        String cursor;
+        try (var provider = new ControlledProvider(evidence, true, DelegationHttpFixture.readSequence("researcher"))) {
+            try (var gateway = GatewayFixture.production(data, 0, environment(), evidence)) {
+                DelegationHttpFixture.configure(http, gateway.base, provider.port());
+                DelegationHttpFixture.seed(http, gateway.base, "researcher", 30, 3, List.of("list_uploaded_files"));
+                var input = DelegationHttpFixture.input(true);
+                input.putArray("stream_mode").add("messages-tuple").add("updates");
+                location = DelegationHttpFixture.execute(http, gateway.base, "no-custom", input);
+                String body = Files.readString(evidence.resolve("no-custom.sse"));
+                cursor = body.lines().filter(line -> line.startsWith("id: ")).map(line -> line.substring(4))
+                        .reduce((left, right) -> right).orElseThrow();
+                assertThat(customs(body)).isEmpty();
+                assertNoCustomJoin(gateway.base, location, cursor, "no-custom-cached.sse");
+                // A later Turn in the same Thread selects custom; the original Run must keep its own choice.
+                var next = http.request(gateway.base, "POST", "/api/threads/no-custom/runs/stream",
+                        DelegationHttpFixture.input(false).toString(), "no-custom-later-turn.sse");
+                assertThat(next.statusCode()).isEqualTo(200);
+                assertThat(next.body()).contains("event: end");
+                for (int index = 0; index < 9; index++) {
+                    DelegationHttpFixture.execute(http, gateway.base, "no-custom-evict-" + index, DelegationHttpFixture.input(false));
+                }
+                assertNoCustomJoin(gateway.base, location, cursor, "no-custom-evicted.sse");
+                assertThat(http.get(gateway.base, "/api/threads/no-custom", "no-custom-thread.json")
+                        .path("metadata").has("haifa_run_stream_modes")).isFalse();
+            }
+            int calls = provider.calls.get();
+            try (var reopened = GatewayFixture.production(data, 0, environment(), evidence)) {
+                assertNoCustomJoin(reopened.base, location, cursor, "no-custom-restarted.sse");
+                assertThat(provider.calls.get()).isEqualTo(calls);
+            }
+        }
+    }
+
+    private void assertNoCustomJoin(URI base, String location, String cursor, String name) throws Exception {
+        var response = http.client.send(HttpRequest.newBuilder(base.resolve(location + "/stream"))
+                .timeout(Duration.ofSeconds(40)).header("Last-Event-ID", cursor).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        Files.writeString(evidence.resolve(name), response.body());
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.body()).contains("event: end").doesNotContain("event: error", "event: custom");
+    }
+
+    @Test void slowChildCancellationPreservesParentEndAndLaterActualChildReplay() throws Exception {
+        var admitted = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var childFinished = new CountDownLatch(1);
+        AtomicInteger lead = new AtomicInteger();
+        var model = new ControlledModel((request, call) -> {
+            if (request.messages().stream().anyMatch(message -> message.content().contains(DelegationHttpFixture.CHILD_MARKER))) {
+                admitted.countDown();
+                long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
+                try {
+                    // Real in-flight execution deliberately survives interrupt until the test releases it.
+                    while (release.getCount() != 0 && System.nanoTime() < deadline) {
+                        try { release.await(100, TimeUnit.MILLISECONDS); }
+                        catch (InterruptedException ignored) { /* exercise asynchronous SDK cancellation */ }
+                    }
+                    if (release.getCount() != 0) throw new IllegalStateException("Slow Child cancellation deadline expired");
+                    return ControlledModel.stop(request);
+                } finally { childFinished.countDown(); }
+            }
+            if (lead.incrementAndGet() == 1) return ControlledModel.call(request, "task",
+                    Map.of("agent", "researcher", "objective", "Observe bounded slow cancellation"));
+            return ControlledModel.stop(request);
+        });
+        try (var gateway = new GatewayFixture(data, model, evidence)) {
+            DelegationHttpFixture.configure(http, gateway.base, 1);
+            DelegationHttpFixture.seed(http, gateway.base, "researcher", 30, 3, List.of());
+            assertThat(http.request(gateway.base, "POST", "/api/threads", "{\"thread_id\":\"slow-cancel\"}").statusCode()).isEqualTo(200);
+            var request = HttpRequest.newBuilder(gateway.base.resolve("/api/threads/slow-cancel/runs/stream"))
+                    .timeout(Duration.ofSeconds(40)).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(DelegationHttpFixture.input(true).toString())).build();
+            var response = http.client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            String location = response.headers().firstValue("content-location").orElseThrow();
+            try (var stream = response.body()) {
+                assertThat(admitted.await(10, TimeUnit.SECONDS)).isTrue();
+                long cancelledAt = System.nanoTime();
+                assertThat(http.request(gateway.base, "POST", location + "/cancel?action=interrupt&wait=0", "", "slow-cancel.http")
+                        .statusCode()).isEqualTo(202);
+                String body = GatewayFixture.drain(stream);
+                Files.writeString(evidence.resolve("slow-cancel.sse"), body);
+                assertThat(body).contains("event: end").doesNotContain("event: error");
+                assertThat(Duration.ofNanos(System.nanoTime() - cancelledAt)).isGreaterThanOrEqualTo(Duration.ofSeconds(2));
+                assertThat(childFinished.getCount()).as("Parent end must arrive before slow execution is released").isEqualTo(1);
+                assertThat(customs(body)).noneMatch(event -> "task_cancelled".equals(event.path("type").asText()));
+                assertThat(http.get(gateway.base, location, "slow-parent-terminal.json")
+                        .path("diagnostics").path("sdk_status").asText()).isEqualTo("CANCELLED");
+                release.countDown();
+                assertThat(childFinished.await(10, TimeUnit.SECONDS)).isTrue();
+                String cursor = body.lines().filter(line -> line.startsWith("id: ")).map(line -> line.substring(4))
+                        .reduce((left, right) -> right).orElseThrow();
+                var joined = http.client.send(HttpRequest.newBuilder(gateway.base.resolve(location + "/stream"))
+                        .timeout(Duration.ofSeconds(40)).header("Last-Event-ID", cursor).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                Files.writeString(evidence.resolve("slow-cancel-late-join.sse"), joined.body());
+                assertThat(joined.body()).contains("event: end").doesNotContain("event: error");
+                assertThat(customs(joined.body()).stream().filter(event -> "task_cancelled".equals(event.path("type").asText())))
+                        .hasSize(1);
+            } finally { release.countDown(); }
         }
     }
 

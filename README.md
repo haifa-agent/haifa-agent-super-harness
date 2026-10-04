@@ -180,6 +180,8 @@ Gateway 审批恢复和最终门禁待流程/CI 优化完成后执行。本切�
 
 Gateway 提供 `GET/POST /api/subagents`、`PUT/DELETE /api/subagents/{name}`，managed 定义按现有 owner 配置布局保存到 `<data-root>/owners/default/subagents/<name>.json`。创建名称转小写，更新仅应用实际出现的字段；`tools=null` 保留继承语义，`tools=[]` 保留空集。创建拒绝覆盖同名文件，更新在同目录原子替换；损坏定义警告并跳过，不隐藏其他条目。读写每次读取文件，不新增运行状态或缓存。
 
+目录定义所在文件系统须支持同目录硬链接和原子替换：创建通过硬链接发布完整文件且不覆盖同名条目，更新通过原子替换发布。FAT/exFAT 或拒绝硬链接的共享卷不在该目录存储的支持范围；具体卷的能力预检和等价回退方案记录在私有 W08 TODO，不以可能暴露部分 JSON 或覆盖现有条目的写法回退。
+
 本地 profile 沿用 `/api/v1/auth/me` 的固定管理员身份；角色判定会对非管理员隐藏 `system_prompt` 并禁止写入，但当前无真实非管理员 HTTP 身份入口。内置目录只列 `general-purpose`（`max_turns=150`）；因无生产 shell 工具，暂不列 `bash`。SQL managed 存储、config.yaml 来源及 config overrides 未接入。本切片提供只读目录与稳定内容指纹，不表示已实现 Child 执行或冻结 UI 验收。
 
 目录真实 HTTP 定向测试与 CRUD smoke：
@@ -198,7 +200,7 @@ pwsh -NoProfile -File scripts/test-targeted.ps1 -Test DeerFlowSubagentCatalogApi
 
 启用委托的 Parent wall 授权为 `120000 + max_total_per_run * 最大有效 Child timeout_ms`，以免原 120 秒 Parent wall 提前终止委托等待。Parent 原有 16 次迭代、模型/Tool 调用预算等限制仍生效；执行限额与终止由 SDK 拥有。默认内置 timeout900秒、总量6时 wall 授权为5520000毫秒。未启用委托仍使用原120秒授权。
 
-生产装配定向验证：`pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'DeerFlowTaskDelegationApiTest,SubagentRunConfigurationTest,LeadPromptComposerTest' -LowMemory`。这些测试消费主控指定的公开候选 JAR；完整回放/UI/全仓门禁仍须独立验收，未合入上游 dev 的 SDK 候选不能使本分支合入 main。
+生产装配定向验证：`pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'DeerFlowTaskDelegationApiTest,SubagentRunConfigurationTest,LeadPromptComposerTest' -LowMemory`。测试按本 worktree 的 SDK 选择规则消费公开 JAR，主线使用从上游 `dev` 发布的基线；完整回放/UI/全仓门禁仍须独立验收，未合入上游 `dev` 的 SDK 候选不能使分支合入 `main`。协议与验证入口见 [委托兼容手册](docs/w08-delegation-transcript.md)。
 
 W08 子任务步骤兼容层通过公开 SDK 的 `messages` 持久游标和 `subscribe` 信号投影既有 Parent SSE
 `custom` 流；不新增步骤存储或执行线程。刷新回放入口为
@@ -206,7 +208,7 @@ W08 子任务步骤兼容层通过公开 SDK 的 `messages` 持久游标和 `sub
 `task_id` 必填且使用 Parent 的 Runtime task Tool Call ID；只支持 `subagent.step`，limit 为 1–500，
 after_seq 为非负 JavaScript 安全整数。未知 task 返回 `[]`，未知或不属于该线程的 Parent 返回 404。
 步骤正文与序列化参数最多 8192 个 Unicode 字符并保留截断标记；模型与已知累计 Usage 来自该 Child 的
-公开事件，不读取当前目录推测历史。该接线需要包含公开 `RunMessage*` API 的 SDK 候选，当前完整
+公开事件，不读取当前目录推测历史。该接线消费公开 SDK 的 `RunMessage*` API；完整
 HTTP/SSE、重启与冻结 UI 验收以工作包证据为准；接口静态实现不表示 W08 全部通过。
 
 ## W03 后续建议配置
