@@ -252,6 +252,8 @@ pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 1 -GatewayPort 
 
 Gateway 从 `resources/upstream/deerflow/prompts/` 读取冻结 DeerFlow 原文和有序适配清单，校验资源 SHA，并通过 Haifa SDK 公开 `ProductProfile` 装配每个 Bridge 的系统指令。默认文件、Web、澄清工具已对应恢复原提示；Skill 加载说明映射为 `skill_load` / `skill_resource_read`。渲染中提及未注册工具、资源漂移或超长时拒绝创建 Run，错误不含提示词正文。
 
+Skill 加载提示有一项已知适配差异：冻结 DeerFlow 要求先用 `read_file` 读取 Skill 主文件；Haifa 的激活属于当前 Run，因此产品提示要求每个新请求先成功执行 `skill_load`，再读取资源。该提示不能保证真实模型从不提前调用读取；`SKILL_NOT_ACTIVATED` 的真实失败仍须记录，即使模型随后自行恢复。
+
 后续 Turn 的提示词变化会重建 Bridge，活跃 Run 保持原声明。线程产品元数据保留已准入 Run 的 Skill 选择、agent 身份、bootstrap 标志和提示词签名；pending Run 重启恢复通过公开 SDK 的 `frozenInstructionDiagnostic` 核对原冻结指令摘要，允许当前配置已更新，缺失或不一致则拒绝继续执行。用户边界只用于模型输入，state/history 保持用户原文。资源来源与适配说明见 `resources/upstream/deerflow/prompts/lead-agent-assembly.md`。
 
 ## Agent SOUL 与冻结新建页
@@ -303,7 +305,7 @@ pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 2 -GatewayPort 
 
 第二轮 `-SkipBuild` 仅在首轮已按 Gateway `30618` 构建成功后使用。每轮脚本在结束时清理槽位进程，Playwright trace、截图及前后端/受控 Provider 日志写到 `local-tmp/slot-2-w15-v2-skill/evidence/ui/run-<时间戳>/`；测试需检查 `skill_load` ToolCall、启用后的模型 Context 和禁用后新 Run 的隔离。完整验收仍以开发报告的实际运行结果为准。
 
-真实模型代表性链路使用同一 runner 的 `-W15LiveSkill`：托管 `deepseek-v4-pro`、`https://api.deepseek.com` 和 `os://DEEPSEEK_API_KEY`，验证生产 `skill_manage` 审批/编辑、后续新会话 `skill_load` 与完整资源读取、实际评测 JSON 的 Artifact 下载/hash 及只读 review。该用例会产生真实模型调用；脚本评测仍按 W14 的实际能力单独验收。独立额外槽位 4 的入口如下，运行前需设置上述扫描解释器变量：
+真实模型代表性链路使用同一 runner 的 `-W15LiveSkill`：托管 `deepseek-v4-pro`、`https://api.deepseek.com` 和 `os://DEEPSEEK_API_KEY`，验证生产 `skill_manage` 审批/编辑、后续新会话 `skill_load` 与完整资源读取，再在同一会话的下一轮执行评测和写文件审批，验证实际评测 JSON 的 Artifact 下载/hash 及只读 review。审批卡必须位于本轮用户输入之后并可操作，不能把本轮输入误判成已回答；首次写入批准前没有输出文件；后续覆盖写入批准前，已有文件必须仍与上一次成功发布的 Artifact hash 和字节数一致。审批检查脚本的正反例可用 `node --test tests/checks/ui/pending-write.test.cjs` 单独运行。该用例会产生真实模型调用；脚本评测仍按 W14 的实际能力单独验收。独立额外槽位 4 的入口如下，运行前需设置上述扫描解释器变量：
 
 ```powershell
 pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 -AgentSlot 4 -GatewayPort 11618 -FrontendPort 16618 -W15LiveSkill

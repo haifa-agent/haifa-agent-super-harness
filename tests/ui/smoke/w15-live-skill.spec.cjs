@@ -4,6 +4,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const { expect, test } = require(path.resolve(__dirname, "../../../frontend/node_modules/@playwright/test"));
+const { verifyPendingWrite } = require("./support/pending-write.cjs");
 const APP = process.env.E2E_APP_URL;
 const NAME = "w15-package-ui";
 const runs = [];
@@ -20,8 +21,8 @@ async function state(request, identity) {
   return response.json();
 }
 
-async function chat(page, context, prompt, testInfo) {
-  await page.goto("/workspace/chats/new", { waitUntil: "domcontentloaded" });
+async function chat(page, context, prompt, testInfo, previousRun, report) {
+  if (!previousRun) await page.goto("/workspace/chats/new", { waitUntil: "domcontentloaded" });
   const input = page.locator('textarea[name="message"]');
   await expect(input).toBeVisible();
   const stream = page.waitForResponse(response => response.request().method() === "POST" &&
@@ -34,6 +35,10 @@ async function chat(page, context, prompt, testInfo) {
   const match = location?.match(/\/api\/threads\/([^/]+)\/runs\/([^/]+)$/);
   expect(match, "production stream must identify the real Run").toBeTruthy();
   const identity = { threadId: match[1], runId: match[2], location };
+  if (previousRun) {
+    expect(identity.threadId).toBe(previousRun.threadId);
+    expect(identity.runId).not.toBe(previousRun.runId);
+  }
   runs.push(identity);
   const deadline = Date.now() + 90_000;
   let approvals = 0;
@@ -45,6 +50,11 @@ async function chat(page, context, prompt, testInfo) {
     expect(["error", "timeout"], `Run ${identity.runId} failed`).not.toContain(status);
     const approve = page.getByTestId("human-input-card").getByRole("button", { name: /^(Approve|批准)$/ });
     if (await approve.count() && await approve.last().isEnabled()) {
+      if (report) {
+        const observation = await verifyPendingWrite({ request: context.request, app: APP, identity,
+          state: await state(context.request, identity), report });
+        await save(testInfo, `${identity.runId}-pending-write-${approvals + 1}`, observation);
+      }
       const resumed = page.waitForResponse(value => value.request().method() === "POST" &&
         Boolean(value.request().postDataJSON()?.input?.messages?.at(-1)?.additional_kwargs?.human_input_response), { timeout: 15_000 });
       await approve.last().click();
@@ -94,18 +104,27 @@ test("W15 real model edits a Skill and evaluates its actual resources in a new R
   expect(after.revision).not.toBe(before.revision);
   expect((await (await context.request.get(`${APP}/api/skills/custom/${NAME}`)).json()).content).toBe(editedContent);
   const report = "/mnt/user-data/outputs/w15-evaluation.json";
+  const readOnly = await chat(page, context,
+    `Load ${NAME} using skill_load, read references/fact.txt using skill_resource_read, and report its actual fact. ` +
+    `Do not create any output file or edit the package.`, testInfo);
+  expect(readOnly.approvals).toBe(0);
+  expect(results(readOnly.state, "skill_resource_read").at(-1)?.additional_kwargs?.haifa_tool_result?.content).toContain("17");
   const evaluated = await chat(page, context,
-    `Load ${NAME} using skill_load. Read both references/fact.txt and evals/evals.json using skill_resource_read. ` +
+    `请使用 ${NAME}，读取 references/fact.txt 和 evals/evals.json，执行编号 1 的评测。请根据实际文件内容判断，不要猜测。` +
     `Evaluate case id 1 by comparing the actual resource fact with the expected_output in the actual eval file. ` +
     `Write ${report} using write_file with JSON fields skill_name, case_id (integer), observed (string), expected (string), passed (boolean). ` +
     `Use the actual tool results, do not invent a score. Call present_files for that JSON. ` +
     `Then call review_skill_package on skill://custom/${NAME}, profile deerflow, include_content facts-only, scope ["all"]. ` +
-    `Do not execute package code. Summarize the real outcome.`, testInfo);
+    `Do not execute package code. Summarize the real outcome.`, testInfo, readOnly.identity, report);
   expect(evaluated.identity.threadId).not.toBe(edited.identity.threadId);
   expect(evaluated.approvals).toBeGreaterThan(0);
-  const sequence = calls(evaluated.state).map(call => call.name);
+  const evaluationState = { values: { messages: evaluated.state.values.messages.filter(message => message.run_id === evaluated.identity.runId) } };
+  const sequence = calls(evaluationState).map(call => call.name);
   for (const name of ["skill_load", "skill_resource_read", "write_file", "present_files", "review_skill_package"]) expect(sequence).toContain(name);
-  const reads = calls(evaluated.state).filter(call => call.name === "skill_resource_read");
+  const reads = calls(evaluationState).filter(call => call.name === "skill_resource_read");
+  expect(results(evaluationState, "skill_resource_read").every(message => message.additional_kwargs?.haifa_tool_status === "completed" &&
+    typeof message.additional_kwargs?.haifa_tool_result?.content === "string"), "all reads in the next Run must succeed after its own activation").toBe(true);
+  expect(results(evaluationState, "skill_resource_read").length).toBeGreaterThanOrEqual(2);
   expect(JSON.stringify(reads)).toContain("references/fact.txt");
   expect(JSON.stringify(reads)).toContain("evals/evals.json");
   const load = results(evaluated.state, "skill_load").at(-1);
@@ -139,8 +158,56 @@ test("W15 real model edits a Skill and evaluates its actual resources in a new R
   const observed = JSON.parse(bytes.toString("utf8"));
   expect(observed).toMatchObject({ skill_name: NAME, case_id: 1, observed: "17", expected: "17", passed: true });
   await save(testInfo, "w15-live-evaluation", { started, finished: new Date().toISOString(), provider: "https://api.deepseek.com",
-    model: "deepseek-v4-pro", runnerRetry: false, writeAttempts, editedRun: edited.identity, evaluatedRun: evaluated.identity,
+    model: "deepseek-v4-pro", runnerRetry: false, writeAttempts, editedRun: edited.identity, readOnlyRun: readOnly.identity, evaluatedRun: evaluated.identity,
     revisions: { before: before.revision, after: after.revision }, sequence, approvals: edited.approvals + evaluated.approvals,
     artifact, sha256, actualEvaluation: observed, scriptExecution: "NOT_RUN - W14 dependency" });
   await page.screenshot({ path: testInfo.outputPath("w15-live-evaluation.png"), fullPage: true });
+});
+
+test("W15 real model evaluates Skill resources in the next conversation Run", async ({ context, page }, testInfo) => {
+  page.setDefaultTimeout(15_000);
+  page.setDefaultNavigationTimeout(30_000);
+  const fixture = path.resolve(__dirname, "../../fixtures/w15/package_archive.py");
+  const archive = execFileSync("python", ["-B", fixture], { timeout: 10_000 });
+  const installed = await context.request.post(`${APP}/api/skills/install/upload`, {
+    multipart: { archive: { name: `${NAME}.skill`, mimeType: "application/zip", buffer: archive } }, timeout: 90_000,
+  });
+  expect(installed.status(), await installed.text()).toBe(200);
+  const first = await chat(page, context,
+    `请加载 ${NAME}，读取它的 references/fact.txt，告诉我文件里记录的数值，并说明依据。`, testInfo);
+  expect(first.approvals).toBe(0);
+  expect(results(first.state, "skill_resource_read").at(-1)?.additional_kwargs?.haifa_tool_result?.content).toContain("17");
+  const report = "/mnt/user-data/outputs/w15-evaluation.json";
+  const evaluated = await chat(page, context,
+    `请使用 ${NAME}，读取 references/fact.txt 和 evals/evals.json，执行编号 1 的评测。` +
+    `将实际值、预期值和是否通过写入 ${report}，并提供下载链接。请根据实际文件内容判断，不要猜测。` +
+    `JSON字段使用 skill_name、case_id（整数）、observed（字符串）、expected（字符串）、passed（布尔值）。请通过 present_files 提供文件。`,
+    testInfo, first.identity, report);
+  expect(evaluated.approvals).toBe(1);
+  const own = { values: { messages: evaluated.state.values.messages.filter(message => message.run_id === evaluated.identity.runId) } };
+  const resourceReads = results(own, "skill_resource_read");
+  expect(resourceReads.length).toBeGreaterThanOrEqual(2);
+  expect(resourceReads.map(message => message.additional_kwargs.haifa_tool_result.path)).toEqual(expect.arrayContaining(["references/fact.txt", "evals/evals.json"]));
+  const write = results(own, "write_file").at(-1);
+  const artifact = write?.additional_kwargs?.haifa_tool_result;
+  expect(artifact).toMatchObject({ path: report, runId: evaluated.identity.runId, artifactExecutionRef: write.tool_call_id });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByTestId("artifact-trigger").first().click();
+  const ready = page.waitForEvent("download", { timeout: 15_000 });
+  await page.getByRole("link", { name: /^(Download|下载)$/ }).first().click();
+  const download = await ready;
+  const bytes = fs.readFileSync(await download.path());
+  const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+  expect(`sha256:${sha256}`).toBe(artifact.artifactSha256);
+  const actualEvaluation = JSON.parse(bytes.toString("utf8"));
+  expect(actualEvaluation).toMatchObject({ skill_name: NAME, case_id: 1, observed: "17", expected: "17", passed: true });
+  await save(testInfo, "w15-next-turn-evaluation", { provider: "https://api.deepseek.com", model: "deepseek-v4-pro",
+    firstRun: first.identity, evaluatedRun: evaluated.identity, approvals: evaluated.approvals, artifact, sha256,
+    actualEvaluation, resourceReadFailures: resourceReads.filter(message => message.additional_kwargs?.haifa_tool_status !== "completed").length,
+    skillSequence: calls(own).filter(call => ["skill_load", "skill_resource_read"].includes(call.name)).map(call => call.name), runnerRetry: false });
+  await page.screenshot({ path: testInfo.outputPath("w15-next-turn-evaluation.png"), fullPage: true });
+  // Keep the loading-order oracle, but collect the independent approval/download evidence first.
+  expect(resourceReads.every(message => message.additional_kwargs?.haifa_tool_status === "completed" &&
+    typeof message.additional_kwargs?.haifa_tool_result?.content === "string"), "next request must load before every resource read").toBe(true);
+  expect(calls(own).filter(call => ["skill_load", "skill_resource_read"].includes(call.name))[0].name).toBe("skill_load");
 });

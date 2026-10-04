@@ -17,3 +17,5 @@ resources/upstream/deerflow/prompts/*.json text eol=lf
 resources/upstream/deerflow/prompts/*.md text eol=lf
 # Tool description and manifest ledger hashes use the same LF bytes on every checkout.
 super-harness-server/src/main/resources/upstream/deerflow/tool-descriptions/* text eol=lf
+# Frozen Skill scanner manifests hash committed LF bytes, including Python resources.
+super-harness-server/src/main/resources/upstream/deerflow/w15/** text eol=lf
