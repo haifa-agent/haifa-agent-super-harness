@@ -124,6 +124,7 @@ python scripts/governance/audit_disconnected_branches.py `
 | --- | --- |
 | `preflight.ps1` | 入口公共预检（代理/端口等） |
 | `quick_checks.py` | 秒级预检：SDK 基线门禁、`git diff --check`、secret scan |
+| `gate_resources.py` | 全仓门禁按空闲内存自动选择并行进程数（供 `verify-full.ps1`） |
 | `script_regressions.py` | 脚本回归清单、运行与摘要（供 `verify-scripts.ps1`） |
 | `main_service.py` | 主服务状态检查、JAR 复制/回退与刷新摘要（供 `refresh-main-service.ps1`） |
 | `sdk-selection.ps1` | 解析本 worktree 消费的 SDK 版本 |

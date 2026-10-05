@@ -35,6 +35,7 @@ pr_review = load("scripts/governance/pr_review_digest.py")
 script_regressions = load("scripts/lib/script_regressions.py")
 sdk_api_digest = load("scripts/governance/sdk_api_digest.py")
 main_service = load("scripts/lib/main_service.py")
+gate_resources = load("scripts/lib/gate_resources.py")
 
 BOT = pr_review.DEFAULT_BOT
 
@@ -553,6 +554,38 @@ class MainServiceTest(unittest.TestCase):
             main_service.validate_scope(worktree, 20618, 25618, slot_data, worktree / "local-tmp/main-service", True)
             with self.assertRaises(main_service.MainServiceError):
                 main_service.validate_scope(worktree, 20618, 25618, Path("C:/outside"), worktree / "local-tmp/main-service", True)
+
+
+class GateResourcesTest(unittest.TestCase):
+    def test_high_memory_selects_three_forks(self):
+        self.assertEqual(gate_resources.select_forks(16000, 32000), (3, False))
+        self.assertEqual(
+            gate_resources.select_forks(gate_resources.THREE_FORKS_MIN_FREE_PHYSICAL_MB,
+                                        gate_resources.THREE_FORKS_MIN_FREE_COMMIT_MB), (3, False))
+
+    def test_middle_band_selects_two_forks(self):
+        self.assertEqual(
+            gate_resources.select_forks(gate_resources.TWO_FORKS_MIN_FREE_PHYSICAL_MB,
+                                        gate_resources.TWO_FORKS_MIN_FREE_COMMIT_MB), (2, False))
+        self.assertEqual(
+            gate_resources.select_forks(gate_resources.THREE_FORKS_MIN_FREE_PHYSICAL_MB - 1,
+                                        gate_resources.THREE_FORKS_MIN_FREE_COMMIT_MB - 1), (2, False))
+
+    def test_low_memory_selects_one_fork_with_low_memory(self):
+        self.assertEqual(gate_resources.select_forks(1024, 2048), (1, True))
+        self.assertEqual(
+            gate_resources.select_forks(gate_resources.TWO_FORKS_MIN_FREE_PHYSICAL_MB - 1,
+                                        gate_resources.TWO_FORKS_MIN_FREE_COMMIT_MB - 1), (1, True))
+
+    def test_missing_probe_falls_back_to_default(self):
+        self.assertEqual(gate_resources.select_forks(None, 32000), (gate_resources.DEFAULT_FORKS, False))
+        self.assertEqual(gate_resources.select_forks(16000, None), (gate_resources.DEFAULT_FORKS, False))
+
+    def test_selection_shape(self):
+        result = gate_resources.selection()
+        self.assertIn(result["forks"], (1, 2, 3))
+        self.assertIsInstance(result["lowMemory"], bool)
+        self.assertIn("probeAvailable", result)
 
 
 if __name__ == "__main__":
