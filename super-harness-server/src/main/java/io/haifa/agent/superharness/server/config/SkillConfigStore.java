@@ -190,6 +190,18 @@ public final class SkillConfigStore {
         List<SkillRunTools.Package> bundled = externalSkillsDirectory != null
                 ? loadExternalSkills()
                 : readManifest();
+        if (externalSkillsDirectory != null) {
+            bundled = new ArrayList<>(bundled);
+            Set<String> versions = bundled.stream().map(pkg -> pkg.name() + "@" + pkg.version())
+                    .collect(java.util.stream.Collectors.toSet());
+            for (SkillRunTools.Package legacy : readManifest()) {
+                if (versions.add(legacy.name() + "@" + legacy.version())) {
+                    bundled.add(new SkillRunTools.Package(legacy.name(), legacy.description(), legacy.category(),
+                            legacy.license(), legacy.sourceName(), legacy.sourceSha(), legacy.version(), legacy.contentHash(),
+                            false, false, legacy.source()));
+                }
+            }
+        }
         for (SkillRunTools.Package pkg : bundled) {
             packages.add(overrides.contains(pkg.name()) ? new SkillRunTools.Package(pkg.name(), pkg.description(), pkg.category(),
                     pkg.license(), pkg.sourceName(), pkg.sourceSha(), pkg.version(), pkg.contentHash(), false,
@@ -492,11 +504,11 @@ public final class SkillConfigStore {
                     String directoryName = SkillPackageFiles.name(directory.getFileName().toString());
                     try (var versions = Files.list(directory)) {
                         for (Path version : versions.sorted().toList()) {
-                            String digest = version.getFileName().toString();
-                            if (digest.startsWith(".pending-")) continue;
-                            if (!digest.matches("[0-9a-f]{64}")) throw new IOException("Invalid retained Skill version");
-                            Map<String, byte[]> files = SkillPackageFiles.directory(requireExternalDirectory(version));
-                            if (!SkillPackageFiles.digest(files).equals(digest)) throw new IOException("Retained Skill bytes changed");
+                            String filename = version.getFileName().toString();
+                            if (filename.startsWith(".pending-")) continue;
+                            if (!filename.matches("[0-9a-f]{64}\\.zip")) throw new IOException("Invalid retained Skill version");
+                            String digest = filename.substring(0, 64);
+                            Map<String, byte[]> files = retainedFiles(version, digest);
                             SkillRunTools.Package pkg = externalPackage(directoryName, digest,
                                     normalizedExternalFiles(version, files), false);
                             if (current.add(pkg.name() + "@" + pkg.version())) result.add(pkg);
@@ -526,6 +538,18 @@ public final class SkillConfigStore {
 
     private Path externalCache() { return stateFile.getParent().resolve("skills/external/.versions"); }
 
+    private Map<String, byte[]> retainedFiles(Path archive, String digest) throws IOException {
+        if (Files.isSymbolicLink(archive) || !Files.isRegularFile(archive, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                || Files.size(archive) > SkillPackageFiles.MAX_ARCHIVE_BYTES) throw new IOException("Retained Skill archive is unsafe");
+        try (var input = Files.newInputStream(archive)) {
+            Map<String, byte[]> files = SkillPackageFiles.archive(input.readNBytes(SkillPackageFiles.MAX_ARCHIVE_BYTES + 1));
+            if (!SkillPackageFiles.digest(files).equals(digest)) throw new IOException("Retained Skill bytes changed");
+            return files;
+        } catch (IllegalArgumentException invalid) {
+            throw new IOException("Retained Skill bytes changed", invalid);
+        }
+    }
+
     /** Retain resource bytes for SDK-pinned Runs; no Run state or recovery semantics live here. */
     private void retainExternalFiles(State candidate) throws IOException {
         if (externalSkillsDirectory == null) return;
@@ -543,20 +567,18 @@ public final class SkillConfigStore {
             Path parent = root.resolve(directory);
             if (Files.exists(parent)) requireExternalDirectory(parent);
             Files.createDirectories(parent);
-            Path target = parent.resolve(digest);
+            Path target = parent.resolve(digest + ".zip");
             if (Files.exists(target)) {
-                if (!SkillPackageFiles.digest(SkillPackageFiles.directory(requireExternalDirectory(target))).equals(digest)) {
-                    throw new IOException("Retained Skill bytes changed");
-                }
+                retainedFiles(target, digest);
                 continue;
             }
             Path pending = parent.resolve(".pending-" + UUID.randomUUID());
-            Files.createDirectory(pending);
-            for (var file : files.entrySet()) {
-                Path destination = pending.resolve(file.getKey());
-                Files.createDirectories(destination.getParent()); Files.write(destination, file.getValue());
+            try {
+                Files.write(pending, SkillPackageFiles.export(directory, files));
+                Files.move(pending, target, StandardCopyOption.ATOMIC_MOVE);
+            } finally {
+                Files.deleteIfExists(pending);
             }
-            Files.move(pending, target, StandardCopyOption.ATOMIC_MOVE);
         }
     }
 

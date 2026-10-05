@@ -124,11 +124,24 @@ class ExternalSkillDirectoryTest {
         assertThat(restarted.projection(selection).allowedSkills()).isEmpty();
         Path retained = temporary.resolve("data/skills/external/.versions/bootstrap");
         try (var versionsOnDisk = Files.list(retained)) {
-            Path old = versionsOnDisk.filter(path -> path.getFileName().toString().equals(version.substring(7)))
+            Path old = versionsOnDisk.filter(path -> path.getFileName().toString().equals(version.substring(7) + ".zip"))
                     .findFirst().orElseThrow();
-            Files.writeString(old.resolve("SKILL.md"), "tampered");
+            Files.writeString(old, "tampered");
         }
         assertThatThrownBy(() -> store(root)).isInstanceOf(java.io.IOException.class).hasMessageContaining("Retained Skill bytes changed");
+    }
+
+    @Test void manifestRunCanRecoverAfterSwitchingToDirectory() throws Exception {
+        Path data = temporary.resolve("data");
+        var legacy = new SkillConfigStore(json, data, repository(), null);
+        var selection = SkillRunTools.Selection.of(java.util.Set.of("consulting-analysis"));
+        var original = legacy.projection(selection).catalog().snapshot().bindings().getFirst();
+        var reference = original.coordinate().source();
+        var directory = store(packages());
+        var recovered = directory.recoveryProjection(selection,
+                java.util.Map.of("consulting-analysis", reference.sourceId() + "@" + reference.sourceVersion()));
+        assertThat(recovered.catalog().snapshot().bindings()).containsExactly(original);
+        assertThat(directory.list()).hasSize(23);
     }
 
     @Test void missingDirectoryNeverFallsBackAndNamesCannotEscape() throws Exception {
