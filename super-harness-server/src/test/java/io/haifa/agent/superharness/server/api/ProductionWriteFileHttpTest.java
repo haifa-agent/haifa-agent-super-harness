@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.haifa.agent.core.run.AgentRunId;
+import io.haifa.agent.runtime.api.AgentRunEvent;
+import io.haifa.agent.superharness.server.run.HaifaRunBridge;
 import io.haifa.agent.superharness.server.testsupport.ControlledProvider;
 import io.haifa.agent.superharness.server.testsupport.GatewayFixture;
 import io.haifa.agent.superharness.server.testsupport.SseEvents;
@@ -413,6 +416,148 @@ class ProductionWriteFileHttpTest {
                     + " sha256=" + persistedProjection[2] + " http=200");
             assertThat(reloaded.path("values").path("artifacts").toString()).contains(path);
             }
+        }
+    }
+
+    /**
+     * W15-task-13/14: a Run that crosses an SDK budget threshold must keep its SSE stream open. The
+     * SDK emits a {@code budget.threshold-reached} DeliveryLifecycle event; frozen DeerFlow has no
+     * wire mapping for it, so the Gateway must skip it without writing an error frame or ending the
+     * stream. The controlled Provider issues read-only Tool calls until the Run crosses 50% of the
+     * DeerFlow-aligned 100-iteration / 100-model-call structural limit, then answers. The same frame
+     * writer serves the live creator stream and every replay/join, so this case checks the live
+     * stream and the terminal replay.
+     */
+    @Test
+    void runStreamIgnoresSdkBudgetThresholdEventAndProjectsEveryToolMessage() throws Exception {
+        // One Tool call per model turn; >50 turns crosses 50% of maxIterations/maxModelCalls (100).
+        int toolCalls = 55;
+        String answer = "BUDGET_THRESHOLD_DONE";
+        String threadId = "budget-threshold";
+        try (var provider = new ControlledProvider(evidence, true, (request, call) ->
+                toolMessages(request) < toolCalls
+                        ? ControlledProvider.call("budget-provider-" + call, "demo-provider-id",
+                                "budget-call-" + call, "list_uploaded_files", Map.of())
+                        : ControlledProvider.stop("budget-provider-" + call, "demo-provider-id", answer))) {
+            String key = Base64.getEncoder().encodeToString(new byte[32]);
+            Map<String, String> environment = Map.of(
+                    "HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF", "env://W15_BUDGET_TEST_KEY",
+                    "W15_BUDGET_TEST_KEY", key);
+            try (var api = GatewayFixture.production(dataRoot, 0, environment, evidence)) {
+                URI base = api.base;
+                String model = """
+                        {"config":{"name":"budget-model","display_name":"Budget Model",
+                        "provider":"openai-compatible","model":"demo-provider-id",
+                        "base_url":"http://127.0.0.1:%s/v1","enabled":true,"supports_vision":false,
+                        "context_window":32768,"max_tokens":1024,"api_key":"controlled-key"},
+                        "expected_revision":null}
+                        """.formatted(provider.port());
+                assertThat(http.request(base, "PUT", "/api/managed-models", model).statusCode()).isEqualTo(200);
+                assertThat(http.request(base, "POST", "/api/threads", "{\"thread_id\":\"" + threadId + "\"}")
+                        .statusCode()).isEqualTo(200);
+                String runBody = """
+                        {"assistant_id":"lead_agent","input":{"messages":[{"type":"human","content":"list files repeatedly"}]},
+                        "stream_mode":["messages-tuple","updates","custom"],
+                        "context":{"model_name":"budget-model","mode":"flash","reasoning_effort":"minimal",
+                        "thinking_enabled":false,"is_plan_mode":false,"subagent_enabled":false},
+                        "on_disconnect":"continue","multitask_strategy":"reject"}
+                        """;
+                HttpResponse<String> run = http.request(base, "POST",
+                        "/api/threads/" + threadId + "/runs/stream", runBody, "budget-threshold.sse");
+                assertThat(run.statusCode()).as(run.body()).isEqualTo(200);
+                String location = run.headers().firstValue("content-location").orElseThrow();
+                String runId = location.substring(location.lastIndexOf('/') + 1);
+
+                var events = SseEvents.read(run.body());
+                // 1. The threshold event must not surface as an error or end the stream.
+                assertThat(events.named("error")).isEmpty();
+                assertThat(run.body()).doesNotContain("unsupported_event_projection");
+                // 2. The stream ends normally and the model's final answer is projected.
+                assertThat(events.named("end")).hasSize(1);
+                assertThat(run.body()).contains(answer);
+                // 3. Every model-issued Tool call is projected as a request and a result, including
+                //    the calls before and after the threshold.
+                assertThat(toolRequests(events)).as("Tool request messages projected").isEqualTo(toolCalls);
+                assertThat(toolResults(events)).as("Tool result messages projected").isEqualTo(toolCalls);
+                // 4. The Run itself succeeded.
+                assertThat(http.get(base, location, "budget-run.json").path("status").asText()).isEqualTo("success");
+                // 5. The threshold event really happened; otherwise this case could pass vacuously.
+                var sdkEvents = sdkRunEvents(api.api, runId);
+                assertThat(sdkEvents.stream().map(AgentRunEvent::eventType).toList())
+                        .as("SDK budget threshold event").contains("budget.threshold-reached");
+                // 6. Replays of the finished Run use the same writer and must not error either: the
+                //    existing terminal-resume pattern and a full join from the beginning.
+                long terminalSequence = lastSseId(run.body());
+                HttpResponse<String> resumed = api.request(
+                        "GET", location + "/stream", null, (terminalSequence - 1) + "-0");
+                assertThat(resumed.statusCode()).as(resumed.body()).isEqualTo(200);
+                assertThat(SseEvents.read(resumed.body()).named("error")).isEmpty();
+                assertThat(resumed.body()).contains("event: end");
+                HttpResponse<String> rejoin = http.request(
+                        base, "GET", location + "/stream", null, "budget-replay.sse");
+                assertThat(rejoin.statusCode()).as(rejoin.body()).isEqualTo(200);
+                assertThat(SseEvents.read(rejoin.body()).named("error")).isEmpty();
+                System.out.println("W15_BUDGET_THRESHOLD_EVIDENCE run=" + runId + " tool_calls=" + toolCalls
+                        + " requests=" + toolCalls + " results=" + toolCalls
+                        + " threshold_event=true replay_errors=0 evidence=" + evidence);
+            }
+        }
+    }
+
+    private static long toolMessages(JsonNode request) {
+        long toolMessages = 0;
+        for (JsonNode message : request.path("messages")) {
+            if ("tool".equals(message.path("role").asText())) toolMessages++;
+        }
+        return toolMessages;
+    }
+
+    private static long toolRequests(SseEvents events) {
+        long requests = 0;
+        for (var event : events.named("messages")) {
+            JsonNode tuple = event.data();
+            if (!tuple.isArray() || tuple.size() != 2) continue;
+            if (!"tools".equals(tuple.get(1).path("langgraph_node").asText())) continue;
+            if (!tuple.get(0).path("tool_calls").isEmpty()) requests++;
+        }
+        return requests;
+    }
+
+    private static long toolResults(SseEvents events) {
+        long results = 0;
+        for (var event : events.named("messages")) {
+            JsonNode tuple = event.data();
+            if (!tuple.isArray() || tuple.size() != 2) continue;
+            if (!"tools".equals(tuple.get(1).path("langgraph_node").asText())) continue;
+            if ("tool".equals(tuple.get(0).path("type").asText())) results++;
+        }
+        return results;
+    }
+
+    private static long lastSseId(String transcript) {
+        var matcher = java.util.regex.Pattern.compile("(?m)^id: (\\d+)-0$").matcher(transcript);
+        long last = 0;
+        while (matcher.find()) last = Long.parseLong(matcher.group(1));
+        return last;
+    }
+
+    /** Reads the actual SDK event feed of one Run through the attached product Bridge. */
+    private static List<AgentRunEvent> sdkRunEvents(DeerFlowBootstrapApi api, String runId) throws Exception {
+        var runsField = DeerFlowThreadRunApi.class.getDeclaredField("runs");
+        runsField.setAccessible(true);
+        Object record = ((Map<?, ?>) runsField.get(api.threadRunApi())).get(runId);
+        assertThat(record).as("cached RunRecord for %s", runId).isNotNull();
+        var bridgeField = record.getClass().getDeclaredField("bridge");
+        bridgeField.setAccessible(true);
+        HaifaRunBridge bridge = (HaifaRunBridge) bridgeField.get(record);
+        AgentRunId id = new AgentRunId(runId);
+        var cursor = bridge.beforeFirstEvent(id);
+        List<AgentRunEvent> events = new ArrayList<>();
+        while (true) {
+            var page = bridge.events(id, cursor, 200);
+            events.addAll(page.items());
+            if (!page.hasMore()) return events;
+            cursor = page.nextCursor();
         }
     }
 
