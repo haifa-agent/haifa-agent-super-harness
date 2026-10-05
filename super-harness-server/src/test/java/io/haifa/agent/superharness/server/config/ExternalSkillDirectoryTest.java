@@ -32,7 +32,9 @@ class ExternalSkillDirectoryTest {
     }
     private Path packages() throws Exception {
         Path root = temporary.resolve("skills/public");
-        packageAt(root, "bootstrap", "bootstrap", "");
+        Path bootstrap = packageAt(root, "bootstrap", "bootstrap", "");
+        Files.createDirectories(bootstrap.resolve("evals/fixtures/example"));
+        Files.writeString(bootstrap.resolve("evals/fixtures/example/SKILL.md"), "Nested fixture instructions\n");
         Path chart = packageAt(root, "chart-visualization", "chart-visualization", "compatibility:\n  nodejs: \">=18.0.0\"\n");
         Files.writeString(chart.resolve("SKILL.md"), Files.readString(chart.resolve("SKILL.md")).replace("\n", "\r\n"));
         Path alias = packageAt(root, "vercel-deploy-claimable", "vercel-deploy", "");
@@ -56,6 +58,8 @@ class ExternalSkillDirectoryTest {
         assertThat(store.detail("chart-visualization").orElseThrow().get("enabled")).isEqualTo(false);
         assertThat(store.detail("bootstrap").orElseThrow().get("license")).isEqualTo("");
         assertThat(Files.readAllBytes(root.resolve("chart-visualization/SKILL.md"))).containsExactly(before);
+        assertThatThrownBy(() -> SkillPackageFiles.archive(SkillPackageFiles.export("bootstrap", store.reviewFiles("bootstrap"))))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Nested SKILL.md");
         assertThatThrownBy(() -> store.setEnabled("chart-visualization", true)).isInstanceOf(java.io.IOException.class)
                 .hasMessageContaining("scanner is unavailable");
         assertThat(store.projection(SkillRunTools.Selection.all()).allowedSkills()).hasSize(21);

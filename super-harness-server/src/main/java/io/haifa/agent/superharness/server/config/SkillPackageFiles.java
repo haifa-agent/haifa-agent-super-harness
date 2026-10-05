@@ -103,6 +103,15 @@ public final class SkillPackageFiles {
     }
 
     static PackageContent archivePackage(byte[] bytes) throws IOException {
+        return archivePackage(bytes, false);
+    }
+
+    /** Decode a product-generated snapshot; nested instruction fixtures are resources, not installed packages. */
+    static Map<String, byte[]> retainedArchive(byte[] bytes) throws IOException {
+        return archivePackage(bytes, true).files();
+    }
+
+    private static PackageContent archivePackage(byte[] bytes, boolean retained) throws IOException {
         if (bytes.length > MAX_ARCHIVE_BYTES) throw new IllegalArgumentException("Skill archive is too large");
         Map<String, CentralMember> central = validateCentralDirectory(bytes);
         Map<String, byte[]> files = new TreeMap<>();
@@ -158,7 +167,7 @@ public final class SkillPackageFiles {
             for (String path : executable) strippedExecutable.add(path.substring(prefix.length()));
             executable = strippedExecutable;
         }
-        if (files.keySet().stream().anyMatch(key -> !key.equals("SKILL.md") && key.endsWith("/SKILL.md"))) {
+        if (!retained && files.keySet().stream().anyMatch(key -> !key.equals("SKILL.md") && key.endsWith("/SKILL.md"))) {
             throw new IllegalArgumentException("Nested SKILL.md is not accepted by the installer");
         }
         Set<String> allDirectories = Set.copyOf(directories);

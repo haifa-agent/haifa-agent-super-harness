@@ -542,7 +542,7 @@ public final class SkillConfigStore {
         if (Files.isSymbolicLink(archive) || !Files.isRegularFile(archive, java.nio.file.LinkOption.NOFOLLOW_LINKS)
                 || Files.size(archive) > SkillPackageFiles.MAX_ARCHIVE_BYTES) throw new IOException("Retained Skill archive is unsafe");
         try (var input = Files.newInputStream(archive)) {
-            Map<String, byte[]> files = SkillPackageFiles.archive(input.readNBytes(SkillPackageFiles.MAX_ARCHIVE_BYTES + 1));
+            Map<String, byte[]> files = SkillPackageFiles.retainedArchive(input.readNBytes(SkillPackageFiles.MAX_ARCHIVE_BYTES + 1));
             if (!SkillPackageFiles.digest(files).equals(digest)) throw new IOException("Retained Skill bytes changed");
             return files;
         } catch (IllegalArgumentException invalid) {
