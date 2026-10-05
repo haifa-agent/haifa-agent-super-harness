@@ -85,7 +85,7 @@ def classify_json(path: Path) -> tuple[str, dict | None]:
         return "unrecognized", None
     if path.name.startswith("refresh-") and "jarSha256" in data and "status" in data:
         return "refresh", data
-    if "forks" in data and "sdkSelection" in data and "status" in data:
+    if "sourceSha" in data and "status" in data and ("forks" in data or "preflightFailures" in data or "sdkSelection" in data):
         return "verify-full", data
     if "checks" in data and "logDirectory" in data and "sourceSha" in data:
         return "script-regressions", data

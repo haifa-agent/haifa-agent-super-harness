@@ -115,8 +115,8 @@ class RecordGatesTest(unittest.TestCase):
             root = Path(directory)
             summary = root / "verify-full-1.json"
             summary.write_text(json.dumps({
-                "status": "FAIL_PREFLIGHT", "sourceSha": "abcdef0123", "preflightFailures": ["git diff --check: x"],
-                "forks": 1, "sdkSelection": "ABSENT",
+                "status": "FAIL_PREFLIGHT", "exitCode": 1, "sourceSha": "abcdef0123",
+                "preflightFailures": ["git diff --check: x"],
             }), encoding="utf-8")
             ui = self.ui_dir(root, "run", "run-20261005-100000-000-aaaaaaaa", "w05-demo-artifact", [
                 {"name": "Artifact survives reload", "result": "PASS", "firstFailure": None},
