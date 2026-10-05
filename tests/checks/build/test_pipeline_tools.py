@@ -1268,6 +1268,11 @@ class KnownIntermittentTest(unittest.TestCase):
 class UiRoundPlanTest(unittest.TestCase):
     def test_passes_requires_a_warm_round(self):
         ui_round_plan.validate_run(passes=2, skip_build=True)
+        for verified in ui_round_plan.REPEATABLE_PROFILES:
+            ui_round_plan.validate_run(passes=2, skip_build=True, profile=verified)
+        with self.assertRaisesRegex(ui_round_plan.PlanError, "not verified for repeated passes"):
+            ui_round_plan.validate_run(passes=2, skip_build=True, profile="w15-v2-skill")
+        ui_round_plan.validate_run(passes=1, profile="w15-v2-skill")
         with self.assertRaises(ui_round_plan.PlanError):
             ui_round_plan.validate_run(passes=2, skip_build=False)
 

@@ -68,6 +68,17 @@ STARTUP_CLASSES = {
 _STARTUP_CLASS_BY_PROFILE = {profile: name for name, profiles in STARTUP_CLASSES.items() for profile in profiles}
 
 
+# Profiles whose spec was run twice against one service start and passed both times
+# (controller, 2026-10-05). Everything else is rejected for -Passes > 1 until someone verifies
+# it the same way: a spec may leave state behind that its own second pass trips over.
+# w15-v2-skill is known not to repeat: its first pass leaves a Skill disabled.
+REPEATABLE_PROFILES = (
+    "w18-ui-smoke",
+    "w05-demo-artifact",
+    "w15-package-differential",
+)
+
+
 class PlanError(RuntimeError):
     """Raised when the requested round cannot be planned without changing semantics."""
 
@@ -79,6 +90,7 @@ def validate_run(
     case_title: str | None = None,
     preflight_only: bool = False,
     skip_build: bool = False,
+    profile: str | None = None,
 ) -> None:
     """Rejects impossible option combinations; returns None when the run is valid."""
     profiles = list(profiles or [])
@@ -92,6 +104,10 @@ def validate_run(
             problems.append("-Passes > 1 cannot be combined with -PreflightOnly")
         if not skip_build:
             problems.append("-Passes > 1 requires a warm round (-SkipBuild); a cold round cannot repeat")
+        if profile is not None and profile not in REPEATABLE_PROFILES:
+            problems.append(
+                f"profile '{profile}' is not verified for repeated passes "
+                f"(verified: {', '.join(REPEATABLE_PROFILES)}); run it as separate rounds")
     if profiles:
         if len(profiles) < 2:
             problems.append("-MergeProfiles needs at least two profile names")
@@ -248,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
     validate.add_argument("--case-title", default=None)
     validate.add_argument("--preflight-only", action="store_true")
     validate.add_argument("--skip-build", action="store_true")
+    validate.add_argument("--profile", default=None)
 
     plan = sub.add_parser("plan")
     plan.add_argument("--root", type=Path, required=True)
@@ -264,7 +281,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "validate":
             validate_run(passes=args.passes, profiles=profiles, case_title=args.case_title,
-                         preflight_only=args.preflight_only, skip_build=args.skip_build)
+                         preflight_only=args.preflight_only, skip_build=args.skip_build,
+                         profile=args.profile)
             print("ok")
         elif args.command == "plan":
             document = _plan(args.root.resolve(), profiles, args.passes)

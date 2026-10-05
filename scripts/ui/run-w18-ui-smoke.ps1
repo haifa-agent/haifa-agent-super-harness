@@ -71,17 +71,6 @@ if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill) {
     $LiveDeepSeek = $true
 }
 
-if ($Passes -gt 1) {
-    # The planner owns the option rules (warm only; never with -CaseTitle/-PreflightOnly) so
-    # the runner and its unit tests cannot drift.
-    $validate = @('-B', (Join-Path $PSScriptRoot '../lib/ui_round_plan.py'), 'validate', '--passes', [string]$Passes)
-    if ($CaseTitle) { $validate += @('--case-title', $CaseTitle) }
-    if ($PreflightOnly) { $validate += @('--preflight-only') }
-    if ($SkipBuild) { $validate += @('--skip-build') }
-    & python @validate
-    if ($LASTEXITCODE -ne 0) { throw "Invalid -Passes $Passes options for the W18 UI runner." }
-}
-
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 . (Join-Path $PSScriptRoot '../lib/sdk-selection.ps1')
 . (Join-Path $PSScriptRoot '../lib/build-stamp.ps1')
@@ -99,6 +88,17 @@ $tag = if ($W15PackageDifferential) { 'w15-package-differential' } elseif ($W15L
     elseif ($V2ModelSwitch) { 'w03-v2-model-switch' } elseif ($V2FileContext) { 'w04-v2-file-context' }
     elseif ($V2Skill) { 'w15-v2-skill' } elseif ($V2Diagnostics) { 'w21-diagnostics' }
     elseif ($W08Catalog) { 'w08-catalog' } else { 'w18-ui-smoke' }
+if ($Passes -gt 1) {
+    # The planner owns the option rules (warm only; never with -CaseTitle/-PreflightOnly) so
+    # the runner and its unit tests cannot drift.
+    $validate = @('-B', (Join-Path $PSScriptRoot '../lib/ui_round_plan.py'), 'validate', '--passes', [string]$Passes)
+    if ($CaseTitle) { $validate += @('--case-title', $CaseTitle) }
+    if ($PreflightOnly) { $validate += @('--preflight-only') }
+    if ($SkipBuild) { $validate += @('--skip-build') }
+    $validate += @('--profile', $tag)
+    & python @validate
+    if ($LASTEXITCODE -ne 0) { throw "Invalid -Passes $Passes options for the W18 UI runner." }
+}
 $fixture = New-RunFixture -RepositoryRoot $root -Slot $AgentSlot -TaskTag $tag `
     -BuildMode $(if ($SkipBuild) { 'warm-reuse' } else { 'cold-build' }) -Ports @($GatewayPort, $FrontendPort)
 $evidenceRoot = $fixture.Evidence
