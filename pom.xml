@@ -31,6 +31,9 @@
         <maven.dependency.plugin.version>3.8.1</maven.dependency.plugin.version>
         <maven.shade.plugin.version>3.6.2</maven.shade.plugin.version>
         <archunit.version>1.4.1</archunit.version>
+        <!-- Slow tests carry @Tag("slow") and stay out of the default gate; -Pslow-tests runs them. -->
+        <superharness.surefire.groups></superharness.surefire.groups>
+        <superharness.surefire.excludedGroups>slow</superharness.surefire.excludedGroups>
     </properties>
 
     <dependencyManagement>
@@ -83,6 +86,8 @@
                     <version>${maven.surefire.plugin.version}</version>
                     <configuration>
                         <useModulePath>false</useModulePath>
+                        <groups>${superharness.surefire.groups}</groups>
+                        <excludedGroups>${superharness.surefire.excludedGroups}</excludedGroups>
                     </configuration>
                 </plugin>
                 <plugin>
@@ -187,4 +192,14 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <id>slow-tests</id>
+            <properties>
+                <superharness.surefire.groups>slow</superharness.surefire.groups>
+                <superharness.surefire.excludedGroups></superharness.surefire.excludedGroups>
+            </properties>
+        </profile>
+    </profiles>
 </project>

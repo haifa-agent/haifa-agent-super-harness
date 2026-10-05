@@ -1233,6 +1233,21 @@ class KnownIntermittentTest(unittest.TestCase):
         right = {**base, "method": "cancellingThreeActualChildrenClosesTwoWaitingRequestsWithoutInventingChildFrames"}
         self.assertTrue(known_intermittent.intermittent_plan([right], entries, [], {})["use"])
 
+    def test_slow_tagged_methods_do_not_change_module_report_gaps(self):
+        # @Tag("slow") removes a method from the default gate, not its class from surefire's
+        # includes: the class still runs and reports its untagged cases, so the known-intermittent
+        # "every other class has a report" rule is unaffected.
+        with tempfile.TemporaryDirectory() as directory:
+            module = Path(directory) / "super-harness-server"
+            tests = module / "src/test/java/pkg"
+            tests.mkdir(parents=True)
+            (tests / "MixedApiTest.java").write_text(
+                "package pkg;\nclass MixedApiTest {\n"
+                "  @Tag(\"slow\") void slowCase() {}\n  void fastCase() {}\n}\n", encoding="utf-8")
+            self.assertEqual(known_intermittent.expected_test_classes(module), {"MixedApiTest"})
+            self.assertEqual(known_intermittent.module_report_gaps(module, [{"name": "pkg.MixedApiTest"}]), [])
+            self.assertEqual(known_intermittent.module_report_gaps(module, []), ["MixedApiTest"])
+
     def test_module_report_gaps_from_source_files(self):
         with tempfile.TemporaryDirectory() as directory:
             module = Path(directory) / "super-harness-server"
