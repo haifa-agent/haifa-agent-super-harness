@@ -490,9 +490,10 @@ try {
             $passDir = Join-Path $evidenceRoot "pass-$passIndex"
             $null = New-Item -ItemType Directory -Force -Path $passDir
             [Environment]::SetEnvironmentVariable('W18_PASS_INDEX', [string]$passIndex, 'Process')
-            # Playwright (results.json, artifacts/) and the specs write under W18_EVIDENCE_DIR:
-            # point it at this pass so one pass cannot overwrite another's report.
-            [Environment]::SetEnvironmentVariable('W18_EVIDENCE_DIR', $passDir, 'Process')
+            # Playwright's own report (results.json, artifacts/) goes to this pass's directory so
+            # one pass cannot overwrite another. W18_EVIDENCE_DIR stays the round directory:
+            # several specs read the Provider log that the runner writes there.
+            [Environment]::SetEnvironmentVariable('W18_PLAYWRIGHT_OUTPUT_DIR', $passDir, 'Process')
             $passStartMs = $fixture.Watch.ElapsedMilliseconds
             $passExit = $null
             $passFailure = $null
@@ -526,7 +527,7 @@ try {
                 caseResults = "pass-$passIndex/case-results.json"
             }
         }
-        [Environment]::SetEnvironmentVariable('W18_EVIDENCE_DIR', $evidenceRoot, 'Process')
+        [Environment]::SetEnvironmentVariable('W18_PLAYWRIGHT_OUTPUT_DIR', $null, 'Process')
         [ordered]@{ root = $evidenceRoot; runs = @($passesSummary | ForEach-Object {
             [ordered]@{ profile = $_.profile; pass = $_.pass; directory = (Join-Path $evidenceRoot "pass-$($_.pass)")
                 relativeDirectory = "pass-$($_.pass)"; caseResults = $_.caseResults
