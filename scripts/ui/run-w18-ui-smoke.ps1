@@ -3,9 +3,9 @@ param(
     [string]$RepositoryRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)),
     [string]$SourceRepository = 'D:\workspace\haifa-agent-super-harness\deer-flow',
     [ValidateRange(1, 5)]
-    [int]$AgentSlot = 5,
-    [int]$GatewayPort = 50618,
-    [int]$FrontendPort = 55618,
+    [int]$AgentSlot = 2,
+    [int]$GatewayPort = 30618,
+    [int]$FrontendPort = 35618,
     [int]$ProviderPort = 0,
     [string]$DataDirectory,
     [switch]$ActiveReconnect,
@@ -49,7 +49,7 @@ $expectedGatewayPort = 10618 + (10000 * $AgentSlot)
 $expectedFrontendPort = 15618 + (10000 * $AgentSlot)
 # W15 controller: additional isolated slot authorized by the user on 2026-10-03.
 if ($AgentSlot -eq 4) { $expectedGatewayPort = 11618; $expectedFrontendPort = 16618 }
-if ($AgentSlot -eq 5) { $expectedGatewayPort = 50618; $expectedFrontendPort = 55618 }
+if ($AgentSlot -eq 5) { $expectedGatewayPort = 12618; $expectedFrontendPort = 17618 }
 if ($GatewayPort -ne $expectedGatewayPort -or $FrontendPort -ne $expectedFrontendPort -or $ProviderPort -ne 0) {
     throw "W18 slot $AgentSlot requires Gateway=$expectedGatewayPort and Frontend=$expectedFrontendPort; controlled Provider must use OS-assigned port 0."
 }
