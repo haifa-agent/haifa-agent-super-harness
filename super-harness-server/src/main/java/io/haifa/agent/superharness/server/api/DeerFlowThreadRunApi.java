@@ -2187,6 +2187,14 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 // second card.
                 return false;
             }
+            if (event.source().payload() instanceof RunEventPayloads.DeliveryLifecycle
+                    && "budget.threshold-reached".equals(event.source().eventType())) {
+                // Frozen DeerFlow has no budget concept and its UI consumes no such event. Skip the
+                // frame without ending the stream; the Run's later events project normally. Handling
+                // it in the one frame writer keeps the live stream, a mid-Run reconnect and a
+                // terminal replay identical.
+                return false;
+            }
             writeSse(
                     output,
                     "error",
