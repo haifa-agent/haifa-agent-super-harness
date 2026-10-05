@@ -359,6 +359,86 @@ class DeerFlowConfigurationApiTest {
     }
 
     @Test
+    void agentKnowledgeScopeSnapshotPreservedAcrossCreateDetailListAndRestart() throws Exception {
+        String create = """
+                {
+                  "name": "scope-agent",
+                  "display_name": "Scope Agent",
+                  "description": "Agent with knowledge scope snapshot",
+                  "knowledge_scope": {
+                    "version": 1,
+                    "mode": "selected",
+                    "dataset_ids": ["ds-alpha", "ds-beta"],
+                    "document_filters": [
+                      {"dataset_id": "ds-alpha", "document_ids": ["doc-1"]}
+                    ]
+                  },
+                  "soul": "Domain expert."
+                }
+                """;
+        HttpResponse<String> created = request("POST", "/api/agents", create);
+        assertThat(created.statusCode()).isEqualTo(201);
+        JsonNode createdBody = json.readTree(created.body());
+        assertThat(createdBody.path("name").asText()).isEqualTo("scope-agent");
+        assertThat(createdBody.path("knowledge_scope").isObject()).isTrue();
+        assertThat(createdBody.path("knowledge_scope").path("version").asInt()).isEqualTo(1);
+        assertThat(createdBody.path("knowledge_scope").path("mode").asText()).isEqualTo("selected");
+        assertThat(createdBody.path("knowledge_scope").path("dataset_ids").findValuesAsText("dataset_ids"))
+                .isEmpty(); // array itself contains strings
+        assertThat(createdBody.path("knowledge_scope").path("dataset_ids").get(0).asText()).isEqualTo("ds-alpha");
+        assertThat(createdBody.path("knowledge_scope").path("dataset_ids").get(1).asText()).isEqualTo("ds-beta");
+
+        // Detail check: GET /api/agents/{name}
+        HttpResponse<String> detail = request("GET", "/api/agents/scope-agent", null);
+        assertThat(detail.statusCode()).isEqualTo(200);
+        JsonNode detailBody = json.readTree(detail.body());
+        assertThat(detailBody.path("knowledge_scope")).isEqualTo(createdBody.path("knowledge_scope"));
+
+        // List check: GET /api/agents
+        HttpResponse<String> list = request("GET", "/api/agents", null);
+        assertThat(list.statusCode()).isEqualTo(200);
+        JsonNode listBody = json.readTree(list.body());
+        JsonNode listedAgent = null;
+        for (JsonNode item : listBody.path("agents")) {
+            if ("scope-agent".equals(item.path("name").asText())) {
+                listedAgent = item;
+                break;
+            }
+        }
+        assertThat(listedAgent).isNotNull();
+        assertThat(listedAgent.path("knowledge_scope")).isEqualTo(createdBody.path("knowledge_scope"));
+
+        // Update check: PUT /api/agents/{name}
+        String update = """
+                {
+                  "knowledge_scope": {
+                    "version": 1,
+                    "mode": "all"
+                  }
+                }
+                """;
+        HttpResponse<String> updated = request("PUT", "/api/agents/scope-agent", update);
+        assertThat(updated.statusCode()).isEqualTo(200);
+        JsonNode updatedBody = json.readTree(updated.body());
+        assertThat(updatedBody.path("knowledge_scope").isObject()).isTrue();
+        assertThat(updatedBody.path("knowledge_scope").path("mode").asText()).isEqualTo("all");
+
+        // Restart persistence check
+        restart();
+        HttpResponse<String> afterRestart = request("GET", "/api/agents/scope-agent", null);
+        assertThat(afterRestart.statusCode()).isEqualTo(200);
+        JsonNode afterRestartBody = json.readTree(afterRestart.body());
+        assertThat(afterRestartBody.path("knowledge_scope").isObject()).isTrue();
+        assertThat(afterRestartBody.path("knowledge_scope").path("mode").asText()).isEqualTo("all");
+
+        // Null clear check
+        HttpResponse<String> cleared = request("PUT", "/api/agents/scope-agent", "{\"knowledge_scope\": null}");
+        assertThat(cleared.statusCode()).isEqualTo(200);
+        JsonNode clearedBody = json.readTree(cleared.body());
+        assertThat(clearedBody.get("knowledge_scope").isNull()).isTrue();
+    }
+
+    @Test
     void invalidModelAndModeAreRejectedInsteadOfFallingBack() throws Exception {
         HttpResponse<String> unknownModel = request(
                 "POST",

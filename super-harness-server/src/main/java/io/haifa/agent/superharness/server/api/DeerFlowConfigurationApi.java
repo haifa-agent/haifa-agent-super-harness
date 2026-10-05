@@ -669,7 +669,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                 toListOrNull(stored.get("tool_groups")),
                 toListOrNull(stored.get("skills")),
                 toListOrNull(stored.get("mcp_plugins")),
-                stored.hasNonNull("knowledge_scope") ? stored.path("knowledge_scope").asText() : null,
+                stored.hasNonNull("knowledge_scope") ? stored.get("knowledge_scope") : null,
                 toListOrNull(stored.get("allowed_subagents")),
                 toMapOrNull(stored.get("model_settings")),
                 stored.hasNonNull("thinking_enabled") ? stored.path("thinking_enabled").asBoolean() : null,

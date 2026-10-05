@@ -16,6 +16,9 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
@@ -65,36 +68,50 @@ class JavalinSseSemanticTest {
         app.start("127.0.0.1", 0);
         int port = app.port();
 
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         try {
             HttpClient client = HttpClient.newBuilder()
                     .connectTimeout(Duration.ofSeconds(5))
                     .build();
 
             HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/test-sse"))
+                    .timeout(Duration.ofSeconds(5))
                     .POST(HttpRequest.BodyPublishers.noBody())
                     .header("Accept", "text/event-stream")
                     .build();
 
-            HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            Future<List<String>> readTask = executor.submit(() -> {
+                HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
 
-            assertThat(response.statusCode()).isEqualTo(200);
-            assertThat(response.headers().firstValue("content-type"))
-                    .hasValueSatisfying(ct -> assertThat(ct).contains("text/event-stream"));
-            assertThat(response.headers().firstValue("cache-control"))
-                    .hasValue("no-cache");
-            // Chunked streaming response must NOT have a Content-Length header
-            assertThat(response.headers().firstValue("content-length")).isEmpty();
+                assertThat(response.statusCode()).isEqualTo(200);
+                assertThat(response.headers().firstValue("content-type"))
+                        .hasValueSatisfying(ct -> assertThat(ct).contains("text/event-stream"));
+                assertThat(response.headers().firstValue("cache-control"))
+                        .hasValue("no-cache");
+                // Chunked streaming response must NOT have a Content-Length header
+                assertThat(response.headers().firstValue("content-length")).isEmpty();
 
-            List<String> receivedLines = new ArrayList<>();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    receivedLines.add(line);
-                    if ("event: metadata".equals(line)) {
-                        // Notify the server handler that client observed the first frame
-                        clientReadFirstFrame.countDown();
+                List<String> receivedLines = new ArrayList<>();
+                try (InputStream in = response.body();
+                     BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        receivedLines.add(line);
+                        if ("event: metadata".equals(line)) {
+                            // Notify the server handler that client observed the first frame
+                            clientReadFirstFrame.countDown();
+                        }
                     }
                 }
+                return receivedLines;
+            });
+
+            List<String> receivedLines;
+            try {
+                receivedLines = readTask.get(5, TimeUnit.SECONDS);
+            } catch (Exception timeoutOrError) {
+                readTask.cancel(true);
+                throw timeoutOrError;
             }
 
             assertThat(receivedLines).contains(
@@ -106,6 +123,7 @@ class JavalinSseSemanticTest {
                     "data: null"
             );
         } finally {
+            executor.shutdownNow();
             app.stop();
         }
     }

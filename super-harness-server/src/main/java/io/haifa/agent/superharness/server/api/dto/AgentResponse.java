@@ -1,5 +1,6 @@
 package io.haifa.agent.superharness.server.api.dto;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Map;
 
@@ -11,7 +12,7 @@ public record AgentResponse(
         List<String> tool_groups,
         List<String> skills,
         List<String> mcp_plugins,
-        String knowledge_scope,
+        JsonNode knowledge_scope,
         List<String> allowed_subagents,
         Map<String, Object> model_settings,
         Boolean thinking_enabled,
