@@ -64,6 +64,11 @@ Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业�
 - `contracts/`、`third-party/`、`resources/`、`frontend/`、`deer-flow/`：冻结协议、资源、前端与来源校验。
 - `private-docs/`：提示词、roadmap、评审与交付报告，正文不在本 README 展开。
 
+旧 worktree 分支与 `main` 历史不连通时，可用
+`python scripts/governance/audit_disconnected_branches.py` 批量核对内容：先验证新旧主线的完整文件树桥接，
+再检查祖先关系、精确文件变更和内容/模式，输出已确认项与待核对差异。脚本只读 Git，不调用模型或删除分支；
+参数、判定边界和复现命令见 [脚本目录的治理说明](scripts/README.md#governance--shpm-治理与门禁建议)。
+
 ## 构建与验证
 
 使用 Java 21 和 Maven 3.9.15，或使用仓库提交的 Maven Wrapper（固定 Maven 3.9.15 分发包 SHA-256）。
@@ -206,5 +211,6 @@ pwsh -NoProfile -File scripts/governance/audit-work-package-delivery.ps1
 - [scripts/README.md](scripts/README.md)、[tests/README.md](tests/README.md)
 - [W08 委托兼容手册](docs/w08-delegation-transcript.md)
 - [验收 .cjs 脚本功能与运行说明](docs/engineering/001-cjs-scripts.md)
+- [功能交付流程（纯产品与跨 SDK 协同）](docs/engineering/002-feature-delivery-workflows.md)：最终门禁前 rebase，按改动范围和 Oracle 验收；SDK 切回基线后重新构建并回归，再由主控合入与结算。
 - [验收交接模板](docs/acceptance-handoff-template.md)
 - [SDK 消费记录](docs/todo.md)
