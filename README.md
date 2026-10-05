@@ -125,6 +125,7 @@ SDK 版本规则见 `AGENTS.md`「范围与依赖」。工作包 worktree 消费
 
 ```powershell
 python scripts/governance/change_scope.py
+python scripts/governance/pr_review_digest.py --repo <owner/name> --pr <编号>
 python scripts/governance/shpm_dispatch.py --task ... --execute
 python scripts/governance/shpm_record_gates.py --task ... local-tmp/verify-full/<run>.json <UI 证据目录> --execute
 python -m unittest discover -s tests/checks/build -p "test_*.py"

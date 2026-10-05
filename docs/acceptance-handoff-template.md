@@ -21,5 +21,6 @@
 - 未运行/条件不足：<具体case与前置；不升级PASS>
 - 自审待修复：<按根因合并，不扩范围>
 - 下一步：<最短执行步骤；需重建/复验的原因>
+- Review：<`pr_review_digest.py` 结论 CLEAN/FINDINGS/NO_REVIEW_YET；findings 条数；原始 JSON 路径；未运行则写原因>
 - 清理：<实际进程/端口释放结果与证据；未执行则NOT_RUN>
 ```

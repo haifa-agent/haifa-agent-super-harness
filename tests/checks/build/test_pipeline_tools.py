@@ -30,6 +30,9 @@ record_gates = load("scripts/governance/shpm_record_gates.py")
 dispatch = load("scripts/governance/shpm_dispatch.py")
 gate_cache = load("scripts/lib/frontend_gate_cache.py")
 build_cache = load("scripts/lib/frontend_build_cache.py")
+pr_review = load("scripts/governance/pr_review_digest.py")
+
+BOT = pr_review.DEFAULT_BOT
 
 
 class ChangeScopeTest(unittest.TestCase):
@@ -192,6 +195,55 @@ class FrontendBuildCacheTest(unittest.TestCase):
             self.assertEqual((target / "server" / "app" / "route.js").read_bytes(), b"frozen route")
             self.assertFalse((target / "obsolete.js").exists())
             self.assertEqual((source / "server" / "app" / "route.js").read_bytes(), b"frozen route")
+
+
+class PrReviewDigestTest(unittest.TestCase):
+    def bot_comment(self, commit, body, reply_to=None, line=10):
+        return {
+            "user": {"login": BOT}, "commit_id": commit, "body": body, "path": "src/X.java",
+            "line": line, "original_line": line, "in_reply_to_id": reply_to, "html_url": f"https://x/{line}",
+        }
+
+    def thumbs_up(self, created="2026-10-05T02:38:37Z"):
+        return {"content": "+1", "user": {"login": BOT}, "created_at": created, "html_url": "https://x/r"}
+
+    def test_three_verdicts(self):
+        head = "a" * 40
+        self.assertEqual(pr_review.compute_verdict(head, [], [self.thumbs_up()], BOT), "CLEAN")
+        self.assertEqual(pr_review.compute_verdict(head, [], [], BOT), "NO_REVIEW_YET")
+        finding = self.bot_comment(head, "**<sub>![P2 Badge](https://img.shields.io/badge/P2-yellow)</sub> Problem**\n\nDetails")
+        self.assertEqual(pr_review.compute_verdict(head, [finding], [], BOT), "FINDINGS")
+        self.assertEqual(pr_review.compute_verdict(head, [finding], [self.thumbs_up()], BOT), "FINDINGS")
+
+    def test_human_replies_are_not_findings_but_block_clean_only_when_bot_authored(self):
+        head = "a" * 40
+        bot = self.bot_comment(head, "**title**\n\nbody")
+        bot_reply = self.bot_comment(head, "reply", reply_to=1)
+        human = {"user": {"login": "someone"}, "commit_id": head, "body": "human", "in_reply_to_id": None}
+        self.assertEqual(len(pr_review.bot_findings([bot, bot_reply, human], head, BOT)), 1)
+        self.assertEqual(pr_review.compute_verdict(head, [human], [self.thumbs_up()], BOT), "CLEAN")
+
+    def test_outdated_flag_tracks_the_head(self):
+        head = "a" * 40
+        self.assertTrue(pr_review.finding(self.bot_comment("b" * 40, "old"), head)["outdated"])
+        self.assertFalse(pr_review.finding(self.bot_comment(head, "new"), head)["outdated"])
+
+    def test_priority_and_first_line(self):
+        body = "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Redact only the value**\n\nMore."
+        self.assertEqual(pr_review.parse_priority(body), "P1")
+        self.assertIsNone(pr_review.parse_priority("**No badge**\n\ntext"))
+        self.assertEqual(pr_review.first_line(body), "Redact only the value")
+        self.assertEqual(pr_review.first_line("plain first line"), "plain first line")
+
+    def test_digest_counts_bot_findings_only(self):
+        head = "a" * 40
+        digest = pr_review.build_digest(
+            {"number": 9, "draft": False, "head": {"sha": head},
+             "base": {"repo": {"full_name": "o/r"}}},
+            [self.bot_comment(head, "**t**\n\nb")], [self.thumbs_up()], BOT)
+        self.assertEqual(digest["botVerdict"], "FINDINGS")
+        self.assertEqual(digest["counts"]["findings"], 1)
+        self.assertEqual(digest["headSha"], head)
 
 
 if __name__ == "__main__":

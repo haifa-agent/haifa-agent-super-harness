@@ -88,6 +88,7 @@
 | `audit-work-package-delivery.ps1` | SHPM 与实际交付/worktree 审计 |
 | `audit_disconnected_branches.py` | 用相同文件树连接新旧历史，批量核对旧分支内容并导出未确认差异 |
 | `change_scope.py` | 按 main 以来的改动给出所需门禁（Python） |
+| `pr_review_digest.py` | 只读读取 PR 机器人审查并输出 `botVerdict`/`findings`（Python） |
 | `shpm_dispatch.py` | 一次性完成 task create、sprint link、task start、assign create |
 | `shpm_record_gates.py` | 从门禁摘要 JSON 与 UI 证据目录登记结果 |
 
