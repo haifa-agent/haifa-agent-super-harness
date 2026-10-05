@@ -124,6 +124,18 @@ function Get-FixtureProcessFact {
 
 function Update-FixtureProcessTree {
     param($Entry)
+    # One bulk snapshot per update. A filtered Win32_Process query per tree node costs about the
+    # same as reading the whole table, so resolving the parent/child links in memory is much
+    # cheaper than the original per-node queries once the tree has more than one process.
+    $snapshot = Get-FixtureProcessSnapshot
+    $childrenByParent = @{}
+    foreach ($process in $snapshot.Values) {
+        $parentPid = [int]$process.ParentProcessId
+        if (-not $childrenByParent.ContainsKey($parentPid)) {
+            $childrenByParent[$parentPid] = [Collections.Generic.List[object]]::new()
+        }
+        $childrenByParent[$parentPid].Add($process)
+    }
     $queue = [Collections.Generic.Queue[int]]::new(); $queue.Enqueue($Entry.WrapperPid)
     $visited = @{}
     while ($queue.Count) {
@@ -131,10 +143,11 @@ function Update-FixtureProcessTree {
         if ($visited.ContainsKey($parent)) { continue }; $visited[$parent] = $true
         if (-not $Entry.Owned.ContainsKey($parent)) { continue }
         $knownParent = $Entry.Owned[$parent]
-        $currentParent = Get-CimInstance Win32_Process -Filter "ProcessId=$parent" -ErrorAction Stop
-        if ($currentParent -and ((Get-FixtureCommandHash $currentParent.CommandLine) -ne $knownParent.identityHash -or
-                $currentParent.CreationDate.ToUniversalTime().ToString('o') -ne $knownParent.created)) { continue }
-        foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$parent" -ErrorAction Stop)) {
+        $currentParent = if ($snapshot.ContainsKey($parent)) { $snapshot[$parent] } else { $null }
+        if ($null -eq $currentParent) { continue }
+        if ((Get-FixtureCommandHash $currentParent.CommandLine) -ne $knownParent.identityHash -or
+                $currentParent.CreationDate.ToUniversalTime().ToString('o') -ne $knownParent.created) { continue }
+        foreach ($child in @($(if ($childrenByParent.ContainsKey($parent)) { $childrenByParent[$parent] } else { @() }))) {
             if ($child.CreationDate.ToUniversalTime() -lt [DateTime]::Parse($knownParent.created).ToUniversalTime()) { continue }
             $fact = Get-FixtureProcessFact $child
             if (-not $Entry.Owned.ContainsKey($fact.pid)) { $Entry.Owned[$fact.pid] = $fact }
@@ -165,15 +178,34 @@ function Start-FixtureProcess {
 function Wait-FixtureReady {
     param($Entry, [int]$TimeoutSec, [scriptblock]$Observe, [scriptblock]$Accept, [string]$ObjectName)
     $last = 'no successful observation'
+    # Refreshing the process tree issues one bulk CIM snapshot, so doing it on every 100ms poll
+    # would spend the whole startup budget on snapshots. The tree only has to discover children
+    # before readiness is accepted; liveness between refreshes uses Get-Process on the known PIDs.
+    # Refreshing at most once per second, plus immediately before any exit decision and before
+    # the port-ownership check, preserves "exited process fails immediately" (the confirming
+    # refresh happens before the break) without paying for a snapshot every poll.
+    $refreshIntervalMs = 1000
+    $lastRefreshMs = [long]::MinValue
     while ([Diagnostics.Stopwatch]::GetElapsedTime($Entry.Started).TotalSeconds -lt $TimeoutSec) {
-        Update-FixtureProcessTree $Entry
+        $elapsedMs = [long][Diagnostics.Stopwatch]::GetElapsedTime($Entry.Started).TotalMilliseconds
+        if ($lastRefreshMs -eq [long]::MinValue -or ($elapsedMs - $lastRefreshMs) -ge $refreshIntervalMs) {
+            Update-FixtureProcessTree $Entry; $lastRefreshMs = $elapsedMs
+        }
         $alive = @($Entry.Owned.Keys | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
         if ((Test-Path -LiteralPath $Entry.ExitCodePath) -or $alive.Count -eq 0 -or
             ($Entry.Id -gt 0 -and -not (Get-Process -Id $Entry.Id -ErrorAction SilentlyContinue))) {
-            $last = 'owned process exited before readiness'; break
+            # A child spawned since the last refresh must not be mistaken for an exit: confirm
+            # with one fresh tree before failing.
+            Update-FixtureProcessTree $Entry; $lastRefreshMs = $elapsedMs
+            $alive = @($Entry.Owned.Keys | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+            if ((Test-Path -LiteralPath $Entry.ExitCodePath) -or $alive.Count -eq 0 -or
+                ($Entry.Id -gt 0 -and -not (Get-Process -Id $Entry.Id -ErrorAction SilentlyContinue))) {
+                $last = 'owned process exited before readiness'; break
+            }
         }
         try { $value = & $Observe } catch { $last = $_.Exception.Message; Start-Sleep -Milliseconds 100; continue }
             if (& $Accept $value) {
+                Update-FixtureProcessTree $Entry
                 foreach ($port in $Entry.Ports) {
                     $owners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction Stop)
                     if (@($owners | Where-Object { -not $Entry.Owned.ContainsKey([int]$_.OwningProcess) }).Count) {
@@ -195,7 +227,7 @@ function Get-FixtureProcessSnapshot {
     # can resolve every registered identity from a single query. A failed query must surface as
     # an error, never as an empty table that would falsely satisfy "no processes remain".
     $snapshot = @{}
-    foreach ($process in @(Get-CimInstance Win32_Process -Property ProcessId, CreationDate, Name, CommandLine -ErrorAction Stop)) {
+    foreach ($process in @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate, Name, CommandLine -ErrorAction Stop)) {
         $snapshot[[int]$process.ProcessId] = $process
     }
     $snapshot
@@ -210,8 +242,16 @@ function Get-FixtureOwnedRuntimeProcesses {
 function Wait-FixtureExit {
     param($Entry, [int]$TimeoutSec)
     $deadline = [Diagnostics.Stopwatch]::GetTimestamp()
+    # The exit is read from the exit-code file and the wrapper PID, so the process tree only has
+    # to be discovered periodically (cleanup refreshes it again before stopping anything).
+    # Updating on every 100ms poll would issue one bulk snapshot per poll for the whole run.
+    $refreshIntervalMs = 1000
+    $lastRefreshMs = [long]::MinValue
     while ([Diagnostics.Stopwatch]::GetElapsedTime($deadline).TotalSeconds -lt $TimeoutSec) {
-        Update-FixtureProcessTree $Entry
+        $elapsedMs = [long][Diagnostics.Stopwatch]::GetElapsedTime($deadline).TotalMilliseconds
+        if ($lastRefreshMs -eq [long]::MinValue -or ($elapsedMs - $lastRefreshMs) -ge $refreshIntervalMs) {
+            Update-FixtureProcessTree $Entry; $lastRefreshMs = $elapsedMs
+        }
         if (Test-Path -LiteralPath $Entry.ExitCodePath) {
             $value = (Get-Content -Raw -LiteralPath $Entry.ExitCodePath).Trim()
             if ($value -match '^-?\d+$') { return [int]$value }
@@ -282,11 +322,20 @@ function Stop-FixtureProcesses {
     $failures = [Collections.Generic.List[string]]::new()
     $reusedPids = [Collections.Generic.List[int]]::new()
     $identityChanges = [Collections.Generic.List[object]]::new()
-    foreach ($entry in @($Fixture.Processes | Sort-Object Started -Descending)) {
+    $entries = @($Fixture.Processes | Sort-Object Started -Descending)
+    foreach ($entry in $entries) {
         try { Update-FixtureProcessTree $entry } catch { $failures.Add($_.Exception.Message) }
+    }
+    # One bulk snapshot backs every stop decision below: a per-PID query costs about as much as
+    # the whole table, and each identity must be judged from a single consistent view. The
+    # snapshot is taken here, inside the stop function, and never reused from an earlier read.
+    $stopSnapshot = $null
+    try { $stopSnapshot = Get-FixtureProcessSnapshot } catch { $failures.Add("Process snapshot failed: $($_.Exception.Message)") }
+    foreach ($entry in $entries) {
         foreach ($fact in @($entry.Owned.Values | Sort-Object created -Descending)) {
             try {
-                $current = Get-CimInstance Win32_Process -Filter "ProcessId=$($fact.pid)" -ErrorAction Stop
+                if ($null -eq $stopSnapshot) { continue }
+                $current = if ($stopSnapshot.ContainsKey([int]$fact.pid)) { $stopSnapshot[[int]$fact.pid] } else { $null }
                 if ($null -eq $current) { continue }
                 # The original child exited and Windows reused its PID. Never stop the new owner.
                 if ($current.CreationDate.ToUniversalTime().ToString('o') -ne $fact.created) {
