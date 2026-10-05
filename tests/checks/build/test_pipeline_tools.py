@@ -65,10 +65,15 @@ class ChangeScopeTest(unittest.TestCase):
             self.assertEqual(change_scope.classify(path), expected, path)
 
     def test_gates_follow_the_widest_class(self):
-        self.assertEqual(change_scope.required_gates(["README.md"]), ["docs-check", "verify-full-reuse"])
+        self.assertEqual(change_scope.required_gates(["README.md"]), ["docs-check"])
+        self.assertEqual(change_scope.required_gates(["scripts/governance/x.py"]), ["script-regressions"])
         self.assertEqual(
-            change_scope.required_gates(["scripts/governance/x.py"]),
-            ["script-regressions", "verify-full-reuse"],
+            change_scope.required_gates(["tests/ui/smoke/x.spec.cjs"]),
+            ["verify-full-reuse", "ui-controlled-round-x2"],
+        )
+        self.assertEqual(
+            change_scope.required_gates(["tests/ui/smoke/x-live.spec.cjs"]),
+            ["verify-full-reuse", "ui-live-round-x2"],
         )
         self.assertEqual(
             change_scope.required_gates(["scripts/lib/x.ps1"]),
@@ -924,6 +929,46 @@ class SourceFingerprintTest(unittest.TestCase):
             self.assertNotEqual(first["javaInputFingerprint"], second["javaInputFingerprint"])
             self.assertEqual(first["sourceTree"], second["sourceTree"])
 
+    def test_fingerprint_is_reusable_only_when_clean_and_the_sdk_is_known(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree, maven, _ = self.fixture(Path(directory))
+            clean = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            self.assertTrue(clean["reusable"])
+            self.assertEqual(clean["dirtyPaths"], [])
+            self.assertIsNone(clean["notReusableReason"])
+
+            (worktree / "docs/guide.md").write_text("dirty doc", encoding="utf-8")
+            docs_dirty = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            self.assertTrue(docs_dirty["reusable"], "an excluded path does not make the build inputs dirty")
+
+            (worktree / "src/App.java").write_text("class App { int y; }", encoding="utf-8")
+            dirty = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            self.assertFalse(dirty["reusable"])
+            self.assertEqual(dirty["dirtyPaths"], ["src/App.java"])
+            self.assertEqual(dirty["javaInputFingerprint"], clean["javaInputFingerprint"],
+                             "the value still describes the commit; the flag says it must not be reused")
+
+            self.git(worktree, "checkout", "-q", "--", "src/App.java")
+            empty = Path(directory) / "empty-maven"
+            empty.mkdir()
+            unknown = source_fingerprint.fingerprint(worktree, "HEAD", empty, self.VERSION, jdk="jdk", maven="mvn")
+            self.assertEqual(unknown["sdkIdentity"], "UNAVAILABLE")
+            self.assertFalse(unknown["reusable"])
+            self.assertEqual(unknown["notReusableReason"], "SDK identity unavailable")
+
+    def test_excluded_references_reads_tracked_files_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree, _, _ = self.fixture(Path(directory))
+            (worktree / "super-harness-server/src/test/java").mkdir(parents=True)
+            (worktree / "super-harness-server/src/test/java/X.java").write_text(
+                'String p = "scripts/tool.py";', encoding="utf-8")
+            (worktree / "ignored-deps/pkg").mkdir(parents=True)
+            (worktree / "ignored-deps/pkg/pom.xml").write_text("<project>docs/guide.md</project>", encoding="utf-8")
+            (worktree / ".gitignore").write_text("local-tmp/\nignored-deps/\n", encoding="utf-8")
+            self.commit(worktree, "test reference")
+            findings = source_fingerprint.excluded_references(worktree)
+            self.assertEqual(findings, ["super-harness-server/src/test/java/X.java: scripts/tool.py"])
+
     def test_covered_dirty_paths_ignores_excluded_edits(self):
         with tempfile.TemporaryDirectory() as directory:
             worktree, _, _ = self.fixture(Path(directory))
@@ -1027,6 +1072,36 @@ class KnownIntermittentTest(unittest.TestCase):
         mapping = {"Super Harness DeerFlow Compatibility Server": "super-harness-server",
                    "Super Harness Evidence Harness": "super-harness-harness"}
         self.assertEqual(known_intermittent.reactor_skipped_modules(log, mapping), ["super-harness-harness"])
+
+    def test_abstract_and_interface_test_types_are_not_report_gaps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            module = Path(directory) / "super-harness-server"
+            tests = module / "src/test/java/pkg"
+            tests.mkdir(parents=True)
+            (tests / "AbstractBaseApiTest.java").write_text(
+                "package pkg;\nabstract class AbstractBaseApiTest { }\n", encoding="utf-8")
+            (tests / "ContractTest.java").write_text("package pkg;\npublic interface ContractTest { }\n", encoding="utf-8")
+            (tests / "RealApiTest.java").write_text(
+                "package pkg;\nclass RealApiTest extends AbstractBaseApiTest { }\n", encoding="utf-8")
+            (tests / "Helper.java").write_text("package pkg;\nclass Helper { }\n", encoding="utf-8")
+            self.assertEqual(known_intermittent.expected_test_classes(module), {"RealApiTest"})
+            self.assertEqual(known_intermittent.module_report_gaps(module, []), ["RealApiTest"])
+            self.assertEqual(known_intermittent.module_report_gaps(module, [{"name": "pkg.RealApiTest"}]), [])
+
+    def test_plan_names_targeted_reruns_per_module_and_skipped_module_tests(self):
+        entries = self.entries()
+        upload = self.upload_failure()
+        plan = known_intermittent.intermittent_plan(
+            [upload], entries, [], {}, skipped=["super-harness-harness"],
+            skipped_tests={"super-harness-harness": ["EvidenceReportTest", "ContractOracleTest"]})
+        self.assertTrue(plan["use"])
+        self.assertEqual(plan["rerunByModule"],
+                         [{"module": "super-harness-server", "classes": ["DeerFlowUploadRunContextHttpTest"]}])
+        self.assertEqual(plan["skippedModuleTests"],
+                         [{"module": "super-harness-harness", "classes": ["ContractOracleTest", "EvidenceReportTest"]}])
+        denied = known_intermittent.intermittent_plan([upload], entries, [], {}, no_known_intermittent=True)
+        self.assertEqual(denied["rerunByModule"], [])
+        self.assertEqual(denied["skippedModuleTests"], [])
 
     def test_manifest_loads(self):
         entries = known_intermittent.load_manifest(ROOT / "tests/known-intermittent.json")

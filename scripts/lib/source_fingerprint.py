@@ -36,6 +36,7 @@ import sys
 from pathlib import Path
 
 EXCLUDED_PREFIXES = ("docs/", "tests/", "scripts/")
+SDK_UNAVAILABLE = "UNAVAILABLE"
 BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 LINE_COMMENT = re.compile(r"(?<!:)//[^\n]*")
 EXCLUDED_REFERENCE = re.compile(r"(?<![A-Za-z0-9_./-])((?:docs|scripts|tests)/[A-Za-z0-9_./-]*)")
@@ -132,14 +133,26 @@ def fingerprint(repo: Path, commit: str, maven_repo: Path | None = None, version
     digest = java_tree_digest(repo, commit)
     combined = "\n".join([digest, sdk["identity"], sdk["version"], jdk, maven])
     tree = source_tree(repo, commit)
+    resolved = git(repo, "rev-parse", commit).strip()
+    # Dirty paths only matter when the fingerprint describes the checked-out commit: the
+    # files on disk are then not the files the fingerprint was computed from.
+    dirty = covered_dirty_paths(repo) if resolved == git(repo, "rev-parse", "HEAD").strip() else []
+    sdk_known = sdk["identity"] != SDK_UNAVAILABLE
     return {
-        "commit": git(repo, "rev-parse", commit).strip(),
+        "commit": resolved,
         "sourceTree": tree,
         "sdkVersion": sdk["version"],
         "sdkIdentity": sdk["identity"],
         "jdkVersion": jdk,
         "mavenVersion": maven,
         "javaInputFingerprint": sha256_text(combined),
+        "dirtyPaths": dirty,
+        # Evidence may be reused by fingerprint only when the SDK content is known and the
+        # working tree has no uncommitted change on a covered path.
+        "reusable": sdk_known and not dirty,
+        "notReusableReason": (None if sdk_known and not dirty else
+                              ("SDK identity unavailable" if not sdk_known else
+                               "uncommitted changes on covered paths")),
     }
 
 
@@ -167,8 +180,15 @@ def excluded_references(repo: Path) -> list[str]:
     ``scripts/run.sh`` string is not a false positive. The format is ``<path>: <match>``.
     """
     findings: list[str] = []
-    candidates = sorted(repo.glob("**/pom.xml"))
-    candidates += sorted(repo.glob("super-harness-*/src/test/**/*.java"))
+    # Tracked files only: walking the working tree would descend into frontend/node_modules
+    # (74 s on a prepared worktree) and could pick up files that are not part of the build.
+    try:
+        tracked = git(repo, "ls-files", "--", "pom.xml", "*/pom.xml", "super-harness-*/src/test/*.java").splitlines()
+        candidates = [repo / name for name in sorted(tracked) if name]
+    except FingerprintError:
+        # Not a git checkout (a test fixture): look only where the build files can be.
+        candidates = sorted(repo.glob("pom.xml")) + sorted(repo.glob("*/pom.xml"))
+        candidates += sorted(repo.glob("super-harness-*/src/test/**/*.java"))
     for path in candidates:
         if not path.is_file():
             continue

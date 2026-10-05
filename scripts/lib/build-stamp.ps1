@@ -154,6 +154,11 @@ function Assert-ServerBuildStamp {
     # keeps the same JAR reusable, while a source or SDK content change does not. An old stamp
     # without the field is a mismatch, never a fallback to sourceSha.
     $expected = Get-ServerStampFields $RepositoryRoot $HaifaVersion $MavenRepo
+    # Without the published SDK JARs the fingerprint cannot tell two SDK builds apart, so the
+    # JAR is not reusable. Only a fixture that passes its own -MavenRepo may compare without.
+    if ($expected.sdkIdentity -ceq 'UNAVAILABLE' -and [string]::IsNullOrWhiteSpace($MavenRepo)) {
+        throw 'Server build stamp cannot be checked: the SDK identity is unavailable; rerun without -SkipBuild.'
+    }
     Assert-BuildStamp 'Server' (Get-ServerBuildStampPath $RepositoryRoot) ([ordered]@{
         javaInputFingerprint = $expected.javaInputFingerprint
     })

@@ -157,8 +157,17 @@ def expected_test_classes(module_dir: Path) -> set[str]:
         return names
     for path in test_root.rglob("*.java"):
         stem = path.stem
-        if stem.startswith("Test") or stem.endswith(("Test", "Tests", "TestCase")):
-            names.add(stem)
+        if not (stem.startswith("Test") or stem.endswith(("Test", "Tests", "TestCase"))):
+            continue
+        # Surefire never instantiates an abstract base class or an interface, so neither has
+        # a report; counting them as gaps would deny the branch for every failure.
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            source = ""
+        if re.search(rf"\b(abstract\s+(?:sealed\s+|non-sealed\s+)?class|interface)\s+{re.escape(stem)}\b", source):
+            continue
+        names.add(stem)
     return names
 
 
@@ -204,12 +213,14 @@ def changed_files(repo: Path, base: str) -> list[str]:
 
 def _deny(reason: str, failed: list[dict]) -> dict:
     return {"use": False, "reason": reason, "failedTests": failed, "matched": [],
-            "rerunClasses": [], "rerunModules": [], "reruns": 0, "skippedModules": []}
+            "rerunClasses": [], "rerunModules": [], "rerunByModule": [], "reruns": 0,
+            "skippedModules": [], "skippedModuleTests": []}
 
 
 def intermittent_plan(failed: list[dict], manifest: list[dict], changed: list[str],
                       module_gaps: dict[str, list[str]], skipped: list[str] | None = None,
-                      no_known_intermittent: bool = False, reruns: int = DEFAULT_RERUNS) -> dict:
+                      no_known_intermittent: bool = False, reruns: int = DEFAULT_RERUNS,
+                      skipped_tests: dict[str, list[str]] | None = None) -> dict:
     if no_known_intermittent:
         return _deny("-NoKnownIntermittent was given", failed)
     if not failed:
@@ -237,8 +248,18 @@ def intermittent_plan(failed: list[dict], manifest: list[dict], changed: list[st
                      "covers": entry.get("covers", [])} for entry in matched],
         "rerunClasses": sorted({problem["class"] for problem in failed}),
         "rerunModules": sorted({problem["module"] for problem in failed}),
+        # Simple class names per module: test-targeted.ps1 takes -Module and -Test.
+        "rerunByModule": [
+            {"module": module,
+             "classes": sorted({problem["test"] for problem in failed if problem["module"] == module})}
+            for module in sorted({problem["module"] for problem in failed})
+        ],
         "reruns": reruns,
         "skippedModules": list(skipped or []),
+        "skippedModuleTests": [
+            {"module": module, "classes": sorted((skipped_tests or {}).get(module, []))}
+            for module in (skipped or [])
+        ],
     }
 
 
@@ -261,8 +282,9 @@ def main(argv: list[str] | None = None) -> int:
     for module in {problem["module"] for problem in failed}:
         module_reports = [report for report in reports if report["module"] == module]
         module_gaps[module] = module_report_gaps(repo / module, module_reports)
+    skipped_tests = {module: sorted(expected_test_classes(repo / module)) for module in skipped}
     plan = intermittent_plan(failed, manifest, changed_files(repo, args.base), module_gaps,
-                             skipped, args.no_known_intermittent)
+                             skipped, args.no_known_intermittent, skipped_tests=skipped_tests)
     print(json.dumps(plan, ensure_ascii=False))
     return 0
 

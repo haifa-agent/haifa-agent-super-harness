@@ -101,30 +101,38 @@ function Invoke-KnownIntermittentBranch {
         }
     }
     $rerunLogs = [Collections.Generic.List[string]]::new()
-    $classes = (@($Plan.rerunClasses) -join ',')
     $testTargeted = Join-Path $PSScriptRoot 'test-targeted.ps1'
-    for ($pass = 1; $pass -le [int]$Plan.reruns; $pass++) {
-        $rerunLog = Join-Path $firstFail "rerun-$pass.log"
-        $arguments = @('-NoLogo', '-NoProfile', '-File', $testTargeted, '-Test', $classes)
+    # test-targeted.ps1 runs "-pl <module> -am -Dtest=<classes>": upstream modules are compiled
+    # but only the named classes run, so neither step repeats the failed module's whole suite.
+    function Invoke-TargetedClasses([string]$Module, [string[]]$Classes, [string]$Log) {
+        $arguments = @('-NoLogo', '-NoProfile', '-File', $testTargeted, '-Module', $Module, '-Test', ($Classes -join ','))
         if ($useLowMemory) { $arguments += '-LowMemory' }
         $output = & pwsh @arguments 2>&1
-        ($output -join "`n") | Set-Content -LiteralPath $rerunLog -Encoding utf8
-        $rerunLogs.Add($rerunLog)
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "verify-full: known-intermittent rerun $pass failed; keeping FAIL."
+        $code = $LASTEXITCODE
+        ($output -join "`n") | Set-Content -LiteralPath $Log -Encoding utf8
+        return $code
+    }
+    for ($pass = 1; $pass -le [int]$Plan.reruns; $pass++) {
+        foreach ($group in @($Plan.rerunByModule)) {
+            $rerunLog = Join-Path $firstFail "rerun-$pass-$($group.module).log"
+            $rerunLogs.Add($rerunLog)
+            if ((Invoke-TargetedClasses $group.module @($group.classes) $rerunLog) -ne 0) {
+                Write-Host "verify-full: known-intermittent rerun $pass failed in $($group.module); keeping FAIL."
+                return $null
+            }
+        }
+    }
+    # Modules the reactor skipped after the failure never ran their tests: run exactly those.
+    foreach ($group in @($Plan.skippedModuleTests)) {
+        if (@($group.classes).Count -eq 0) { continue }
+        $skippedLog = Join-Path $firstFail "skipped-$($group.module).log"
+        if ((Invoke-TargetedClasses $group.module @($group.classes) $skippedLog) -ne 0) {
+            Write-Host "verify-full: tests of the reactor-skipped module '$($group.module)' failed; keeping FAIL."
             return $null
         }
     }
     Push-Location $root
     try {
-        if (@($Plan.skippedModules).Count -gt 0) {
-            $modules = (@($Plan.skippedModules) -join ',')
-            & mvn.cmd -o -ntp -pl $modules -am test *> (Join-Path $firstFail 'skipped-modules.log')
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host 'verify-full: building the reactor-skipped modules failed; keeping FAIL.'
-                return $null
-            }
-        }
         foreach ($module in @($Plan.rerunModules)) {
             & mvn.cmd -o -ntp -pl $module -am -DskipTests package *> (Join-Path $firstFail "$module-package.log")
             if ($LASTEXITCODE -ne 0) {
@@ -168,6 +176,13 @@ try {
 }
 catch {
     Write-Host "verify-full: source fingerprint unavailable ($($_.Exception.Message)); gate reuse disabled."
+}
+
+# A fingerprint of a dirty working tree, or one computed without the SDK JARs, does not
+# describe what Maven is about to build: it is neither reused nor written to the summary.
+if ($null -ne $fingerprint -and -not $fingerprint.reusable) {
+    Write-Host "verify-full: fingerprint not usable for reuse ($($fingerprint.notReusableReason)); running the gate."
+    $fingerprint = $null
 }
 
 if (-not $NoReuse -and $null -ne $fingerprint -and

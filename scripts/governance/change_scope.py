@@ -130,9 +130,13 @@ def required_gates(files: list[str], sdk_identity_changed: bool = False) -> list
         gates.append("docs-check")
     if "scripts" in classes:
         gates.append("script-regressions")
+    needs_ui_round = bool(classes & {"product", "ui", "frontend"}) or ("scripts" in classes and shared_scripts)
     if java_inputs_changed(files):
         gates.append("verify-full")
-    else:
+    elif needs_ui_round:
+        # The change does not feed Maven, but its UI rounds run against the built server: a
+        # valid PASS for this fingerprint must exist (reused, or run once). Docs-only and
+        # plain script changes need no full-gate record at all.
         gates.append("verify-full-reuse")
     if "frontend" in classes:
         gates.append("ui-cold-round")
@@ -165,6 +169,9 @@ def sdk_identity_changed(repo: Path, merge_base: str) -> bool:
     the same version is caught there, not here. A version change always changes the identity, so
     treating it as live is correct and conservative.
     """
+    if (repo / "local-tmp/sdk-selection.json").is_file():
+        # The worktree consumes a candidate SDK instead of the baseline.
+        return True
     before = haifa_version_at(repo, merge_base)
     after = haifa_version_at(repo, git(repo, "rev-parse", "HEAD").strip())
     return before is not None and after is not None and before != after
