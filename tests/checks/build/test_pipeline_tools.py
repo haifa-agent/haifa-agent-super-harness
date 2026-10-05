@@ -371,6 +371,39 @@ class PrReviewDigestTest(unittest.TestCase):
         self.assertEqual(pr_review.compute_verdict(head, [finding], [], BOT), "FINDINGS")
         self.assertEqual(pr_review.compute_verdict(head, [finding], [self.thumbs_up()], BOT), "FINDINGS")
 
+    def summary_comment(self, status, commit, trigger):
+        return {"user": {"login": BOT}, "created_at": "2026-10-05T06:23:54Z", "body": (
+            "<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\n"
+            "| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n"
+            f"| \U0001F4DD **Code Review** | \u26A0\uFE0F **{status}** "
+            '<relative-time datetime="2026-10-05T06:24:53.490867Z">2026-10-05T06:24:53.490867Z</relative-time> '
+            f"| `{commit}` | {trigger} |\n")}
+
+    def test_review_summary_rows_and_failed_review(self):
+        head = "de233fb" + "0" * 33
+        failed = pr_review.review_summary([self.summary_comment("Failed", "de233fb", "Draft marked ready")], BOT)
+        self.assertEqual(failed, [{"review": "Code Review", "status": "Failed",
+                                   "at": "2026-10-05T06:24:53.490867Z", "commit": "de233fb",
+                                   "trigger": "Draft marked ready"}])
+        self.assertEqual(pr_review.compute_verdict(head, [], [], BOT, failed), "REVIEW_FAILED")
+        # A thumbs up or a comment on the current head still wins over a failed attempt.
+        self.assertEqual(pr_review.compute_verdict(head, [], [self.thumbs_up()], BOT, failed), "CLEAN")
+        self.assertEqual(pr_review.compute_verdict(head, [self.bot_comment(head, "**t**")], [], BOT, failed), "FINDINGS")
+        completed = pr_review.review_summary([self.summary_comment("Completed", "33fa688", "PR opened")], BOT)
+        self.assertEqual(completed[0]["status"], "Completed")
+        self.assertEqual(pr_review.compute_verdict(head, [], [], BOT, completed), "NO_REVIEW_YET")
+        self.assertEqual(pr_review.review_summary([{"user": {"login": "someone"}, "body": "plain"}], BOT), [])
+
+    def test_digest_reports_whether_the_latest_review_covers_the_head(self):
+        head = "de233fb" + "0" * 33
+        pull = {"number": 17, "draft": False, "head": {"sha": head}, "base": {"repo": {"full_name": "o/r"}}}
+        covered = pr_review.build_digest(pull, [], [], BOT, [self.summary_comment("Failed", "de233fb", "Draft marked ready")])
+        self.assertEqual(covered["botVerdict"], "REVIEW_FAILED")
+        self.assertTrue(covered["reviewedHead"])
+        stale = pr_review.build_digest(pull, [], [self.thumbs_up()], BOT, [self.summary_comment("Completed", "33fa688", "PR opened")])
+        self.assertEqual(stale["botVerdict"], "CLEAN")
+        self.assertFalse(stale["reviewedHead"])
+
     def test_human_replies_are_not_findings_but_block_clean_only_when_bot_authored(self):
         head = "a" * 40
         bot = self.bot_comment(head, "**title**\n\nbody")
