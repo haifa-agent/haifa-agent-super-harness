@@ -101,14 +101,40 @@ class RecordGatesTest(unittest.TestCase):
     def keys(self, roots):
         records, _ = record_gates.discover([Path(root) for root in roots])
         record_gates.assign_rounds(records)
-        return [(r["name"], record_gates.idempotency_key("2026-10-05", "T", r)) for r in records]
+        return [(r["name"], record_gates.idempotency_key("T", r)) for r in records]
 
     def test_results_are_copied_without_promotion(self):
         self.assertEqual(record_gates.shpm_result("PASS"), "PASS")
-        for failure in ("FAIL", "FAIL_PREFLIGHT", "FAIL_NO_TESTS_MATCHED"):
+        for failure in ("FAIL", "FAIL_PREFLIGHT", "FAIL_NO_TESTS_MATCHED", "FAIL_MANIFEST"):
             self.assertEqual(record_gates.shpm_result(failure), "FAIL")
         self.assertEqual(record_gates.shpm_result(None), "NOT_RUN")
         self.assertEqual(record_gates.shpm_result("BLOCKED_EXTERNAL"), "BLOCKED_EXTERNAL")
+
+    def test_idempotency_key_has_no_date(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "verify-full-20261005-100000-000.json").write_text(json.dumps({
+                "status": "PASS", "sourceSha": "abcdef0123", "forks": 3, "sdkSelection": "ABSENT"}), encoding="utf-8")
+            records, _ = record_gates.discover([root])
+            record_gates.assign_rounds(records)
+            key = record_gates.idempotency_key("T", records[0])
+            self.assertEqual(key, "T-verify-full-abcdef01-verify-full-20261005-100000-000")
+            self.assertNotIn("2026-10-05", key)
+
+    def test_summaries_are_written_in_time_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            failing = root / "verify-full-20261005-100000-000.json"
+            passing = root / "verify-full-20261005-110000-000.json"
+            failing.write_text(json.dumps({
+                "status": "FAIL", "sourceSha": "abcdef0123", "forks": 3, "sdkSelection": "ABSENT"}), encoding="utf-8")
+            passing.write_text(json.dumps({
+                "status": "PASS", "sourceSha": "abcdef0123", "forks": 3, "sdkSelection": "ABSENT"}), encoding="utf-8")
+            for roots in ([passing, failing], [failing, passing]):
+                records, _ = record_gates.discover(roots)
+                record_gates.assign_rounds(records)
+                record_gates.sort_by_time(records)
+                self.assertEqual([r["result"] for r in records], ["FAIL", "PASS"])
 
     def test_reads_verify_full_and_ui_with_profile_in_the_name(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -131,7 +157,7 @@ class RecordGatesTest(unittest.TestCase):
             record_gates.assign_rounds(cases)
             self.assertEqual(cases[0]["name"], "ui-w05-demo-artifact-artifact-survives-reload")
             self.assertIn("first failure: timeout", cases[1]["summary"])
-            command = record_gates.build_command("W05-task-1", cases[1], "db", "2026-10-03")
+            command = record_gates.build_command("W05-task-1", cases[1], "db")
             self.assertEqual(command[command.index("--result") + 1], "FAIL")
 
     def test_two_rounds_get_distinct_names_and_keys(self):
@@ -441,6 +467,7 @@ class SdkApiDigestTest(unittest.TestCase):
         (sources / "Widget.java").write_text(
             "package fixture;\npublic class Widget {\n"
             "    public void visible() {}\n    protected void guarded() {}\n    void hidden() {}\n"
+            "    public static class Nested { public int n; }\n"
             "    public static Runnable anonymous() { return new Runnable() { public void run() {} }; }\n}\n",
             encoding="utf-8")
         (sources / "Hidden.java").write_text("package fixture;\nclass Hidden { public void x() {} }\n", encoding="utf-8")
@@ -511,6 +538,45 @@ class SdkApiDigestTest(unittest.TestCase):
                 archive.writestr("fixture/extra.txt", "changed")
             self.assertEqual(sdk_api_digest.generate(worktree, maven, self.VERSION)["status"], "GENERATED")
 
+    def test_batched_javap_matches_per_class_filtering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.fixture(Path(directory))
+            names = sdk_api_digest.classes_of(self.jar)
+            batched = []
+            for batch in sdk_api_digest.batch_class_names(names, batch_size=2, max_command_chars=24000):
+                self.assertLessEqual(len(batch), 2)
+                sections = sdk_api_digest.split_javap_output(
+                    sdk_api_digest.javap_batch(self.jar, batch), batch)
+                for name in batch:
+                    self.assertIn(name, sections)
+                    batched.append((name, sdk_api_digest.is_public_surface(sections[name])))
+            individual = [(name, sdk_api_digest.is_public_surface(sdk_api_digest.javap(self.jar, name)))
+                          for name in names]
+            self.assertEqual(batched, individual)
+            surface = {name for name, public in individual if public}
+            self.assertIn("fixture.Sample", surface)
+            self.assertIn("fixture.Widget", surface)
+            self.assertIn("fixture.Widget$Nested", surface)
+            self.assertNotIn("fixture.Hidden", surface)
+
+    def test_batch_class_names_respects_count_and_length(self):
+        names = [f"fixture.Class{i:02d}" for i in range(250)]
+        batches = sdk_api_digest.batch_class_names(names)
+        self.assertTrue(all(len(batch) <= 100 for batch in batches))
+        self.assertTrue(all(sum(len(name) + 1 for name in batch) <= 24000 for batch in batches))
+        self.assertEqual([name for batch in batches for name in batch], names)
+        narrow = sdk_api_digest.batch_class_names(["a" * 100, "b" * 100, "c" * 100], max_command_chars=150)
+        self.assertEqual([len(batch) for batch in narrow], [1, 1, 1])
+
+    def test_publish_manifest_name_and_sdk_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, maven = self.fixture(Path(directory))
+            bom = maven / "io/haifa/haifa-agent-bom" / self.VERSION / f"haifa-agent-bom-{self.VERSION}.pom"
+            (bom.parent / "haifa-sdk-publish-manifest.json").write_text(
+                json.dumps({"sdkCommit": "deadbeef", "version": self.VERSION}), encoding="utf-8")
+            self.assertEqual(sdk_api_digest.MANIFEST_NAMES[0], "haifa-sdk-publish-manifest.json")
+            self.assertEqual(sdk_api_digest.parse_sdk_commit(bom), "deadbeef")
+
 
 class MainServiceTest(unittest.TestCase):
     def test_command_line_feature_detection(self):
@@ -555,6 +621,53 @@ class MainServiceTest(unittest.TestCase):
             with self.assertRaises(main_service.MainServiceError):
                 main_service.validate_scope(worktree, 20618, 25618, Path("C:/outside"), worktree / "local-tmp/main-service", True)
 
+    def test_stamp_matches_same_commit_or_same_tree(self):
+        self.assertEqual(main_service.stamps_match("a", "a", None, None), (True, False))
+        self.assertEqual(main_service.stamps_match("a", "b", "tree", "tree"), (True, True))
+        self.assertEqual(main_service.stamps_match("a", "b", "t1", "t2"), (False, False))
+        self.assertEqual(main_service.stamps_match("a", "b", None, "tree"), (False, False))
+        self.assertEqual(main_service.stamps_match("a", "b", "tree", None), (False, False))
+
+    def test_frontend_decision_branches(self):
+        self.assertEqual(main_service.frontend_decision(True, False, False, False), "FAIL_NO_ROOT")
+        self.assertEqual(main_service.frontend_decision(False, True, False, True), "FAIL_TREE")
+        self.assertEqual(main_service.frontend_decision(True, True, False, True), "REUSED")
+        self.assertEqual(main_service.frontend_decision(True, False, True, True), "FAIL_FOREIGN")
+        self.assertEqual(main_service.frontend_decision(True, False, False, True), "START")
+
+    def test_frontend_start_args_match_the_production_launcher(self):
+        launcher = Path("C:/fr/scripts/frontend/start-haifa-frontend.ps1")
+        args = main_service.frontend_start_args(launcher, Path("C:/fr"), Path("D:/w/deer-flow"),
+                                                Path("D:/w/slot/data"), "http://127.0.0.1:20618", 25618)
+        self.assertEqual(args[0], "pwsh")
+        self.assertEqual(args[args.index("-File") + 1], str(launcher))
+        self.assertEqual(args[args.index("-RepositoryRoot") + 1], str(Path("C:/fr")))
+        self.assertEqual(args[args.index("-SourceRepository") + 1], str(Path("D:/w/deer-flow")))
+        self.assertEqual(args[args.index("-DataDirectory") + 1], str(Path("D:/w/slot/data")))
+        self.assertEqual(args[args.index("-GatewayBaseUrl") + 1], "http://127.0.0.1:20618")
+        self.assertEqual(args[args.index("-FrontendPort") + 1], "25618")
+        self.assertIn("-Production", args)
+
+    def test_evaluate_stream_answer_error_empty_and_tools_only(self):
+        answer = ('event: messages\n'
+                  'data: [{"type":"ai","content":"pong"},{"langgraph_node":"model"}]\n\n'
+                  'event: end\ndata:\n\n')
+        self.assertEqual(main_service.evaluate_stream(answer), {"hasAnswer": True, "hasError": False})
+        error = 'event: error\ndata: {"message":"boom"}\n\n'
+        self.assertEqual(main_service.evaluate_stream(error), {"hasAnswer": False, "hasError": True})
+        self.assertEqual(main_service.evaluate_stream(""), {"hasAnswer": False, "hasError": False})
+        tools_only = ('event: messages\n'
+                      'data: [{"type":"ai","content":"","tool_calls":[{"name":"read_file"}]},{}]\n\n')
+        self.assertEqual(main_service.evaluate_stream(tools_only), {"hasAnswer": False, "hasError": False})
+        parts = 'event: messages\ndata: [{"type":"ai","content":[{"type":"text","text":"hi"}]},{}]\n\n'
+        self.assertEqual(main_service.evaluate_stream(parts), {"hasAnswer": True, "hasError": False})
+
+    def test_model_name_picks_the_first_executable_model(self):
+        self.assertEqual(main_service.model_name({"models": [{"name": "first"}, {"name": "second"}]}), "first")
+        self.assertIsNone(main_service.model_name({"models": []}))
+        self.assertIsNone(main_service.model_name({"models": [{"display": "x"}]}))
+        self.assertIsNone(main_service.model_name(None))
+
 
 class GateResourcesTest(unittest.TestCase):
     def test_high_memory_selects_three_forks(self):
@@ -563,19 +676,22 @@ class GateResourcesTest(unittest.TestCase):
             gate_resources.select_forks(gate_resources.THREE_FORKS_MIN_FREE_PHYSICAL_MB,
                                         gate_resources.THREE_FORKS_MIN_FREE_COMMIT_MB), (3, False))
 
-    def test_middle_band_selects_two_forks(self):
+    def test_measured_thresholds_skip_the_two_fork_band(self):
+        # The measured 2-fork peaks are not below the 3-fork peaks, so its thresholds are
+        # higher and the 2-fork guard can never win: even at the 2-fork thresholds the
+        # 3-fork guard fires first. The branch stays tested with a synthetic ordering.
         self.assertEqual(
             gate_resources.select_forks(gate_resources.TWO_FORKS_MIN_FREE_PHYSICAL_MB,
-                                        gate_resources.TWO_FORKS_MIN_FREE_COMMIT_MB), (2, False))
-        self.assertEqual(
-            gate_resources.select_forks(gate_resources.THREE_FORKS_MIN_FREE_PHYSICAL_MB - 1,
-                                        gate_resources.THREE_FORKS_MIN_FREE_COMMIT_MB - 1), (2, False))
+                                        gate_resources.TWO_FORKS_MIN_FREE_COMMIT_MB), (3, False))
+        with patch.object(gate_resources, "TWO_FORKS_MIN_FREE_PHYSICAL_MB", 2000), \
+                patch.object(gate_resources, "TWO_FORKS_MIN_FREE_COMMIT_MB", 4000):
+            self.assertEqual(gate_resources.select_forks(2500, 4500), (2, False))
 
     def test_low_memory_selects_one_fork_with_low_memory(self):
         self.assertEqual(gate_resources.select_forks(1024, 2048), (1, True))
         self.assertEqual(
-            gate_resources.select_forks(gate_resources.TWO_FORKS_MIN_FREE_PHYSICAL_MB - 1,
-                                        gate_resources.TWO_FORKS_MIN_FREE_COMMIT_MB - 1), (1, True))
+            gate_resources.select_forks(gate_resources.THREE_FORKS_MIN_FREE_PHYSICAL_MB - 1,
+                                        gate_resources.THREE_FORKS_MIN_FREE_COMMIT_MB - 1), (1, True))
 
     def test_missing_probe_falls_back_to_default(self):
         self.assertEqual(gate_resources.select_forks(None, 32000), (gate_resources.DEFAULT_FORKS, False))

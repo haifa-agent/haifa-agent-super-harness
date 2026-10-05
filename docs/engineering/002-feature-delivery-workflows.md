@@ -5,7 +5,7 @@
 | **文档编号** | 002 |
 | **主题** | Super Harness 纯产品功能与跨 SDK 功能的交付顺序、门禁和结算条件 |
 | **适用仓库** | `D:\workspace\haifa-agent-super-harness`、`D:\workspace\haifa-agent` |
-| **更新日期** | 2026-10-04 |
+| **更新日期** | 2026-10-05 |
 | **依据规范** | [AGENTS.md](../../AGENTS.md)、[Runtime / Product Boundary](../runtime-product-boundary.md)、[SHPM 使用手册](../shpm-manual.md)，以及上游 `AGENTS.md`、`build-support/README.md` |
 
 本文是操作索引；具体任务的 Oracle、必需门禁和人工验收要求以当前派单、Roadmap 35 / PRD 及上述规则为准。脚本建议、局部 PASS 和候选 SDK 证据不能自动提升任务、工作包或阶段为 `PASS` / `GO`。
@@ -42,7 +42,10 @@ flowchart TD
     FIX --> I
     F -->|"前置不足"| BLOCK["保留 FAIL / NOT_RUN / BLOCKED_EXTERNAL<br/>登记影响；继续独立用例或修复前置"]
     BLOCK --> E
-    F -->|"是"| REBASE["最终门禁前 rebase 到最新 main<br/>固定候选源码 SHA / SDK / 断言"]
+    F -->|"是"| PR["推送分支并开 draft PR<br/>draft 不代表任何门禁通过"]
+    PR --> BOT["一次性读取机器人审查并集中处理<br/>最多等 10 分钟，超时记 NO_REVIEW_YET"]
+    BOT --> FIXCAND["按根因攒批修复并固定候选提交"]
+    FIXCAND --> REBASE["最终门禁前 rebase 到最新 main<br/>固定候选源码 SHA / SDK / 断言"]
     REBASE --> PLAN["change_scope 建议 + AGENTS Rule B 复核<br/>主控复核 Oracle→断言→前置→原件映射"]
     PLAN --> PRE["正式预检；clean / 重跑前外置保存需保留原件"]
     PRE --> G["执行范围内必需门禁<br/>按条件补冷轮、规定暖轮及真实 smoke"]
@@ -74,8 +77,9 @@ flowchart TD
 1. **派工与资源**：先确认任务依赖、独立 branch/worktree、基线 SHA、完整槽位端口和独立 `data-root`。常规槽位为 `20618/25618`、`30618/35618`、`40618/45618`；`11618/16618` 是已批准的特定附加槽位，不作为通用默认值。开发服务不占用主端口 `18018/33018`。启动前检查动态/排除端口范围，并对完整端口组实际绑定预检；不能只查监听表。
 2. **内环**：实现后运行受影响定向测试和必要的单 case UI，集中自审、按根因攒批修复，再进入稳定候选正式门禁。UI spec/fixture 变更先用 `-CaseTitle '<完整标题>'` 跑受影响 case。局部结果和 `-PreflightOnly` 不代替全套验收。
 3. **最终 SHA**：最终门禁之前 rebase 到最新 `main`，固定候选 SHA、SDK 构件和断言。源码、SDK 构件或断言改变后，重跑受影响门禁，不沿用失效 PASS。提交前执行范围内检查；交付证据须绑定最终候选提交，不能用 dirty 状态的结果证明最终 SHA。
-4. **Oracle 与预检**：昂贵全仓构建或双后端 UI 之前，列出 `Oracle case → 实际断言 → 必需前置条件 → 预期原始证据`，由主控复核关键正反例。正式 UI 一次性核对冻结来源、SDK 实际落盘构件、前端依赖与浏览器、完整端口组、独立数据/凭据、Provider、Gateway 和前端代理目标。已存在资源的跨身份拒绝不能由不存在资源的 404 替代。
-5. **原件与失败**：任何 `mvn clean` 或重跑之前，将需保留的 trace、截图及前后端/Provider 原始日志复制到该工作包外置证据目录，记录原路径和复制路径。首次 FAIL 永久保留；`NOT_RUN` 写明缺失前置。前置失效只停止受影响批次，独立用例继续；批次内不边测边改产品，结束后归并根因修复。
+4. **PR 与机器人审查**：内环稳定后先把分支推送到远端并开 draft PR；draft 不代表任何门禁通过，PR 描述须写明正式门禁尚未运行。开 PR 后最多等机器人审查 10 分钟，超时按 `NO_REVIEW_YET` 记录并继续，不无界等待。审查意见只处理一轮：正确的采纳，不采纳的各写一句理由，不再主动请求重新审查。按根因攒批修复后固定候选提交，再进入正式门禁；正式门禁通过后才出现的新意见，只有确认会导致错误行为时才修改并重跑受影响门禁，其余登记为后续事项。向人工报告 PR 可合并之前，必须运行 `scripts/governance/pr_review_digest.py` 并给出结论。
+5. **Oracle 与预检**：昂贵全仓构建或双后端 UI 之前，列出 `Oracle case → 实际断言 → 必需前置条件 → 预期原始证据`，由主控复核关键正反例。正式 UI 一次性核对冻结来源、SDK 实际落盘构件、前端依赖与浏览器、完整端口组、独立数据/凭据、Provider、Gateway 和前端代理目标。已存在资源的跨身份拒绝不能由不存在资源的 404 替代。
+6. **原件与失败**：任何 `mvn clean` 或重跑之前，将需保留的 trace、截图及前后端/Provider 原始日志复制到该工作包外置证据目录，记录原路径和复制路径。首次 FAIL 永久保留；`NOT_RUN` 写明缺失前置。前置失效只停止受影响批次，独立用例继续；批次内不边测边改产品，结束后归并根因修复。
 
 按 Rule B 选择门禁，混合改动取并集；主控或复审可以要求更多：
 
@@ -163,7 +167,10 @@ flowchart TD
 python scripts/governance/change_scope.py
 pwsh -NoProfile -File scripts/test-targeted.ps1 -Test '<受影响用例>' -LowMemory
 pwsh -NoProfile -File tests/checks/build/verify-haifa-version-baseline.ps1
-# Oracle 和正式预检完成、原件外置后，按范围执行；内存紧张时加 -Forks 1 -LowMemory。
+# 推送分支并开 draft PR 后一次性读取机器人审查（只读；退出码 0=CLEAN、2=FINDINGS、3=NO_REVIEW_YET）。
+python scripts/governance/pr_review_digest.py --repo <owner/name> --pr <编号>
+# Oracle 和正式预检完成、原件外置后，按范围执行；不传 -Forks 时按空闲内存自动选 3/2/1 档（1 档自动低内存），
+# 显式 -Forks / -LowMemory 行为不变。实测 2026-10-05（16 核 31 GB）：1 进程低内存约 811s、2 进程约 387s、3 进程约 270–285s。
 pwsh -NoProfile -File scripts/verify-full.ps1
 # 示例为常规槽位 2；新槽位或构建戳失效时 runner 会构建，暖轮按构建戳规则复用。
 pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 `
@@ -206,10 +213,14 @@ shpm task deliver $taskId --assignment $assignmentId --commit '<候选SHA>' `
   --handoff '<private-docs/ai-coding-report/交付报告路径>' `
   --idempotency-key "$operationKey-deliver" --json
 
+# 脚本回归用统一入口，摘要写 local-tmp/verify-scripts/。
+pwsh -NoProfile -File scripts/verify-scripts.ps1
+# 门禁结果从证据组目录递归登记（全仓摘要、脚本回归摘要、UI 证据目录、主服务刷新摘要）；
+# 不带 --execute 只打印表，证据已归档时用 --raw-root 改写原件路径。
 python scripts/governance/shpm_record_gates.py --task $taskId `
   'local-tmp/verify-full/<本轮摘要>.json' '<本轮UI证据目录>' --execute
 # 只传实际存在且适用于本任务的输入；无 UI 门禁时省略 UI 路径。
-# 真实 smoke、非该脚本支持的证据及额外轮次，用 shpm verify add 逐项追加；不覆盖首次 FAIL。
+# 薄封装覆盖不到的真实 smoke 及额外轮次，用 shpm verify add 逐项追加；不覆盖首次 FAIL。
 
 # 主控独立复审、合入及最终 SHA / SDK / smoke 证据核对全部通过后：
 shpm task accept $taskId --assignment $assignmentId --main-commit '<最终主线SHA>' `
@@ -218,7 +229,7 @@ shpm task accept $taskId --assignment $assignmentId --main-commit '<最终主线
 shpm assign release $assignmentId --idempotency-key "$operationKey-release" --json
 ```
 
-两套薄封装不会执行 `deliver`、`accept`、阶段结算或 `GO`。门禁登记脚本并不核准 SHA/SDK 是否可合入，仍由主控核对。其当前幂等键包含日期、任务、检查名和 SHA，不包含本轮证据目录；同日、同 SHA、同名检查的重复轮次应由主控用 `shpm verify add` 配置不同的检查 key 和幂等键，逐轮登记，不能靠重复调用薄封装证明两轮均已入账。各轮仍保留实际结果与原件，不覆盖首次 FAIL。状态变化后按规则执行 `tests/checks/evidence/verify-evidence-report.ps1`；整包、阶段与 `GO` 命令见 [SHPM 使用手册](../shpm-manual.md)。
+两套薄封装不会执行 `deliver`、`accept`、阶段结算或 `GO`。门禁登记脚本并不核准 SHA/SDK 是否可合入，仍由主控核对。`shpm_record_gates.py` 的幂等键为 `<任务>-<检查名>-<提交>-<证据身份>`，不含日期，同一份证据隔天重登仍幂等，不同轮次各自写入；写入前按时间稳定排序（UI 用已解析的开始时间，摘要用文件名时间戳，解析不出时间的排在最后并保持原顺序），使 SHPM 中同一检查名的最后一条记录是最新证据。UI 检查名带 profile，同一次调用里同 profile、同提交的多轮按开始时间追加 `-r1`/`-r2`；脚本回归清单外的检查文件使本次为 `FAIL_MANIFEST` 并记为 `FAIL`。结果原样登记（`FAIL` 和 `NOT_RUN` 都不提升），各轮保留原件、不覆盖首次 FAIL。状态变化后按规则执行 `tests/checks/evidence/verify-evidence-report.ps1`；整包、阶段与 `GO` 命令见 [SHPM 使用手册](../shpm-manual.md)。
 
 ## 4. 两套流程的准入条件
 

@@ -12,7 +12,7 @@
 | `verify-full.ps1` | 完整离线门禁（`mvn clean verify`）与服务端构建戳 |
 | `verify-scripts.ps1` | 运行 `tests/checks/build/` 与 `tests/checks/ui/` 清单内的全部脚本回归检查 |
 | `start-main-super-harness.ps1` | 主工作树 Gateway（18018）+ 冻结前端（33018）启动 |
-| `refresh-main-service.ps1` | 主服务只读状态检查与一键刷新（复制 JAR、精确停旧 PID、回退） |
+| `refresh-main-service.ps1` | 主服务只读状态检查与一键刷新（复制 JAR、精确停旧 PID、前端复用/启动、回退） |
 | `check_w08_oracle12.py` | W08 Oracle12 静态一致性/截断检查（Python） |
 | `w08_frozen_steps.mjs` | Oracle12 的 Node 桥，执行冻结 TypeScript 函数，断言在 Python 中 |
 
@@ -91,9 +91,9 @@
 | `audit_disconnected_branches.py` | 用相同文件树连接新旧历史，批量核对旧分支内容并导出未确认差异 |
 | `change_scope.py` | 按 main 以来的改动给出所需门禁（Python） |
 | `pr_review_digest.py` | 只读读取 PR 机器人审查并输出 `botVerdict`/`findings`（Python） |
-| `sdk_api_digest.py` | 从本地仓库 JAR 生成 SDK 公开/受保护签名摘要（Python，主控运行） |
+| `sdk_api_digest.py` | 从本地仓库 JAR 分批 `javap` 生成 SDK 公开/受保护签名摘要（Python，主控运行） |
 | `shpm_dispatch.py` | 一次性完成 task create、sprint link、task start、assign create |
-| `shpm_record_gates.py` | 从门禁摘要 JSON 与 UI 证据目录登记结果 |
+| `shpm_record_gates.py` | 从门禁摘要 JSON 与 UI 证据目录按时间顺序登记结果（幂等键含证据身份、不含日期） |
 
 历史更换后的旧分支内容审计（只读 Git，不调用模型、不删除分支）：
 
@@ -124,9 +124,9 @@ python scripts/governance/audit_disconnected_branches.py `
 | --- | --- |
 | `preflight.ps1` | 入口公共预检（代理/端口等） |
 | `quick_checks.py` | 秒级预检：SDK 基线门禁、`git diff --check`、secret scan |
-| `gate_resources.py` | 全仓门禁按空闲内存自动选择并行进程数（供 `verify-full.ps1`） |
+| `gate_resources.py` | 全仓门禁按空闲内存自动选择并行进程数（阈值 = 2026-10-05 实测峰值 + 2 GB；供 `verify-full.ps1`） |
 | `script_regressions.py` | 脚本回归清单、运行与摘要（供 `verify-scripts.ps1`） |
-| `main_service.py` | 主服务状态检查、JAR 复制/回退与刷新摘要（供 `refresh-main-service.ps1`） |
+| `main_service.py` | 主服务状态检查、JAR 复制/构建戳树比对/回退、前端复用与启动、真实 smoke 与刷新摘要（供 `refresh-main-service.ps1`） |
 | `sdk-selection.ps1` | 解析本 worktree 消费的 SDK 版本 |
 | `build-stamp.ps1` | 构建戳读写，决定 `-SkipBuild` 能否复用 |
 | `frontend-gate-cache.ps1` / `frontend_gate_cache.py` | 复用冻结前端来源门禁结果 |

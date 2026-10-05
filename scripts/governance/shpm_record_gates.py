@@ -16,11 +16,15 @@ exactly: PASS stays PASS; FAIL, FAIL_PREFLIGHT and FAIL_NO_TESTS_MATCHED become 
 never retries, and never delivers, accepts or decides a stage. Without --execute the table of
 ``shpm verify add`` rows is only printed.
 
-The idempotency key carries the evidence identity (a summary file name, or the UI evidence
-directory's ``run-*`` identity taken from ``flow-health.json``'s ``evidenceRoot``), so the same
-evidence is idempotent while a second round with different evidence writes separately. UI check
-names carry the profile; two evidence directories for the same profile and commit in one call
-get ``-r1`` / ``-r2`` by their recorded start time.
+The idempotency key is ``<task>-<check>-<commit>-<evidence identity>``: it deliberately carries
+no date, so the same evidence re-registered on a later day is still idempotent. The evidence
+identity is a summary file name, or the UI evidence directory's ``run-*`` identity taken from
+``flow-health.json``'s ``evidenceRoot``; a second round with different evidence writes
+separately. UI check names carry the profile; two evidence directories for the same profile and
+commit in one call get ``-r1`` / ``-r2`` by their recorded start time. Records are written in
+time order (UI by parsed run start, summaries by the timestamp in the file name; records whose
+time cannot be parsed keep their relative order at the end), so SHPM's last row for a check is
+the latest evidence rather than a directory-walk accident.
 
     python scripts/governance/shpm_record_gates.py --task W05-task-12 \\
         local-tmp/slot-2-w05-demo-artifact/evidence/final-33fa688 [--raw-root <moved root>] [--execute]
@@ -38,8 +42,9 @@ import sys
 from pathlib import Path
 
 DEFAULT_DB = r"C:\Users\wangr\.shpm\data\project.db"
-FAILURE_STATUSES = {"FAIL", "FAIL_PREFLIGHT", "FAIL_NO_TESTS_MATCHED"}
+FAILURE_STATUSES = {"FAIL", "FAIL_PREFLIGHT", "FAIL_NO_TESTS_MATCHED", "FAIL_MANIFEST"}
 RUN_ID_PATTERN = re.compile(r"run-(\d{8})-(\d{6})-(\d{3})-([0-9a-fA-F]+)")
+TIMESTAMP_PATTERN = re.compile(r"(\d{8})-(\d{6})-(\d{1,6})")
 
 
 class EvidenceError(RuntimeError):
@@ -71,6 +76,19 @@ def parse_run_start(identity: str | None):
         return None
     try:
         return datetime.datetime.strptime("".join(match.group(1, 2, 3)), "%Y%m%d%H%M%S%f")
+    except ValueError:
+        return None
+
+
+def parse_summary_start(identity: str | None):
+    """Timestamp from a summary file stem (``verify-full-YYYYMMDD-HHMMSS-mmm`` and friends)."""
+    match = TIMESTAMP_PATTERN.search(identity or "")
+    if not match:
+        return None
+    date, clock, fraction = match.groups()
+    fraction = (fraction + "000000")[:6]
+    try:
+        return datetime.datetime.strptime(date + clock + fraction, "%Y%m%d%H%M%S%f")
     except ValueError:
         return None
 
@@ -113,7 +131,7 @@ def verify_full_records(path: Path, summary: dict, anchor: Path) -> list[dict]:
         "retry": 0,
         "summary": detail,
         "identity": path.stem,
-        "start": None,
+        "start": parse_summary_start(path.stem),
         "local_path": path,
         "anchor": anchor,
     }]
@@ -134,7 +152,7 @@ def script_records(path: Path, summary: dict, anchor: Path) -> list[dict]:
             "retry": 0,
             "summary": "; ".join(summary.get("manifestErrors") or []) or "no checks recorded",
             "identity": path.stem,
-            "start": None,
+            "start": parse_summary_start(path.stem),
             "local_path": path,
             "anchor": anchor,
         }]
@@ -152,7 +170,7 @@ def script_records(path: Path, summary: dict, anchor: Path) -> list[dict]:
             "retry": 0,
             "summary": f"exitCode={check.get('exitCode')}",
             "identity": f"{path.stem}-{check.get('name')}",
-            "start": None,
+            "start": parse_summary_start(path.stem),
             "local_path": path,
             "anchor": anchor,
         })
@@ -172,7 +190,7 @@ def refresh_records(path: Path, summary: dict, anchor: Path) -> list[dict]:
         "retry": 0,
         "summary": f"jarSha256={summary.get('jarSha256')} oldPid={summary.get('oldGatewayPid')} newPid={summary.get('newGatewayPid')}",
         "identity": path.stem,
-        "start": None,
+        "start": parse_summary_start(path.stem),
         "local_path": path,
         "anchor": anchor,
     }]
@@ -287,6 +305,15 @@ def assign_rounds(records: list[dict]) -> None:
             record["name"] = f"{record['base_name']}-r{index}"
 
 
+def sort_by_time(records: list[dict]) -> None:
+    """Stable time order so SHPM's last row per check is the latest evidence.
+
+    Records with a parsed start time come first in ascending order; records whose time cannot
+    be parsed keep their original relative order at the end.
+    """
+    records.sort(key=lambda record: (record["start"] is None, record["start"] or datetime.datetime.min))
+
+
 def apply_raw_root(records: list[dict], raw_root: Path) -> None:
     if not raw_root.is_dir():
         raise EvidenceError(f"--raw-root '{raw_root}' is not a directory")
@@ -300,24 +327,24 @@ def apply_raw_root(records: list[dict], raw_root: Path) -> None:
         record["raw"] = str(target)
 
 
-def idempotency_key(day: str, task: str, record: dict) -> str:
+def idempotency_key(task: str, record: dict) -> str:
     identity = re.sub(r"[^A-Za-z0-9]+", "-", record["identity"]).strip("-")
-    return f"{day}-{task}-{record['name']}-{record['sha'][:8]}-{identity}"
+    return f"{task}-{record['name']}-{record['sha'][:8]}-{identity}"
 
 
-def build_command(task: str, record: dict, db: str, day: str) -> list[str]:
+def build_command(task: str, record: dict, db: str) -> list[str]:
     return ["verify", "add", "--task", task, "--key", record["name"], "--criteria", record["criteria"],
             "--result", record["result"], "--required", "--command", record["command"],
             "--repo-sha", record["sha"], "--raw", record["raw"], "--duration", record["duration"],
             "--retry-count", str(record["retry"]), "--summary", record["summary"],
-            "--idempotency-key", idempotency_key(day, task, record), "--json", "--db", db]
+            "--idempotency-key", idempotency_key(task, record), "--json", "--db", db]
 
 
-def format_table(records: list[dict], task: str, day: str) -> str:
+def format_table(records: list[dict], task: str) -> str:
     rows = [("CHECK", "RESULT", "COMMIT", "DURATION", "RAW", "IDEMPOTENCY KEY")]
     for record in records:
         rows.append((record["name"], record["result"], record["sha"][:8], record["duration"],
-                     record["raw"], idempotency_key(day, task, record)))
+                     record["raw"], idempotency_key(task, record)))
     widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
     return "\n".join("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)) for row in rows)
 
@@ -333,20 +360,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         records, unrecognized = discover(args.results)
         assign_rounds(records)
+        sort_by_time(records)
         if args.raw_root:
             apply_raw_root(records, args.raw_root.resolve())
     except EvidenceError as error:
         print(str(error), file=sys.stderr)
         return 1
 
-    day = datetime.date.today().isoformat()
-    print(format_table(records, args.task, day))
+    print(format_table(records, args.task))
     if unrecognized:
         print("unrecognized JSON (ignored):")
         for path in unrecognized:
             print(f"  {path}")
 
-    commands = [build_command(args.task, record, args.db, day) for record in records]
+    commands = [build_command(args.task, record, args.db) for record in records]
     env = dict(os.environ, SHPM_DB=args.db, PYTHONIOENCODING="utf-8")
     for command in commands:
         display = "shpm " + " ".join(f"'{part}'" if " " in part else part for part in command)

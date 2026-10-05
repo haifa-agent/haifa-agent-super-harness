@@ -37,7 +37,10 @@ BASELINE_VERSION = "0.1.2-SNAPSHOT"
 SELECTED_PATTERN = re.compile(r"^0\.1\.2-[A-Za-z0-9.-]+-SNAPSHOT$")
 ANONYMOUS_PATTERN = re.compile(r"\$\d")
 DECLARATION_PATTERN = re.compile(r"^(public|protected)\s")
-MANIFEST_NAMES = ("publish-manifest.json", "sdk-publish-manifest.json", "sdk-publish.json")
+MANIFEST_NAMES = ("haifa-sdk-publish-manifest.json", "publish-manifest.json", "sdk-publish-manifest.json",
+                  "sdk-publish.json")
+JAVAP_BATCH_SIZE = 100
+JAVAP_MAX_COMMAND_CHARS = 24000
 
 
 class SdkDigestError(RuntimeError):
@@ -224,6 +227,68 @@ def javap(jar: Path, class_name: str, executable: str = "javap") -> str:
     return result.stdout
 
 
+def batch_class_names(class_names: list[str], batch_size: int = JAVAP_BATCH_SIZE,
+                      max_command_chars: int = JAVAP_MAX_COMMAND_CHARS, overhead: int = 0) -> list[list[str]]:
+    """Split class names into javap batches bounded by count and command-line length.
+
+    ``overhead`` is the length of everything else on the command line (executable, options,
+    classpath), so ``overhead + sum(len(name) + 1)`` stays below ``max_command_chars``.
+    """
+    batches: list[list[str]] = []
+    current: list[str] = []
+    used = overhead
+    for name in class_names:
+        addition = len(name) + 1
+        if current and (len(current) >= batch_size or used + addition > max_command_chars):
+            batches.append(current)
+            current = []
+            used = overhead
+        current.append(name)
+        used += addition
+    if current:
+        batches.append(current)
+    return batches
+
+
+def javap_batch(jar: Path, class_names: list[str], executable: str = "javap") -> str:
+    result = subprocess.run(
+        [executable, "-protected", "-classpath", str(jar), *class_names],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if result.returncode != 0:
+        raise SdkDigestError(
+            f"javap failed for a batch of {len(class_names)} classes in {jar.name}: {result.stderr.strip()}")
+    return result.stdout
+
+
+def split_javap_output(output: str, class_names: list[str]) -> dict[str, str]:
+    """Split a multi-class javap output into one section per requested class.
+
+    javap prints one section per class in argument order; each section's class declaration is
+    a line ending in ``{`` that contains the binary class name, optionally preceded by a
+    ``Compiled from ...`` line. Names without a section are absent from the result so the
+    caller can fall back to a single-class call.
+    """
+    lines = output.splitlines()
+    starts: list[tuple[int, str]] = []
+    queue = list(class_names)
+    for index, line in enumerate(lines):
+        if not queue:
+            break
+        if line.rstrip().endswith("{") and queue[0] in line:
+            starts.append((index, queue.pop(0)))
+    sections: dict[str, str] = {}
+    for position, (index, name) in enumerate(starts):
+        begin = index - 1 if index > 0 and lines[index - 1].startswith("Compiled from ") else index
+        if position + 1 < len(starts):
+            next_index = starts[position + 1][0]
+            end = next_index - 1 if next_index > 0 and lines[next_index - 1].startswith("Compiled from ") else next_index
+        else:
+            end = len(lines)
+        sections[name] = "\n".join(lines[begin:end])
+    return sections
+
+
 def is_public_surface(output: str) -> bool:
     """The javap class declaration must be public or protected, not package-private."""
     for line in output.splitlines():
@@ -290,13 +355,18 @@ def generate(worktree: Path, maven_repo: Path, override: str | None = None,
     for entry in artifacts:
         jar = maven_repo.joinpath(*entry["groupId"].split("."), entry["artifactId"], version, entry["jar"])
         names = classes_of(jar)
+        overhead = len(javap_executable) + len("-protected") + len("-classpath") + len(str(jar)) + 4
         blocks = []
-        for name in names:
-            output = javap(jar, name, javap_executable)
-            if not is_public_surface(output):
-                continue
-            blocks.append(output)
-            classes_lines.append(f"{name}\t{entry['artifactId']}")
+        for batch in batch_class_names(names, overhead=overhead):
+            sections = split_javap_output(javap_batch(jar, batch, javap_executable), batch)
+            for name in batch:
+                output = sections.get(name)
+                if output is None:
+                    output = javap(jar, name, javap_executable)
+                if not is_public_surface(output):
+                    continue
+                blocks.append(output)
+                classes_lines.append(f"{name}\t{entry['artifactId']}")
         (target / f"{entry['artifactId']}.api.txt").write_text(
             "\n".join(block.rstrip() for block in blocks) + "\n", encoding="utf-8")
     (target / "classes.txt").write_text("\n".join(classes_lines) + "\n", encoding="utf-8")

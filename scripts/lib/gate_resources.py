@@ -1,19 +1,20 @@
 """Picks the full-gate fork count from the free memory at the moment it starts.
 
 ``scripts/verify-full.ps1`` asks this module only when the caller passed neither ``-Forks``
-nor ``-LowMemory``. The thresholds are the measured memory peak of a run plus 2 GB, kept as
-named constants:
+nor ``-LowMemory``. The thresholds are the measured memory peak of a run plus 2 GB. Free
+physical memory is compared against the Java working-set peak and free commit memory against
+the private-bytes peak, both taken from the controller's four-run measurement on 2026-10-05
+(16 cores, 31 GB, commit 7077325; ``local-tmp/<slot>/evidence/fork-measure/measure-summary.json``):
 
-- 3 forks: the highest stable count seen in the measurement;
-- 2 forks: the next step down;
+- 3 forks: working-set peak 2634 MB (max of 2634/2326) and private peak 3259 MB (max of
+  3259/3044) -> 4682 / 5307 MB thresholds;
+- 2 forks: working-set peak 2918 MB and private peak 3914 MB -> 4966 / 5962 MB thresholds;
 - otherwise 1 fork with the low-memory Maven parameters.
 
-Provisional values (待实测校准): the controller's four-run measurement
-(``local-tmp/<slot>/evidence/fork-measure/measure-summary.json``) was still incomplete (only the
-1-fork run, 2026-10-05, private peak 3343 MB, 811 s) when this module was written, so the
-conservative defaults from the dispatch are used for the 2- and 3-fork thresholds. Replace each
-constant with ``measured peak at that fork count + 2048`` once the remaining runs land and note
-the measurement date.
+The measured 2-fork peaks are not below the 3-fork peaks, so the 2-fork thresholds are higher
+than the 3-fork thresholds and the 2-fork band can never satisfy its own guard before the
+3-fork guard: the 2-fork tier is not reachable in practice and the constants are kept as
+measured rather than tuned to make all three tiers appear.
 
     python scripts/lib/gate_resources.py      # {"forks": n, "lowMemory": bool, ...}
 """
@@ -24,11 +25,11 @@ import ctypes
 import json
 import sys
 
-# Measured 2026-10-05 (provisional, 待实测校准); each threshold is the observed peak + 2048 MB.
-THREE_FORKS_MIN_FREE_PHYSICAL_MB = 6144
-THREE_FORKS_MIN_FREE_COMMIT_MB = 12288
-TWO_FORKS_MIN_FREE_PHYSICAL_MB = 4096
-TWO_FORKS_MIN_FREE_COMMIT_MB = 8192
+# Measured 2026-10-05 (commit 7077325): each threshold is the observed peak + 2048 MB.
+THREE_FORKS_MIN_FREE_PHYSICAL_MB = 4682
+THREE_FORKS_MIN_FREE_COMMIT_MB = 5307
+TWO_FORKS_MIN_FREE_PHYSICAL_MB = 4966
+TWO_FORKS_MIN_FREE_COMMIT_MB = 5962
 DEFAULT_FORKS = 3
 
 

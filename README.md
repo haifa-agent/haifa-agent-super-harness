@@ -99,6 +99,8 @@ pwsh -NoProfile -File scripts/verify-full.ps1
 `FAIL_PREFLIGHT` 且不启动 Maven；再运行 `mvn -o -ntp clean verify`，摘要 JSON 写到 `local-tmp/verify-full/`，
 并为产出的 exec JAR 写入服务端构建戳。不传 `-Forks` 时按当时空闲物理内存与空闲提交内存自动选择 3/2/1 个
 并行进程（1 档自动加 `-LowMemory`）；显式 `-Forks` 或 `-LowMemory` 行为不变，内存探测失败回退默认 3 个进程。
+阈值 = 实测内存峰值 + 2 GB（2026-10-05 实测：1 进程低内存约 811 秒、2 进程约 387 秒、3 进程约 270–285 秒；
+2 进程峰值不低于 3 进程，故 2 档实际不会被选中）。
 
 脚本回归入口统一运行 `tests/checks/build/` 与 `tests/checks/ui/` 清单内的检查，摘要写到
 `local-tmp/verify-scripts/`：
@@ -186,10 +188,16 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1
 `package`；`-JarPath` 指定要运行的 exec JAR，`-FrontendRoot` 指定前端所在检出。
 
 主线合入后刷新固定端口服务用 `scripts/refresh-main-service.ps1`：只读检查用 `-Status`；刷新用
-`-Jar <exec JAR> -ExpectSha <提交> [-LiveSmoke]`，会校验 JAR 旁的构建戳、复制到
+`-Jar <exec JAR> -ExpectSha <提交> [-FrontendRoot <检出>] [-LiveSmoke]`，会校验 JAR 旁的构建戳（提交相同，或
+在 `--worktree` 仓库里两个提交的 `^{tree}` 相同，squash 合并后仍可复用）、复制到
 `local-tmp/main-service/<短 SHA>/` 并记录 `service.json`、只按精确 PID 停止命令行匹配的旧 Gateway、等待端口
-释放、启动复制的 Gateway，并在新 Gateway 未就绪时回退到上一个 JAR；摘要写 `refresh-<时间戳>.json`。
-不带回归开关时只接受 `18018`/`33018` 与固定数据目录。
+释放、脱离调用者启动复制的 Gateway。`service.json` 没有可用 `active` 时，被停止进程命令行里的 JAR 会作为
+回退目标。前端按 `--frontend-root` 的 `HEAD:frontend` 树与 `--expect-sha` 的 `frontend` 树比对：健康则复用，
+不健康且端口空闲则用该检出的 `scripts/frontend/start-haifa-frontend.ps1` 以生产模式启动；端口被别的进程占用
+则失败且不停止它。`-LiveSmoke` 取 `GET /api/models` 的第一个可执行模型发起一次最短 Run，要求有非空 AI 文本且
+无 `error` 帧。整体 `PASS` 要求 Gateway 就绪、smoke、前端和 live-smoke 全部通过；Gateway 就绪但后续检查失败只
+记为 `FAIL`，不回退也不停止 Gateway。摘要写 `refresh-<时间戳>.json`。不带回归开关时只接受 `18018`/`33018`
+与固定数据目录。
 
 - 只重启 Gateway（受保护前端仍在运行）：先核对并只停止监听 `18018` 的 PID，再执行
 

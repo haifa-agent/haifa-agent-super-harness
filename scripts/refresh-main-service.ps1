@@ -54,7 +54,7 @@ if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
 if ([string]::IsNullOrWhiteSpace($MainServiceRoot)) {
     $MainServiceRoot = Join-Path $root 'local-tmp/main-service'
 }
-$module = Join-Path $root 'scripts/lib/main_service.py'
+$module = Join-Path $PSScriptRoot 'lib/main_service.py'
 
 $cliArgs = @($module, '--worktree', $root, '--gateway-port', [string]$GatewayPort, '--frontend-port', [string]$FrontendPort)
 if ($AllowSlot) { $cliArgs += '--allow-slot' }

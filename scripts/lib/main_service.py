@@ -11,22 +11,32 @@ main service, the running Gateway JAR and the source commit from the build stamp
 
 ``refresh`` runs in a fixed order and stops at the first failure:
 
-1. the build stamp beside ``--jar`` must record ``--expect-sha``;
+1. the build stamp beside ``--jar`` must record ``--expect-sha`` or, when both commits resolve
+   in ``--worktree``, the same ``^{tree}`` (a squash merge keeps the tree but changes the SHA);
 2. the JAR is copied to ``main-service/<short sha>/`` with the stamp, never run from a
    ``target`` directory;
 3. only PIDs whose command line is the main service are stopped; a foreign listener on a
-   port is reported with its PID and left running;
+   port is reported with its PID and left running; when ``service.json`` has no usable
+   ``active``, the stopped process's command-line JAR is kept as ``previous`` for rollback;
 4. both ports must actually accept a loopback bind within 20 seconds;
-5. the copied Gateway starts and must answer ``/health`` and ``/api/v1/auth/me``;
-6. the frontend checkout's ``HEAD:frontend`` tree must match ``--expect-sha`` and a healthy
-   frontend is reused (Gateway-only runs skip the frontend);
-7. smoke checks mirror ``status``; ``--live-smoke`` additionally sends one shortest real
-   conversation Run through the configured managed model and asserts a final answer with no
-   ``error`` frame (recorded as NOT_RUN without the switch);
-8. a Gateway that never becomes ready is stopped and the previous JAR from ``service.json``
-   is started again, with the round recorded as a failure.
+5. the copied Gateway starts (detached from the caller) and must answer ``/health`` and
+   ``/api/v1/auth/me``;
+6. the frontend checkout's ``HEAD:frontend`` tree must match ``--expect-sha``; a healthy
+   frontend is reused, an unhealthy one on a free port is started in production mode from
+   ``--frontend-root`` and must answer the home page and the proxied ``/api/v1/auth/me``
+   (Gateway-only runs skip the frontend);
+7. smoke mirrors ``status``; ``--live-smoke`` additionally sends one shortest real
+   conversation Run through the first executable model from ``/api/models`` and asserts an
+   AI answer with non-empty text and no ``error`` frame (recorded as NOT_RUN without the
+   switch);
+8. the round is ``PASS`` only when the Gateway is ready and smoke, frontend and live-smoke
+   all pass; a ready Gateway whose later checks fail is still a failure but is neither
+   rolled back nor stopped. A Gateway that never becomes ready is stopped and the
+   ``previous`` JAR is started again, with the round recorded as a failure.
 
-The round summary is written to ``main-service/<short sha>/refresh-<timestamp>.json``.
+Gateway and frontend processes are started detached (new process group, no window, null
+stdin) so closing the caller's terminal does not stop them. The round summary is written to
+``main-service/<short sha>/refresh-<timestamp>.json``.
 """
 
 from __future__ import annotations
@@ -98,6 +108,111 @@ def rollback_decision(new_gateway_ready: bool, previous_jar_exists: bool) -> str
     return "rollback" if previous_jar_exists else "stop"
 
 
+def stamps_match(recorded_sha: str, expected_sha: str, recorded_tree: str | None, expected_tree: str | None) -> tuple[bool, bool]:
+    """Accept a stamp when the commit is the same or both resolve to the same tree."""
+    tree_match = bool(recorded_tree and expected_tree and recorded_tree == expected_tree)
+    return (recorded_sha == expected_sha or tree_match), tree_match
+
+
+def frontend_decision(tree_match: bool, healthy: bool, port_busy: bool, has_root: bool) -> str:
+    """One of FAIL_NO_ROOT, FAIL_TREE, REUSED, FAIL_FOREIGN, START."""
+    if not has_root:
+        return "FAIL_NO_ROOT"
+    if not tree_match:
+        return "FAIL_TREE"
+    if healthy:
+        return "REUSED"
+    if port_busy:
+        return "FAIL_FOREIGN"
+    return "START"
+
+
+def frontend_start_args(launcher: Path, frontend_root: Path, source_repository: Path, data_root: Path,
+                        gateway_url: str, frontend_port: int) -> list[str]:
+    """Production frontend launch matching ``start-main-super-harness.ps1``."""
+    return ["pwsh", "-NoProfile", "-File", str(launcher),
+            "-RepositoryRoot", str(frontend_root),
+            "-SourceRepository", str(source_repository),
+            "-DataDirectory", str(data_root),
+            "-GatewayBaseUrl", gateway_url,
+            "-FrontendPort", str(frontend_port),
+            "-Production"]
+
+
+def sse_events(text: str) -> list[tuple[str, str]]:
+    """Parse an SSE body into ``(event name, data)`` pairs."""
+    events: list[tuple[str, str]] = []
+    event_name = "message"
+    data_lines: list[str] = []
+    for raw in text.splitlines():
+        line = raw.rstrip("\r")
+        if line.startswith("event:"):
+            event_name = line[len("event:"):].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line[len("data:"):].lstrip())
+        elif line == "":
+            if data_lines:
+                events.append((event_name, "\n".join(data_lines)))
+                data_lines = []
+                event_name = "message"
+    if data_lines:
+        events.append((event_name, "\n".join(data_lines)))
+    return events
+
+
+def _message_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(part["text"] for part in content
+                       if isinstance(part, dict) and isinstance(part.get("text"), str))
+    return ""
+
+
+def _is_ai_message(message) -> bool:
+    if not isinstance(message, dict):
+        return False
+    return str(message.get("type", "")).lower() in ("ai", "aimessage", "aimessagechunk", "assistant")
+
+
+def evaluate_stream(text: str) -> dict:
+    """Decide from an SSE body whether an AI answer was streamed and whether it errored."""
+    has_answer = False
+    has_error = False
+    for event_name, data in sse_events(text):
+        normalized = event_name.lower()
+        if normalized == "error":
+            has_error = True
+        try:
+            payload = json.loads(data)
+        except (json.JSONDecodeError, ValueError):
+            payload = None
+        if isinstance(payload, dict) and str(payload.get("type", "")).lower() == "error":
+            has_error = True
+        if normalized in ("messages", "messages-tuple"):
+            candidates = payload if isinstance(payload, list) else [payload]
+            for candidate in candidates:
+                if _is_ai_message(candidate) and _message_text(candidate.get("content")).strip():
+                    has_answer = True
+        if normalized == "values" and isinstance(payload, dict):
+            values = payload.get("values") if isinstance(payload.get("values"), dict) else {}
+            for message in values.get("messages") or []:
+                if _is_ai_message(message) and _message_text(message.get("content")).strip():
+                    has_answer = True
+    return {"hasAnswer": has_answer, "hasError": has_error}
+
+
+def model_name(models_payload) -> str | None:
+    """First executable model name from ``GET /api/models``."""
+    models = models_payload.get("models") if isinstance(models_payload, dict) else None
+    if not isinstance(models, list):
+        return None
+    for entry in models:
+        if isinstance(entry, dict) and entry.get("name"):
+            return str(entry["name"])
+    return None
+
+
 def validate_scope(worktree: Path, gateway_port: int, frontend_port: int, data_root: Path,
                    main_service_root: Path, allow_slot: bool) -> None:
     """Without the regression switch the main service is fixed to 18018/33018 and its data dir."""
@@ -166,6 +281,18 @@ def http_json(url: str, timeout: float = 3.0) -> tuple[int, object]:
         return 0, None
 
 
+def http_json_post(url: str, body: object, timeout: float = 10.0) -> tuple[int, object]:
+    request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, json.loads(response.read().decode("utf-8", "replace") or "null")
+    except urllib.error.HTTPError as error:
+        return error.code, None
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+        return 0, None
+
+
 def http_status(url: str, timeout: float = 3.0) -> int:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
@@ -174,6 +301,24 @@ def http_status(url: str, timeout: float = 3.0) -> int:
         return error.code
     except (urllib.error.URLError, TimeoutError, OSError):
         return 0
+
+
+def frontend_ready(frontend_url: str) -> bool:
+    home = http_status(frontend_url)
+    proxy = http_status(f"{frontend_url}/api/v1/auth/me")
+    return 200 <= home < 400 and proxy == 200
+
+
+def wait_for_frontend(frontend_url: str, timeout: int,
+                      process: subprocess.Popen | None = None) -> tuple[bool, float]:
+    started = time.monotonic()
+    while time.monotonic() - started < timeout:
+        if process is not None and process.poll() is not None:
+            return False, time.monotonic() - started
+        if frontend_ready(frontend_url):
+            return True, time.monotonic() - started
+        time.sleep(0.5)
+    return False, time.monotonic() - started
 
 
 def gateway_ready(base: str) -> bool:
@@ -209,6 +354,15 @@ def git_output(repo: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def tree_of(repo: Path, revision: str) -> str | None:
+    """``<revision>^{tree}`` in ``repo``, or None when the revision cannot be resolved."""
+    result = subprocess.run(["git", "-C", str(repo), "rev-parse", f"{revision}^{{tree}}"],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
 def java_executable() -> str:
     return shutil.which("java") or "java"
 
@@ -237,6 +391,10 @@ def write_service_record(main_service_root: Path, active: dict, previous: dict |
         json.dumps({"active": active, "previous": previous}, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def creation_flags() -> int:
+    return subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+
+
 def start_gateway(jar: Path, worktree: Path, data_root: Path, gateway_port: int, frontend_port: int,
                   log_dir: Path, stamp: str) -> tuple[subprocess.Popen, list[str]]:
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -261,7 +419,20 @@ def start_gateway(jar: Path, worktree: Path, data_root: Path, gateway_port: int,
     handle_out = out.open("w", encoding="utf-8")
     handle_err = err.open("w", encoding="utf-8")
     process = subprocess.Popen([java_executable(), "-jar", str(jar)], cwd=str(worktree),
-                               stdout=handle_out, stderr=handle_err, env=environment)
+                               stdout=handle_out, stderr=handle_err, env=environment,
+                               stdin=subprocess.DEVNULL, creationflags=creation_flags())
+    return process, [str(out), str(err)]
+
+
+def start_frontend(command: list[str], worktree: Path, log_dir: Path,
+                   stamp: str) -> tuple[subprocess.Popen, list[str]]:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    out = log_dir / f"frontend-{stamp}.out.log"
+    err = log_dir / f"frontend-{stamp}.err.log"
+    handle_out = out.open("w", encoding="utf-8")
+    handle_err = err.open("w", encoding="utf-8")
+    process = subprocess.Popen(command, cwd=str(worktree), stdout=handle_out, stderr=handle_err,
+                               stdin=subprocess.DEVNULL, creationflags=creation_flags())
     return process, [str(out), str(err)]
 
 
@@ -334,24 +505,23 @@ def status_impl(gateway_port: int, frontend_port: int, gateway_only: bool) -> di
 # ---------------------------------------------------------------------------
 
 def live_smoke(gateway_url: str, timeout: float = 120.0) -> dict:
-    """One shortest real conversation Run against the configured managed model."""
+    """One shortest real conversation Run against the first executable managed model."""
     started = time.monotonic()
-    status, thread = http_json(f"{gateway_url}/api/threads", timeout=10)
+    models_status, models = http_json(f"{gateway_url}/api/models", timeout=10)
+    model = model_name(models) if models_status == 200 else None
+    if not model:
+        return {"status": "FAIL", "reason": "没有可执行模型",
+                "elapsedMs": int((time.monotonic() - started) * 1000)}
+    status, thread = http_json_post(f"{gateway_url}/api/threads", {}, timeout=10)
     if status != 200 or not isinstance(thread, dict) or not thread.get("thread_id"):
-        return {"status": "FAIL", "reason": f"thread create status={status}", "elapsedMs": 0}
+        return {"status": "FAIL", "model": model, "reason": f"thread create status={status}",
+                "elapsedMs": int((time.monotonic() - started) * 1000)}
     thread_id = thread["thread_id"]
-    model = None
-    models_status, models = http_json(f"{gateway_url}/api/managed-models", timeout=10)
-    if models_status == 200 and isinstance(models, dict):
-        entries = models.get("models") or []
-        if isinstance(entries, list) and entries:
-            first = entries[0]
-            model = first.get("name") if isinstance(first, dict) else None
     payload = {
         "assistant_id": "lead_agent",
         "input": {"messages": [{"type": "human", "content": [{"type": "text", "text": "Reply with the single word: pong"}],
                                 "additional_kwargs": {}}]},
-        "context": {"model_name": model} if model else {},
+        "context": {"model_name": model},
         "stream_mode": ["messages-tuple", "updates", "custom"],
         "on_disconnect": "continue",
     }
@@ -363,19 +533,22 @@ def live_smoke(gateway_url: str, timeout: float = 120.0) -> dict:
             run_location = response.headers.get("content-location") or ""
             body = response.read().decode("utf-8", "replace")
     except (urllib.error.URLError, TimeoutError, OSError) as error:
-        return {"status": "FAIL", "reason": f"run stream failed: {error}", "elapsedMs": int((time.monotonic() - started) * 1000)}
+        return {"status": "FAIL", "model": model, "threadId": thread_id,
+                "reason": f"run stream failed: {error}",
+                "elapsedMs": int((time.monotonic() - started) * 1000)}
     match = re.search(r"/runs/([^/?]+)", run_location)
     run_id = match.group(1) if match else None
-    has_error = bool(re.search(r"(?m)^event:\s*error\b", body)) or '"type": "error"' in body
-    answered = bool(body.strip())
+    outcome = evaluate_stream(body)
+    token_status, token_usage = http_json(f"{gateway_url}/api/threads/{thread_id}/token-usage", timeout=10)
     return {
-        "status": "PASS" if answered and not has_error else "FAIL",
+        "status": "PASS" if outcome["hasAnswer"] and not outcome["hasError"] else "FAIL",
         "model": model,
         "threadId": thread_id,
         "runId": run_id,
         "elapsedMs": int((time.monotonic() - started) * 1000),
-        "hasErrorFrame": has_error,
-        "bytes": len(body),
+        "hasAnswer": outcome["hasAnswer"],
+        "hasError": outcome["hasError"],
+        "tokenUsage": token_usage if token_status == 200 else None,
     }
 
 
@@ -385,7 +558,6 @@ def refresh_impl(args) -> tuple[int, dict]:
     main_service_root = args.main_service_root.resolve()
     validate_scope(worktree, args.gateway_port, args.frontend_port, data_root, main_service_root, args.allow_slot)
     gateway_url = f"http://127.0.0.1:{args.gateway_port}"
-    frontend_url = f"http://127.0.0.1:{args.frontend_port}"
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     log_dir = main_service_root / "logs"
     steps: list[dict] = []
@@ -394,13 +566,22 @@ def refresh_impl(args) -> tuple[int, dict]:
         steps.append({"name": name, "status": "PASS" if ok else "FAIL", "detail": detail, "elapsedMs": elapsed_ms})
 
     jar = args.jar.resolve()
-    # 1. build stamp
+    # 1. build stamp: same commit, or both commits resolve to the same tree in --worktree
     started = time.monotonic()
     recorded = stamp_source_sha(jar)
+    recorded_tree = None
+    expected_tree = None
     if recorded != args.expect_sha:
-        step("build-stamp", False, f"stamp sourceSha={recorded} expected={args.expect_sha}", 0)
-        return 1, {"status": "FAIL", "sourceSha": args.expect_sha, "reason": "build stamp mismatch", "steps": steps}
-    step("build-stamp", True, f"sourceSha={recorded}", int((time.monotonic() - started) * 1000))
+        recorded_tree = tree_of(worktree, recorded)
+        expected_tree = tree_of(worktree, args.expect_sha)
+    matched, tree_match = stamps_match(recorded, args.expect_sha, recorded_tree, expected_tree)
+    if not matched:
+        step("build-stamp", False,
+             f"stamp sourceSha={recorded} expected={args.expect_sha} treeMatch={tree_match}", 0)
+        return 1, {"status": "FAIL", "sourceSha": args.expect_sha, "stampSourceSha": recorded,
+                   "treeMatch": tree_match, "reason": "build stamp mismatch", "steps": steps}
+    step("build-stamp", True, f"sourceSha={recorded} treeMatch={tree_match}",
+         int((time.monotonic() - started) * 1000))
 
     short = args.expect_sha[:8]
     # 2. copy the JAR
@@ -416,18 +597,29 @@ def refresh_impl(args) -> tuple[int, dict]:
     # 3. stop only the exact main-service processes
     started = time.monotonic()
     old_pids: list[int] = []
+    old_jars: list[str] = []
     for port in (args.gateway_port,):
         for pid in listeners(port):
             command = process_command_line(pid)
             if looks_like_main_service(command):
                 old_pids.append(pid)
+                old_jar = jar_from_command_line(command)
+                if old_jar:
+                    old_jars.append(old_jar)
             else:
                 step("stop-old", False, f"port {port} is held by foreign PID {pid}: {command}", 0)
                 return 1, {"status": "FAIL", "sourceSha": args.expect_sha, "reason": "foreign listener",
                            "foreignPid": pid, "steps": steps}
     for pid in sorted(set(old_pids)):
         stop_pid(pid)
-    step("stop-old", True, f"stopped pids={sorted(set(old_pids))}", int((time.monotonic() - started) * 1000))
+    # With no usable service.json ``active``, keep the stopped process's JAR as the rollback
+    # target so the first real refresh can still fall back.
+    if not (previous and previous.get("jar")):
+        fallback_jar = next((old_jar for old_jar in old_jars if Path(old_jar).is_file()), None)
+        if fallback_jar:
+            previous = {"jar": fallback_jar, "sha": None, "short": None, "sha256": None, "length": None}
+    step("stop-old", True, f"stopped pids={sorted(set(old_pids))} previous={previous.get('jar') if previous else None}",
+         int((time.monotonic() - started) * 1000))
 
     # 4. ports must actually bind again
     started = time.monotonic()
@@ -445,14 +637,48 @@ def refresh_impl(args) -> tuple[int, dict]:
          int((time.monotonic() - started) * 1000))
 
     new_pid = process.pid if ready else None
-    if ready:
-        write_service_record(main_service_root, active, previous)
-    else:
+    if not ready:
         stop_pid(process.pid)
 
+    # 6. frontend, smoke and live-smoke. A ready Gateway whose later checks fail is still a
+    # failure but is neither rolled back nor stopped.
+    if args.gateway_only:
+        frontend: object = "NOT_RUN"
+    elif ready:
+        frontend = _frontend_result(args, worktree, gateway_url, log_dir, stamp)
+    else:
+        frontend = {"status": "NOT_RUN", "reason": "gateway not ready"}
+    smoke = status_impl(args.gateway_port, args.frontend_port, args.gateway_only) if ready else None
+    if not args.live_smoke:
+        live = {"status": "NOT_RUN"}
+    elif ready:
+        live = live_smoke(gateway_url)
+    else:
+        live = {"status": "FAIL"}
+
+    failures: list[str] = []
+    if not ready:
+        failures.append("gateway")
+    if not (isinstance(smoke, dict) and smoke.get("ok")):
+        failures.append("smoke")
+    if isinstance(frontend, dict) and frontend.get("status") == "FAIL":
+        failures.append("frontend")
+    if live.get("status") == "FAIL":
+        failures.append("live-smoke")
+    overall = "PASS" if not failures else "FAIL"
+
+    if ready:
+        active["frontendRoot"] = str(args.frontend_root.resolve()) if args.frontend_root else None
+        active["frontendTree"] = frontend.get("tree") if isinstance(frontend, dict) else None
+        write_service_record(main_service_root, active, previous)
+
     summary = {
-        "status": "PASS" if ready else "FAIL",
+        "status": overall,
+        "failedChecks": failures,
         "sourceSha": args.expect_sha,
+        "stampSourceSha": recorded,
+        "expectSha": args.expect_sha,
+        "treeMatch": tree_match,
         "jarSha256": jar_sha,
         "jarLength": active["length"],
         "installedJar": str(installed),
@@ -462,12 +688,12 @@ def refresh_impl(args) -> tuple[int, dict]:
         "gatewayPid": process.pid,
         "steps": steps,
         "logs": logs,
-        "frontend": "NOT_RUN" if args.gateway_only else _frontend_result(args, worktree, gateway_url),
-        "smoke": status_impl(args.gateway_port, args.frontend_port, args.gateway_only) if ready else None,
-        "liveSmoke": {"status": "NOT_RUN"} if not args.live_smoke else (live_smoke(gateway_url) if ready else {"status": "FAIL"}),
+        "frontend": frontend,
+        "smoke": smoke,
+        "liveSmoke": live,
     }
 
-    # 6. rollback when the new Gateway never became ready
+    # 7. rollback only when the new Gateway never became ready
     if not ready:
         previous_jar = Path(previous["jar"]) if previous and previous.get("jar") else None
         decision = rollback_decision(False, bool(previous_jar and previous_jar.is_file()))
@@ -482,7 +708,7 @@ def refresh_impl(args) -> tuple[int, dict]:
     summary["elapsedMs"] = sum(s["elapsedMs"] for s in steps)
     summary["summaryPath"] = str(summary_path)
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
-    return (0 if ready else 1), summary
+    return (0 if overall == "PASS" else 1), summary
 
 
 def _sha256(path: Path) -> str:
@@ -493,19 +719,44 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _frontend_result(args, worktree: Path, gateway_url: str) -> dict:
-    if not args.frontend_root:
-        return {"status": "NOT_RUN", "reason": "no --frontend-root"}
-    frontend_root = args.frontend_root.resolve()
-    expected_tree = git_output(worktree, "rev-parse", f"{args.expect_sha}:frontend")
-    actual_tree = git_output(frontend_root, "rev-parse", "HEAD:frontend")
-    healthy = http_status(f"http://127.0.0.1:{args.frontend_port}") in range(200, 400)
-    if actual_tree != expected_tree:
+def _frontend_result(args, worktree: Path, gateway_url: str, log_dir: Path, stamp: str) -> dict:
+    frontend_root = args.frontend_root.resolve() if args.frontend_root else None
+    expected_tree = tree_of(worktree, f"{args.expect_sha}:frontend") if frontend_root else None
+    actual_tree = tree_of(frontend_root, "HEAD:frontend") if frontend_root else None
+    tree_match = bool(expected_tree and actual_tree and expected_tree == actual_tree)
+    frontend_url = f"http://127.0.0.1:{args.frontend_port}"
+    healthy = http_status(frontend_url) in range(200, 400)
+    busy = bool(listeners(args.frontend_port))
+    decision = frontend_decision(tree_match, healthy, busy, frontend_root is not None)
+
+    if decision == "REUSED":
+        return {"status": "REUSED", "tree": actual_tree, "frontendRoot": str(frontend_root)}
+    if decision == "FAIL_TREE":
         return {"status": "FAIL", "reason": "frontend tree does not match the expected commit",
                 "expectedTree": expected_tree, "actualTree": actual_tree}
-    if healthy:
-        return {"status": "REUSED", "tree": actual_tree}
-    return {"status": "FAIL", "reason": "frontend is not healthy and automatic restart was not attempted"}
+    if decision == "FAIL_FOREIGN":
+        foreign = [{"pid": pid, "commandLine": process_command_line(pid)}
+                   for pid in listeners(args.frontend_port)]
+        return {"status": "FAIL", "reason": "frontend port is held by another process",
+                "frontendRoot": str(frontend_root), "listeners": foreign}
+    if decision == "FAIL_NO_ROOT":
+        return {"status": "FAIL", "reason": "frontend is not healthy; --frontend-root is required"}
+
+    launcher = frontend_root / "scripts/frontend/start-haifa-frontend.ps1"
+    if not launcher.is_file():
+        return {"status": "FAIL", "reason": f"frontend launcher is missing: {launcher}",
+                "frontendRoot": str(frontend_root)}
+    source_repository = args.source_repository or (worktree / "deer-flow")
+    command = frontend_start_args(launcher, frontend_root, source_repository, args.data_root,
+                                  gateway_url, args.frontend_port)
+    process, logs = start_frontend(command, worktree, log_dir, stamp)
+    ready, elapsed = wait_for_frontend(frontend_url, args.ready_timeout_seconds, process)
+    if not ready:
+        stop_pid(process.pid)
+        return {"status": "FAIL", "reason": "frontend did not become ready", "frontendRoot": str(frontend_root),
+                "logs": logs, "elapsedMs": int(elapsed * 1000)}
+    return {"status": "STARTED", "tree": actual_tree, "frontendRoot": str(frontend_root),
+            "frontendPid": process.pid, "logs": logs, "elapsedMs": int(elapsed * 1000)}
 
 
 def _start_previous(previous_jar: Path, worktree: Path, data_root: Path, args, log_dir: Path,
@@ -539,6 +790,7 @@ def main(argv: list[str] | None = None) -> int:
     refresh.add_argument("--data-root", required=True, type=Path)
     refresh.add_argument("--main-service-root", required=True, type=Path)
     refresh.add_argument("--frontend-root", type=Path)
+    refresh.add_argument("--source-repository", type=Path)
     refresh.add_argument("--live-smoke", action="store_true")
     refresh.add_argument("--gateway-only", action="store_true")
     refresh.add_argument("--ready-timeout-seconds", type=int, default=READY_TIMEOUT_SECONDS)
