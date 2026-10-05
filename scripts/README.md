@@ -86,9 +86,33 @@
 | 文件 | 用途 |
 | --- | --- |
 | `audit-work-package-delivery.ps1` | SHPM 与实际交付/worktree 审计 |
+| `audit_disconnected_branches.py` | 用相同文件树连接新旧历史，批量核对旧分支内容并导出未确认差异 |
 | `change_scope.py` | 按 main 以来的改动给出所需门禁（Python） |
 | `shpm_dispatch.py` | 一次性完成 task create、sprint link、task start、assign create |
 | `shpm_record_gates.py` | 从门禁摘要 JSON 与 UI 证据目录登记结果 |
+
+历史更换后的旧分支内容审计（只读 Git，不调用模型、不删除分支）：
+
+```powershell
+python scripts/governance/audit_disconnected_branches.py `
+  --inventory local-tmp/governance/reviews/worktree-release-20261004/recommendations.json `
+  --old-main 9111e66edab07fedc7301b83421b60b7d969391f `
+  --bridge c112012e147cc11daec891af3d602aeefcdff1de `
+  --output local-tmp/governance/reviews/disconnected-content-<新批次名>
+```
+
+`--old-main` 是历史更换前的主线，`--bridge` 是更换后具有相同完整文件树的提交；脚本验证树相等、
+桥接点属于当前 `main`、仓库不是浅克隆。清单只选择 `history_relation=UNRELATED_HISTORY` 的条目，
+每个 worktree 的路径、HEAD、分支和 dirty/untracked 状态会重新读取。输出目录必须不存在，每个 Git
+子进程默认限时 60 秒，进度打印为 JSON。
+
+`HISTORY_CONFIRMED` 证明旧提交经祖先关系和相同文件树进入过主线；`CONTENT_ACCOUNTED_FOR` 证明净变更有
+精确文件内容/模式或完整变更记录证据；`REVIEW_REQUIRED` 保留无法确认的文件。内容相似、同名文件、
+其他路径同 blob、历史曾出现某 blob 或忽略空白的 patch-id 均不能单独判定通过。完整记录在 `audit.json`，
+中文摘要在 `README.md`，未确认的分支净变更及其与当前主线的差异在 `branches/<worktree>/`。
+每次完整运行还生成 `history-index.json`；之后可加 `--history-cache <该文件>` 复用主线历史索引，
+仅在旧主线和当前主线 SHA 完全相同时允许复用，每个 worktree 的引用和工作树状态仍重新读取。
+历史已进入主线不等于当前行为验收；未跟踪/忽略文件和嵌套仓库仍须单独处理。本脚本不授权删除，也不修改 SHPM。
 
 ### `lib/` — 共用函数（由入口脚本加载）
 

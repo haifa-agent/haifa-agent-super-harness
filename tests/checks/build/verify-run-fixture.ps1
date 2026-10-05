@@ -183,4 +183,34 @@ Check 'different-creation-preserves-real-live-process-as-reused-pid' {
         $fixture.Cleanup | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $EvidenceDirectory 'identity-reused-cleanup.json')
     } finally { if (-not $control.Process.HasExited) { $control.Process.Kill(); $control.Process.WaitForExit() }; $control.Process.Dispose() }
 }
+Check 'bulk-snapshot-releases-seventeen-exiting-children-under-five-seconds' {
+    $controls = [Collections.Generic.List[object]]::new()
+    try {
+        for ($i = 0; $i -lt 17; $i++) { $controls.Add((New-IdentityControlChild "bulk-$i" 2500)) }
+        $ownedFacts = @($controls | ForEach-Object { $_.Fact })
+        # Bounded, object-specific wait for every registered child to actually exit, so the
+        # release assertion measures the bulk observation path rather than startup churn.
+        $exitWatch = [Diagnostics.Stopwatch]::StartNew()
+        do {
+            $alive = @($controls | Where-Object { $_.Process.Refresh(); -not $_.Process.HasExited })
+            if ($alive.Count) { Start-Sleep -Milliseconds 25 }
+        } while ($alive.Count -and $exitWatch.Elapsed.TotalSeconds -lt 15)
+        if ($alive.Count) { throw 'Bulk snapshot control children did not exit within 15s' }
+        $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+        $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop()
+        $started = [Diagnostics.Stopwatch]::GetTimestamp()
+        $facts = @(Wait-FixturePortsReleased -Ports @($port) -Started $started -TimeoutSec 10 -OwnedFacts $ownedFacts)
+        $elapsedMs = [Diagnostics.Stopwatch]::GetElapsedTime($started).TotalMilliseconds
+        if ($elapsedMs -ge 5000) { throw "Bulk snapshot release waited ${elapsedMs}ms for 17 tracked children (expected <5000ms)" }
+        if (@($facts).Count -ne 1 -or -not $facts[0].released) { throw 'Bulk snapshot did not report the port released' }
+        [pscustomobject]@{ tracked = $ownedFacts.Count; elapsedMs = [math]::Round($elapsedMs, 1); released = [bool]$facts[0].released } |
+            ConvertTo-Json | Set-Content (Join-Path $EvidenceDirectory 'bulk-snapshot-release.json')
+    } finally {
+        foreach ($control in $controls) {
+            $control.Process.Refresh()
+            if (-not $control.Process.HasExited) { $control.Process.Kill(); $control.Process.WaitForExit() }
+            $control.Process.Dispose()
+        }
+    }
+}
 ConvertTo-Json -InputObject $results.ToArray() | Set-Content (Join-Path $EvidenceDirectory 'verification-results.json')

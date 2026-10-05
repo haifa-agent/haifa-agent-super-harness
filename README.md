@@ -34,6 +34,12 @@ Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业�
 - **子智能体（Parent/Child）**：`GET/POST /api/subagents`、`PUT/DELETE /api/subagents/{name}` 管理目录定义；
   生产 Run 在 `context.subagent_enabled=true` 时声明 SDK Child 与 `task`。容量、超时、深度与终止由 SDK 拥有，
   子任务步骤通过公开 `RunMessage*` API 投影。
+- **Run 预算与限制**：主对话 Run 的结构限制对齐冻结 DeerFlow 默认值（`config.example.yaml` 的
+  `recursion_limit: 100`、`max_recursion_limit: 1000`、`token_budget.enabled: false`）：迭代 100 轮、
+  模型调用 100 次、工具调用 1000 次、墙钟基数 3600000 毫秒（委托开启时按现有算法叠加「子 Run 总数 × 子 Run
+  最大超时」）、空闲超时 600000 毫秒；输入、输出、缓存输入 token 与费用预算不限（SDK `QuotaMode.DISABLED`）。
+  已知差异：冻结 DeerFlow 有循环检测（同一调用重复 5 次或单个工具累计 50 次强制收尾），Super Harness 目前
+  没有，失控的 Run 会运行到 100 轮迭代上限。
 - **Skill 平台**：从 `third-party/deerflow/skills/manifest.json` 读取冻结 Skill 资源；`GET /api/skills`、
   `GET/PUT /api/skills/{name}`、`POST /api/skills/reload` 管理启停，用户包通过 `/api/skills/install/upload`
   或 `/api/skills/install` 安装。带脚本包启用前须获得安全审查结果；静态 `review_skill_package` 只读且不执行目标。
@@ -63,6 +69,11 @@ Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业�
 - `docs/`：稳定的开发与使用手册。
 - `contracts/`、`third-party/`、`resources/`、`frontend/`、`deer-flow/`：冻结协议、资源、前端与来源校验。
 - `private-docs/`：提示词、roadmap、评审与交付报告，正文不在本 README 展开。
+
+旧 worktree 分支与 `main` 历史不连通时，可用
+`python scripts/governance/audit_disconnected_branches.py` 批量核对内容：先验证新旧主线的完整文件树桥接，
+再检查祖先关系、精确文件变更和内容/模式，输出已确认项与待核对差异。脚本只读 Git，不调用模型或删除分支；
+参数、判定边界和复现命令见 [脚本目录的治理说明](scripts/README.md#governance--shpm-治理与门禁建议)。
 
 ## 构建与验证
 
@@ -206,5 +217,6 @@ pwsh -NoProfile -File scripts/governance/audit-work-package-delivery.ps1
 - [scripts/README.md](scripts/README.md)、[tests/README.md](tests/README.md)
 - [W08 委托兼容手册](docs/w08-delegation-transcript.md)
 - [验收 .cjs 脚本功能与运行说明](docs/engineering/001-cjs-scripts.md)
+- [功能交付流程（纯产品与跨 SDK 协同）](docs/engineering/002-feature-delivery-workflows.md)：最终门禁前 rebase，按改动范围和 Oracle 验收；SDK 切回基线后重新构建并回归，再由主控合入与结算。
 - [验收交接模板](docs/acceptance-handoff-template.md)
 - [SDK 消费记录](docs/todo.md)

@@ -538,13 +538,13 @@ public final class HaifaRunBridge implements AutoCloseable {
 
     public record StartedRun(AgentRunId runId, SessionState session) {}
 
-    private static ProductProfile profile(
+    static ProductProfile profile(
             ResolvedModelSnapshot snapshot,
             String instructions,
             Set<String> allowedTools,
             Set<String> allowedSkills,
             SubagentRunConfiguration delegation) {
-        long wall = 120_000;
+        long wall = 3_600_000;
         if (delegation.enabled()) {
             long childWall = delegation.children().stream().mapToLong(SubagentRunConfiguration.Child::timeoutMillis).max().orElseThrow();
             // Directory seconds are positive int values; total is clamped to 50. Reject any
@@ -563,9 +563,11 @@ public final class HaifaRunBridge implements AutoCloseable {
                 new AgentDefinitionVersion(1, 0, 0),
                 instructions,
                 new ProductRunProfileRef(snapshot.modelId().value(), "1.0.0"),
-                new AgentRunBudget(0, 8_192, 65_536, 16, 16, delegation.enabled() ? delegation.settings().total() : 0, "USD", 100),
-                new AgentRunLimits(16, delegation.enabled() ? 1 : 0, delegation.enabled() ? delegation.settings().parallel() : 1, wall,
-                        60_000, 16, 16, delegation.enabled() ? delegation.settings().total() : 0),
+                // DeerFlow's default token/cost budget is disabled; only the structural
+                // AgentRunLimits below constrain iterations, model calls and tool calls.
+                new AgentRunBudget(0, 0, 0, 0, 0, delegation.enabled() ? delegation.settings().total() : 0, "USD", 0),
+                new AgentRunLimits(100, delegation.enabled() ? 1 : 0, delegation.enabled() ? delegation.settings().parallel() : 1, wall,
+                        600_000, 100, 1000, delegation.enabled() ? delegation.settings().total() : 0),
                 allowedTools,
                 allowedSkills).withAllowedChildAgents(delegation.names());
     }
