@@ -34,6 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+import quick_checks  # noqa: E402  (path added above)
 import source_fingerprint  # noqa: E402  (path added above)
 
 STALE_OLD_EVIDENCE = "证据早于内容判定"
@@ -178,6 +179,7 @@ def evaluate(evidence: dict, target: dict) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    quick_checks.force_utf8_stdout()
     parser = argparse.ArgumentParser(description="Decide whether gate evidence can be reused")
     parser.add_argument("results", nargs="*", type=Path)
     parser.add_argument("--target")

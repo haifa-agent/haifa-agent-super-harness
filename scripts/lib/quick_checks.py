@@ -29,6 +29,17 @@ SECRET_PATTERNS = {
 }
 
 
+def force_utf8_stdout() -> None:
+    """Force stdout to UTF-8 so JSON with Chinese text is valid when redirected on Windows.
+
+    Without this, a redirected stdout uses the system code page (for example GBK), so Chinese
+    ``ensure_ascii=False`` output is written with bytes that are not valid UTF-8.
+    """
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8")
+
+
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", str(repo), *args],

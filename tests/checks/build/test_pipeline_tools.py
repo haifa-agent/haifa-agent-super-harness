@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import io
 import json
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -588,6 +591,34 @@ class SdkApiDigestTest(unittest.TestCase):
     def git(self, repo, *args):
         subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
+    @classmethod
+    def setUpClass(cls):
+        # Every test needs the same fixture JAR, and a fresh javac/jar JVM pair costs more than
+        # the rest of each test. Build the bytes once for the whole class and copy them per test.
+        template = Path(tempfile.mkdtemp())
+        try:
+            sources = template / "src/fixture"
+            sources.mkdir(parents=True)
+            (sources / "Sample.java").write_text(
+                "package fixture;\npublic record Sample(int a, String b) {}\n", encoding="utf-8")
+            (sources / "Widget.java").write_text(
+                "package fixture;\npublic class Widget {\n"
+                "    public void visible() {}\n    protected void guarded() {}\n    void hidden() {}\n"
+                "    public static class Nested { public int n; }\n"
+                "    public static Runnable anonymous() { return new Runnable() { public void run() {} }; }\n}\n",
+                encoding="utf-8")
+            (sources / "Hidden.java").write_text(
+                "package fixture;\nclass Hidden { public void x() {} }\n", encoding="utf-8")
+            classes = template / "classes"
+            classes.mkdir()
+            subprocess.run(["javac", "-d", str(classes), *[str(p) for p in sorted(sources.glob("*.java"))]], check=True)
+            jar = template / "fixture.jar"
+            subprocess.run(["jar", "--create", "--file", str(jar), "-C", str(classes), "."], check=True)
+            cls._fixture_jar_bytes = jar.read_bytes()
+        finally:
+            shutil.rmtree(template, ignore_errors=True)
+        super().setUpClass()
+
     def fixture(self, root):
         worktree = root / "worktree"
         (worktree / "local-tmp").mkdir(parents=True)
@@ -603,24 +634,10 @@ class SdkApiDigestTest(unittest.TestCase):
         bom_dir.mkdir(parents=True)
         (bom_dir / f"haifa-agent-bom-{self.VERSION}.pom").write_text(
             self.BOM.format(version=self.VERSION), encoding="utf-8")
-
-        sources = root / "src/fixture"
-        sources.mkdir(parents=True)
-        (sources / "Sample.java").write_text("package fixture;\npublic record Sample(int a, String b) {}\n", encoding="utf-8")
-        (sources / "Widget.java").write_text(
-            "package fixture;\npublic class Widget {\n"
-            "    public void visible() {}\n    protected void guarded() {}\n    void hidden() {}\n"
-            "    public static class Nested { public int n; }\n"
-            "    public static Runnable anonymous() { return new Runnable() { public void run() {} }; }\n}\n",
-            encoding="utf-8")
-        (sources / "Hidden.java").write_text("package fixture;\nclass Hidden { public void x() {} }\n", encoding="utf-8")
-        classes = root / "classes"
-        classes.mkdir()
-        subprocess.run(["javac", "-d", str(classes), *[str(p) for p in sorted(sources.glob("*.java"))]], check=True)
         jar_dir = maven / "io/haifa/haifa-agent-fixture" / self.VERSION
         jar_dir.mkdir(parents=True)
         self.jar = jar_dir / f"haifa-agent-fixture-{self.VERSION}.jar"
-        subprocess.run(["jar", "--create", "--file", str(self.jar), "-C", str(classes), "."], check=True)
+        self.jar.write_bytes(self._fixture_jar_bytes)
         return worktree, maven
 
     def test_version_resolution_two_cases(self):
@@ -860,23 +877,37 @@ class SourceFingerprintTest(unittest.TestCase):
     BOM = SdkApiDigestTest.BOM
     WORKTREE_POM = SdkApiDigestTest.WORKTREE_POM
 
+    @classmethod
+    def setUpClass(cls):
+        # The seed repository is identical for every test; initialising and committing it once
+        # and copying it per test removes repeated git init/commit from the class.
+        cls._seed_root = Path(tempfile.mkdtemp())
+        seed = cls._seed_root / "worktree"
+        (seed / "local-tmp").mkdir(parents=True)
+        (seed / ".gitignore").write_text("local-tmp/\n", encoding="utf-8")
+        (seed / "pom.xml").write_text(cls.WORKTREE_POM, encoding="utf-8")
+        for relative, text in {
+            "docs/guide.md": "doc", "scripts/tool.py": "print()", "tests/data.txt": "data",
+            "AGENTS.md": "rules", "src/App.java": "class App {}",
+        }.items():
+            (seed / relative).parent.mkdir(parents=True, exist_ok=True)
+            (seed / relative).write_text(text, encoding="utf-8")
+        for command in (["init", "-q"], ["config", "core.autocrlf", "false"], ["add", "-A"],
+                        ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "seed"]):
+            subprocess.run(["git", "-C", str(seed), *command], check=True, capture_output=True)
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls._seed_root, ignore_errors=True)
+        super().tearDownClass()
+
     def git(self, repo, *args):
         subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
     def fixture(self, root):
         worktree = root / "worktree"
-        (worktree / "local-tmp").mkdir(parents=True)
-        (worktree / ".gitignore").write_text("local-tmp/\n", encoding="utf-8")
-        (worktree / "pom.xml").write_text(self.WORKTREE_POM, encoding="utf-8")
-        for relative, text in {
-            "docs/guide.md": "doc", "scripts/tool.py": "print()", "tests/data.txt": "data",
-            "AGENTS.md": "rules", "src/App.java": "class App {}",
-        }.items():
-            (worktree / relative).parent.mkdir(parents=True, exist_ok=True)
-            (worktree / relative).write_text(text, encoding="utf-8")
-        self.git(worktree, "init", "-q")
-        self.git(worktree, "config", "core.autocrlf", "false")
-        self.commit(worktree, "seed")
+        shutil.copytree(self._seed_root / "worktree", worktree)
 
         maven = root / "maven"
         bom_dir = maven / "io/haifa/haifa-agent-bom" / self.VERSION
@@ -987,6 +1018,24 @@ class SourceFingerprintTest(unittest.TestCase):
             findings = source_fingerprint.excluded_references(repo)
             self.assertTrue(any("X.java" in finding for finding in findings), findings)
         self.assertEqual(source_fingerprint.excluded_references(ROOT), [])
+
+
+class ForceUtf8StdoutTest(unittest.TestCase):
+    def test_redirected_stream_is_forced_to_utf8(self):
+        # A redirected stdout defaults to the system code page (for example GBK on Chinese
+        # Windows), which makes ``ensure_ascii=False`` JSON invalid UTF-8. The helper restores
+        # UTF-8 so the bytes decode as UTF-8 again.
+        buffer = io.BytesIO()
+        stream = io.TextIOWrapper(buffer, encoding="cp1252")
+        original = sys.stdout
+        sys.stdout = stream
+        try:
+            quick_checks.force_utf8_stdout()
+            sys.stdout.write("证据早于内容判定")
+            sys.stdout.flush()
+        finally:
+            sys.stdout = original
+        self.assertEqual(buffer.getvalue().decode("utf-8"), "证据早于内容判定")
 
 
 class EvidenceReuseTest(unittest.TestCase):
