@@ -963,6 +963,7 @@ class EvidenceReuseTest(unittest.TestCase):
             self.assertEqual(found.name, "verify-full-20261005-100000-000.json")
             self.assertIsNone(evidence_reuse.find_reusable_summary(root, "missing"))
             self.assertIsNone(evidence_reuse.find_reusable_summary(root, None))
+            self.assertIsNone(evidence_reuse.find_reusable_summary(root / "does-not-exist", "fp"))
 
     def test_full_gate_verdicts(self):
         target = {"sourceTree": "tree", "sdkIdentity": "sdk", "javaInputFingerprint": "fp"}

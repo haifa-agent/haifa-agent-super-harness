@@ -196,9 +196,9 @@ def changed_files(repo: Path, base: str) -> list[str]:
     try:
         merge_base = git(repo, "merge-base", "HEAD", base).strip()
         tracked = git(repo, "diff", "--name-only", merge_base).splitlines()
+        untracked = git(repo, "ls-files", "--others", "--exclude-standard").splitlines()
     except RuntimeError:
-        tracked = []
-    untracked = git(repo, "ls-files", "--others", "--exclude-standard").splitlines()
+        return []
     return sorted({line for line in tracked + untracked if line})
 
 

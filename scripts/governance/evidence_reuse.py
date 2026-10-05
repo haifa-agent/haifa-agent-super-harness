@@ -78,7 +78,7 @@ def parse_summary_start(identity: str | None):
 
 def find_reusable_summary(directory: Path, fingerprint: str | None) -> Path | None:
     """The newest real PASS full-gate summary in ``directory`` with the same fingerprint."""
-    if not fingerprint:
+    if not fingerprint or not directory.is_dir():
         return None
     candidates: list[tuple[datetime.datetime, Path]] = []
     for path in sorted(directory.glob("verify-full-*.json")):
