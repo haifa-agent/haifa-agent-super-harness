@@ -68,7 +68,7 @@ class ChangeScopeTest(unittest.TestCase):
         )
         self.assertEqual(
             change_scope.required_gates(["scripts/lib/x.ps1"]),
-            ["script-regressions", "verify-full-reuse", "ui-warm-round-x1"],
+            ["script-regressions", "verify-full-reuse", "ui-controlled-round-x1"],
         )
         self.assertEqual(
             change_scope.required_gates(["super-harness-server/src/test/java/X.java"]),
@@ -76,12 +76,61 @@ class ChangeScopeTest(unittest.TestCase):
         )
         self.assertEqual(
             change_scope.required_gates(["super-harness-server/src/main/java/X.java", "README.md"]),
-            ["docs-check", "verify-full", "ui-warm-round-x2"],
+            ["docs-check", "verify-full", "ui-live-round-x2"],
         )
         self.assertEqual(
             change_scope.required_gates(["frontend/pnpm-lock.yaml"]),
-            ["verify-full", "ui-cold-round", "ui-warm-round-x2"],
+            ["verify-full", "ui-cold-round", "ui-live-round-x2"],
         )
+
+    def test_any_markdown_is_documentation(self):
+        self.assertEqual(change_scope.classify("scripts/README.md"), "docs")
+        self.assertEqual(change_scope.classify("tests/ui/notes.md"), "docs")
+
+
+class UiModelDecisionTest(unittest.TestCase):
+    def test_controlled_paths(self):
+        controlled = [
+            "docs/guide.md", "README.md", "AGENTS.md", "scripts/tool.py",
+            "tests/checks/build/check.py", "super-harness-server/src/test/java/X.java",
+            "tests/ui/w18-ui-smoke/w05-demo-artifact.spec.cjs",
+            "tests/ui/smoke/loopback-openai-provider.cjs",
+            "docs/engineering/002-feature-delivery-workflows.md",
+            "super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/X.java",
+        ]
+        for path in controlled:
+            self.assertEqual(change_scope.ui_model_decision([path])[0], "controlled", path)
+
+    def test_live_paths(self):
+        cases = {
+            "super-harness-server/src/main/java/io/haifa/agent/superharness/server/run/X.java": "run",
+            "super-harness-server/src/main/java/io/haifa/agent/superharness/server/prompt/X.java": "prompt",
+            "super-harness-server/src/main/java/io/haifa/agent/superharness/server/tool/X.java": "tool",
+            "super-harness-server/src/main/java/io/haifa/agent/superharness/server/config/X.java": "config",
+            "super-harness-server/src/main/resources/application.yml": "resources",
+            "super-harness-events/src/main/java/X.java": "src/main",
+            "pom.xml": "pom.xml",
+            "tests/checks/customer-demo-v2/mcp-servers/pom.xml": "pom.xml",
+            "tests/ui/smoke/live-deepseek.spec.cjs": "live",
+            "scripts/ui/run-live-rounds.ps1": "live",
+            "frontend/app/page.tsx": "表里没有的路径",
+            "brand-new-dir/x.txt": "表里没有的路径",
+        }
+        for path, fragment in cases.items():
+            model, reason = change_scope.ui_model_decision([path])
+            self.assertEqual(model, "live", path)
+            self.assertIn(fragment, reason, path)
+
+    def test_sdk_identity_change_and_empty_change_force_live(self):
+        model, reason = change_scope.ui_model_decision(["docs/x.md"], sdk_identity_changed=True)
+        self.assertEqual(model, "live")
+        self.assertIn("SDK", reason)
+        model, reason = change_scope.ui_model_decision([])
+        self.assertEqual(model, "live")
+
+    def test_one_live_path_overrides_many_controlled_paths(self):
+        model, _ = change_scope.ui_model_decision(["docs/x.md", "scripts/y.py", "pom.xml"])
+        self.assertEqual(model, "live")
 
 
 class SecretScanTest(unittest.TestCase):
