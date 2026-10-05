@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import io.haifa.agent.superharness.server.api.dto.McpCacheResetResponse;
 import io.haifa.agent.superharness.server.config.McpConfigStore;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -65,7 +66,7 @@ final class DeerFlowMcpApi implements HttpHandler {
                 return;
             }
             if (path.equals("/api/mcp/config/cache/reset") && method.equals("POST")) {
-                send(exchange, 200, Map.of("success", true, "message", "MCP tools cache reset"));
+                send(exchange, 200, new McpCacheResetResponse(true, "MCP tools cache reset"));
                 return;
             }
             Matcher server = SERVER_PATH.matcher(path);

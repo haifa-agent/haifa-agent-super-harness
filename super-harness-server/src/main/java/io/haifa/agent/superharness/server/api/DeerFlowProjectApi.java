@@ -5,6 +5,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import io.haifa.agent.superharness.server.api.dto.ProjectConfigResponse;
+import io.haifa.agent.superharness.server.api.dto.ProjectDocumentResponse;
+import io.haifa.agent.superharness.server.api.dto.ProjectDocumentsResponse;
+import io.haifa.agent.superharness.server.api.dto.ProjectDocumentUploadResponse;
+import io.haifa.agent.superharness.server.api.dto.ProjectResponse;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
 import io.haifa.agent.superharness.workspace.ProjectDocument;
 import io.haifa.agent.superharness.workspace.ProjectDocumentContent;
@@ -69,9 +74,8 @@ final class DeerFlowProjectApi implements HttpHandler {
                 if (!requireMethod(exchange, "GET")) {
                     return;
                 }
-                sendJson(exchange, 200, Map.of(
-                        "instructions_max_bytes", PersistentProjectWorkspaceService.PROJECT_INSTRUCTIONS_MAX_BYTES,
-                        "trash_retention_days", 30));
+                sendJson(exchange, 200, new ProjectConfigResponse(
+                        PersistentProjectWorkspaceService.PROJECT_INSTRUCTIONS_MAX_BYTES, 30));
                 return;
             }
             if (path.equals("/api/projects")) {
@@ -204,7 +208,7 @@ final class DeerFlowProjectApi implements HttpHandler {
                 && !status.orElseThrow().equals("archived")) {
             throw new HttpFailure(422, "status must be active or archived");
         }
-        List<Map<String, Object>> values = projects.listProjects(OWNER_ID, status).stream()
+        List<ProjectResponse> values = projects.listProjects(OWNER_ID, status).stream()
                 .map(this::response)
                 .toList();
         sendJson(exchange, 200, Map.of("projects", values));
@@ -245,11 +249,11 @@ final class DeerFlowProjectApi implements HttpHandler {
         List<ProjectDocument> all = projects.listProjectDocuments(OWNER_ID, projectId);
         int from = Math.min(offset, all.size());
         int to = Math.min(all.size(), Math.addExact(from, Math.min(limit, all.size() - from)));
-        sendJson(exchange, 200, Map.of(
-                "documents", all.subList(from, to).stream().map(this::documentResponse).toList(),
-                "total", all.size(),
-                "limit", limit,
-                "offset", offset));
+        sendJson(exchange, 200, new ProjectDocumentsResponse(
+                all.subList(from, to).stream().map(this::documentResponse).toList(),
+                all.size(),
+                limit,
+                offset));
     }
 
     private void uploadDocument(HttpExchange exchange, String projectId) throws IOException {
@@ -277,9 +281,9 @@ final class DeerFlowProjectApi implements HttpHandler {
                 }
                 throw failure;
             }
-            sendJson(exchange, receipt.deduplicated() ? 200 : 201, Map.of(
-                    "document", documentResponse(receipt.document()),
-                    "deduplicated", receipt.deduplicated()));
+            sendJson(exchange, receipt.deduplicated() ? 200 : 201, new ProjectDocumentUploadResponse(
+                    documentResponse(receipt.document()),
+                    receipt.deduplicated()));
         } finally {
             workspace.releaseUploadSlot();
         }
@@ -338,19 +342,19 @@ final class DeerFlowProjectApi implements HttpHandler {
                 .orElseThrow(() -> new HttpFailure(404, "Document not found"));
     }
 
-    private Map<String, Object> documentResponse(ProjectDocument document) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("id", document.id());
-        result.put("name", document.name());
-        result.put("size_bytes", document.sizeBytes());
-        result.put("sha256", document.sha256());
-        result.put("content_missing", false);
-        result.put("source_thread_id", document.sourceThreadId().orElse(null));
-        result.put("source_kind", document.sourceKind() == null ? null : document.sourceKind().name().toLowerCase(Locale.ROOT));
-        result.put("source_name", document.sourceName().orElse(null));
-        result.put("created_at", document.createdAt().toString());
-        result.put("updated_at", document.updatedAt().toString());
-        return result;
+    private ProjectDocumentResponse documentResponse(ProjectDocument document) {
+        return new ProjectDocumentResponse(
+                document.id(),
+                document.name(),
+                document.sizeBytes(),
+                document.sha256(),
+                false,
+                document.sourceThreadId().orElse(null),
+                document.sourceKind() == null ? null : document.sourceKind().name().toLowerCase(Locale.ROOT),
+                document.sourceName().orElse(null),
+                document.createdAt().toString(),
+                document.updatedAt().toString()
+        );
     }
 
     private static ByteSelection selectRange(String header, long total) {
@@ -429,16 +433,15 @@ final class DeerFlowProjectApi implements HttpHandler {
                 || value.equals("application/xml") || value.equals("text/xsl") || value.endsWith("+xml");
     }
 
-    private Map<String, Object> response(ProjectProfile project) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("id", project.id());
-        result.put("name", project.name());
-        result.put("instructions", project.instructions());
-        result.put("presentation", project.presentation());
-        result.put("status", project.status());
-        result.put("created_at", project.createdAt().toString());
-        result.put("updated_at", project.updatedAt().toString());
-        return result;
+    private ProjectResponse response(ProjectProfile project) {
+        return new ProjectResponse(
+                project.id(),
+                project.name(),
+                project.instructions(),
+                project.presentation(),
+                project.status(),
+                project.createdAt().toString(),
+                project.updatedAt().toString());
     }
 
     private JsonNode readObject(HttpExchange exchange) throws IOException {

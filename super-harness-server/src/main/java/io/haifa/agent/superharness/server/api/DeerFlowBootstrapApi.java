@@ -4,8 +4,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
-import com.sun.net.httpserver.HttpServer;
 import io.haifa.agent.auth.localmodel.WindowsCredentialManagerClient;
+import io.haifa.agent.superharness.server.api.dto.AuthMeResponse;
+import io.haifa.agent.superharness.server.api.dto.FeaturesResponse;
+import io.haifa.agent.superharness.server.api.dto.HealthResponse;
+import io.haifa.agent.superharness.server.api.dto.SetupStatusResponse;
+import java.net.InetAddress;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.superharness.server.config.LocalServerConfiguration;
 import io.haifa.agent.superharness.server.config.McpConfigStore;
@@ -73,7 +77,9 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                     "projects:write",
                     "projects:delete");
 
-    private final HttpServer server;
+    private final io.javalin.Javalin javalin;
+    private final String bindHost;
+    private final int bindPort;
     private final ExecutorService executor;
     private final ObjectMapper objectMapper;
     private final DeerFlowThreadRunApi threadRunApi;
@@ -88,7 +94,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final DeerFlowSuggestionsApi suggestionsApi;
 
     private DeerFlowBootstrapApi(
-            HttpServer server,
+            String bindHost,
+            int bindPort,
             ExecutorService executor,
             Path dataDirectory,
             SecretKey continuationKey,
@@ -97,19 +104,25 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             DeerFlowSuggestionsApi.Settings suggestionsSettings,
             SkillConfigStore testSkillStore)
             throws IOException {
-        this(server, executor, dataDirectory, continuationKey, testRunModelResolver, testRunTools,
+        this(bindHost, bindPort, executor, dataDirectory, continuationKey, testRunModelResolver, testRunTools,
                 suggestionsSettings, testSkillStore,
                 io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings.defaults());
     }
 
-    private DeerFlowBootstrapApi(HttpServer server, ExecutorService executor, Path dataDirectory,
+    private DeerFlowBootstrapApi(String bindHost, int bindPort, ExecutorService executor, Path dataDirectory,
             SecretKey continuationKey, Function<JsonNode, HaifaRunBridge.ModelBinding> testRunModelResolver,
             List<? extends JavaTool<?, ?>> testRunTools, DeerFlowSuggestionsApi.Settings suggestionsSettings,
             SkillConfigStore testSkillStore,
             io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings delegationSettings) throws IOException {
-        this.server = server;
+        this.bindHost = bindHost;
+        this.bindPort = bindPort;
         this.executor = executor;
         this.objectMapper = new ObjectMapper();
+        this.javalin = io.javalin.Javalin.create(config -> {
+            config.showJavalinBanner = false;
+            config.useVirtualThreads = true;
+            config.jsonMapper(new io.javalin.json.JavalinJackson(objectMapper, true));
+        });
         this.configurationApi = new DeerFlowConfigurationApi(objectMapper, dataDirectory);
         this.subagentCatalog = new SubagentCatalogStore(objectMapper, dataDirectory);
         McpConfigStore mcpStore = new McpConfigStore(objectMapper, dataDirectory);
@@ -342,12 +355,18 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
             DeerFlowSuggestionsApi.Settings suggestionsSettings,
             io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings delegationSettings) throws IOException {
-        HttpServer server = HttpServer.create(configuration.socketAddress(), 0);
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-        server.setExecutor(executor);
         return new DeerFlowBootstrapApi(
-                server, executor, dataDirectory, continuationKey, runModelResolver, List.of(),
-                suggestionsSettings, null, delegationSettings);
+                configuration.bindAddress().getHostAddress(),
+                configuration.port(),
+                executor,
+                dataDirectory,
+                continuationKey,
+                runModelResolver,
+                List.of(),
+                suggestionsSettings,
+                null,
+                delegationSettings);
     }
 
     public static DeerFlowBootstrapApi createForTests(
@@ -390,11 +409,10 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
             List<? extends JavaTool<?, ?>> tools)
             throws IOException {
-        HttpServer server = HttpServer.create(configuration.socketAddress(), 0);
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-        server.setExecutor(executor);
         return new DeerFlowBootstrapApi(
-                server,
+                configuration.bindAddress().getHostAddress(),
+                configuration.port(),
                 executor,
                 dataDirectory,
                 continuationKey,
@@ -426,12 +444,17 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             List<? extends JavaTool<?, ?>> tools,
             SkillConfigStore skillStore)
             throws IOException {
-        HttpServer server = HttpServer.create(configuration.socketAddress(), 0);
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-        server.setExecutor(executor);
         return new DeerFlowBootstrapApi(
-                server, executor, dataDirectory, continuationKey, runModelResolver, tools,
-                DeerFlowSuggestionsApi.Settings.defaults(), skillStore);
+                configuration.bindAddress().getHostAddress(),
+                configuration.port(),
+                executor,
+                dataDirectory,
+                continuationKey,
+                runModelResolver,
+                tools,
+                DeerFlowSuggestionsApi.Settings.defaults(),
+                skillStore);
     }
 
     private static SecretKey continuationKey(Map<String, String> environment, Path dataDirectory) {
@@ -540,11 +563,15 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     }
 
     public void start() {
-        server.start();
+        javalin.start(bindHost, bindPort);
     }
 
     public InetSocketAddress address() {
-        return server.getAddress();
+        try {
+            return new InetSocketAddress(InetAddress.getByName(bindHost), javalin.port());
+        } catch (Exception e) {
+            return new InetSocketAddress(bindHost, javalin.port());
+        }
     }
 
     public DeerFlowThreadRunApi threadRunApi() {
@@ -574,98 +601,139 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
 
     @Override
     public void close() {
-        server.stop(0);
+        javalin.stop();
         threadRunApi.close();
         executor.close();
     }
 
+    private static final List<io.javalin.http.HandlerType> HTTP_METHODS =
+            java.util.Arrays.stream(io.javalin.http.HandlerType.values())
+                    .filter(io.javalin.http.HandlerType::isHttpMethod)
+                    .toList();
+
     private void registerRoutes() {
-        get("/health", Map.of("status", "ok"));
-        get(
-                "/api/v1/auth/setup-status",
-                orderedMap("needs_setup", false, "registration_enabled", false));
-        get(
-                "/api/v1/auth/me",
-                orderedMap(
-                        "id",
-                        DEFAULT_USER_ID,
-                        "email",
-                        DEFAULT_USER_EMAIL,
-                        "system_role",
-                        DEFAULT_SYSTEM_ROLE,
-                        "needs_setup",
-                        false,
-                        "oauth_provider",
-                        null,
-                        "permissions",
-                        DEFAULT_PERMISSIONS));
-        get(
-                "/api/features",
-                orderedMap(
-                        "agents_api",
-                        Map.of("enabled", true),
-                        "browser_control",
-                        Map.of("enabled", false),
-                        "mcp_tasks",
-                        Map.of("enabled", false),
-                        "subagent_batches",
-                        orderedMap(
-                                "enabled",
-                                false,
-                                "repository_available",
-                                false,
-                                "worker_running",
-                                false,
-                                "max_running",
-                                3),
-                        "conversation_references",
-                        orderedMap("enabled", false, "max_references", 3),
-                        "knowledge_base",
-                        Map.of("scope_selection_enabled", false)));
-        server.createContext("/api/models", configurationApi);
-        server.createContext("/api/managed-models", configurationApi);
-        server.createContext("/api/agents", configurationApi);
-        server.createContext("/api/subagents", new DeerFlowSubagentCatalogApi(objectMapper, subagentCatalog,
-                configurationApi::isConfiguredModel, ignored -> DEFAULT_SYSTEM_ROLE.equals("admin")));
-        server.createContext("/api/mcp", mcpApi);
-        server.createContext("/api/skills", skillsApi);
-        server.createContext(DeerFlowInputPolishApi.PATH, inputPolishApi);
-        server.createContext("/api/suggestions", suggestionsApi);
-        server.createContext("/api/projects", projectApi);
-        server.createContext("/api/trash", trashApi);
-        server.createContext("/api/threads", exchange -> {
-            if (!workspaceApi.tryHandle(exchange) && !suggestionsApi.tryHandle(exchange)) {
-                threadRunApi.handle(exchange);
+        javalin.before(ctx -> {
+            String remoteAddr = ctx.req().getRemoteAddr();
+            try {
+                InetAddress addr = InetAddress.getByName(remoteAddr != null ? remoteAddr : "127.0.0.1");
+                if (!addr.isLoopbackAddress()) {
+                    ctx.status(403)
+                            .contentType("application/json")
+                            .header("Cache-Control", "no-store")
+                            .header("X-Content-Type-Options", "nosniff")
+                            .result(objectMapper.writeValueAsBytes(
+                                    Map.of("detail", "Local profile accepts loopback clients only")));
+                    ctx.skipRemainingHandlers();
+                }
+            } catch (Exception e) {
+                ctx.status(403)
+                        .contentType("application/json")
+                        .header("Cache-Control", "no-store")
+                        .header("X-Content-Type-Options", "nosniff")
+                        .result(objectMapper.writeValueAsBytes(
+                                Map.of("detail", "Local profile accepts loopback clients only")));
+                ctx.skipRemainingHandlers();
             }
         });
-        server.createContext("/", this::notFound);
+
+        registerExactGet("/health", new HealthResponse("ok"));
+        registerExactGet(
+                "/api/v1/auth/setup-status",
+                new SetupStatusResponse(false, false));
+        registerExactGet(
+                "/api/v1/auth/me",
+                new AuthMeResponse(
+                        DEFAULT_USER_ID,
+                        DEFAULT_USER_EMAIL,
+                        DEFAULT_SYSTEM_ROLE,
+                        false,
+                        null,
+                        DEFAULT_PERMISSIONS));
+        registerExactGet("/api/features", FeaturesResponse.defaults());
+
+        bindPrefix("/api/models", configurationApi);
+        bindPrefix("/api/managed-models", configurationApi);
+        bindPrefix("/api/agents", configurationApi);
+        bindPrefix(
+                "/api/subagents",
+                new DeerFlowSubagentCatalogApi(
+                        objectMapper,
+                        subagentCatalog,
+                        configurationApi::isConfiguredModel,
+                        ignored -> DEFAULT_SYSTEM_ROLE.equals("admin")));
+        bindPrefix("/api/mcp", mcpApi);
+        bindPrefix("/api/skills", skillsApi);
+        bindPrefix(DeerFlowInputPolishApi.PATH, inputPolishApi);
+        bindPrefix("/api/suggestions", suggestionsApi);
+        bindPrefix("/api/projects", projectApi);
+        bindPrefix("/api/trash", trashApi);
+        bindPrefix(
+                "/api/threads",
+                exchange -> {
+                    if (!workspaceApi.tryHandle(exchange) && !suggestionsApi.tryHandle(exchange)) {
+                        threadRunApi.handle(exchange);
+                    }
+                });
+
+        javalin.error(404, ctx -> {
+            String contentType = ctx.res().getHeader("Content-Type");
+            boolean hasJson = contentType != null && contentType.startsWith("application/json");
+            if (!ctx.res().isCommitted() && !hasJson) {
+                ctx.status(404)
+                        .contentType("application/json")
+                        .header("Cache-Control", "no-store")
+                        .header("X-Content-Type-Options", "nosniff")
+                        .result(objectMapper.writeValueAsBytes(Map.of("detail", "Not Found")));
+            }
+        });
+
+        javalin.error(405, ctx -> {
+            String contentType = ctx.res().getHeader("Content-Type");
+            boolean hasJson = contentType != null && contentType.startsWith("application/json");
+            if (!ctx.res().isCommitted() && !hasJson) {
+                ctx.status(405)
+                        .header("Allow", "GET")
+                        .contentType("application/json")
+                        .header("Cache-Control", "no-store")
+                        .header("X-Content-Type-Options", "nosniff")
+                        .result(objectMapper.writeValueAsBytes(Map.of("detail", "Method Not Allowed")));
+            }
+        });
     }
 
-    private void get(String path, Object body) {
-        server.createContext(path, exactGet(path, body));
+    private void registerExactGet(String path, Object body) {
+        javalin.get(path, ctx -> {
+            ctx.status(200)
+                    .contentType("application/json")
+                    .header("Cache-Control", "no-store")
+                    .header("X-Content-Type-Options", "nosniff")
+                    .result(objectMapper.writeValueAsBytes(body));
+        });
+        for (io.javalin.http.HandlerType type : HTTP_METHODS) {
+            if (type != io.javalin.http.HandlerType.GET) {
+                javalin.addHttpHandler(type, path, ctx -> {
+                    ctx.status(405)
+                            .header("Allow", "GET")
+                            .contentType("application/json")
+                            .header("Cache-Control", "no-store")
+                            .header("X-Content-Type-Options", "nosniff")
+                            .result(objectMapper.writeValueAsBytes(Map.of("detail", "Method Not Allowed")));
+                });
+            }
+        }
     }
 
-    private HttpHandler exactGet(String path, Object body) {
-        return exchange -> {
-            if (!exchange.getRequestURI().getPath().equals(path)) {
-                notFound(exchange);
-                return;
-            }
-            if (!isLoopbackPeer(exchange)) {
-                send(exchange, 403, Map.of("detail", "Local profile accepts loopback clients only"));
-                return;
-            }
-            if (!exchange.getRequestMethod().equals("GET")) {
-                exchange.getResponseHeaders().set("Allow", "GET");
-                send(exchange, 405, Map.of("detail", "Method Not Allowed"));
-                return;
-            }
-            send(exchange, 200, body);
-        };
+    private void bindPrefix(String prefix, HttpHandler handler) {
+        for (io.javalin.http.HandlerType type : HTTP_METHODS) {
+            javalin.addHttpHandler(type, prefix, ctx -> dispatch(ctx, handler));
+            javalin.addHttpHandler(type, prefix + "/<*subpath>", ctx -> dispatch(ctx, handler));
+        }
     }
 
-    private void notFound(HttpExchange exchange) throws IOException {
-        send(exchange, 404, Map.of("detail", "Not Found"));
+    private void dispatch(io.javalin.http.Context ctx, HttpHandler handler) throws IOException {
+        try (JavalinHttpExchange exchange = new JavalinHttpExchange(ctx)) {
+            handler.handle(exchange);
+        }
     }
 
     static boolean isLoopbackPeer(HttpExchange exchange) {

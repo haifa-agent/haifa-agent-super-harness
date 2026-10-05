@@ -5,6 +5,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import io.haifa.agent.superharness.server.api.dto.ProjectDocumentResponse;
+import io.haifa.agent.superharness.server.api.dto.TrashDocumentResponse;
+import io.haifa.agent.superharness.server.api.dto.TrashListResponse;
+import io.haifa.agent.superharness.server.api.dto.TrashOriginDto;
+import io.haifa.agent.superharness.server.api.dto.TrashPurgeResponse;
+import io.haifa.agent.superharness.server.api.dto.TrashRestoreResponse;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
 import io.haifa.agent.superharness.workspace.ProjectDocument;
 import io.haifa.agent.superharness.workspace.RestoreDocumentResult;
@@ -104,11 +110,11 @@ final class DeerFlowTrashApi implements HttpHandler {
         int limit = queryInt(exchange, "limit", 100, 1, 1000);
         int offset = queryInt(exchange, "offset", 0, 0, Integer.MAX_VALUE);
         TrashDocumentList list = projects.listTrashDocuments(OWNER_ID, limit, offset);
-        sendJson(exchange, 200, Map.of(
-                "documents", list.documents().stream().map(this::trashResponse).toList(),
-                "total", list.total(),
-                "limit", limit,
-                "offset", offset));
+        sendJson(exchange, 200, new TrashListResponse(
+                list.documents().stream().map(this::trashResponse).toList(),
+                list.total(),
+                limit,
+                offset));
     }
 
     private void restoreDocument(HttpExchange exchange, String documentId) throws IOException {
@@ -119,10 +125,7 @@ final class DeerFlowTrashApi implements HttpHandler {
             targetProjectId = nullableText(body, "project_id");
         }
         RestoreDocumentResult result = projects.restoreTrashDocument(OWNER_ID, documentId, targetProjectId);
-        Map<String, Object> response = new LinkedHashMap<>();
-        response.put("outcome", result.outcome());
-        response.put("document", documentResponse(result.document()));
-        sendJson(exchange, 200, response);
+        sendJson(exchange, 200, new TrashRestoreResponse(result.outcome(), documentResponse(result.document())));
     }
 
     private void purgeDocument(HttpExchange exchange, String documentId) throws IOException {
@@ -132,41 +135,41 @@ final class DeerFlowTrashApi implements HttpHandler {
 
     private void emptyTrash(HttpExchange exchange) throws IOException {
         int purged = projects.emptyTrash(OWNER_ID);
-        sendJson(exchange, 200, Map.of("purged", purged));
+        sendJson(exchange, 200, new TrashPurgeResponse(purged));
     }
 
-    private Map<String, Object> trashResponse(TrashDocument doc) {
-        Map<String, Object> map = new LinkedHashMap<>();
-        map.put("id", doc.id());
-        map.put("name", doc.name());
-        map.put("size_bytes", doc.sizeBytes());
-        map.put("sha256", doc.sha256());
-        map.put("source_thread_id", doc.sourceThreadId().orElse(null));
-        map.put("source_kind", doc.sourceKind() == null ? null : doc.sourceKind().name().toLowerCase(Locale.ROOT));
-        map.put("source_name", doc.sourceName().orElse(null));
-        map.put("created_at", doc.createdAt().toString());
-        map.put("updated_at", doc.updatedAt().toString());
-        map.put("trashed_at", doc.trashedAt().toString());
-        map.put("trash_origin", doc.trashOrigin().map(origin -> Map.of(
-                "project_id", origin.projectId(),
-                "project_name", origin.projectName()
-        )).orElse(null));
-        return map;
+    private TrashDocumentResponse trashResponse(TrashDocument doc) {
+        return new TrashDocumentResponse(
+                doc.id(),
+                doc.name(),
+                doc.sizeBytes(),
+                doc.sha256(),
+                doc.sourceThreadId().orElse(null),
+                doc.sourceKind() == null ? null : doc.sourceKind().name().toLowerCase(Locale.ROOT),
+                doc.sourceName().orElse(null),
+                doc.createdAt().toString(),
+                doc.updatedAt().toString(),
+                doc.trashedAt().toString(),
+                doc.trashOrigin().map(origin -> new TrashOriginDto(
+                        origin.projectId(),
+                        origin.projectName()
+                )).orElse(null)
+        );
     }
 
-    private Map<String, Object> documentResponse(ProjectDocument doc) {
-        Map<String, Object> map = new LinkedHashMap<>();
-        map.put("id", doc.id());
-        map.put("name", doc.name());
-        map.put("size_bytes", doc.sizeBytes());
-        map.put("sha256", doc.sha256());
-        map.put("content_missing", false);
-        map.put("source_thread_id", doc.sourceThreadId().orElse(null));
-        map.put("source_kind", doc.sourceKind() == null ? null : doc.sourceKind().name().toLowerCase(Locale.ROOT));
-        map.put("source_name", doc.sourceName().orElse(null));
-        map.put("created_at", doc.createdAt().toString());
-        map.put("updated_at", doc.updatedAt().toString());
-        return map;
+    private ProjectDocumentResponse documentResponse(ProjectDocument doc) {
+        return new ProjectDocumentResponse(
+                doc.id(),
+                doc.name(),
+                doc.sizeBytes(),
+                doc.sha256(),
+                false,
+                doc.sourceThreadId().orElse(null),
+                doc.sourceKind() == null ? null : doc.sourceKind().name().toLowerCase(Locale.ROOT),
+                doc.sourceName().orElse(null),
+                doc.createdAt().toString(),
+                doc.updatedAt().toString()
+        );
     }
 
     private void sendNoContent(HttpExchange exchange) throws IOException {

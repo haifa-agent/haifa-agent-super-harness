@@ -12,6 +12,8 @@ import io.haifa.agent.model.api.ModelCallId;
 import io.haifa.agent.model.api.ModelMessage;
 import io.haifa.agent.model.api.ModelMessageRole;
 import io.haifa.agent.model.api.ResolvedModelSnapshot;
+import io.haifa.agent.superharness.server.api.dto.SuggestionsConfigResponse;
+import io.haifa.agent.superharness.server.api.dto.SuggestionsResponse;
 import io.haifa.agent.superharness.server.run.HaifaRunBridge;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -107,7 +109,7 @@ final class DeerFlowSuggestionsApi implements HttpHandler {
             send(
                     exchange,
                     200,
-                    orderedMap("enabled", enabled, "max_suggestions", configuredMaxSuggestions));
+                    new SuggestionsConfigResponse(enabled, configuredMaxSuggestions));
             return;
         }
         Matcher match = THREAD_SUGGESTIONS_PATH.matcher(path);
@@ -133,7 +135,7 @@ final class DeerFlowSuggestionsApi implements HttpHandler {
             return;
         }
         if (!enabled) {
-            send(exchange, 200, orderedMap("suggestions", List.of()));
+            send(exchange, 200, new SuggestionsResponse(List.of()));
             return;
         }
         ObjectNode body;
@@ -160,17 +162,17 @@ final class DeerFlowSuggestionsApi implements HttpHandler {
         }
 
         if (messages.isEmpty()) {
-            send(exchange, 200, orderedMap("suggestions", List.of()));
+            send(exchange, 200, new SuggestionsResponse(List.of()));
             return;
         }
         int n = Math.min(requested, configuredMaxSuggestions);
         String conversation = formatConversation(messages);
         if (conversation.isEmpty()) {
-            send(exchange, 200, orderedMap("suggestions", List.of()));
+            send(exchange, 200, new SuggestionsResponse(List.of()));
             return;
         }
         List<String> suggestions = generate(conversation, n, modelName);
-        send(exchange, 200, orderedMap("suggestions", suggestions));
+        send(exchange, 200, new SuggestionsResponse(suggestions));
     }
 
     private List<String> generate(String conversation, int n, String modelName) {

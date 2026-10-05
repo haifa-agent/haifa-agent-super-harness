@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import io.haifa.agent.superharness.server.api.dto.SkillDeleteResponse;
+import io.haifa.agent.superharness.server.api.dto.SkillReloadResponse;
+import io.haifa.agent.superharness.server.api.dto.SkillsListResponse;
 import io.haifa.agent.superharness.server.config.SkillConfigStore;
 import java.io.IOException;
 import java.util.Map;
@@ -65,7 +68,7 @@ public final class DeerFlowSkillsApi implements HttpHandler {
             }
             if (path.equals("/api/skills/custom")) {
                 if (!method.equals("GET")) { methodNotAllowed(exchange, "GET"); return; }
-                send(exchange, 200, Map.of("skills", store.list().stream().filter(row -> Boolean.TRUE.equals(row.get("editable"))).toList()));
+                send(exchange, 200, new SkillsListResponse<>(store.list().stream().filter(row -> Boolean.TRUE.equals(row.get("editable"))).toList()));
                 return;
             }
             Matcher custom = Pattern.compile("^/api/skills/custom/([a-z][a-z0-9-]{0,62})(?:/(history|rollback))?$").matcher(path);
@@ -83,7 +86,7 @@ public final class DeerFlowSkillsApi implements HttpHandler {
                     send(exchange, 200, store.customDetail(name));
                 } else if (operation == null && method.equals("DELETE")) {
                     store.manage("delete", name, null, null, null, null, null, "human", null);
-                    send(exchange, 200, Map.of("success", true, "message", "Custom skill '" + name + "' deleted"));
+                    send(exchange, 200, new SkillDeleteResponse(true, "Custom skill '" + name + "' deleted"));
                 } else methodNotAllowed(exchange, "history".equals(operation) ? "GET" : "rollback".equals(operation) ? "POST" : "GET, PUT, DELETE");
                 return;
             }
@@ -109,7 +112,7 @@ public final class DeerFlowSkillsApi implements HttpHandler {
                 return;
             }
             if (path.equals("/api/skills") && method.equals("GET")) {
-                send(exchange, 200, Map.of("skills", store.list()));
+                send(exchange, 200, new SkillsListResponse<>(store.list()));
                 return;
             }
             if (path.equals("/api/skills") && !method.equals("GET")) {
@@ -118,10 +121,10 @@ public final class DeerFlowSkillsApi implements HttpHandler {
             }
             if (path.equals("/api/skills/reload") && method.equals("POST")) {
                 store.reload();
-                send(exchange, 200, Map.of(
-                        "success", true,
-                        "scope", "process",
-                        "message", "Skill catalog reloaded for subsequent Runs in this Gateway process."));
+                send(exchange, 200, new SkillReloadResponse(
+                        true,
+                        "process",
+                        "Skill catalog reloaded for subsequent Runs in this Gateway process."));
                 return;
             }
             if (path.equals("/api/skills/reload")) {
