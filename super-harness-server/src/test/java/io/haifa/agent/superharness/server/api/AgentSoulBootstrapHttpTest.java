@@ -89,7 +89,7 @@ class AgentSoulBootstrapHttpTest {
             http.thread("custom-positive");
             http.completed(http.run("custom-positive", "agent-a", false));
             assertThat(fixture.requests.size()).isEqualTo(1);
-            assertThat(names(fixture, 0)).contains("skill_load", "skill_resource_read", "update_agent");
+            assertThat(names(fixture, 0)).contains("skill_load", "update_agent").doesNotContain("skill_resource_read");
             assertThat(names(fixture, 0).stream().anyMatch(name -> name.endsWith("probe_tool"))).isTrue();
             assertThat(initializeCalls.get()).isPositive();
             assertThat(listCalls.get()).isPositive();

@@ -9,6 +9,15 @@ import com.sun.net.httpserver.HttpHandler;
 import io.haifa.agent.auth.localmodel.ExternalLoginRegistry;
 import io.haifa.agent.auth.localmodel.LocalModelCredentialResolver;
 import io.haifa.agent.auth.localmodel.WindowsLocalModelAuthStore;
+import io.haifa.agent.superharness.server.api.dto.AgentNameCheckResponse;
+import io.haifa.agent.superharness.server.api.dto.AgentResponse;
+import io.haifa.agent.superharness.server.api.dto.AgentsResponse;
+import io.haifa.agent.superharness.server.api.dto.ManagedModelResponse;
+import io.haifa.agent.superharness.server.api.dto.ManagedModelsResponse;
+import io.haifa.agent.superharness.server.api.dto.ModelItemResponse;
+import io.haifa.agent.superharness.server.api.dto.ModelsResponse;
+import io.haifa.agent.superharness.server.api.dto.ProbeResponse;
+import io.haifa.agent.superharness.server.api.dto.TokenUsageResponse;
 import io.haifa.agent.core.run.AgentRunId;
 import io.haifa.agent.model.api.AgentChatRequest;
 import io.haifa.agent.model.api.AgentChatResponse;
@@ -358,21 +367,18 @@ final class DeerFlowConfigurationApi implements HttpHandler {
     }
 
     private void listModels(HttpExchange exchange) throws IOException {
-        ArrayNode models = json.createArrayNode();
-        store.executableModels().stream().map(this::publicExecutableModel).forEach(models::add);
-        ObjectNode response = json.createObjectNode();
-        response.set("models", models);
-        response.set("token_usage", json.createObjectNode().put("enabled", false));
-        send(exchange, 200, response);
+        List<ModelItemResponse> models = store.executableModels().stream()
+                .map(this::toModelItemResponse)
+                .toList();
+        send(exchange, 200, new ModelsResponse(models, new TokenUsageResponse(false)));
     }
 
     private void listManagedModels(HttpExchange exchange) throws IOException {
-        ArrayNode models = json.createArrayNode();
-        store.models().stream()
+        List<ManagedModelResponse> models = store.models().stream()
                 .sorted(Comparator.comparing(node -> node.path("name").asText()))
-                .map(this::publicModel)
-                .forEach(models::add);
-        send(exchange, 200, json.createObjectNode().set("models", models));
+                .map(this::toManagedModelResponse)
+                .toList();
+        send(exchange, 200, new ManagedModelsResponse(models));
     }
 
     boolean isConfiguredModel(String name) {
@@ -386,7 +392,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         validateModel(config);
         String expectedRevision = nullableText(request.get("expected_revision"));
         ObjectNode saved = store.saveModel(config, expectedRevision);
-        send(exchange, 200, publicModel(saved));
+        send(exchange, 200, toManagedModelResponse(saved));
     }
 
     private void testManagedModel(HttpExchange exchange) throws IOException {
@@ -400,12 +406,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
             throw new InvalidRequestException(422, "Model credential is required for probe");
         }
         ProbeResult result = runToolCallProbe(effective);
-        send(
-                exchange,
-                200,
-                Map.of(
-                        "ok", result == ProbeResult.SUCCESS,
-                        "message", result.message));
+        send(exchange, 200, new ProbeResponse(result == ProbeResult.SUCCESS, result.message));
     }
 
     private ProbeResult runToolCallProbe(ObjectNode config) {
@@ -449,12 +450,11 @@ final class DeerFlowConfigurationApi implements HttpHandler {
     }
 
     private void listAgents(HttpExchange exchange) throws IOException {
-        ArrayNode agents = json.createArrayNode();
-        store.agents().stream()
+        List<AgentResponse> agents = store.agents().stream()
                 .sorted(Comparator.comparing(node -> node.path("name").asText()))
-                .map(this::publicAgent)
-                .forEach(agents::add);
-        send(exchange, 200, json.createObjectNode().set("agents", agents));
+                .map(this::toAgentResponse)
+                .toList();
+        send(exchange, 200, new AgentsResponse(agents));
     }
 
     private void checkAgentName(HttpExchange exchange) throws IOException {
@@ -465,7 +465,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         send(
                 exchange,
                 200,
-                Map.of("available", store.agent(normalized).isEmpty(), "name", normalized));
+                new AgentNameCheckResponse(store.agent(normalized).isEmpty(), normalized));
     }
 
     private void createAgent(HttpExchange exchange) throws IOException {
@@ -474,14 +474,14 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         validateAgentName(name);
         validateAgentFields(request, true);
         ObjectNode created = store.createAgent(normalizeAgent(name, request));
-        send(exchange, 201, publicAgent(created));
+        send(exchange, 201, toAgentResponse(created));
     }
 
     private void getAgent(HttpExchange exchange, String name) throws IOException {
         validateAgentName(name);
         ObjectNode agent = store.agent(name.toLowerCase(java.util.Locale.ROOT))
                 .orElseThrow(() -> new InvalidRequestException(404, "Agent '" + name + "' not found"));
-        send(exchange, 200, publicAgent(agent));
+        send(exchange, 200, toAgentResponse(agent));
     }
 
     private void updateAgent(HttpExchange exchange, String name) throws IOException {
@@ -489,7 +489,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         ObjectNode request = readObject(exchange);
         validateAgentFields(request, false);
         ObjectNode updated = store.updateAgent(name.toLowerCase(java.util.Locale.ROOT), request);
-        send(exchange, 200, publicAgent(updated));
+        send(exchange, 200, toAgentResponse(updated));
     }
 
     private void deleteAgent(HttpExchange exchange, String name) throws IOException {
@@ -660,48 +660,80 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         return agent;
     }
 
-    private ObjectNode publicAgent(ObjectNode stored) {
-        return stored.deepCopy();
+    private AgentResponse toAgentResponse(ObjectNode stored) {
+        return new AgentResponse(
+                stored.path("name").asText(),
+                stored.hasNonNull("display_name") ? stored.path("display_name").asText() : null,
+                stored.path("description").asText(""),
+                stored.hasNonNull("model") ? stored.path("model").asText() : null,
+                toListOrNull(stored.get("tool_groups")),
+                toListOrNull(stored.get("skills")),
+                toListOrNull(stored.get("mcp_plugins")),
+                stored.hasNonNull("knowledge_scope") ? stored.path("knowledge_scope").asText() : null,
+                toListOrNull(stored.get("allowed_subagents")),
+                toMapOrNull(stored.get("model_settings")),
+                stored.hasNonNull("thinking_enabled") ? stored.path("thinking_enabled").asBoolean() : null,
+                stored.hasNonNull("reasoning_effort") ? stored.path("reasoning_effort").asText() : null,
+                stored.path("soul").asText("")
+        );
     }
 
-    private ObjectNode publicModel(ObjectNode stored) {
-        ObjectNode result = json.createObjectNode();
-        for (String field : List.of(
-                "name",
-                "display_name",
-                "provider",
-                "model",
-                "base_url",
-                "enabled",
-                "supports_vision",
-                "context_window",
-                "max_tokens",
-                "revision")) {
-            result.set(field, stored.get(field));
+    private static List<String> toListOrNull(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
         }
-        result.put("source", "managed");
-        result.put("has_api_key", hasText(stored, "api_key"));
-        result.put("has_credential", hasConfiguredCredential(stored));
-        result.put(
-                "credential_source",
+        if (node.isArray()) {
+            List<String> list = new ArrayList<>();
+            node.forEach(item -> list.add(item.asText()));
+            return list;
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> toMapOrNull(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return json.convertValue(node, Map.class);
+    }
+
+    private ManagedModelResponse toManagedModelResponse(ObjectNode stored) {
+        JsonNode cw = stored.get("context_window");
+        Integer contextWindow = (cw != null && !cw.isNull() && cw.isIntegralNumber()) ? cw.asInt() : null;
+        JsonNode mt = stored.get("max_tokens");
+        Integer maxTokens = (mt != null && !mt.isNull() && mt.isIntegralNumber()) ? mt.asInt() : null;
+        return new ManagedModelResponse(
+                stored.path("name").asText(),
+                stored.path("display_name").asText(),
+                stored.path("provider").asText(),
+                stored.path("model").asText(),
+                stored.path("base_url").asText(),
+                stored.path("enabled").asBoolean(true),
+                stored.path("supports_vision").asBoolean(false),
+                contextWindow,
+                maxTokens,
+                stored.path("revision").asText(null),
+                "managed",
+                hasText(stored, "api_key"),
+                hasConfiguredCredential(stored),
                 hasText(stored, "credential_ref")
                         ? "os"
-                        : hasText(stored, "api_key") ? "api_key" : "none");
-        return result;
+                        : hasText(stored, "api_key") ? "api_key" : "none"
+        );
     }
 
-    private ObjectNode publicExecutableModel(ObjectNode stored) {
-        ObjectNode result = json.createObjectNode();
-        result.put("id", stored.path("name").asText());
-        result.put("name", stored.path("name").asText());
-        result.put("model", stored.path("model").asText());
+    private ModelItemResponse toModelItemResponse(ObjectNode stored) {
+        String name = stored.path("name").asText();
         String displayName = stored.path("display_name").asText();
-        result.put("display_name", displayName.isBlank() ? stored.path("name").asText() : displayName);
-        // The frozen UI defaults a reasoning-capable model to pro. Keep this release gate
-        // closed until W07 and the joint default-pro acceptance are complete.
-        result.put("supports_thinking", false);
-        result.put("supports_reasoning_effort", false);
-        return result;
+        return new ModelItemResponse(
+                name,
+                name,
+                stored.path("model").asText(),
+                displayName.isBlank() ? name : displayName,
+                false,
+                false
+        );
     }
 
     private boolean supportsReasoning(ObjectNode config) {

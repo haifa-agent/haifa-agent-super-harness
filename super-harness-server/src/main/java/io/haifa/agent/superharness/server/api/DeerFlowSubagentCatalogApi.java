@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import io.haifa.agent.superharness.server.api.dto.SubagentsResponse;
 import io.haifa.agent.superharness.server.config.SubagentCatalogStore;
 import io.haifa.agent.superharness.server.config.SubagentCatalogStore.CatalogException;
 import java.io.IOException;
@@ -47,7 +48,7 @@ final class DeerFlowSubagentCatalogApi implements HttpHandler {
             }
             boolean isAdmin = admin.test(exchange);
             if (collection && method.equals("GET")) {
-                send(exchange, 200, Map.of("subagents", store.catalog(isAdmin)));
+                send(exchange, 200, new SubagentsResponse<>(store.catalog(isAdmin)));
             } else if ((collection && method.equals("POST")) || (!collection && (method.equals("PUT") || method.equals("DELETE")))) {
                 requireAdmin(isAdmin);
                 if (method.equals("POST")) send(exchange, 201, store.create(readObject(exchange), configuredModel));

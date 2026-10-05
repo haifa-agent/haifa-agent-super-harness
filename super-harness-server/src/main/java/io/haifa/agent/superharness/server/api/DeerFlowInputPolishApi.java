@@ -12,6 +12,7 @@ import io.haifa.agent.model.api.ModelCallId;
 import io.haifa.agent.model.api.ModelMessage;
 import io.haifa.agent.model.api.ModelMessageRole;
 import io.haifa.agent.model.api.ResolvedModelSnapshot;
+import io.haifa.agent.superharness.server.api.dto.InputPolishResponse;
 import io.haifa.agent.superharness.server.run.HaifaRunBridge;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -108,10 +109,7 @@ final class DeerFlowInputPolishApi implements HttpHandler {
                 send(exchange, 503, Map.of("detail", "Failed to polish input"));
                 return;
             }
-            Map<String, Object> response = new LinkedHashMap<>();
-            response.put("rewritten_text", rewritten);
-            response.put("changed", !rewritten.equals(text));
-            send(exchange, 200, response);
+            send(exchange, 200, new InputPolishResponse(rewritten, !rewritten.equals(text)));
         } catch (InvalidRequestException invalid) {
             send(exchange, invalid.status, Map.of("detail", invalid.getMessage()));
         } catch (Exception failure) {
