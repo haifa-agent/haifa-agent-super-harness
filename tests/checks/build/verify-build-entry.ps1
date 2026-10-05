@@ -124,17 +124,19 @@ try {
     }
     $gatewayA = 'http://127.0.0.1:20618'
     $gatewayB = 'http://127.0.0.1:30618'
+    $stampMavenRepo = Join-Path $scratch 'stamp-maven-repo'
+    $null = New-Item -ItemType Directory -Force -Path $stampMavenRepo
     $env:NEXT_PUBLIC_STATIC_WEBSITE_ONLY = 'false'
 
     Set-Case 'S4-missing-frontend-stamp-fails' $(if (Test-Throws { Assert-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA } 'stamp is missing') { 'PASS' } else { 'FAIL' })
     Write-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA
-    Write-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.2-SNAPSHOT'
+    Write-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.2-SNAPSHOT' -MavenRepo $stampMavenRepo
     $stampWritten = (Test-Path -LiteralPath (Get-FrontendBuildStampPath $stampRoot)) -and (Test-Path -LiteralPath (Get-ServerBuildStampPath $stampRoot))
     Set-Case 'S1-stamps-written' $(if ($stampWritten) { 'PASS' } else { 'FAIL' })
     $reuseError = ''
     try {
         Assert-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA
-        Assert-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.2-SNAPSHOT'
+        Assert-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.2-SNAPSHOT' -MavenRepo $stampMavenRepo
     }
     catch { $reuseError = $_.Exception.Message }
     Set-Case 'S2-same-inputs-reusable' $(if ($reuseError -eq '') { 'PASS' } else { 'FAIL' }) $reuseError
@@ -151,14 +153,24 @@ try {
     Write-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA
     $proxyMismatch = Test-Throws { Assert-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayB } "built with '$gatewayA', current is '$gatewayB'"
     Set-Case 'S3-proxy-target-mismatch-fails' $(if ($proxyMismatch) { 'PASS' } else { 'FAIL' })
-    Set-Case 'S3b-sdk-version-mismatch-fails' $(if (Test-Throws { Assert-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion $labelled } "field 'haifaVersion'") { 'PASS' } else { 'FAIL' })
+    Set-Case 'S3b-sdk-version-mismatch-fails' $(if (Test-Throws { Assert-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion $labelled -MavenRepo $stampMavenRepo } "field 'javaInputFingerprint'") { 'PASS' } else { 'FAIL' })
 
     Set-Content -LiteralPath (Join-Path $stampRoot 'frontend/pnpm-lock.yaml') -Value 'lockfileVersion: 2' -Encoding utf8
     Set-Case 'S5-dirty-frontend-not-reusable' $(if (Test-Throws { Assert-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA } 'uncommitted changes') { 'PASS' } else { 'FAIL' })
     Write-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA
     Set-Case 'S5b-dirty-build-leaves-no-stamp' $(if (-not (Test-Path -LiteralPath (Get-FrontendBuildStampPath $stampRoot))) { 'PASS' } else { 'FAIL' })
     & git -C $stampRoot -c user.name=t -c user.email=t@example.invalid commit -q -am 'lockfile'
-    Set-Case 'S6-new-head-invalidates-server-stamp' $(if (Test-Throws { Assert-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.2-SNAPSHOT' } "field 'sourceSha'") { 'PASS' } else { 'FAIL' })
+    Write-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.2-SNAPSHOT' -MavenRepo $stampMavenRepo
+    $null = New-Item -ItemType Directory -Force -Path (Join-Path $stampRoot 'docs')
+    Set-Content -LiteralPath (Join-Path $stampRoot 'docs/guide.md') -Value 'doc' -Encoding utf8
+    & git -C $stampRoot add -A
+    & git -C $stampRoot -c user.name=t -c user.email=t@example.invalid commit -q -m 'docs only'
+    Set-Case 'S6-docs-only-commit-keeps-server-stamp' $(if (Test-Throws { Assert-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.2-SNAPSHOT' -MavenRepo $stampMavenRepo } 'does not match') { 'FAIL' } else { 'PASS' })
+    $null = New-Item -ItemType Directory -Force -Path (Join-Path $stampRoot 'super-harness-server/src/main/java')
+    Set-Content -LiteralPath (Join-Path $stampRoot 'super-harness-server/src/main/java/App.java') -Value 'class App {}' -Encoding utf8
+    & git -C $stampRoot add -A
+    & git -C $stampRoot -c user.name=t -c user.email=t@example.invalid commit -q -m 'java input'
+    Set-Case 'S7-java-input-commit-invalidates-server-stamp' $(if (Test-Throws { Assert-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.2-SNAPSHOT' -MavenRepo $stampMavenRepo } "field 'javaInputFingerprint'") { 'PASS' } else { 'FAIL' })
 
     Write-Output 'test-targeted.ps1 argument guards'
     foreach ($forbidden in @('install', 'clean', '-DskipTests', '-Dhaifa.version=0.1.2-x-SNAPSHOT')) {

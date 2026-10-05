@@ -36,6 +36,8 @@ script_regressions = load("scripts/lib/script_regressions.py")
 sdk_api_digest = load("scripts/governance/sdk_api_digest.py")
 main_service = load("scripts/lib/main_service.py")
 gate_resources = load("scripts/lib/gate_resources.py")
+source_fingerprint = load("scripts/lib/source_fingerprint.py")
+evidence_reuse = load("scripts/governance/evidence_reuse.py")
 
 BOT = pr_review.DEFAULT_BOT
 
@@ -59,15 +61,27 @@ class ChangeScopeTest(unittest.TestCase):
             self.assertEqual(change_scope.classify(path), expected, path)
 
     def test_gates_follow_the_widest_class(self):
-        self.assertEqual(change_scope.required_gates(["README.md"]), ["docs-check"])
-        self.assertEqual(change_scope.required_gates(["scripts/governance/x.py"]), ["script-regressions"])
-        self.assertEqual(change_scope.required_gates(["scripts/lib/x.ps1"]), ["script-regressions", "ui-warm-round-x1"])
-        self.assertEqual(change_scope.required_gates(["super-harness-server/src/test/java/X.java"]), ["verify-full"])
+        self.assertEqual(change_scope.required_gates(["README.md"]), ["docs-check", "verify-full-reuse"])
+        self.assertEqual(
+            change_scope.required_gates(["scripts/governance/x.py"]),
+            ["script-regressions", "verify-full-reuse"],
+        )
+        self.assertEqual(
+            change_scope.required_gates(["scripts/lib/x.ps1"]),
+            ["script-regressions", "verify-full-reuse", "ui-warm-round-x1"],
+        )
+        self.assertEqual(
+            change_scope.required_gates(["super-harness-server/src/test/java/X.java"]),
+            ["verify-full"],
+        )
         self.assertEqual(
             change_scope.required_gates(["super-harness-server/src/main/java/X.java", "README.md"]),
             ["docs-check", "verify-full", "ui-warm-round-x2"],
         )
-        self.assertEqual(change_scope.required_gates(["frontend/pnpm-lock.yaml"]), ["ui-cold-round", "ui-warm-round-x2"])
+        self.assertEqual(
+            change_scope.required_gates(["frontend/pnpm-lock.yaml"]),
+            ["verify-full", "ui-cold-round", "ui-warm-round-x2"],
+        )
 
 
 class SecretScanTest(unittest.TestCase):
@@ -745,6 +759,144 @@ class GateResourcesTest(unittest.TestCase):
         self.assertIn(result["forks"], (1, 2, 3))
         self.assertIsInstance(result["lowMemory"], bool)
         self.assertIn("probeAvailable", result)
+
+
+class SourceFingerprintTest(unittest.TestCase):
+    VERSION = SdkApiDigestTest.VERSION
+    BOM = SdkApiDigestTest.BOM
+    WORKTREE_POM = SdkApiDigestTest.WORKTREE_POM
+
+    def git(self, repo, *args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    def fixture(self, root):
+        worktree = root / "worktree"
+        (worktree / "local-tmp").mkdir(parents=True)
+        (worktree / ".gitignore").write_text("local-tmp/\n", encoding="utf-8")
+        (worktree / "pom.xml").write_text(self.WORKTREE_POM, encoding="utf-8")
+        for relative, text in {
+            "docs/guide.md": "doc", "scripts/tool.py": "print()", "tests/data.txt": "data",
+            "AGENTS.md": "rules", "src/App.java": "class App {}",
+        }.items():
+            (worktree / relative).parent.mkdir(parents=True, exist_ok=True)
+            (worktree / relative).write_text(text, encoding="utf-8")
+        self.git(worktree, "init", "-q")
+        self.git(worktree, "config", "core.autocrlf", "false")
+        self.commit(worktree, "seed")
+
+        maven = root / "maven"
+        bom_dir = maven / "io/haifa/haifa-agent-bom" / self.VERSION
+        bom_dir.mkdir(parents=True)
+        (bom_dir / f"haifa-agent-bom-{self.VERSION}.pom").write_text(
+            self.BOM.format(version=self.VERSION), encoding="utf-8")
+        jar_dir = maven / "io/haifa/haifa-agent-fixture" / self.VERSION
+        jar_dir.mkdir(parents=True)
+        jar = jar_dir / f"haifa-agent-fixture-{self.VERSION}.jar"
+        with zipfile.ZipFile(jar, "w") as archive:
+            archive.writestr("fixture/Sample.class", b"v1")
+        return worktree, maven, jar
+
+    def commit(self, worktree, message):
+        self.git(worktree, "add", "-A")
+        self.git(worktree, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                 "commit", "-q", "-m", message)
+
+    def test_exclusion_classification(self):
+        for path in ("docs/a.md", "tests/a.txt", "scripts/a.py", "README.md", "AGENTS.md"):
+            self.assertTrue(source_fingerprint.is_excluded(path), path)
+        for path in ("super-harness-server/src/main/java/X.java", "pom.xml", "frontend/x", "src/App.java"):
+            self.assertFalse(source_fingerprint.is_excluded(path), path)
+
+    def test_excluded_edits_keep_the_fingerprint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree, maven, _ = self.fixture(Path(directory))
+            first = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            for relative in ("docs/guide.md", "scripts/tool.py", "tests/data.txt", "AGENTS.md"):
+                (worktree / relative).write_text("changed", encoding="utf-8")
+            self.commit(worktree, "docs and tests")
+            second = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            self.assertNotEqual(first["sourceTree"], second["sourceTree"])
+            self.assertEqual(first["javaInputFingerprint"], second["javaInputFingerprint"])
+
+            (worktree / "src/App.java").write_text("class App { int x; }", encoding="utf-8")
+            self.commit(worktree, "java change")
+            third = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            self.assertNotEqual(first["javaInputFingerprint"], third["javaInputFingerprint"])
+
+    def test_sdk_identity_and_fingerprint_change_when_jar_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree, maven, jar = self.fixture(Path(directory))
+            first = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            with zipfile.ZipFile(jar, "a") as archive:
+                archive.writestr("fixture/extra.class", b"v2")
+            second = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            self.assertNotEqual(first["sdkIdentity"], second["sdkIdentity"])
+            self.assertNotEqual(first["javaInputFingerprint"], second["javaInputFingerprint"])
+            self.assertEqual(first["sourceTree"], second["sourceTree"])
+
+    def test_covered_dirty_paths_ignores_excluded_edits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree, _, _ = self.fixture(Path(directory))
+            (worktree / "docs/guide.md").write_text("dirty doc", encoding="utf-8")
+            (worktree / "src/App.java").write_text("class App { int y; }", encoding="utf-8")
+            self.assertEqual(source_fingerprint.covered_dirty_paths(worktree), ["src/App.java"])
+
+    def test_excluded_references_detect_and_real_repo_is_clean(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            (repo / "super-harness-server/src/test/java").mkdir(parents=True)
+            (repo / "scripts").mkdir()
+            (repo / "scripts/tool.py").write_text("print()", encoding="utf-8")
+            (repo / "pom.xml").write_text("<project/>", encoding="utf-8")
+            (repo / "super-harness-server/src/test/java/X.java").write_text(
+                'String p = "scripts/tool.py";', encoding="utf-8")
+            findings = source_fingerprint.excluded_references(repo)
+            self.assertTrue(any("X.java" in finding for finding in findings), findings)
+        self.assertEqual(source_fingerprint.excluded_references(ROOT), [])
+
+
+class EvidenceReuseTest(unittest.TestCase):
+    def test_find_reusable_summary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def write(name, **fields):
+                (root / name).write_text(json.dumps(fields), encoding="utf-8")
+
+            write("verify-full-20261005-100000-000.json", status="PASS", javaInputFingerprint="fp", tests=5)
+            write("verify-full-20261005-110000-000.json", status="PASS", javaInputFingerprint="fp",
+                  reuse={"fromSummary": "x"})
+            write("verify-full-20261005-120000-000.json", status="FAIL", javaInputFingerprint="fp")
+            write("verify-full-20261005-130000-000.json", status="PASS", javaInputFingerprint="other")
+            write("verify-full-20261005-140000-000.json", status="PASS")
+            found = evidence_reuse.find_reusable_summary(root, "fp")
+            self.assertEqual(found.name, "verify-full-20261005-100000-000.json")
+            self.assertIsNone(evidence_reuse.find_reusable_summary(root, "missing"))
+            self.assertIsNone(evidence_reuse.find_reusable_summary(root, None))
+
+    def test_full_gate_verdicts(self):
+        target = {"sourceTree": "tree", "sdkIdentity": "sdk", "javaInputFingerprint": "fp"}
+        self.assertEqual(evidence_reuse.evaluate_full_gate(
+            {"status": "PASS", "javaInputFingerprint": "fp"}, target)[0], "REUSABLE")
+        self.assertEqual(evidence_reuse.evaluate_full_gate(
+            {"status": "FAIL", "javaInputFingerprint": "fp"}, target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_full_gate(
+            {"status": "PASS", "javaInputFingerprint": "other"}, target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_full_gate({"status": "PASS"}, target),
+                         ("STALE", evidence_reuse.STALE_OLD_EVIDENCE))
+
+    def test_tree_evidence_verdicts(self):
+        target = {"sourceTree": "tree", "sdkIdentity": "sdk", "javaInputFingerprint": "fp"}
+        reusable = {"sourceTree": "tree", "sdkIdentity": "sdk", "sourceDirty": False}
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence(reusable, target)[0], "REUSABLE")
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence(
+            {"sourceTree": "tree", "sdkIdentity": "sdk", "sourceDirty": True}, target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence(
+            {"sourceTree": "other", "sdkIdentity": "sdk", "sourceDirty": False}, target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence(
+            {"sourceTree": "tree", "sdkIdentity": "other", "sourceDirty": False}, target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence({"sourceTree": "tree"}, target),
+                         ("STALE", evidence_reuse.STALE_OLD_EVIDENCE))
 
 
 if __name__ == "__main__":

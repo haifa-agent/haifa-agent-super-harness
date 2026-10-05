@@ -310,7 +310,13 @@ def output_directory(worktree: Path, version: str) -> Path:
     return target
 
 
-def collect(worktree: Path, maven_repo: Path, version: str) -> tuple[list[dict], list[str], str | None]:
+def published_artifacts(worktree: Path, maven_repo: Path, version: str) -> tuple[list[dict], list[str], str | None]:
+    """Locate and hash every published SDK JAR the worktree consumes.
+
+    Shared by the API digest and the content fingerprint: both must agree on which JARs
+    identify a published SDK. The returned entries carry the artifact coordinates, the JAR
+    file name, its SHA-256 and length; ``missing`` lists managed artifacts with no JAR.
+    """
     group, artifact = find_bom_coordinate(worktree)
     pom = bom_path(maven_repo, group, artifact, version)
     if not pom.is_file():
@@ -329,10 +335,43 @@ def collect(worktree: Path, maven_repo: Path, version: str) -> tuple[list[dict],
             "jar": jar.name,
             "sha256": sha256(jar),
             "length": jar.stat().st_size,
-            "classCount": len(classes_of(jar)),
         })
     if not artifacts:
         raise SdkDigestError(f"no published SDK JARs found under '{maven_repo}' for version '{version}'. Stop and report.")
+    return artifacts, missing, sdk_commit
+
+
+def sdk_identity(worktree: Path, maven_repo: Path, version: str | None = None) -> dict:
+    """The content identity of the published SDK the worktree consumes.
+
+    ``identity`` is a SHA-256 over the sorted ``artifactId:sha256`` lines, so re-publishing a
+    JAR under the same version changes it. A worktree POM with no resolvable BOM import, or a
+    version with no published JAR, yields ``UNAVAILABLE`` instead of failing: the fingerprint
+    is best-effort and the build itself reports a missing SDK.
+    """
+    resolved = read_version(worktree / "local-tmp/sdk-selection.json", version)
+    try:
+        artifacts, missing, sdk_commit = published_artifacts(worktree, maven_repo, resolved)
+    except SdkDigestError:
+        return {"version": resolved, "identity": "UNAVAILABLE", "artifacts": [],
+                "missingArtifacts": [], "sdkCommit": None}
+    ordered = sorted(artifacts, key=lambda entry: entry["artifactId"])
+    canonical = "\n".join(f"{entry['artifactId']}:{entry['sha256']}" for entry in ordered)
+    identity = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return {
+        "version": resolved,
+        "identity": identity,
+        "artifacts": [{"artifactId": entry["artifactId"], "sha256": entry["sha256"]} for entry in ordered],
+        "missingArtifacts": missing,
+        "sdkCommit": sdk_commit,
+    }
+
+
+def collect(worktree: Path, maven_repo: Path, version: str) -> tuple[list[dict], list[str], str | None]:
+    artifacts, missing, sdk_commit = published_artifacts(worktree, maven_repo, version)
+    for entry in artifacts:
+        jar = maven_repo.joinpath(*entry["groupId"].split("."), entry["artifactId"], version, entry["jar"])
+        entry["classCount"] = len(classes_of(jar))
     return artifacts, missing, sdk_commit
 
 

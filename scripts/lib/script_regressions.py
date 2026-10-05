@@ -133,6 +133,21 @@ def source_sha(root: Path) -> str:
     return result.stdout.strip()
 
 
+def fingerprint_fields(root: Path) -> dict:
+    """The source tree hash, SDK identity and dirty flag a script-regression run bound to."""
+    import source_fingerprint  # same directory; resolved at run time, not at import time
+    try:
+        data = source_fingerprint.fingerprint(root, "HEAD")
+        return {
+            "sourceTree": data["sourceTree"],
+            "sdkIdentity": data["sdkIdentity"],
+            "sourceDirty": bool(source_fingerprint.covered_dirty_paths(root)),
+        }
+    except Exception as error:  # noqa: BLE001 - the summary must still be written
+        return {"sourceTree": None, "sdkIdentity": None, "sourceDirty": None,
+                "fingerprintError": str(error)}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the script regression checks")
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[2])
@@ -154,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
     summary = {
         "status": status,
         "sourceSha": source_sha(root),
+        **fingerprint_fields(root),
         "manifestErrors": errors,
         "checks": checks,
         "elapsedMs": sum(check["elapsedMs"] for check in checks),
