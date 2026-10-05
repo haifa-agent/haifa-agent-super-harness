@@ -51,7 +51,7 @@
   - B. 按改动范围定门禁：运行 `python scripts/governance/change_scope.py` 得到建议门禁。只改文档 → 文档检查；只改脚本 → 脚本回归，改到 `scripts/lib/`、`scripts/ui/` 再加一轮暖轮；只改 Java 测试 → 全仓门禁；改产品代码、UI 脚本或用例 → 全仓门禁加两轮暖轮；改冻结前端 → 加一轮冷轮。建议只是下限，主控或复审可以要求更多。
   - C. UI 默认两次暖轮：同一提交上默认跑两次暖轮（满足同脚本重复运行）；冷轮只在冻结前端、前端依赖、槽位或代理目标变化、构建戳失效时跑。新 worktree 首次运行没有构建戳，第一轮自然就是冷轮。
   - D. SHPM 登记用薄封装：派工用 `python scripts/governance/shpm_dispatch.py`（一次完成 task create、sprint link、task start、assign create）；脚本回归用 `pwsh -NoProfile -File scripts/verify-scripts.ps1`（统一运行 `tests/checks/build/` 与 `tests/checks/ui/` 清单内的检查，摘要写 `local-tmp/verify-scripts/`）；门禁结果用 `python scripts/governance/shpm_record_gates.py` 从证据组目录递归登记全仓门禁摘要、脚本回归摘要、UI 证据目录和主服务刷新摘要。登记默认只打印一张表，加 `--execute` 才写入；幂等键带证据身份，UI 检查名带 profile，同一次调用里同 profile、同提交多轮按开始时间追加 `-r1`/`-r2`，`--raw-root` 在证据已归档时改写原件路径。结果原样登记（FAIL 仍是 FAIL，`NOT_RUN` 仍是 `NOT_RUN`），`deliver`、`accept`、阶段结果和 `GO` 仍由主控手工执行。
-- 2026-10-05 人工同意 R5–R9 中的 A、B、E 三条规则（C 另行派工）：
+- 2026-10-05 人工同意 R5–R9 中的 A、B、E 三条规则（C 另行派工）。与上面 2026-10-03 的 A、B 两条不一致的地方（非快进合入一律重跑、改 UI 脚本或用例一律重跑全仓门禁）以这里为准：
   - A. 合入后复用：合入后 `main` 的源码树哈希和 SDK 身份与已验证候选相同，即可复用该候选的门禁和 UI 结果，合入方式不限。用 `python scripts/governance/evidence_reuse.py --target <合入后提交> <证据>` 核对，全部 `REUSABLE` 才复用；树哈希不同须在合入后的提交上重跑。固定端口主服务的刷新与 smoke 照常执行。
   - B. 按改动范围定门禁：以 `change_scope.py` 的输出为准。全仓门禁的结果绑定 Java 输入指纹，指纹相同且已有真实运行的通过记录时由 `verify-full.ps1` 自动复用并注明来源。UI 正式轮次默认使用真实模型，仅当改动全部落在 `change_scope.py` 列出的受控范围内时使用受控模型。建议只是下限。
   - E. 已登记的偶发失败：全仓门禁只失败 `tests/known-intermittent.json` 内的用例（不超过两个，且本次改动未触及其覆盖范围）时，入口把失败的测试类重跑 3 次，全部通过则记通过并注明；首次失败原件照常保留并计入该 issue 的发生次数。清单只由主控增删，新增时告知人工；同一条累计三次必须安排修复。
