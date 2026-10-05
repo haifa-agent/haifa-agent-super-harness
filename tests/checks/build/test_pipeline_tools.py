@@ -1411,8 +1411,43 @@ class RecordGatesPassesTest(unittest.TestCase):
             })
             records = record_gates.records_for(root)
             record_gates.assign_rounds(records)
+            # One run per profile: different check names, no round suffix needed.
             self.assertEqual({r["name"] for r in records},
-                             {"ui-w05-demo-artifact-same-r1", "ui-w15-v2-skill-same-r1"})
+                             {"ui-w05-demo-artifact-same", "ui-w15-v2-skill-same"})
+
+    def test_rounds_are_numbered_across_evidence_directories(self):
+        def flow(identity):
+            return {
+                "acceptanceProfile": "w18-ui-smoke", "sourceSha": "abcdef0123", "retryCount": 0,
+                "cleanup": {"success": True}, "evidenceRoot": f"D:/e/{identity}",
+                "passes": [
+                    {"profile": "w18-ui-smoke", "pass": number, "assertionMs": 1000, "exitCode": 0,
+                     "firstFailure": None, "caseResults": f"pass-{number}/case-results.json"}
+                    for number in (1, 2)
+                ],
+            }
+        rows = {f"pass-{number}/case-results.json": [{"name": "Case A", "result": "PASS"}] for number in (1, 2)}
+        with tempfile.TemporaryDirectory() as directory:
+            later = Path(directory) / "b-later"
+            earlier = Path(directory) / "a-earlier"
+            self.write(later, flow("run-20261005-110000-000-bbbbbbbb"), rows)
+            self.write(earlier, flow("run-20261005-100000-000-aaaaaaaa"), rows)
+            # A plain single-run directory of the same profile and commit joins the same numbering.
+            single = Path(directory) / "c-single"
+            self.write(single, {"acceptanceProfile": "w18-ui-smoke", "sourceSha": "abcdef0123", "retryCount": 0,
+                                "cleanup": {"success": True}, "evidenceRoot": "D:/e/run-20261005-120000-000-cccccccc"},
+                       {}, merged=[{"name": "Case A", "result": "PASS"}])
+            records = record_gates.records_for(later) + record_gates.records_for(earlier) + record_gates.records_for(single)
+            record_gates.assign_rounds(records)
+            by_identity = {r["identity"]: r["name"] for r in records}
+            self.assertEqual(by_identity, {
+                "run-20261005-100000-000-aaaaaaaa-pass1": "ui-w18-ui-smoke-case-a-r1",
+                "run-20261005-100000-000-aaaaaaaa-pass2": "ui-w18-ui-smoke-case-a-r2",
+                "run-20261005-110000-000-bbbbbbbb-pass1": "ui-w18-ui-smoke-case-a-r3",
+                "run-20261005-110000-000-bbbbbbbb-pass2": "ui-w18-ui-smoke-case-a-r4",
+                "run-20261005-120000-000-cccccccc": "ui-w18-ui-smoke-case-a-r5",
+            })
+            self.assertEqual(len({record_gates.idempotency_key("T", r) for r in records}), 5)
 
     def test_passes_fall_back_to_the_merged_case_file(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -376,17 +376,16 @@ def discover(roots: list[Path]) -> tuple[list[dict], list[Path]]:
 
 
 def assign_rounds(records: list[dict]) -> None:
-    """Adds -r1 / -r2 to UI records that share a profile and commit in this call.
+    """Adds -r1 / -r2 / ... to UI records that share a check name and commit in this call.
 
-    Records from a single evidence directory that already carries its pass number
-    (``-Passes n`` / merged profiles) keep that explicit ``-r<pass>`` suffix and are not
-    renumbered by time.
+    Every run counts, whether it is its own evidence directory or one pass of a ``-Passes n``
+    directory: runs are ordered by the directory's start time and then by pass number, and
+    numbered across all directories, so two ``-Passes 2`` directories give ``-r1`` .. ``-r4``
+    instead of two colliding ``-r1`` / ``-r2`` pairs. A single run keeps the bare name.
     """
     groups: dict[tuple[str, str], list[dict]] = {}
     for record in records:
-        if record.get("explicitPass") is not None:
-            record["name"] = f"{record['base_name']}-r{int(record['explicitPass'])}"
-        elif record["round"]:
+        if record["round"]:
             groups.setdefault((record["base_name"], record["sha"]), []).append(record)
         else:
             record["name"] = record["base_name"]
@@ -394,7 +393,9 @@ def assign_rounds(records: list[dict]) -> None:
         if len(group) == 1:
             group[0]["name"] = group[0]["base_name"]
             continue
-        group.sort(key=lambda record: (record["start"] is None, record["start"] or 0, record["identity"]))
+        group.sort(key=lambda record: (record["start"] is None, record["start"] or datetime.datetime.min,
+                                       record["identity"].rsplit("-pass", 1)[0],
+                                       int(record.get("explicitPass") or 0), record["identity"]))
         for index, record in enumerate(group, 1):
             record["name"] = f"{record['base_name']}-r{index}"
 

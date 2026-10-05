@@ -519,7 +519,12 @@ try {
                 if ($null -eq $passFailure) { $passFailure = $_.Exception.Message }
                 if ($null -eq $fixture.FirstFailure) { $fixture.FirstFailure = [ordered]@{ phase = 'assertions'; message = $passFailure; pass = $passIndex } }
             }
-            $fixture.TestExitCode = $passExit
+            # The round's exit code must stay non-zero once any pass failed: a later green pass
+            # must not make flow-health report testExitCode 0 for a failed repeated run.
+            $passCode = if ($null -ne $passFailure -and ($null -eq $passExit -or $passExit -eq 0)) { 1 } else { $passExit }
+            if ($passIndex -eq 1 -or $null -eq $fixture.TestExitCode -or $fixture.TestExitCode -eq 0) {
+                $fixture.TestExitCode = $passCode
+            }
             $passesSummary += [ordered]@{
                 profile = $tag; pass = $passIndex
                 assertionMs = $fixture.Watch.ElapsedMilliseconds - $passStartMs

@@ -318,7 +318,9 @@ function Stop-FixtureProcesses {
     param($Fixture)
     $started = [Diagnostics.Stopwatch]::GetTimestamp()
     # Original W18 allows 10 seconds for each managed process; binding consumes this same total budget.
-    $budget = [Math]::Max(1, @($Fixture.Processes | Where-Object Name -ne 'Playwright').Count) * 10
+    # Playwright entries (one per repeated pass: Playwright, Playwright1, Playwright2, ...) have
+    # already exited and must not add to the budget the services share.
+    $budget = [Math]::Max(1, @($Fixture.Processes | Where-Object { $_.Name -notmatch '^Playwright\d*$' }).Count) * 10
     $failures = [Collections.Generic.List[string]]::new()
     $reusedPids = [Collections.Generic.List[int]]::new()
     $identityChanges = [Collections.Generic.List[object]]::new()
