@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="3.0.2" name="io.haifa.agent.superharness.server.api.AgentSoulBootstrapHttpTest" time="10.887" tests="2" errors="0" skipped="0" failures="0">
+  <properties/>
+  <testcase name="bootstrapDeclaresOnlyBaseAndSetupEvenWhenExistingAgentSkillAndMcpAreEnabled" classname="io.haifa.agent.superharness.server.api.AgentSoulBootstrapHttpTest" time="8.335">
+    <system-err/>
+  </testcase>
+  <testcase name="bootstrapBypassesOnlyAgentLookupInAllResolvers" classname="io.haifa.agent.superharness.server.api.AgentSoulBootstrapHttpTest" time="2.523"/>
+</testsuite>

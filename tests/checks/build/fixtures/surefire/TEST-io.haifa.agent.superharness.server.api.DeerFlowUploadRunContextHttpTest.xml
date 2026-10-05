@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="3.0.2" name="io.haifa.agent.superharness.server.api.DeerFlowUploadRunContextHttpTest" time="23.545" tests="12" errors="1" skipped="0" failures="0">
+  <properties/>
+  <testcase name="uploadRejectsInvalidThreadIdentifiersLikeTheFrozenThreadIdType" classname="io.haifa.agent.superharness.server.api.DeerFlowUploadRunContextHttpTest" time="0.731"/>
+  <testcase name="duplicateUploadsAndReferencesStayDeterministicAndOriginalsAreImmutable" classname="io.haifa.agent.superharness.server.api.DeerFlowUploadRunContextHttpTest" time="0.739">
+    <error message="Cannot invoke &quot;com.fasterxml.jackson.databind.JsonNode.path(String)&quot; because &quot;again&quot; is null" type="java.lang.NullPointerException"><![CDATA[java.lang.NullPointerException
+	at io.haifa.agent.superharness.server.api.DeerFlowUploadRunContextHttpTest.duplicateUploadsAndReferencesStayDeterministicAndOriginalsAreImmutable(DeerFlowUploadRunContextHttpTest.java:350)
+]]></error>
+  </testcase>
+  <testcase name="firstUploadOfANewConversationIsAcceptedBeforeTheThreadIsCreated" classname="io.haifa.agent.superharness.server.api.DeerFlowUploadRunContextHttpTest" time="1.776"/>
+</testsuite>

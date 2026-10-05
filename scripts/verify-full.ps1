@@ -19,6 +19,13 @@
     runners on the same fingerprint can reuse this JAR with -SkipServerBuild instead of
     packaging and running the unit tests a second time.
 
+    When Maven fails, the surefire reports are read into ``failedTests``. If every failure is
+    registered in tests/known-intermittent.json (at most two, none covered by the change since
+    main, and the failed module still ran its other test classes), the failed classes are rerun
+    three times and the reactor-skipped modules are built; only then is the summary PASS with a
+    ``knownIntermittent`` object. -NoKnownIntermittent keeps the plain FAIL. The first failure's
+    log and reports are copied to local-tmp/verify-full/<name>-first-fail/ regardless.
+
     Maven output goes to a log file under local-tmp. The JSON summary is written to stdout
     and next to the log (same name, .json) for scripts/governance/shpm_record_gates.py.
     No stamp is written when the gate fails or when server sources are uncommitted.
@@ -31,6 +38,9 @@
 
 .EXAMPLE
     pwsh -NoProfile -File scripts/verify-full.ps1 -NoReuse
+
+.EXAMPLE
+    pwsh -NoProfile -File scripts/verify-full.ps1 -NoKnownIntermittent
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
@@ -38,6 +48,7 @@ param(
     [int]$Forks = 3,
     [switch]$LowMemory,
     [switch]$NoReuse,
+    [switch]$NoKnownIntermittent,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Rejected = @()
 )
@@ -71,6 +82,67 @@ function Get-SummaryValue {
     $property = $Object.PSObject.Properties[$Name]
     if ($null -eq $property) { return $Default }
     return $property.Value
+}
+
+# Runs the plan scripts/lib/known_intermittent.py produced. It only executes the commands the
+# plan names: archive the first failure, rerun the failed classes, run the reactor-skipped
+# modules' tests, then package the failed module. Any failing step returns $null and the gate
+# stays FAIL. The caller writes the stamp and the summary.
+function Invoke-KnownIntermittentBranch {
+    param($Plan, [string]$LogPath, [string]$SummaryPath)
+    $firstFail = Join-Path (Split-Path -Parent $SummaryPath) `
+        ("$([IO.Path]::GetFileNameWithoutExtension($SummaryPath))-first-fail")
+    $null = New-Item -ItemType Directory -Force -Path $firstFail
+    Copy-Item -LiteralPath $LogPath -Destination (Join-Path $firstFail 'maven-first-fail.log') -Force
+    foreach ($module in @($Plan.rerunModules)) {
+        $reports = Join-Path $root "$module/target/surefire-reports"
+        if (Test-Path -LiteralPath $reports -PathType Container) {
+            Copy-Item -LiteralPath $reports -Destination (Join-Path $firstFail "$module-surefire-reports") -Recurse -Force
+        }
+    }
+    $rerunLogs = [Collections.Generic.List[string]]::new()
+    $classes = (@($Plan.rerunClasses) -join ',')
+    $testTargeted = Join-Path $PSScriptRoot 'test-targeted.ps1'
+    for ($pass = 1; $pass -le [int]$Plan.reruns; $pass++) {
+        $rerunLog = Join-Path $firstFail "rerun-$pass.log"
+        $arguments = @('-NoLogo', '-NoProfile', '-File', $testTargeted, '-Test', $classes)
+        if ($useLowMemory) { $arguments += '-LowMemory' }
+        $output = & pwsh @arguments 2>&1
+        ($output -join "`n") | Set-Content -LiteralPath $rerunLog -Encoding utf8
+        $rerunLogs.Add($rerunLog)
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "verify-full: known-intermittent rerun $pass failed; keeping FAIL."
+            return $null
+        }
+    }
+    Push-Location $root
+    try {
+        if (@($Plan.skippedModules).Count -gt 0) {
+            $modules = (@($Plan.skippedModules) -join ',')
+            & mvn.cmd -o -ntp -pl $modules -am test *> (Join-Path $firstFail 'skipped-modules.log')
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host 'verify-full: building the reactor-skipped modules failed; keeping FAIL.'
+                return $null
+            }
+        }
+        foreach ($module in @($Plan.rerunModules)) {
+            & mvn.cmd -o -ntp -pl $module -am -DskipTests package *> (Join-Path $firstFail "$module-package.log")
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "verify-full: packaging the failed module '$module' failed; keeping FAIL."
+                return $null
+            }
+        }
+    }
+    finally {
+        Pop-Location
+    }
+    return [ordered]@{
+        reruns = [int]$Plan.reruns
+        entries = @(foreach ($entry in @($Plan.matched)) {
+            [ordered]@{ test = $entry.test; module = $entry.module; issue = $entry.issue
+                firstFailureEvidence = $firstFail; rerunLogs = @($rerunLogs) }
+        })
+    }
 }
 
 Use-SafeNoProxy
@@ -206,6 +278,34 @@ foreach ($line in Get-Content -LiteralPath $logPath) {
     }
 }
 
+# On failure, read the surefire reports and decide (in Python) whether only registered
+# intermittent tests failed. failedTests is recorded either way; knownIntermittent turns a
+# confirmed intermittent failure into PASS with the provenance and the rerun count.
+$failedTests = @()
+$knownIntermittent = $null
+if ($exitCode -ne 0) {
+    $planArguments = @('-B', (Join-Path $PSScriptRoot 'lib/known_intermittent.py'),
+        '--repo', $root, '--log', $logPath, '--manifest', 'tests/known-intermittent.json', '--base', 'main')
+    if ($NoKnownIntermittent) { $planArguments += '--no-known-intermittent' }
+    $plan = $null
+    try {
+        $plan = ((@(& python @planArguments) -join "`n") | ConvertFrom-Json)
+    }
+    catch {
+        Write-Host "verify-full: known-intermittent plan unavailable ($($_.Exception.Message)); recording plain FAIL."
+    }
+    if ($null -ne $plan) {
+        $failedTests = @($plan.failedTests)
+        Write-Host "verify-full: $($failedTests.Count) failed test(s); known-intermittent branch: $($plan.use) ($($plan.reason))"
+        if ($plan.use) {
+            $knownIntermittent = Invoke-KnownIntermittentBranch -Plan $plan -LogPath $logPath -SummaryPath $summaryPath
+            if ($null -ne $knownIntermittent) {
+                $exitCode = 0
+            }
+        }
+    }
+}
+
 $stampPath = Get-ServerBuildStampPath $root
 if ($exitCode -eq 0) {
     Write-ServerBuildStamp -RepositoryRoot $root -HaifaVersion $sdk.HaifaVersion
@@ -214,7 +314,7 @@ else {
     Remove-BuildStamp $stampPath
 }
 
-Write-Summary ([ordered]@{
+$summaryFields = [ordered]@{
     status = $(if ($exitCode -eq 0) { 'PASS' } else { 'FAIL' })
     exitCode = $exitCode
     command = "mvn.cmd $($mavenArguments -join ' ')"
@@ -233,10 +333,14 @@ Write-Summary ([ordered]@{
     failures = $counts.failures
     errors = $counts.errors
     skipped = $counts.skipped
+    failedTests = @($failedTests)
     elapsedMs = $watch.ElapsedMilliseconds
     serverBuildStamp = $(if (Test-Path -LiteralPath $stampPath -PathType Leaf) { $stampPath } else { $null })
     logPath = $logPath
     summaryPath = $summaryPath
-})
+}
+if ($null -ne $knownIntermittent) { $summaryFields.knownIntermittent = $knownIntermittent }
+
+Write-Summary $summaryFields
 
 exit $exitCode

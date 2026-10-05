@@ -38,6 +38,9 @@ main_service = load("scripts/lib/main_service.py")
 gate_resources = load("scripts/lib/gate_resources.py")
 source_fingerprint = load("scripts/lib/source_fingerprint.py")
 evidence_reuse = load("scripts/governance/evidence_reuse.py")
+known_intermittent = load("scripts/lib/known_intermittent.py")
+
+SUREFIRE_FIXTURES = ROOT / "tests/checks/build/fixtures/surefire"
 
 BOT = pr_review.DEFAULT_BOT
 
@@ -49,6 +52,7 @@ class ChangeScopeTest(unittest.TestCase):
             "docs/guide.md": "docs",
             "scripts/verify-full.ps1": "scripts",
             "tests/checks/build/verify-build-entry.ps1": "scripts",
+            "tests/known-intermittent.json": "scripts",
             "super-harness-server/src/test/java/X.java": "java-test",
             "super-harness-server/src/main/java/X.java": "product",
             "pom.xml": "product",
@@ -276,6 +280,43 @@ class RecordGatesTest(unittest.TestCase):
             results = {r["base_name"]: r["result"] for r in records}
             self.assertEqual(results, {"verify-full": "PASS", "scripts-node-x": "PASS",
                                        "ui-p-c": "FAIL", "main-service-refresh": "PASS"})
+
+    def test_known_intermittent_records_pass_and_a_per_issue_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            summary = root / "verify-full-20261005-100000-000.json"
+            summary.write_text(json.dumps({
+                "status": "PASS", "sourceSha": "abcdef0123", "forks": 1, "sdkSelection": "ABSENT",
+                "knownIntermittent": {
+                    "reruns": 3,
+                    "entries": [{"test": "X", "module": "m", "issue": "W04-X",
+                                 "firstFailureEvidence": "local-tmp/verify-full/x-first-fail"}],
+                },
+            }), encoding="utf-8")
+            records = record_gates.records_for(summary)
+            record_gates.assign_rounds(records)
+            self.assertEqual([record["result"] for record in records], ["PASS", "FAIL"])
+            self.assertEqual(records[0]["retry"], 3)
+            self.assertIn("W04-X", records[0]["summary"])
+            issue = records[1]
+            self.assertEqual(issue["base_name"], "known-intermittent-W04-X")
+            self.assertFalse(issue["required"])
+            self.assertIn("first-fail", issue["raw"])
+            command = record_gates.build_command("T", issue, "db")
+            self.assertNotIn("--required", command)
+            primary = record_gates.build_command("T", records[0], "db")
+            self.assertIn("--required", primary)
+
+    def test_reuse_summary_is_described_in_the_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            summary = Path(directory) / "verify-full-20261005-100000-000.json"
+            summary.write_text(json.dumps({
+                "status": "PASS", "sourceSha": "abcdef0123", "forks": 1, "sdkSelection": "ABSENT",
+                "reuse": {"fromSummary": "old.json", "fromSourceSha": "0123456789", "fingerprint": "fp"},
+            }), encoding="utf-8")
+            records = record_gates.records_for(summary)
+            self.assertIn("reused from old.json", records[0]["summary"])
+            self.assertIn("fp", records[0]["summary"])
 
     def test_missing_acceptance_profile_stops(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -946,6 +987,99 @@ class EvidenceReuseTest(unittest.TestCase):
             {"sourceTree": "tree", "sdkIdentity": "other", "sourceDirty": False}, target)[0], "STALE")
         self.assertEqual(evidence_reuse.evaluate_tree_evidence({"sourceTree": "tree"}, target),
                          ("STALE", evidence_reuse.STALE_OLD_EVIDENCE))
+
+
+class KnownIntermittentTest(unittest.TestCase):
+    def entries(self):
+        return [
+            {"test": "DeerFlowUploadRunContextHttpTest", "module": "super-harness-server",
+             "issue": "W04-UPLOAD-DUPLICATE-INTERMITTENT",
+             "covers": ["super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/DeerFlowUploadContext.java"]},
+            {"test": "DeerFlowSubtaskProjectionApiTest#cancellingThreeActualChildrenClosesTwoWaitingRequestsWithoutInventingChildFrames",
+             "module": "super-harness-server", "issue": "W08-SUBTASK-CANCEL-INTERMITTENT",
+             "covers": ["super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/DeerFlowSubtaskProjection.java"]},
+        ]
+
+    def upload_failure(self):
+        return {"class": "io.haifa.agent.superharness.server.api.DeerFlowUploadRunContextHttpTest",
+                "test": "DeerFlowUploadRunContextHttpTest",
+                "method": "duplicateUploadsAndReferencesStayDeterministicAndOriginalsAreImmutable",
+                "module": "super-harness-server", "kind": "error", "type": "java.lang.NullPointerException", "message": ""}
+
+    def test_parse_surefire_failure_and_pass(self):
+        upload = known_intermittent.parse_surefire_xml(
+            SUREFIRE_FIXTURES / "TEST-io.haifa.agent.superharness.server.api.DeerFlowUploadRunContextHttpTest.xml",
+            "super-harness-server")
+        self.assertEqual(upload["errors"], 1)
+        self.assertEqual(len(upload["failed"]), 1)
+        self.assertEqual(upload["failed"][0]["method"],
+                         "duplicateUploadsAndReferencesStayDeterministicAndOriginalsAreImmutable")
+        passing = known_intermittent.parse_surefire_xml(
+            SUREFIRE_FIXTURES / "TEST-io.haifa.agent.superharness.server.api.AgentSoulBootstrapHttpTest.xml")
+        self.assertEqual(passing["failed"], [])
+        failed = known_intermittent.failed_tests([upload])
+        self.assertEqual(failed[0]["test"], "DeerFlowUploadRunContextHttpTest")
+        self.assertEqual(failed[0]["module"], "super-harness-server")
+
+    def test_reactor_skipped_modules_from_the_log_excerpt(self):
+        log = (SUREFIRE_FIXTURES / "reactor-log-excerpt.txt").read_text(encoding="utf-8")
+        mapping = {"Super Harness DeerFlow Compatibility Server": "super-harness-server",
+                   "Super Harness Evidence Harness": "super-harness-harness"}
+        self.assertEqual(known_intermittent.reactor_skipped_modules(log, mapping), ["super-harness-harness"])
+
+    def test_manifest_loads(self):
+        entries = known_intermittent.load_manifest(ROOT / "tests/known-intermittent.json")
+        self.assertEqual([entry["issue"] for entry in entries],
+                         ["W04-UPLOAD-DUPLICATE-INTERMITTENT", "W08-SUBTASK-CANCEL-INTERMITTENT"])
+        self.assertTrue(all("covers" in entry for entry in entries))
+
+    def test_plan_allowed_and_each_denial(self):
+        entries = self.entries()
+        upload = self.upload_failure()
+        allowed = known_intermittent.intermittent_plan(
+            [upload], entries, ["super-harness-server/src/main/java/Other.java"], {})
+        self.assertTrue(allowed["use"])
+        self.assertEqual(allowed["reruns"], 3)
+        self.assertEqual(allowed["rerunClasses"], [upload["class"]])
+
+        unregistered = {**upload, "class": "io.x.OtherTest", "test": "OtherTest"}
+        self.assertFalse(known_intermittent.intermittent_plan([unregistered], entries, [], {})["use"])
+        self.assertFalse(known_intermittent.intermittent_plan([upload, upload, upload], entries, [], {})["use"])
+        touched = known_intermittent.intermittent_plan(
+            [upload], entries,
+            ["super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/DeerFlowUploadContext.java"], {})
+        self.assertFalse(touched["use"])
+        self.assertIn("covered", touched["reason"])
+        gap = known_intermittent.intermittent_plan([upload], entries, [], {"super-harness-server": ["NestedTest"]})
+        self.assertFalse(gap["use"])
+        self.assertIn("no surefire report", gap["reason"])
+        disabled = known_intermittent.intermittent_plan([upload], entries, [], {}, no_known_intermittent=True)
+        self.assertFalse(disabled["use"])
+
+    def test_method_qualified_entry_requires_the_method(self):
+        entries = self.entries()
+        base = {"class": "io.haifa.agent.superharness.server.api.DeerFlowSubtaskProjectionApiTest",
+                "test": "DeerFlowSubtaskProjectionApiTest", "module": "super-harness-server",
+                "kind": "failure", "type": "java.lang.AssertionError", "message": ""}
+        wrong = {**base, "method": "someOtherMethod"}
+        self.assertFalse(known_intermittent.intermittent_plan([wrong], entries, [], {})["use"])
+        right = {**base, "method": "cancellingThreeActualChildrenClosesTwoWaitingRequestsWithoutInventingChildFrames"}
+        self.assertTrue(known_intermittent.intermittent_plan([right], entries, [], {})["use"])
+
+    def test_module_report_gaps_from_source_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            module = Path(directory) / "super-harness-server"
+            (module / "src/test/java/a").mkdir(parents=True)
+            (module / "src/test/java/a/AlphaTest.java").write_text("", encoding="utf-8")
+            (module / "src/test/java/a/BetaTest.java").write_text("", encoding="utf-8")
+            (module / "src/test/java/a/Helper.java").write_text("", encoding="utf-8")
+            self.assertEqual(known_intermittent.module_report_gaps(module, [{"name": "a.AlphaTest"}]), ["BetaTest"])
+
+    def test_cover_matching(self):
+        self.assertTrue(known_intermittent.path_matches_cover(
+            "super-harness-server/src/main/java/x/A.java", "super-harness-server/src/main/java/x/A.java"))
+        self.assertTrue(known_intermittent.path_matches_cover("a/b/c.java", "a/b/*.java"))
+        self.assertFalse(known_intermittent.path_matches_cover("a/bc/c.java", "a/b"))
 
 
 if __name__ == "__main__":
