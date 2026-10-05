@@ -47,6 +47,7 @@ Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业�
   `<data-root>/skills_config.json` 的 `external_directory` 顺序选择；持久化配置须为绝对路径，配置变化后重启 Gateway。
   目录可指向 `skills` 或 `skills/public`，不自动发现邻近检出。目录缺失、链接、无效包或重复名称会拒绝加载；
   包版本按完整原始文件摘要生成，文件变化会使旧安全审查失效。带脚本包默认关闭，启用时执行现有静态与语义安全审查。
+  已发布的外部包原始文件保留在 `<data-root>/skills/external/.versions/`，供 SDK 恢复旧 Run；缓存被改动时拒绝加载。
   W16 将冻结来源的 23 个公共包导入目录；技能成果依赖各自模型、工具、凭据和外部服务，导入不代表逐项成果验收通过。
 - **MCP 平台**：`/api/mcp/config` 管理 `mcp_servers`，按 allowlist 投影为公开 `McpServerSpec`，连接、发现、
   命名、调用与释放由 SDK 拥有。`read_only` 的 server 工具走 SDK 只读网络预设并由 Bridge 自动放行；非

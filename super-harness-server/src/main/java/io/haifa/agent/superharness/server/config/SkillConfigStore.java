@@ -131,7 +131,9 @@ public final class SkillConfigStore {
     }
 
     public synchronized void reload() throws IOException {
-        state = candidate(readConfiguration());
+        State next = candidate(readConfiguration());
+        retainExternalFiles(next);
+        state = next;
     }
 
     public synchronized void setEnabled(String name, boolean enabled) throws IOException {
@@ -211,6 +213,7 @@ public final class SkillConfigStore {
 
     private void publish(ObjectNode payload) throws IOException {
         State next = candidate(payload);
+        retainExternalFiles(next);
         byte[] bytes = json.writeValueAsBytes(payload);
         if (bytes.length > 32 * 1024 * 1024) throw new IOException("Skill configuration exceeds its publication limit");
         Files.createDirectories(stateFile.getParent());
@@ -474,17 +477,87 @@ public final class SkillConfigStore {
                 var metadata = parsed.parsed().orElseThrow().metadata();
                 String name = SkillPackageFiles.name(metadata.name().value());
                 if (!names.add(name)) throw new IOException("Duplicate external Skill name: " + name);
-                boolean hasScripts = files.keySet().stream().anyMatch(path -> path.startsWith("scripts/"));
-                String license = metadata.license().orElse(files.containsKey("LICENSE.txt") ? "See package LICENSE.txt" : "");
-                result.add(new SkillRunTools.Package(name, metadata.description(), "public", license,
-                        "external-directory", "sha256:" + rawDigest, "sha256:" + rawDigest,
-                        SkillPackageFiles.hash(files.get("SKILL.md")), true, !hasScripts,
-                        new io.haifa.agent.skill.core.InMemorySkillSource(descriptor, parser, SkillAvailability.ENABLED,
-                                Map.of(directoryName, files))));
+                result.add(externalPackage(directoryName, rawDigest, files, true));
             }
         }
         if (result.isEmpty()) throw new IOException("Configured Skill directory contains no Skill packages");
+        Path retained = externalCache();
+        if (Files.exists(retained)) {
+            requireExternalDirectory(retained);
+            Set<String> current = result.stream().map(pkg -> pkg.name() + "@" + pkg.version())
+                    .collect(java.util.stream.Collectors.toSet());
+            try (var directories = Files.list(retained)) {
+                for (Path directory : directories.sorted().toList()) {
+                    requireExternalDirectory(directory);
+                    String directoryName = SkillPackageFiles.name(directory.getFileName().toString());
+                    try (var versions = Files.list(directory)) {
+                        for (Path version : versions.sorted().toList()) {
+                            String digest = version.getFileName().toString();
+                            if (digest.startsWith(".pending-")) continue;
+                            if (!digest.matches("[0-9a-f]{64}")) throw new IOException("Invalid retained Skill version");
+                            Map<String, byte[]> files = SkillPackageFiles.directory(requireExternalDirectory(version));
+                            if (!SkillPackageFiles.digest(files).equals(digest)) throw new IOException("Retained Skill bytes changed");
+                            SkillRunTools.Package pkg = externalPackage(directoryName, digest,
+                                    normalizedExternalFiles(version, files), false);
+                            if (current.add(pkg.name() + "@" + pkg.version())) result.add(pkg);
+                        }
+                    }
+                }
+            }
+        }
         return List.copyOf(result);
+    }
+
+    private SkillRunTools.Package externalPackage(String directory, String digest, Map<String, byte[]> files,
+            boolean active) throws IOException {
+        SkillPackageParser parser = externalParser();
+        SkillSourceDescriptor descriptor = externalDescriptor(directory, digest);
+        var parsed = parser.parseFiles(directory, files, descriptor);
+        if (parsed.parsed().isEmpty()) throw new IOException("External Skill failed parsing: " + directory);
+        var metadata = parsed.parsed().orElseThrow().metadata();
+        boolean hasScripts = files.keySet().stream().anyMatch(path -> path.startsWith("scripts/"));
+        String license = metadata.license().orElse(files.containsKey("LICENSE.txt") ? "See package LICENSE.txt" : "");
+        return new SkillRunTools.Package(SkillPackageFiles.name(metadata.name().value()), metadata.description(),
+                "public", license, "external-directory", "sha256:" + digest, "sha256:" + digest,
+                SkillPackageFiles.hash(files.get("SKILL.md")), active, active && !hasScripts,
+                new io.haifa.agent.skill.core.InMemorySkillSource(descriptor, parser, SkillAvailability.ENABLED,
+                        Map.of(directory, files)));
+    }
+
+    private Path externalCache() { return stateFile.getParent().resolve("skills/external/.versions"); }
+
+    /** Retain resource bytes for SDK-pinned Runs; no Run state or recovery semantics live here. */
+    private void retainExternalFiles(State candidate) throws IOException {
+        if (externalSkillsDirectory == null) return;
+        Path root = externalCache();
+        Path existing = root;
+        while (!Files.exists(existing)) existing = existing.getParent();
+        requireExternalDirectory(existing);
+        Files.createDirectories(root); requireExternalDirectory(root);
+        for (SkillRunTools.Package pkg : candidate.packages()) {
+            if (!pkg.sourceName().equals("external-directory") || !pkg.active()) continue;
+            String directory = pkg.source().descriptor().reference().sourceId();
+            Map<String, byte[]> files = SkillPackageFiles.directory(requireExternalDirectory(externalScanRoot().resolve(directory)));
+            String digest = SkillPackageFiles.digest(files);
+            if (!pkg.version().equals("sha256:" + digest)) throw new IOException("External Skill changed during publication");
+            Path parent = root.resolve(directory);
+            if (Files.exists(parent)) requireExternalDirectory(parent);
+            Files.createDirectories(parent);
+            Path target = parent.resolve(digest);
+            if (Files.exists(target)) {
+                if (!SkillPackageFiles.digest(SkillPackageFiles.directory(requireExternalDirectory(target))).equals(digest)) {
+                    throw new IOException("Retained Skill bytes changed");
+                }
+                continue;
+            }
+            Path pending = parent.resolve(".pending-" + UUID.randomUUID());
+            Files.createDirectory(pending);
+            for (var file : files.entrySet()) {
+                Path destination = pending.resolve(file.getKey());
+                Files.createDirectories(destination.getParent()); Files.write(destination, file.getValue());
+            }
+            Files.move(pending, target, StandardCopyOption.ATOMIC_MOVE);
+        }
     }
 
     private List<SkillRunTools.Package> readManifest() throws IOException {

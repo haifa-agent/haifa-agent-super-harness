@@ -109,6 +109,28 @@ class ExternalSkillDirectoryTest {
         assertThat(store.detail("chart-visualization").orElseThrow().get("version")).isEqualTo(version);
     }
 
+    @Test void changedDirectoryRetainsPinnedInstructionsAcrossReloadAndRestart() throws Exception {
+        Path root = packages(); var store = store(root);
+        var selection = SkillRunTools.Selection.of(java.util.Set.of("bootstrap"));
+        var original = store.projection(selection).catalog().snapshot().bindings().getFirst();
+        String version = store.detail("bootstrap").orElseThrow().get("version").toString();
+        var versions = java.util.Map.of("bootstrap", "bootstrap@" + version);
+        Files.writeString(root.resolve("bootstrap/SKILL.md"), Files.readString(root.resolve("bootstrap/SKILL.md"))
+                .replace("Use the package instructions.", "Updated instructions."));
+        store.reload(); store.setEnabled("bootstrap", false);
+        var restarted = store(root);
+        assertThat(restarted.recoveryProjection(selection, versions).catalog().snapshot().bindings()).containsExactly(original);
+        assertThat(restarted.list()).hasSize(23);
+        assertThat(restarted.projection(selection).allowedSkills()).isEmpty();
+        Path retained = temporary.resolve("data/skills/external/.versions/bootstrap");
+        try (var versionsOnDisk = Files.list(retained)) {
+            Path old = versionsOnDisk.filter(path -> path.getFileName().toString().equals(version.substring(7)))
+                    .findFirst().orElseThrow();
+            Files.writeString(old.resolve("SKILL.md"), "tampered");
+        }
+        assertThatThrownBy(() -> store(root)).isInstanceOf(java.io.IOException.class).hasMessageContaining("Retained Skill bytes changed");
+    }
+
     @Test void missingDirectoryNeverFallsBackAndNamesCannotEscape() throws Exception {
         Path root = packages(); var store = store(root);
         assertThatThrownBy(() -> store.reviewFiles("../bootstrap")).isInstanceOf(IllegalArgumentException.class);
