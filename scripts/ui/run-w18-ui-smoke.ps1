@@ -33,6 +33,9 @@ param(
     [switch]$SkipBuild,
     [ValidateNotNullOrEmpty()]
     [string]$CaseTitle,
+    # Repeat the selected spec in one service start. Only valid on a warm round.
+    [ValidateRange(1, 5)]
+    [int]$Passes = 1,
     [switch]$PreflightOnly
 )
 
@@ -66,6 +69,17 @@ if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill) {
     }
     # Reuses the live DeepSeek managed model and skips the controlled loopback provider.
     $LiveDeepSeek = $true
+}
+
+if ($Passes -gt 1) {
+    # The planner owns the option rules (warm only; never with -CaseTitle/-PreflightOnly) so
+    # the runner and its unit tests cannot drift.
+    $validate = @('-B', (Join-Path $PSScriptRoot '../lib/ui_round_plan.py'), 'validate', '--passes', [string]$Passes)
+    if ($CaseTitle) { $validate += @('--case-title', $CaseTitle) }
+    if ($PreflightOnly) { $validate += @('--preflight-only') }
+    if ($SkipBuild) { $validate += @('--skip-build') }
+    & python @validate
+    if ($LASTEXITCODE -ne 0) { throw "Invalid -Passes $Passes options for the W18 UI runner." }
 }
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
@@ -165,6 +179,8 @@ $managedEnvironment = @{
     })
     W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill) { '360000' } elseif ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog) { '120000' } else { '60000' })
     W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog) { 'on' } else { 'retain-on-failure' })
+    # Pass index handed to the spec; restored with the rest at the end.
+    W18_PASS_INDEX = '1'
     # Kept disabled through the ordinary build/test gate. The runner enables it
     # only immediately before launching the dedicated guarded test process.
     W05_INTERACTION_ACCEPTANCE = $null
@@ -173,6 +189,7 @@ $savedEnvironment = @{}
 $testExitCode = 1
 $expectedCases = @()
 $selectedCases = @()
+$passesSummary = @()
 $frontendBuild = 'NOT_RUN'
 $providerProcess = $null
 $serverBuild = $(if ($SkipBuild -or $SkipServerBuild) { 'REUSED' } else { 'NOT_RUN' })
@@ -464,27 +481,80 @@ try {
         evidenceRoot = $evidenceRoot
     } | ConvertTo-Json
 
-    Push-Location $root
-    try {
-        $playwrightArguments = @((Join-Path $root 'frontend/node_modules/@playwright/test/cli.js'), 'test', '--config', 'tests/ui/smoke/playwright.config.cjs')
-        if ($selection.Grep) { $playwrightArguments += @('--grep', $selection.Grep) }
-        $playwright = Start-FixtureProcess -Fixture $fixture -Name Playwright -FilePath (Get-Command node.exe).Source `
-            -ArgumentList $playwrightArguments `
-            -WorkingDirectory $root -StdoutPath (Join-Path $evidenceRoot 'playwright.raw.log') -StderrPath (Join-Path $evidenceRoot 'playwright.stderr.log')
-        $testExitCode = Wait-FixtureExit -Entry $playwright `
-            -TimeoutSec ([Math]::Max(1, $selectedCases.Count) * ([int]$managedEnvironment.W18_PLAYWRIGHT_TIMEOUT_MS / 1000) + 60)
-        $fixture.TestExitCode = $testExitCode
-        if ($testExitCode -ne 0) { throw "W18 UI smoke failed with exit code $testExitCode." }
-        Write-FixtureCaseResults -EvidenceDirectory $evidenceRoot -ExpectedCases $expectedCases
-        $actualCases = @(Get-Content -Raw (Join-Path $evidenceRoot 'case-results.json') | ConvertFrom-Json)
+    if ($Passes -gt 1) {
+        # One service start, several independent Playwright processes. A failing pass does not
+        # stop the later ones unless the service itself is no longer healthy (a pass that cannot
+        # launch still only fails itself; readiness was already asserted before the loop).
         $allowedNotRun = @($(if ($DeferUxV1Web) { 'C web: web_search -> web_fetch without approval' }))
-        Assert-SmokeCaseResults -Rows $actualCases -SelectedCases $selectedCases -AllowedNotRun $allowedNotRun
-        [ordered]@{ selected = $selectedCases.Count; passed = @($actualCases | Where-Object result -eq 'PASS').Count
-            notRun = @($actualCases | Where-Object result -eq 'NOT_RUN').Count; exitCode = $testExitCode
-            rawLog = (Join-Path $evidenceRoot 'playwright.raw.log') } | ConvertTo-Json -Compress | Write-Output
+        for ($passIndex = 1; $passIndex -le $Passes; $passIndex++) {
+            $passDir = Join-Path $evidenceRoot "pass-$passIndex"
+            $null = New-Item -ItemType Directory -Force -Path $passDir
+            [Environment]::SetEnvironmentVariable('W18_PASS_INDEX', [string]$passIndex, 'Process')
+            $passStartMs = $fixture.Watch.ElapsedMilliseconds
+            $passExit = $null
+            $passFailure = $null
+            Push-Location $root
+            try {
+                $playwrightArguments = @((Join-Path $root 'frontend/node_modules/@playwright/test/cli.js'), 'test', '--config', 'tests/ui/smoke/playwright.config.cjs')
+                if ($selection.Grep) { $playwrightArguments += @('--grep', $selection.Grep) }
+                $playwright = Start-FixtureProcess -Fixture $fixture -Name "Playwright$passIndex" -FilePath (Get-Command node.exe).Source `
+                    -ArgumentList $playwrightArguments `
+                    -WorkingDirectory $root -StdoutPath (Join-Path $passDir 'playwright.raw.log') -StderrPath (Join-Path $passDir 'playwright.stderr.log')
+                $passExit = Wait-FixtureExit -Entry $playwright `
+                    -TimeoutSec ([Math]::Max(1, $selectedCases.Count) * ([int]$managedEnvironment.W18_PLAYWRIGHT_TIMEOUT_MS / 1000) + 60)
+            }
+            catch { $passFailure = $_.Exception.Message }
+            finally { Pop-Location }
+            try {
+                Write-FixtureCaseResults -EvidenceDirectory $passDir -ExpectedCases $expectedCases
+                $passCases = @(Get-Content -Raw (Join-Path $passDir 'case-results.json') | ConvertFrom-Json)
+                Assert-SmokeCaseResults -Rows $passCases -SelectedCases $selectedCases -AllowedNotRun $allowedNotRun
+                if ($passExit -ne 0) { throw "Playwright exit code $passExit." }
+            }
+            catch {
+                if ($null -eq $passFailure) { $passFailure = $_.Exception.Message }
+                if ($null -eq $fixture.FirstFailure) { $fixture.FirstFailure = [ordered]@{ phase = 'assertions'; message = $passFailure; pass = $passIndex } }
+            }
+            $fixture.TestExitCode = $passExit
+            $passesSummary += [ordered]@{
+                profile = $tag; pass = $passIndex
+                assertionMs = $fixture.Watch.ElapsedMilliseconds - $passStartMs
+                exitCode = $passExit; firstFailure = $passFailure
+                caseResults = "pass-$passIndex/case-results.json"
+            }
+        }
+        [ordered]@{ root = $evidenceRoot; runs = @($passesSummary | ForEach-Object {
+            [ordered]@{ profile = $_.profile; pass = $_.pass; directory = (Join-Path $evidenceRoot "pass-$($_.pass)")
+                relativeDirectory = "pass-$($_.pass)"; caseResults = $_.caseResults
+                assertionMs = $_.assertionMs; exitCode = $_.exitCode; firstFailure = $_.firstFailure } }) } |
+            ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'ui-round-plan.json') -Encoding utf8
+        $failedPasses = @($passesSummary | Where-Object { $_.exitCode -ne 0 -or $_.firstFailure })
+        if ($failedPasses.Count) { throw "W18 UI smoke: $($failedPasses.Count) of $Passes passes failed." }
+        [ordered]@{ passes = $Passes; results = @($passesSummary | ForEach-Object { [ordered]@{ pass = $_.pass; exitCode = $_.exitCode; firstFailure = $_.firstFailure; caseResults = $_.caseResults } }) } | ConvertTo-Json -Compress | Write-Output
     }
-    finally {
-        Pop-Location
+    else {
+        Push-Location $root
+        try {
+            $playwrightArguments = @((Join-Path $root 'frontend/node_modules/@playwright/test/cli.js'), 'test', '--config', 'tests/ui/smoke/playwright.config.cjs')
+            if ($selection.Grep) { $playwrightArguments += @('--grep', $selection.Grep) }
+            $playwright = Start-FixtureProcess -Fixture $fixture -Name Playwright -FilePath (Get-Command node.exe).Source `
+                -ArgumentList $playwrightArguments `
+                -WorkingDirectory $root -StdoutPath (Join-Path $evidenceRoot 'playwright.raw.log') -StderrPath (Join-Path $evidenceRoot 'playwright.stderr.log')
+            $testExitCode = Wait-FixtureExit -Entry $playwright `
+                -TimeoutSec ([Math]::Max(1, $selectedCases.Count) * ([int]$managedEnvironment.W18_PLAYWRIGHT_TIMEOUT_MS / 1000) + 60)
+            $fixture.TestExitCode = $testExitCode
+            if ($testExitCode -ne 0) { throw "W18 UI smoke failed with exit code $testExitCode." }
+            Write-FixtureCaseResults -EvidenceDirectory $evidenceRoot -ExpectedCases $expectedCases
+            $actualCases = @(Get-Content -Raw (Join-Path $evidenceRoot 'case-results.json') | ConvertFrom-Json)
+            $allowedNotRun = @($(if ($DeferUxV1Web) { 'C web: web_search -> web_fetch without approval' }))
+            Assert-SmokeCaseResults -Rows $actualCases -SelectedCases $selectedCases -AllowedNotRun $allowedNotRun
+            [ordered]@{ selected = $selectedCases.Count; passed = @($actualCases | Where-Object result -eq 'PASS').Count
+                notRun = @($actualCases | Where-Object result -eq 'NOT_RUN').Count; exitCode = $testExitCode
+                rawLog = (Join-Path $evidenceRoot 'playwright.raw.log') } | ConvertTo-Json -Compress | Write-Output
+        }
+        finally {
+            Pop-Location
+        }
     }
 }
 catch {
@@ -513,6 +583,13 @@ finally {
             dataRoot = $dataRoot
             executionScope = $(if ($PreflightOnly) { 'preflight-only' } elseif ($CaseTitle) { 'selected-case' } else { 'full-profile' })
             selectedCases = $selectedCases
+            passes = $passesSummary
+        }
+        if ($Passes -gt 1) {
+            # Merge the per-pass case results into the top-level file and record the passes array
+            # in flow-health (already set from $passesSummary above when the file is valid JSON).
+            & python -B (Join-Path $root 'scripts/lib/ui_round_plan.py') merge --root $evidenceRoot --runs (Join-Path $evidenceRoot 'ui-round-plan.json')
+            if ($LASTEXITCODE -ne 0) { Write-Host 'run-w18-ui-smoke: repeated-pass evidence merge failed.' }
         }
         Write-Output "flowHealth=$evidenceRoot/flow-health.json"
     }
