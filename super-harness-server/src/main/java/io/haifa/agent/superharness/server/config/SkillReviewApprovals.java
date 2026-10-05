@@ -30,7 +30,8 @@ final class SkillReviewApprovals {
         if (!java.util.Set.of("allow", "warn").contains(decision)) throw new IllegalArgumentException("Skill review did not permit publication");
         return json.createObjectNode().put("registration_digest", registration.registrationDigest().value())
                 .put("package_digest", registration.packageIndex().digest().value())
-                .put("issued_at", Instant.now().toString()).put("decision", decision).put("revoked", false);
+                .put("issued_at", Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS).toString())
+                .put("decision", decision).put("revoked", false);
     }
 
     static SkillPackageReviewGrant grant(SkillRegistration registration, JsonNode evidence) {
