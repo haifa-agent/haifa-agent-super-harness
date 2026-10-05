@@ -8,7 +8,8 @@ reactor log excerpt that names the skipped modules.
 The plan uses the intermittent branch only when every condition holds:
 
 1. at most two failed/errored tests, and every one is in the manifest;
-2. the change since the merge base touches none of the matched entries' ``covers``;
+2. the change scope is known and touches none of the matched entries' ``covers`` (on a
+   branch: everything since the merge base; on the base branch itself: the last commit);
 3. every *other* test class of a failed module has a surefire report (the module really ran);
 4. ``-NoKnownIntermittent`` was not given.
 
@@ -201,14 +202,40 @@ def module_names(repo: Path) -> dict[str, str]:
     return mapping
 
 
-def changed_files(repo: Path, base: str) -> list[str]:
+def change_scope(repo: Path, base: str) -> tuple[list[str] | None, str]:
+    """The files this run's change touches, or ``None`` when that cannot be established.
+
+    On a branch it is everything since the merge base with ``base`` (``origin/<base>`` when
+    there is no local ref), plus uncommitted and untracked files. When HEAD *is* the merge
+    base (the gate runs on the base branch itself, e.g. right after a merge) the scope is the
+    last commit, because that is the change being verified. Any git failure returns ``None``:
+    an unknown scope must never read as "nothing changed".
+    """
     try:
-        merge_base = git(repo, "merge-base", "HEAD", base).strip()
-        tracked = git(repo, "diff", "--name-only", merge_base).splitlines()
+        head = git(repo, "rev-parse", "HEAD").strip()
+    except RuntimeError as error:
+        return None, f"cannot resolve HEAD: {error}"
+    merge_base = None
+    for candidate in (base, f"origin/{base}"):
+        try:
+            merge_base = git(repo, "merge-base", "HEAD", candidate).strip()
+            break
+        except RuntimeError:
+            continue
+    if not merge_base:
+        return None, f"no merge base with '{base}' or 'origin/{base}'"
+    try:
+        if merge_base == head:
+            tracked = git(repo, "diff", "--name-only", "HEAD^", "HEAD").splitlines()
+            described = "the last commit (HEAD is the base branch)"
+        else:
+            tracked = git(repo, "diff", "--name-only", merge_base, "HEAD").splitlines()
+            described = f"since merge base {merge_base[:12]}"
+        tracked += git(repo, "diff", "--name-only", "HEAD").splitlines()
         untracked = git(repo, "ls-files", "--others", "--exclude-standard").splitlines()
-    except RuntimeError:
-        return []
-    return sorted({line for line in tracked + untracked if line})
+    except RuntimeError as error:
+        return None, f"cannot list the changed files: {error}"
+    return sorted({line for line in tracked + untracked if line}), described
 
 
 def _deny(reason: str, failed: list[dict]) -> dict:
@@ -217,12 +244,15 @@ def _deny(reason: str, failed: list[dict]) -> dict:
             "skippedModules": [], "skippedModuleTests": []}
 
 
-def intermittent_plan(failed: list[dict], manifest: list[dict], changed: list[str],
+def intermittent_plan(failed: list[dict], manifest: list[dict], changed: list[str] | None,
                       module_gaps: dict[str, list[str]], skipped: list[str] | None = None,
                       no_known_intermittent: bool = False, reruns: int = DEFAULT_RERUNS,
                       skipped_tests: dict[str, list[str]] | None = None) -> dict:
+    """``changed`` is the change scope; ``None`` means it could not be established."""
     if no_known_intermittent:
         return _deny("-NoKnownIntermittent was given", failed)
+    if changed is None:
+        return _deny("the change scope could not be established, so 'covers' cannot be checked", failed)
     if not failed:
         return _deny("no failed test was read from the surefire reports", failed)
     if len(failed) > 2:
@@ -283,8 +313,10 @@ def main(argv: list[str] | None = None) -> int:
         module_reports = [report for report in reports if report["module"] == module]
         module_gaps[module] = module_report_gaps(repo / module, module_reports)
     skipped_tests = {module: sorted(expected_test_classes(repo / module)) for module in skipped}
-    plan = intermittent_plan(failed, manifest, changed_files(repo, args.base), module_gaps,
+    changed, scope = change_scope(repo, args.base)
+    plan = intermittent_plan(failed, manifest, changed, module_gaps,
                              skipped, args.no_known_intermittent, skipped_tests=skipped_tests)
+    plan["changeScope"] = scope
     print(json.dumps(plan, ensure_ascii=False))
     return 0
 

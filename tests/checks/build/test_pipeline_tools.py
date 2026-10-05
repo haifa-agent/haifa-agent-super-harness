@@ -1012,11 +1012,11 @@ class EvidenceReuseTest(unittest.TestCase):
     def test_full_gate_verdicts(self):
         target = {"sourceTree": "tree", "sdkIdentity": "sdk", "javaInputFingerprint": "fp"}
         self.assertEqual(evidence_reuse.evaluate_full_gate(
-            {"status": "PASS", "javaInputFingerprint": "fp"}, target)[0], "REUSABLE")
+            {"status": "PASS", "javaInputFingerprint": "fp", "sdkIdentity": "sdk"}, target)[0], "REUSABLE")
         self.assertEqual(evidence_reuse.evaluate_full_gate(
-            {"status": "FAIL", "javaInputFingerprint": "fp"}, target)[0], "STALE")
+            {"status": "FAIL", "javaInputFingerprint": "fp", "sdkIdentity": "sdk"}, target)[0], "STALE")
         self.assertEqual(evidence_reuse.evaluate_full_gate(
-            {"status": "PASS", "javaInputFingerprint": "other"}, target)[0], "STALE")
+            {"status": "PASS", "javaInputFingerprint": "other", "sdkIdentity": "sdk"}, target)[0], "STALE")
         self.assertEqual(evidence_reuse.evaluate_full_gate({"status": "PASS"}, target),
                          ("STALE", evidence_reuse.STALE_OLD_EVIDENCE))
 
@@ -1024,6 +1024,14 @@ class EvidenceReuseTest(unittest.TestCase):
         target = {"sourceTree": "tree", "sdkIdentity": "sdk", "javaInputFingerprint": "fp"}
         reusable = {"sourceTree": "tree", "sdkIdentity": "sdk", "sourceDirty": False}
         self.assertEqual(evidence_reuse.evaluate_tree_evidence(reusable, target)[0], "REUSABLE")
+        unknown = {"sourceTree": "tree", "sdkIdentity": "UNAVAILABLE", "sourceDirty": False}
+        unknown_target = dict(target, sdkIdentity="UNAVAILABLE")
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence(unknown, unknown_target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence(unknown, target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence(reusable, unknown_target)[0], "STALE")
+        gate = {"status": "PASS", "javaInputFingerprint": target["javaInputFingerprint"], "sdkIdentity": "UNAVAILABLE"}
+        self.assertEqual(evidence_reuse.evaluate_full_gate(gate, target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_full_gate(dict(gate, sdkIdentity="sdk"), unknown_target)[0], "STALE")
         self.assertEqual(evidence_reuse.evaluate_tree_evidence(
             {"sourceTree": "tree", "sdkIdentity": "sdk", "sourceDirty": True}, target)[0], "STALE")
         self.assertEqual(evidence_reuse.evaluate_tree_evidence(
@@ -1101,6 +1109,41 @@ class KnownIntermittentTest(unittest.TestCase):
         denied = known_intermittent.intermittent_plan([upload], entries, [], {}, no_known_intermittent=True)
         self.assertEqual(denied["rerunByModule"], [])
         self.assertEqual(denied["skippedModuleTests"], [])
+
+    def test_unknown_change_scope_denies_the_branch(self):
+        entries = self.entries()
+        upload = self.upload_failure()
+        denied = known_intermittent.intermittent_plan([upload], entries, None, {})
+        self.assertFalse(denied["use"])
+        self.assertIn("change scope", denied["reason"])
+        self.assertTrue(known_intermittent.intermittent_plan([upload], entries, [], {})["use"])
+
+    def test_change_scope_on_a_branch_on_the_base_branch_and_without_a_base(self):
+        def git(repo, *args):
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                           check=True, capture_output=True)
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            (repo / "a.txt").write_text("a", encoding="utf-8")
+            git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", "one")
+            (repo / "covered.java").write_text("x", encoding="utf-8")
+            git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", "two")
+            # On the base branch itself the scope is the last commit, not "nothing".
+            files, described = known_intermittent.change_scope(repo, "main")
+            self.assertEqual(files, ["covered.java"])
+            self.assertIn("last commit", described)
+            git(repo, "checkout", "-q", "-b", "feature")
+            (repo / "b.txt").write_text("b", encoding="utf-8")
+            git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", "three")
+            (repo / "untracked.txt").write_text("u", encoding="utf-8")
+            files, described = known_intermittent.change_scope(repo, "main")
+            self.assertEqual(files, ["b.txt", "untracked.txt"])
+            self.assertIn("merge base", described)
+            files, described = known_intermittent.change_scope(repo, "no-such-branch")
+            self.assertIsNone(files)
+            self.assertIn("no merge base", described)
 
     def test_manifest_loads(self):
         entries = known_intermittent.load_manifest(ROOT / "tests/known-intermittent.json")

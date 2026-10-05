@@ -349,7 +349,9 @@ $summaryFields = [ordered]@{
     errors = $counts.errors
     skipped = $counts.skipped
     failedTests = @($failedTests)
-    elapsedMs = $watch.ElapsedMilliseconds
+    # The Maven stopwatch stopped after the first invocation; a recovered gate also spent time
+    # on reruns, skipped-module tests and packaging, so it reports the whole run.
+    elapsedMs = $(if ($null -ne $knownIntermittent) { $runWatch.ElapsedMilliseconds } else { $watch.ElapsedMilliseconds })
     serverBuildStamp = $(if (Test-Path -LiteralPath $stampPath -PathType Leaf) { $stampPath } else { $null })
     logPath = $logPath
     summaryPath = $summaryPath

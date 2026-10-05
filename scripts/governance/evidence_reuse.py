@@ -96,10 +96,19 @@ def find_reusable_summary(directory: Path, fingerprint: str | None) -> Path | No
     return candidates[-1][1]
 
 
+def sdk_unknown(value) -> bool:
+    return not value or value == source_fingerprint.SDK_UNAVAILABLE
+
+
 def evaluate_full_gate(summary: dict, target: dict) -> tuple[str, str]:
     fingerprint = summary.get("javaInputFingerprint")
     if fingerprint is None:
         return "STALE", STALE_OLD_EVIDENCE
+    # Two unknown SDK identities being "equal" proves nothing about the SDK contents.
+    if sdk_unknown(target.get("sdkIdentity")):
+        return "STALE", "目标提交的 SDK 身份不可用"
+    if sdk_unknown(summary.get("sdkIdentity")):
+        return "STALE", "证据的 SDK 身份不可用"
     if summary.get("status") != "PASS":
         return "STALE", f"摘要状态不是 PASS（{summary.get('status')}）"
     if fingerprint != target["javaInputFingerprint"]:
@@ -112,6 +121,10 @@ def evaluate_tree_evidence(summary: dict, target: dict) -> tuple[str, str]:
         return "STALE", STALE_OLD_EVIDENCE
     if summary.get("sourceDirty"):
         return "STALE", "证据来自有未提交修改的工作区"
+    if sdk_unknown(target.get("sdkIdentity")):
+        return "STALE", "目标提交的 SDK 身份不可用"
+    if sdk_unknown(summary.get("sdkIdentity")):
+        return "STALE", "证据的 SDK 身份不可用"
     if summary.get("sourceTree") != target["sourceTree"]:
         return "STALE", "源码树哈希不同"
     if summary.get("sdkIdentity") != target["sdkIdentity"]:
