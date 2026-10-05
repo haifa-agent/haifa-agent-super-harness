@@ -68,7 +68,7 @@ def shpm_result(status: str | None) -> str:
 def read_json(path: Path):
     try:
         return json.loads(path.read_text(encoding="utf-8-sig"))
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None
 
 
@@ -100,7 +100,14 @@ def parse_summary_start(identity: str | None):
 
 
 def is_ui_evidence_dir(path: Path) -> bool:
-    return (path / "flow-health.json").is_file() and (path / "case-results.json").is_file()
+    if not (path / "flow-health.json").is_file():
+        return False
+    if (path / "case-results.json").is_file():
+        return True
+    # A repeated / merged run whose top-level merge has not happened still carries its
+    # per-pass evidence through the flow-health ``passes`` array.
+    flow = read_json(path / "flow-health.json") or {}
+    return bool(flow.get("passes"))
 
 
 def classify_json(path: Path) -> tuple[str, dict | None]:
@@ -232,6 +239,21 @@ def refresh_records(path: Path, summary: dict, anchor: Path) -> list[dict]:
     }]
 
 
+def pass_case_rows(path: Path, entry: dict, flow: dict) -> list[dict]:
+    """Case rows for one pass, from its own ``case-results.json`` or the merged top level."""
+    relative = entry.get("caseResults")
+    if relative:
+        rows = read_json(path / str(relative))
+        if isinstance(rows, list):
+            return rows
+    merged = read_json(path / "case-results.json") or []
+    if not isinstance(merged, list):
+        return []
+    profile = entry.get("profile") or flow.get("acceptanceProfile")
+    number = entry.get("pass")
+    return [row for row in merged if row.get("profile") == profile and row.get("pass") == number]
+
+
 def ui_records(path: Path, anchor: Path) -> list[dict]:
     flow = read_json(path / "flow-health.json") or {}
     cases = read_json(path / "case-results.json") or []
@@ -243,6 +265,35 @@ def ui_records(path: Path, anchor: Path) -> list[dict]:
     identity = Path(str(flow.get("evidenceRoot") or "")).name or path.name
     start = parse_run_start(identity)
     cleanup_ok = (flow.get("cleanup") or {}).get("success")
+    passes = flow.get("passes")
+    if isinstance(passes, list) and passes:
+        records = []
+        for entry in passes:
+            entry_profile = entry.get("profile") or profile
+            number = int(entry.get("pass") or 1)
+            for case in pass_case_rows(path, entry, flow):
+                name = case.get("name") or "case"
+                first_failure = case.get("firstFailure")
+                records.append({
+                    "base_name": f"ui-{entry_profile}-{slugify(name)}",
+                    "round": True,
+                    "explicitPass": number,
+                    "criteria": name,
+                    "result": shpm_result(case.get("result")),
+                    "command": f"scripts/ui/run-w18-ui-smoke.ps1 ({entry_profile}) -Passes {len(passes)}",
+                    "sha": flow.get("sourceSha") or "",
+                    "raw": str(path),
+                    "duration": f"{int((entry.get('assertionMs') or 0) / 1000)}s",
+                    "retry": int(flow.get("retryCount") or 0),
+                    "summary": f"profile={entry_profile} pass={number} exitCode={entry.get('exitCode')} "
+                               f"cleanup={'ok' if cleanup_ok else 'FAILED'}"
+                               + (f" first failure: {first_failure}" if first_failure else ""),
+                    "identity": f"{identity}-pass{number}",
+                    "start": start,
+                    "local_path": path,
+                    "anchor": anchor,
+                })
+        return records
     records = []
     for case in cases:
         name = case.get("name") or "case"
@@ -325,7 +376,13 @@ def discover(roots: list[Path]) -> tuple[list[dict], list[Path]]:
 
 
 def assign_rounds(records: list[dict]) -> None:
-    """Adds -r1 / -r2 to UI records that share a profile and commit in this call."""
+    """Adds -r1 / -r2 / ... to UI records that share a check name and commit in this call.
+
+    Every run counts, whether it is its own evidence directory or one pass of a ``-Passes n``
+    directory: runs are ordered by the directory's start time and then by pass number, and
+    numbered across all directories, so two ``-Passes 2`` directories give ``-r1`` .. ``-r4``
+    instead of two colliding ``-r1`` / ``-r2`` pairs. A single run keeps the bare name.
+    """
     groups: dict[tuple[str, str], list[dict]] = {}
     for record in records:
         if record["round"]:
@@ -336,7 +393,9 @@ def assign_rounds(records: list[dict]) -> None:
         if len(group) == 1:
             group[0]["name"] = group[0]["base_name"]
             continue
-        group.sort(key=lambda record: (record["start"] is None, record["start"] or 0, record["identity"]))
+        group.sort(key=lambda record: (record["start"] is None, record["start"] or datetime.datetime.min,
+                                       record["identity"].rsplit("-pass", 1)[0],
+                                       int(record.get("explicitPass") or 0), record["identity"]))
         for index, record in enumerate(group, 1):
             record["name"] = f"{record['base_name']}-r{index}"
 

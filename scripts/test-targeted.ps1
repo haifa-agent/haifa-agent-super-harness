@@ -13,18 +13,24 @@
     Maven output goes to a log file under local-tmp. A JSON summary is written to stdout.
     Matching zero tests is a failure.
 
+    -Slow adds -Pslow-tests, which runs only tests tagged @Tag("slow"). -Test may then be
+    omitted to run every slow test, or given to narrow the modules to those classes.
+
 .EXAMPLE
     pwsh -NoProfile -File scripts/test-targeted.ps1 -Test LocalServerConfigurationTest
 
 .EXAMPLE
     pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'AgentSoulPromptTest,UpdateAgentToolTest' -LowMemory
+
+.EXAMPLE
+    pwsh -NoProfile -File scripts/test-targeted.ps1 -Slow -Test DeerFlowTaskDelegationApiTest
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
-    [Parameter(Mandatory = $true)]
     [string[]]$Test,
     [string]$Module = 'super-harness-server',
     [switch]$LowMemory,
+    [switch]$Slow,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Rejected = @()
 )
@@ -36,8 +42,8 @@ if ($Rejected.Count -gt 0) {
     throw "Unsupported argument(s): $($Rejected -join ' '). This entry point only runs targeted tests; goals, -DskipTests and -Dhaifa.version cannot be passed."
 }
 $patterns = @($Test | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-if ($patterns.Count -eq 0) {
-    throw '-Test requires at least one test class pattern.'
+if ($patterns.Count -eq 0 -and -not $Slow) {
+    throw '-Test requires at least one test class pattern unless -Slow is given.'
 }
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -46,7 +52,15 @@ $root = Split-Path -Parent $PSScriptRoot
 Use-SafeNoProxy
 $sdk = Resolve-HaifaSdkSelection -RepositoryRoot $root
 
-$mavenArguments = @('-o', '-ntp', '-pl', $Module, '-am', "-Dtest=$($patterns -join ',')", '-Dsurefire.failIfNoSpecifiedTests=false')
+$mavenArguments = @('-o', '-ntp', '-pl', $Module, '-am')
+if ($patterns.Count -gt 0) {
+    $mavenArguments += "-Dtest=$($patterns -join ',')"
+    $mavenArguments += '-Dsurefire.failIfNoSpecifiedTests=false'
+}
+# Runs only @Tag("slow") tests; without -Test this is every slow test in the reactor.
+if ($Slow) {
+    $mavenArguments += '-Pslow-tests'
+}
 if ($sdk.MavenArgument) {
     $mavenArguments += $sdk.MavenArgument
 }
@@ -100,6 +114,7 @@ if ($status -eq 'FAIL_NO_TESTS_MATCHED') {
     status = $status
     exitCode = $exitCode
     command = "mvn.cmd $($mavenArguments -join ' ')"
+    slow = [bool]$Slow
     sdkSelection = $sdk.Status
     haifaVersion = $sdk.HaifaVersion
     tests = $counts.tests

@@ -26,6 +26,7 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /** Start new acceptance tests here: shared production Gateway/Provider, current Run approval and verified Artifact bytes. */
@@ -429,6 +430,7 @@ class ProductionWriteFileHttpTest {
      * stream and the terminal replay.
      */
     @Test
+    @Tag("slow")
     void runStreamIgnoresSdkBudgetThresholdEventAndProjectsEveryToolMessage() throws Exception {
         // One Tool call per model turn; >50 turns crosses 50% of maxIterations/maxModelCalls (100).
         int toolCalls = 55;

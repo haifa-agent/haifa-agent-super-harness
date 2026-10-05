@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import io
 import json
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -39,6 +42,7 @@ gate_resources = load("scripts/lib/gate_resources.py")
 source_fingerprint = load("scripts/lib/source_fingerprint.py")
 evidence_reuse = load("scripts/governance/evidence_reuse.py")
 known_intermittent = load("scripts/lib/known_intermittent.py")
+ui_round_plan = load("scripts/lib/ui_round_plan.py")
 
 SUREFIRE_FIXTURES = ROOT / "tests/checks/build/fixtures/surefire"
 
@@ -588,6 +592,34 @@ class SdkApiDigestTest(unittest.TestCase):
     def git(self, repo, *args):
         subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
+    @classmethod
+    def setUpClass(cls):
+        # Every test needs the same fixture JAR, and a fresh javac/jar JVM pair costs more than
+        # the rest of each test. Build the bytes once for the whole class and copy them per test.
+        template = Path(tempfile.mkdtemp())
+        try:
+            sources = template / "src/fixture"
+            sources.mkdir(parents=True)
+            (sources / "Sample.java").write_text(
+                "package fixture;\npublic record Sample(int a, String b) {}\n", encoding="utf-8")
+            (sources / "Widget.java").write_text(
+                "package fixture;\npublic class Widget {\n"
+                "    public void visible() {}\n    protected void guarded() {}\n    void hidden() {}\n"
+                "    public static class Nested { public int n; }\n"
+                "    public static Runnable anonymous() { return new Runnable() { public void run() {} }; }\n}\n",
+                encoding="utf-8")
+            (sources / "Hidden.java").write_text(
+                "package fixture;\nclass Hidden { public void x() {} }\n", encoding="utf-8")
+            classes = template / "classes"
+            classes.mkdir()
+            subprocess.run(["javac", "-d", str(classes), *[str(p) for p in sorted(sources.glob("*.java"))]], check=True)
+            jar = template / "fixture.jar"
+            subprocess.run(["jar", "--create", "--file", str(jar), "-C", str(classes), "."], check=True)
+            cls._fixture_jar_bytes = jar.read_bytes()
+        finally:
+            shutil.rmtree(template, ignore_errors=True)
+        super().setUpClass()
+
     def fixture(self, root):
         worktree = root / "worktree"
         (worktree / "local-tmp").mkdir(parents=True)
@@ -603,24 +635,10 @@ class SdkApiDigestTest(unittest.TestCase):
         bom_dir.mkdir(parents=True)
         (bom_dir / f"haifa-agent-bom-{self.VERSION}.pom").write_text(
             self.BOM.format(version=self.VERSION), encoding="utf-8")
-
-        sources = root / "src/fixture"
-        sources.mkdir(parents=True)
-        (sources / "Sample.java").write_text("package fixture;\npublic record Sample(int a, String b) {}\n", encoding="utf-8")
-        (sources / "Widget.java").write_text(
-            "package fixture;\npublic class Widget {\n"
-            "    public void visible() {}\n    protected void guarded() {}\n    void hidden() {}\n"
-            "    public static class Nested { public int n; }\n"
-            "    public static Runnable anonymous() { return new Runnable() { public void run() {} }; }\n}\n",
-            encoding="utf-8")
-        (sources / "Hidden.java").write_text("package fixture;\nclass Hidden { public void x() {} }\n", encoding="utf-8")
-        classes = root / "classes"
-        classes.mkdir()
-        subprocess.run(["javac", "-d", str(classes), *[str(p) for p in sorted(sources.glob("*.java"))]], check=True)
         jar_dir = maven / "io/haifa/haifa-agent-fixture" / self.VERSION
         jar_dir.mkdir(parents=True)
         self.jar = jar_dir / f"haifa-agent-fixture-{self.VERSION}.jar"
-        subprocess.run(["jar", "--create", "--file", str(self.jar), "-C", str(classes), "."], check=True)
+        self.jar.write_bytes(self._fixture_jar_bytes)
         return worktree, maven
 
     def test_version_resolution_two_cases(self):
@@ -860,23 +878,37 @@ class SourceFingerprintTest(unittest.TestCase):
     BOM = SdkApiDigestTest.BOM
     WORKTREE_POM = SdkApiDigestTest.WORKTREE_POM
 
+    @classmethod
+    def setUpClass(cls):
+        # The seed repository is identical for every test; initialising and committing it once
+        # and copying it per test removes repeated git init/commit from the class.
+        cls._seed_root = Path(tempfile.mkdtemp())
+        seed = cls._seed_root / "worktree"
+        (seed / "local-tmp").mkdir(parents=True)
+        (seed / ".gitignore").write_text("local-tmp/\n", encoding="utf-8")
+        (seed / "pom.xml").write_text(cls.WORKTREE_POM, encoding="utf-8")
+        for relative, text in {
+            "docs/guide.md": "doc", "scripts/tool.py": "print()", "tests/data.txt": "data",
+            "AGENTS.md": "rules", "src/App.java": "class App {}",
+        }.items():
+            (seed / relative).parent.mkdir(parents=True, exist_ok=True)
+            (seed / relative).write_text(text, encoding="utf-8")
+        for command in (["init", "-q"], ["config", "core.autocrlf", "false"], ["add", "-A"],
+                        ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "seed"]):
+            subprocess.run(["git", "-C", str(seed), *command], check=True, capture_output=True)
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls._seed_root, ignore_errors=True)
+        super().tearDownClass()
+
     def git(self, repo, *args):
         subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
     def fixture(self, root):
         worktree = root / "worktree"
-        (worktree / "local-tmp").mkdir(parents=True)
-        (worktree / ".gitignore").write_text("local-tmp/\n", encoding="utf-8")
-        (worktree / "pom.xml").write_text(self.WORKTREE_POM, encoding="utf-8")
-        for relative, text in {
-            "docs/guide.md": "doc", "scripts/tool.py": "print()", "tests/data.txt": "data",
-            "AGENTS.md": "rules", "src/App.java": "class App {}",
-        }.items():
-            (worktree / relative).parent.mkdir(parents=True, exist_ok=True)
-            (worktree / relative).write_text(text, encoding="utf-8")
-        self.git(worktree, "init", "-q")
-        self.git(worktree, "config", "core.autocrlf", "false")
-        self.commit(worktree, "seed")
+        shutil.copytree(self._seed_root / "worktree", worktree)
 
         maven = root / "maven"
         bom_dir = maven / "io/haifa/haifa-agent-bom" / self.VERSION
@@ -987,6 +1019,24 @@ class SourceFingerprintTest(unittest.TestCase):
             findings = source_fingerprint.excluded_references(repo)
             self.assertTrue(any("X.java" in finding for finding in findings), findings)
         self.assertEqual(source_fingerprint.excluded_references(ROOT), [])
+
+
+class ForceUtf8StdoutTest(unittest.TestCase):
+    def test_redirected_stream_is_forced_to_utf8(self):
+        # A redirected stdout defaults to the system code page (for example GBK on Chinese
+        # Windows), which makes ``ensure_ascii=False`` JSON invalid UTF-8. The helper restores
+        # UTF-8 so the bytes decode as UTF-8 again.
+        buffer = io.BytesIO()
+        stream = io.TextIOWrapper(buffer, encoding="cp1252")
+        original = sys.stdout
+        sys.stdout = stream
+        try:
+            quick_checks.force_utf8_stdout()
+            sys.stdout.write("证据早于内容判定")
+            sys.stdout.flush()
+        finally:
+            sys.stdout = original
+        self.assertEqual(buffer.getvalue().decode("utf-8"), "证据早于内容判定")
 
 
 class EvidenceReuseTest(unittest.TestCase):
@@ -1184,6 +1234,21 @@ class KnownIntermittentTest(unittest.TestCase):
         right = {**base, "method": "cancellingThreeActualChildrenClosesTwoWaitingRequestsWithoutInventingChildFrames"}
         self.assertTrue(known_intermittent.intermittent_plan([right], entries, [], {})["use"])
 
+    def test_slow_tagged_methods_do_not_change_module_report_gaps(self):
+        # @Tag("slow") removes a method from the default gate, not its class from surefire's
+        # includes: the class still runs and reports its untagged cases, so the known-intermittent
+        # "every other class has a report" rule is unaffected.
+        with tempfile.TemporaryDirectory() as directory:
+            module = Path(directory) / "super-harness-server"
+            tests = module / "src/test/java/pkg"
+            tests.mkdir(parents=True)
+            (tests / "MixedApiTest.java").write_text(
+                "package pkg;\nclass MixedApiTest {\n"
+                "  @Tag(\"slow\") void slowCase() {}\n  void fastCase() {}\n}\n", encoding="utf-8")
+            self.assertEqual(known_intermittent.expected_test_classes(module), {"MixedApiTest"})
+            self.assertEqual(known_intermittent.module_report_gaps(module, [{"name": "pkg.MixedApiTest"}]), [])
+            self.assertEqual(known_intermittent.module_report_gaps(module, []), ["MixedApiTest"])
+
     def test_module_report_gaps_from_source_files(self):
         with tempfile.TemporaryDirectory() as directory:
             module = Path(directory) / "super-harness-server"
@@ -1198,6 +1263,210 @@ class KnownIntermittentTest(unittest.TestCase):
             "super-harness-server/src/main/java/x/A.java", "super-harness-server/src/main/java/x/A.java"))
         self.assertTrue(known_intermittent.path_matches_cover("a/b/c.java", "a/b/*.java"))
         self.assertFalse(known_intermittent.path_matches_cover("a/bc/c.java", "a/b"))
+
+
+class UiRoundPlanTest(unittest.TestCase):
+    def test_passes_requires_a_warm_round(self):
+        ui_round_plan.validate_run(passes=2, skip_build=True)
+        for verified in ui_round_plan.REPEATABLE_PROFILES:
+            ui_round_plan.validate_run(passes=2, skip_build=True, profile=verified)
+        with self.assertRaisesRegex(ui_round_plan.PlanError, "not verified for repeated passes"):
+            ui_round_plan.validate_run(passes=2, skip_build=True, profile="w15-v2-skill")
+        ui_round_plan.validate_run(passes=1, profile="w15-v2-skill")
+        with self.assertRaises(ui_round_plan.PlanError):
+            ui_round_plan.validate_run(passes=2, skip_build=False)
+
+    def test_passes_rejects_selected_case_and_preflight(self):
+        for kwargs in ({"case_title": "X"}, {"preflight_only": True}):
+            with self.assertRaises(ui_round_plan.PlanError):
+                ui_round_plan.validate_run(passes=2, skip_build=True, **kwargs)
+
+    def test_passes_bounds(self):
+        for bad in (0, 6, True):
+            with self.assertRaises(ui_round_plan.PlanError):
+                ui_round_plan.validate_run(passes=bad, skip_build=True)
+
+    def test_merge_accepts_only_a_shared_startup_class(self):
+        ui_round_plan.validate_run(
+            profiles=["w05-demo-artifact", "w15-v2-skill", "w15-package-differential"], skip_build=True)
+        with self.assertRaises(ui_round_plan.PlanError):
+            ui_round_plan.validate_run(profiles=["w05-demo-artifact", "w03-title-suggestions"], skip_build=True)
+        with self.assertRaises(ui_round_plan.PlanError):
+            ui_round_plan.validate_run(profiles=["w05-demo-artifact"], skip_build=True)
+        with self.assertRaises(ui_round_plan.PlanError):
+            ui_round_plan.validate_run(profiles=["w05-demo-artifact", "nope"], skip_build=True)
+
+    def test_layout_preserves_the_single_default(self):
+        runs = ui_round_plan.run_layout(Path("E"), ["w18-ui-smoke"], 1)
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["relativeDirectory"], ".")
+        self.assertEqual(runs[0]["env"], {"W18_PASS_INDEX": "1"})
+
+    def test_layout_repeats_under_pass_directories(self):
+        runs = ui_round_plan.run_layout(Path("E"), ["w18-ui-smoke"], 2)
+        self.assertEqual([r["relativeDirectory"] for r in runs], ["pass-1", "pass-2"])
+        self.assertEqual([r["env"]["W18_PASS_INDEX"] for r in runs], ["1", "2"])
+
+    def test_layout_merges_under_profile_and_pass(self):
+        runs = ui_round_plan.run_layout(Path("E"), ["w05-demo-artifact", "w15-v2-skill"], 2)
+        self.assertEqual([r["relativeDirectory"] for r in runs], [
+            "w05-demo-artifact/pass-1", "w05-demo-artifact/pass-2",
+            "w15-v2-skill/pass-1", "w15-v2-skill/pass-2",
+        ])
+
+    def test_merge_case_results_annotates_and_preserves_order(self):
+        merged = ui_round_plan.merge_case_results([
+            {"profile": "p1", "pass": 1, "rows": [{"name": "A", "result": "PASS"}]},
+            {"profile": "p1", "pass": 2, "rows": [{"name": "A", "result": "FAIL"}]},
+        ])
+        self.assertEqual([(row["profile"], row["pass"], row["name"]) for row in merged],
+                         [("p1", 1, "A"), ("p1", 2, "A")])
+
+    def test_merge_passes_summary_copies_fields(self):
+        summary = ui_round_plan.merge_passes_summary([
+            {"profile": "p", "pass": 1, "assertionMs": 1234, "exitCode": 0,
+             "firstFailure": None, "caseResults": "pass-1/case-results.json"},
+        ])
+        self.assertEqual(summary, [{
+            "profile": "p", "pass": 1, "assertionMs": 1234, "exitCode": 0,
+            "firstFailure": None, "caseResults": "pass-1/case-results.json"}])
+
+    def test_plan_and_merge_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = ui_round_plan.run_layout(root, ["w18-ui-smoke"], 2)
+            for index, run in enumerate(runs, 1):
+                run_dir = root if run["relativeDirectory"] == "." else root / run["relativeDirectory"]
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "case-results.json").write_text(json.dumps(
+                    [{"name": "Case A", "result": "PASS" if index == 1 else "FAIL", "firstFailure": None}]),
+                    encoding="utf-8")
+                (run_dir / "flow-health.json").write_text(json.dumps(
+                    {"timings": {"assertionsMs": 1000 * index}, "testExitCode": 0 if index == 1 else 1,
+                     "firstFailure": None}), encoding="utf-8")
+            (root / "flow-health.json").write_text(json.dumps({"sourceSha": "abcdef0123"}), encoding="utf-8")
+            (root / "ui-round-plan.json").write_text(json.dumps({"runs": runs}), encoding="utf-8")
+            self.assertEqual(ui_round_plan.main(["merge", "--root", str(root), "--runs", str(root / "ui-round-plan.json")]), 0)
+            merged = json.loads((root / "case-results.json").read_text(encoding="utf-8"))
+            self.assertEqual([(row["pass"], row["result"]) for row in merged], [(1, "PASS"), (2, "FAIL")])
+            health = json.loads((root / "flow-health.json").read_text(encoding="utf-8"))
+            self.assertEqual([entry["pass"] for entry in health["passes"]], [1, 2])
+            self.assertEqual([entry["exitCode"] for entry in health["passes"]], [0, 1])
+
+    def test_validate_cli_reports_problems(self):
+        self.assertEqual(ui_round_plan.main(["validate", "--passes", "2", "--skip-build"]), 0)
+        self.assertEqual(ui_round_plan.main(["validate", "--passes", "2"]), 1)
+
+
+class RecordGatesPassesTest(unittest.TestCase):
+    def write(self, root, flow, pass_files, merged=None):
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "flow-health.json").write_text(json.dumps(flow), encoding="utf-8")
+        if merged is not None:
+            (root / "case-results.json").write_text(json.dumps(merged), encoding="utf-8")
+        for relative, rows in pass_files.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(rows), encoding="utf-8")
+
+    def test_repeated_passes_get_r_suffixes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write(root, {
+                "acceptanceProfile": "w18-ui-smoke", "sourceSha": "abcdef0123", "retryCount": 0,
+                "cleanup": {"success": True}, "evidenceRoot": "D:/e/run-20261005-100000-000-aaaaaaaa",
+                "passes": [
+                    {"profile": "w18-ui-smoke", "pass": 1, "assertionMs": 1000, "exitCode": 0,
+                     "firstFailure": None, "caseResults": "pass-1/case-results.json"},
+                    {"profile": "w18-ui-smoke", "pass": 2, "assertionMs": 2000, "exitCode": 1,
+                     "firstFailure": "boom", "caseResults": "pass-2/case-results.json"},
+                ],
+            }, {
+                "pass-1/case-results.json": [{"name": "Case A", "result": "PASS"}],
+                "pass-2/case-results.json": [{"name": "Case A", "result": "FAIL", "firstFailure": "boom"}],
+            })
+            records = record_gates.records_for(root)
+            record_gates.assign_rounds(records)
+            self.assertEqual([r["name"] for r in records],
+                             ["ui-w18-ui-smoke-case-a-r1", "ui-w18-ui-smoke-case-a-r2"])
+            self.assertEqual([r["result"] for r in records], ["PASS", "FAIL"])
+            self.assertEqual([r["duration"] for r in records], ["1s", "2s"])
+            self.assertIn("pass=2", records[1]["summary"])
+
+    def test_merged_profiles_do_not_collide(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write(root, {
+                "acceptanceProfile": "w05-demo-artifact", "sourceSha": "abcdef0123", "retryCount": 0,
+                "cleanup": {"success": True}, "evidenceRoot": "D:/e/run-20261005-100000-000-aaaaaaaa",
+                "passes": [
+                    {"profile": "w05-demo-artifact", "pass": 1, "assertionMs": 1, "exitCode": 0,
+                     "firstFailure": None, "caseResults": "w05-demo-artifact/pass-1/case-results.json"},
+                    {"profile": "w15-v2-skill", "pass": 1, "assertionMs": 1, "exitCode": 0,
+                     "firstFailure": None, "caseResults": "w15-v2-skill/pass-1/case-results.json"},
+                ],
+            }, {
+                "w05-demo-artifact/pass-1/case-results.json": [{"name": "Same", "result": "PASS"}],
+                "w15-v2-skill/pass-1/case-results.json": [{"name": "Same", "result": "PASS"}],
+            })
+            records = record_gates.records_for(root)
+            record_gates.assign_rounds(records)
+            # One run per profile: different check names, no round suffix needed.
+            self.assertEqual({r["name"] for r in records},
+                             {"ui-w05-demo-artifact-same", "ui-w15-v2-skill-same"})
+
+    def test_rounds_are_numbered_across_evidence_directories(self):
+        def flow(identity):
+            return {
+                "acceptanceProfile": "w18-ui-smoke", "sourceSha": "abcdef0123", "retryCount": 0,
+                "cleanup": {"success": True}, "evidenceRoot": f"D:/e/{identity}",
+                "passes": [
+                    {"profile": "w18-ui-smoke", "pass": number, "assertionMs": 1000, "exitCode": 0,
+                     "firstFailure": None, "caseResults": f"pass-{number}/case-results.json"}
+                    for number in (1, 2)
+                ],
+            }
+        rows = {f"pass-{number}/case-results.json": [{"name": "Case A", "result": "PASS"}] for number in (1, 2)}
+        with tempfile.TemporaryDirectory() as directory:
+            later = Path(directory) / "b-later"
+            earlier = Path(directory) / "a-earlier"
+            self.write(later, flow("run-20261005-110000-000-bbbbbbbb"), rows)
+            self.write(earlier, flow("run-20261005-100000-000-aaaaaaaa"), rows)
+            # A plain single-run directory of the same profile and commit joins the same numbering.
+            single = Path(directory) / "c-single"
+            self.write(single, {"acceptanceProfile": "w18-ui-smoke", "sourceSha": "abcdef0123", "retryCount": 0,
+                                "cleanup": {"success": True}, "evidenceRoot": "D:/e/run-20261005-120000-000-cccccccc"},
+                       {}, merged=[{"name": "Case A", "result": "PASS"}])
+            records = record_gates.records_for(later) + record_gates.records_for(earlier) + record_gates.records_for(single)
+            record_gates.assign_rounds(records)
+            by_identity = {r["identity"]: r["name"] for r in records}
+            self.assertEqual(by_identity, {
+                "run-20261005-100000-000-aaaaaaaa-pass1": "ui-w18-ui-smoke-case-a-r1",
+                "run-20261005-100000-000-aaaaaaaa-pass2": "ui-w18-ui-smoke-case-a-r2",
+                "run-20261005-110000-000-bbbbbbbb-pass1": "ui-w18-ui-smoke-case-a-r3",
+                "run-20261005-110000-000-bbbbbbbb-pass2": "ui-w18-ui-smoke-case-a-r4",
+                "run-20261005-120000-000-cccccccc": "ui-w18-ui-smoke-case-a-r5",
+            })
+            self.assertEqual(len({record_gates.idempotency_key("T", r) for r in records}), 5)
+
+    def test_passes_fall_back_to_the_merged_case_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write(root, {
+                "acceptanceProfile": "w18-ui-smoke", "sourceSha": "abcdef0123", "retryCount": 0,
+                "cleanup": {"success": True}, "evidenceRoot": "D:/e/run-20261005-100000-000-aaaaaaaa",
+                "passes": [
+                    {"profile": "w18-ui-smoke", "pass": 1, "assertionMs": 1, "exitCode": 0, "firstFailure": None},
+                    {"profile": "w18-ui-smoke", "pass": 2, "assertionMs": 1, "exitCode": 0, "firstFailure": None},
+                ],
+            }, {}, merged=[
+                {"name": "Case A", "result": "PASS", "profile": "w18-ui-smoke", "pass": 1},
+                {"name": "Case A", "result": "PASS", "profile": "w18-ui-smoke", "pass": 2},
+            ])
+            records = record_gates.records_for(root)
+            record_gates.assign_rounds(records)
+            self.assertEqual([r["name"] for r in records],
+                             ["ui-w18-ui-smoke-case-a-r1", "ui-w18-ui-smoke-case-a-r2"])
 
 
 if __name__ == "__main__":

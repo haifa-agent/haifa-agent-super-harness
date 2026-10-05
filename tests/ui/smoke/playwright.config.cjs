@@ -12,6 +12,12 @@ const evidenceRoot = process.env.W18_EVIDENCE_DIR
       `../../../local-tmp/slot-2-w18-ui-smoke/evidence/run-manual-${Date.now()}`,
     );
 
+// A repeated pass (run-w18-ui-smoke.ps1 -Passes n) keeps its own report and artifacts; the
+// evidence root stays shared because specs read runner-written files such as the Provider log.
+const outputRoot = process.env.W18_PLAYWRIGHT_OUTPUT_DIR
+  ? path.resolve(process.env.W18_PLAYWRIGHT_OUTPUT_DIR)
+  : evidenceRoot;
+
 module.exports = defineConfig({
   testDir: __dirname,
   testMatch: process.env.W18_PLAYWRIGHT_SPEC ?? "w18-ui-smoke.spec.cjs",
@@ -20,10 +26,10 @@ module.exports = defineConfig({
   retries: 0,
   timeout: Number(process.env.W18_PLAYWRIGHT_TIMEOUT_MS ?? "60000"),
   expect: { timeout: 20_000 },
-  outputDir: path.join(evidenceRoot, "artifacts"),
+  outputDir: path.join(outputRoot, "artifacts"),
   reporter: [
     ["list"],
-    ["json", { outputFile: path.join(evidenceRoot, "results.json") }],
+    ["json", { outputFile: path.join(outputRoot, "results.json") }],
   ],
   use: {
     baseURL: process.env.E2E_APP_URL ?? `http://127.0.0.1:${frontendPort}`,

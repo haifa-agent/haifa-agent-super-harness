@@ -131,6 +131,14 @@ pwsh -NoProfile -File scripts/test-targeted.ps1 -Test LocalServerConfigurationTe
 pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'AgentSoulPromptTest,UpdateAgentToolTest' -LowMemory
 ```
 
+固定耗时很长的用例标注 `@Tag("slow")`，默认门禁不运行。用 `-Slow` 只运行慢测试，可省略 `-Test` 运行全部，
+加 `-Test <类>` 只跑该类的慢测试：
+
+```powershell
+pwsh -NoProfile -File scripts/test-targeted.ps1 -Slow
+pwsh -NoProfile -File scripts/test-targeted.ps1 -Slow -Test DeerFlowTaskDelegationApiTest
+```
+
 SDK 版本规则见 `AGENTS.md`「范围与依赖」。工作包 worktree 消费带标识的 SDK 版本时，在该 worktree 写入不被
 跟踪的 `local-tmp/sdk-selection.json`：
 

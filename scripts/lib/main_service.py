@@ -56,6 +56,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import quick_checks  # noqa: E402  (path added above)
+
 DEFAULT_GATEWAY_PORT = 18018
 DEFAULT_FRONTEND_PORT = 33018
 DEFAULT_DATA_DIRECTORY = "local-tmp/main-service-data"
@@ -789,6 +793,7 @@ def _start_previous(previous_jar: Path, worktree: Path, data_root: Path, args, l
 # ---------------------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> int:
+    quick_checks.force_utf8_stdout()
     parser = argparse.ArgumentParser(description="Main service status and refresh")
     parser.add_argument("--worktree", required=True, type=Path)
     parser.add_argument("--gateway-port", type=int, default=DEFAULT_GATEWAY_PORT)
