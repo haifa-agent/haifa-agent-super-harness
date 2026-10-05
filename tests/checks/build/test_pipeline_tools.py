@@ -36,6 +36,11 @@ script_regressions = load("scripts/lib/script_regressions.py")
 sdk_api_digest = load("scripts/governance/sdk_api_digest.py")
 main_service = load("scripts/lib/main_service.py")
 gate_resources = load("scripts/lib/gate_resources.py")
+source_fingerprint = load("scripts/lib/source_fingerprint.py")
+evidence_reuse = load("scripts/governance/evidence_reuse.py")
+known_intermittent = load("scripts/lib/known_intermittent.py")
+
+SUREFIRE_FIXTURES = ROOT / "tests/checks/build/fixtures/surefire"
 
 BOT = pr_review.DEFAULT_BOT
 
@@ -47,6 +52,7 @@ class ChangeScopeTest(unittest.TestCase):
             "docs/guide.md": "docs",
             "scripts/verify-full.ps1": "scripts",
             "tests/checks/build/verify-build-entry.ps1": "scripts",
+            "tests/known-intermittent.json": "scripts",
             "super-harness-server/src/test/java/X.java": "java-test",
             "super-harness-server/src/main/java/X.java": "product",
             "pom.xml": "product",
@@ -60,14 +66,81 @@ class ChangeScopeTest(unittest.TestCase):
 
     def test_gates_follow_the_widest_class(self):
         self.assertEqual(change_scope.required_gates(["README.md"]), ["docs-check"])
+        self.assertEqual(change_scope.ui_model_decision(["tests/known-intermittent.json", "scripts/lib/x.py"])[0], "controlled")
         self.assertEqual(change_scope.required_gates(["scripts/governance/x.py"]), ["script-regressions"])
-        self.assertEqual(change_scope.required_gates(["scripts/lib/x.ps1"]), ["script-regressions", "ui-warm-round-x1"])
-        self.assertEqual(change_scope.required_gates(["super-harness-server/src/test/java/X.java"]), ["verify-full"])
+        self.assertEqual(
+            change_scope.required_gates(["tests/ui/smoke/x.spec.cjs"]),
+            ["verify-full-reuse", "ui-controlled-round-x2"],
+        )
+        self.assertEqual(
+            change_scope.required_gates(["tests/ui/smoke/x-live.spec.cjs"]),
+            ["verify-full-reuse", "ui-live-round-x2"],
+        )
+        self.assertEqual(
+            change_scope.required_gates(["scripts/lib/x.ps1"]),
+            ["script-regressions", "verify-full-reuse", "ui-controlled-round-x1"],
+        )
+        self.assertEqual(
+            change_scope.required_gates(["super-harness-server/src/test/java/X.java"]),
+            ["verify-full"],
+        )
         self.assertEqual(
             change_scope.required_gates(["super-harness-server/src/main/java/X.java", "README.md"]),
-            ["docs-check", "verify-full", "ui-warm-round-x2"],
+            ["docs-check", "verify-full", "ui-live-round-x2"],
         )
-        self.assertEqual(change_scope.required_gates(["frontend/pnpm-lock.yaml"]), ["ui-cold-round", "ui-warm-round-x2"])
+        self.assertEqual(
+            change_scope.required_gates(["frontend/pnpm-lock.yaml"]),
+            ["verify-full", "ui-cold-round", "ui-live-round-x2"],
+        )
+
+    def test_any_markdown_is_documentation(self):
+        self.assertEqual(change_scope.classify("scripts/README.md"), "docs")
+        self.assertEqual(change_scope.classify("tests/ui/notes.md"), "docs")
+
+
+class UiModelDecisionTest(unittest.TestCase):
+    def test_controlled_paths(self):
+        controlled = [
+            "docs/guide.md", "README.md", "AGENTS.md", "scripts/tool.py",
+            "tests/checks/build/check.py", "super-harness-server/src/test/java/X.java",
+            "tests/ui/w18-ui-smoke/w05-demo-artifact.spec.cjs",
+            "tests/ui/smoke/loopback-openai-provider.cjs",
+            "docs/engineering/002-feature-delivery-workflows.md",
+            "super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/X.java",
+        ]
+        for path in controlled:
+            self.assertEqual(change_scope.ui_model_decision([path])[0], "controlled", path)
+
+    def test_live_paths(self):
+        cases = {
+            "super-harness-server/src/main/java/io/haifa/agent/superharness/server/run/X.java": "run",
+            "super-harness-server/src/main/java/io/haifa/agent/superharness/server/prompt/X.java": "prompt",
+            "super-harness-server/src/main/java/io/haifa/agent/superharness/server/tool/X.java": "tool",
+            "super-harness-server/src/main/java/io/haifa/agent/superharness/server/config/X.java": "config",
+            "super-harness-server/src/main/resources/application.yml": "resources",
+            "super-harness-events/src/main/java/X.java": "src/main",
+            "pom.xml": "pom.xml",
+            "tests/checks/customer-demo-v2/mcp-servers/pom.xml": "pom.xml",
+            "tests/ui/smoke/live-deepseek.spec.cjs": "live",
+            "scripts/ui/run-live-rounds.ps1": "live",
+            "frontend/app/page.tsx": "表里没有的路径",
+            "brand-new-dir/x.txt": "表里没有的路径",
+        }
+        for path, fragment in cases.items():
+            model, reason = change_scope.ui_model_decision([path])
+            self.assertEqual(model, "live", path)
+            self.assertIn(fragment, reason, path)
+
+    def test_sdk_identity_change_and_empty_change_force_live(self):
+        model, reason = change_scope.ui_model_decision(["docs/x.md"], sdk_identity_changed=True)
+        self.assertEqual(model, "live")
+        self.assertIn("SDK", reason)
+        model, reason = change_scope.ui_model_decision([])
+        self.assertEqual(model, "live")
+
+    def test_one_live_path_overrides_many_controlled_paths(self):
+        model, _ = change_scope.ui_model_decision(["docs/x.md", "scripts/y.py", "pom.xml"])
+        self.assertEqual(model, "live")
 
 
 class SecretScanTest(unittest.TestCase):
@@ -213,6 +286,43 @@ class RecordGatesTest(unittest.TestCase):
             results = {r["base_name"]: r["result"] for r in records}
             self.assertEqual(results, {"verify-full": "PASS", "scripts-node-x": "PASS",
                                        "ui-p-c": "FAIL", "main-service-refresh": "PASS"})
+
+    def test_known_intermittent_records_pass_and_a_per_issue_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            summary = root / "verify-full-20261005-100000-000.json"
+            summary.write_text(json.dumps({
+                "status": "PASS", "sourceSha": "abcdef0123", "forks": 1, "sdkSelection": "ABSENT",
+                "knownIntermittent": {
+                    "reruns": 3,
+                    "entries": [{"test": "X", "module": "m", "issue": "W04-X",
+                                 "firstFailureEvidence": "local-tmp/verify-full/x-first-fail"}],
+                },
+            }), encoding="utf-8")
+            records = record_gates.records_for(summary)
+            record_gates.assign_rounds(records)
+            self.assertEqual([record["result"] for record in records], ["PASS", "FAIL"])
+            self.assertEqual(records[0]["retry"], 3)
+            self.assertIn("W04-X", records[0]["summary"])
+            issue = records[1]
+            self.assertEqual(issue["base_name"], "known-intermittent-W04-X")
+            self.assertFalse(issue["required"])
+            self.assertIn("first-fail", issue["raw"])
+            command = record_gates.build_command("T", issue, "db")
+            self.assertNotIn("--required", command)
+            primary = record_gates.build_command("T", records[0], "db")
+            self.assertIn("--required", primary)
+
+    def test_reuse_summary_is_described_in_the_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            summary = Path(directory) / "verify-full-20261005-100000-000.json"
+            summary.write_text(json.dumps({
+                "status": "PASS", "sourceSha": "abcdef0123", "forks": 1, "sdkSelection": "ABSENT",
+                "reuse": {"fromSummary": "old.json", "fromSourceSha": "0123456789", "fingerprint": "fp"},
+            }), encoding="utf-8")
+            records = record_gates.records_for(summary)
+            self.assertIn("reused from old.json", records[0]["summary"])
+            self.assertIn("fp", records[0]["summary"])
 
     def test_missing_acceptance_profile_stops(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -719,22 +829,20 @@ class GateResourcesTest(unittest.TestCase):
             gate_resources.select_forks(gate_resources.THREE_FORKS_MIN_FREE_PHYSICAL_MB,
                                         gate_resources.THREE_FORKS_MIN_FREE_COMMIT_MB), (3, False))
 
-    def test_measured_thresholds_skip_the_two_fork_band(self):
-        # The measured 2-fork peaks are not below the 3-fork peaks, so its thresholds are
-        # higher and the 2-fork guard can never win: even at the 2-fork thresholds the
-        # 3-fork guard fires first. The branch stays tested with a synthetic ordering.
-        self.assertEqual(
-            gate_resources.select_forks(gate_resources.TWO_FORKS_MIN_FREE_PHYSICAL_MB,
-                                        gate_resources.TWO_FORKS_MIN_FREE_COMMIT_MB), (3, False))
-        with patch.object(gate_resources, "TWO_FORKS_MIN_FREE_PHYSICAL_MB", 2000), \
-                patch.object(gate_resources, "TWO_FORKS_MIN_FREE_COMMIT_MB", 4000):
-            self.assertEqual(gate_resources.select_forks(2500, 4500), (2, False))
+    def test_there_is_no_two_fork_tier(self):
+        # Two forks need at least as much memory as three (measured), so the choice is 3 or 1.
+        for physical in range(1024, 8192, 512):
+            for commit in range(2048, 16384, 1024):
+                self.assertIn(gate_resources.select_forks(physical, commit)[0], (1, 3))
+        self.assertEqual(gate_resources.select_forks(4623, 10851), (3, False),
+                         "the lowest free memory at which a three-fork gate was observed to pass")
 
     def test_low_memory_selects_one_fork_with_low_memory(self):
         self.assertEqual(gate_resources.select_forks(1024, 2048), (1, True))
         self.assertEqual(
-            gate_resources.select_forks(gate_resources.THREE_FORKS_MIN_FREE_PHYSICAL_MB - 1,
-                                        gate_resources.THREE_FORKS_MIN_FREE_COMMIT_MB - 1), (1, True))
+            gate_resources.select_forks(gate_resources.THREE_FORKS_MIN_FREE_PHYSICAL_MB - 1, 32000), (1, True))
+        self.assertEqual(
+            gate_resources.select_forks(16000, gate_resources.THREE_FORKS_MIN_FREE_COMMIT_MB - 1), (1, True))
 
     def test_missing_probe_falls_back_to_default(self):
         self.assertEqual(gate_resources.select_forks(None, 32000), (gate_resources.DEFAULT_FORKS, False))
@@ -742,9 +850,354 @@ class GateResourcesTest(unittest.TestCase):
 
     def test_selection_shape(self):
         result = gate_resources.selection()
-        self.assertIn(result["forks"], (1, 2, 3))
+        self.assertIn(result["forks"], (1, 3))
         self.assertIsInstance(result["lowMemory"], bool)
         self.assertIn("probeAvailable", result)
+
+
+class SourceFingerprintTest(unittest.TestCase):
+    VERSION = SdkApiDigestTest.VERSION
+    BOM = SdkApiDigestTest.BOM
+    WORKTREE_POM = SdkApiDigestTest.WORKTREE_POM
+
+    def git(self, repo, *args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    def fixture(self, root):
+        worktree = root / "worktree"
+        (worktree / "local-tmp").mkdir(parents=True)
+        (worktree / ".gitignore").write_text("local-tmp/\n", encoding="utf-8")
+        (worktree / "pom.xml").write_text(self.WORKTREE_POM, encoding="utf-8")
+        for relative, text in {
+            "docs/guide.md": "doc", "scripts/tool.py": "print()", "tests/data.txt": "data",
+            "AGENTS.md": "rules", "src/App.java": "class App {}",
+        }.items():
+            (worktree / relative).parent.mkdir(parents=True, exist_ok=True)
+            (worktree / relative).write_text(text, encoding="utf-8")
+        self.git(worktree, "init", "-q")
+        self.git(worktree, "config", "core.autocrlf", "false")
+        self.commit(worktree, "seed")
+
+        maven = root / "maven"
+        bom_dir = maven / "io/haifa/haifa-agent-bom" / self.VERSION
+        bom_dir.mkdir(parents=True)
+        (bom_dir / f"haifa-agent-bom-{self.VERSION}.pom").write_text(
+            self.BOM.format(version=self.VERSION), encoding="utf-8")
+        jar_dir = maven / "io/haifa/haifa-agent-fixture" / self.VERSION
+        jar_dir.mkdir(parents=True)
+        jar = jar_dir / f"haifa-agent-fixture-{self.VERSION}.jar"
+        with zipfile.ZipFile(jar, "w") as archive:
+            archive.writestr("fixture/Sample.class", b"v1")
+        return worktree, maven, jar
+
+    def commit(self, worktree, message):
+        self.git(worktree, "add", "-A")
+        self.git(worktree, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                 "commit", "-q", "-m", message)
+
+    def test_exclusion_classification(self):
+        for path in ("docs/a.md", "tests/a.txt", "scripts/a.py", "README.md", "AGENTS.md"):
+            self.assertTrue(source_fingerprint.is_excluded(path), path)
+        for path in ("super-harness-server/src/main/java/X.java", "pom.xml", "frontend/x", "src/App.java"):
+            self.assertFalse(source_fingerprint.is_excluded(path), path)
+
+    def test_excluded_edits_keep_the_fingerprint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree, maven, _ = self.fixture(Path(directory))
+            first = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            for relative in ("docs/guide.md", "scripts/tool.py", "tests/data.txt", "AGENTS.md"):
+                (worktree / relative).write_text("changed", encoding="utf-8")
+            self.commit(worktree, "docs and tests")
+            second = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            self.assertNotEqual(first["sourceTree"], second["sourceTree"])
+            self.assertEqual(first["javaInputFingerprint"], second["javaInputFingerprint"])
+
+            (worktree / "src/App.java").write_text("class App { int x; }", encoding="utf-8")
+            self.commit(worktree, "java change")
+            third = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            self.assertNotEqual(first["javaInputFingerprint"], third["javaInputFingerprint"])
+
+    def test_sdk_identity_and_fingerprint_change_when_jar_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree, maven, jar = self.fixture(Path(directory))
+            first = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            with zipfile.ZipFile(jar, "a") as archive:
+                archive.writestr("fixture/extra.class", b"v2")
+            second = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            self.assertNotEqual(first["sdkIdentity"], second["sdkIdentity"])
+            self.assertNotEqual(first["javaInputFingerprint"], second["javaInputFingerprint"])
+            self.assertEqual(first["sourceTree"], second["sourceTree"])
+
+    def test_fingerprint_is_reusable_only_when_clean_and_the_sdk_is_known(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree, maven, _ = self.fixture(Path(directory))
+            clean = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            self.assertTrue(clean["reusable"])
+            self.assertEqual(clean["dirtyPaths"], [])
+            self.assertIsNone(clean["notReusableReason"])
+
+            (worktree / "docs/guide.md").write_text("dirty doc", encoding="utf-8")
+            docs_dirty = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            self.assertTrue(docs_dirty["reusable"], "an excluded path does not make the build inputs dirty")
+
+            (worktree / "src/App.java").write_text("class App { int y; }", encoding="utf-8")
+            dirty = source_fingerprint.fingerprint(worktree, "HEAD", maven, self.VERSION, jdk="jdk", maven="mvn")
+            self.assertFalse(dirty["reusable"])
+            self.assertEqual(dirty["dirtyPaths"], ["src/App.java"])
+            self.assertEqual(dirty["javaInputFingerprint"], clean["javaInputFingerprint"],
+                             "the value still describes the commit; the flag says it must not be reused")
+
+            self.git(worktree, "checkout", "-q", "--", "src/App.java")
+            empty = Path(directory) / "empty-maven"
+            empty.mkdir()
+            unknown = source_fingerprint.fingerprint(worktree, "HEAD", empty, self.VERSION, jdk="jdk", maven="mvn")
+            self.assertEqual(unknown["sdkIdentity"], "UNAVAILABLE")
+            self.assertFalse(unknown["reusable"])
+            self.assertEqual(unknown["notReusableReason"], "SDK identity unavailable")
+
+    def test_excluded_references_reads_tracked_files_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree, _, _ = self.fixture(Path(directory))
+            (worktree / "super-harness-server/src/test/java").mkdir(parents=True)
+            (worktree / "super-harness-server/src/test/java/X.java").write_text(
+                'String p = "scripts/tool.py";', encoding="utf-8")
+            (worktree / "ignored-deps/pkg").mkdir(parents=True)
+            (worktree / "ignored-deps/pkg/pom.xml").write_text("<project>docs/guide.md</project>", encoding="utf-8")
+            (worktree / ".gitignore").write_text("local-tmp/\nignored-deps/\n", encoding="utf-8")
+            self.commit(worktree, "test reference")
+            findings = source_fingerprint.excluded_references(worktree)
+            self.assertEqual(findings, ["super-harness-server/src/test/java/X.java: scripts/tool.py"])
+
+    def test_covered_dirty_paths_ignores_excluded_edits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree, _, _ = self.fixture(Path(directory))
+            (worktree / "docs/guide.md").write_text("dirty doc", encoding="utf-8")
+            (worktree / "src/App.java").write_text("class App { int y; }", encoding="utf-8")
+            self.assertEqual(source_fingerprint.covered_dirty_paths(worktree), ["src/App.java"])
+
+    def test_excluded_references_detect_and_real_repo_is_clean(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            (repo / "super-harness-server/src/test/java").mkdir(parents=True)
+            (repo / "scripts").mkdir()
+            (repo / "scripts/tool.py").write_text("print()", encoding="utf-8")
+            (repo / "pom.xml").write_text("<project/>", encoding="utf-8")
+            (repo / "super-harness-server/src/test/java/X.java").write_text(
+                'String p = "scripts/tool.py";', encoding="utf-8")
+            findings = source_fingerprint.excluded_references(repo)
+            self.assertTrue(any("X.java" in finding for finding in findings), findings)
+        self.assertEqual(source_fingerprint.excluded_references(ROOT), [])
+
+
+class EvidenceReuseTest(unittest.TestCase):
+    def test_find_reusable_summary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def write(name, **fields):
+                (root / name).write_text(json.dumps(fields), encoding="utf-8")
+
+            write("verify-full-20261005-100000-000.json", status="PASS", javaInputFingerprint="fp", tests=5)
+            write("verify-full-20261005-110000-000.json", status="PASS", javaInputFingerprint="fp",
+                  reuse={"fromSummary": "x"})
+            write("verify-full-20261005-120000-000.json", status="FAIL", javaInputFingerprint="fp")
+            write("verify-full-20261005-130000-000.json", status="PASS", javaInputFingerprint="other")
+            write("verify-full-20261005-140000-000.json", status="PASS")
+            found = evidence_reuse.find_reusable_summary(root, "fp")
+            self.assertEqual(found.name, "verify-full-20261005-100000-000.json")
+            self.assertIsNone(evidence_reuse.find_reusable_summary(root, "missing"))
+            self.assertIsNone(evidence_reuse.find_reusable_summary(root, None))
+            self.assertIsNone(evidence_reuse.find_reusable_summary(root / "does-not-exist", "fp"))
+
+    def test_full_gate_verdicts(self):
+        target = {"sourceTree": "tree", "sdkIdentity": "sdk", "javaInputFingerprint": "fp"}
+        self.assertEqual(evidence_reuse.evaluate_full_gate(
+            {"status": "PASS", "javaInputFingerprint": "fp", "sdkIdentity": "sdk"}, target)[0], "REUSABLE")
+        self.assertEqual(evidence_reuse.evaluate_full_gate(
+            {"status": "FAIL", "javaInputFingerprint": "fp", "sdkIdentity": "sdk"}, target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_full_gate(
+            {"status": "PASS", "javaInputFingerprint": "other", "sdkIdentity": "sdk"}, target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_full_gate({"status": "PASS"}, target),
+                         ("STALE", evidence_reuse.STALE_OLD_EVIDENCE))
+
+    def test_tree_evidence_verdicts(self):
+        target = {"sourceTree": "tree", "sdkIdentity": "sdk", "javaInputFingerprint": "fp"}
+        reusable = {"sourceTree": "tree", "sdkIdentity": "sdk", "sourceDirty": False}
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence(reusable, target)[0], "REUSABLE")
+        unknown = {"sourceTree": "tree", "sdkIdentity": "UNAVAILABLE", "sourceDirty": False}
+        unknown_target = dict(target, sdkIdentity="UNAVAILABLE")
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence(unknown, unknown_target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence(unknown, target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence(reusable, unknown_target)[0], "STALE")
+        gate = {"status": "PASS", "javaInputFingerprint": target["javaInputFingerprint"], "sdkIdentity": "UNAVAILABLE"}
+        self.assertEqual(evidence_reuse.evaluate_full_gate(gate, target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_full_gate(dict(gate, sdkIdentity="sdk"), unknown_target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence(
+            {"sourceTree": "tree", "sdkIdentity": "sdk", "sourceDirty": True}, target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence(
+            {"sourceTree": "other", "sdkIdentity": "sdk", "sourceDirty": False}, target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence(
+            {"sourceTree": "tree", "sdkIdentity": "other", "sourceDirty": False}, target)[0], "STALE")
+        self.assertEqual(evidence_reuse.evaluate_tree_evidence({"sourceTree": "tree"}, target),
+                         ("STALE", evidence_reuse.STALE_OLD_EVIDENCE))
+
+
+class KnownIntermittentTest(unittest.TestCase):
+    def entries(self):
+        return [
+            {"test": "DeerFlowUploadRunContextHttpTest", "module": "super-harness-server",
+             "issue": "W04-UPLOAD-DUPLICATE-INTERMITTENT",
+             "covers": ["super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/DeerFlowUploadContext.java"]},
+            {"test": "DeerFlowSubtaskProjectionApiTest#cancellingThreeActualChildrenClosesTwoWaitingRequestsWithoutInventingChildFrames",
+             "module": "super-harness-server", "issue": "W08-SUBTASK-CANCEL-INTERMITTENT",
+             "covers": ["super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/DeerFlowSubtaskProjection.java"]},
+        ]
+
+    def upload_failure(self):
+        return {"class": "io.haifa.agent.superharness.server.api.DeerFlowUploadRunContextHttpTest",
+                "test": "DeerFlowUploadRunContextHttpTest",
+                "method": "duplicateUploadsAndReferencesStayDeterministicAndOriginalsAreImmutable",
+                "module": "super-harness-server", "kind": "error", "type": "java.lang.NullPointerException", "message": ""}
+
+    def test_parse_surefire_failure_and_pass(self):
+        upload = known_intermittent.parse_surefire_xml(
+            SUREFIRE_FIXTURES / "TEST-io.haifa.agent.superharness.server.api.DeerFlowUploadRunContextHttpTest.xml",
+            "super-harness-server")
+        self.assertEqual(upload["errors"], 1)
+        self.assertEqual(len(upload["failed"]), 1)
+        self.assertEqual(upload["failed"][0]["method"],
+                         "duplicateUploadsAndReferencesStayDeterministicAndOriginalsAreImmutable")
+        passing = known_intermittent.parse_surefire_xml(
+            SUREFIRE_FIXTURES / "TEST-io.haifa.agent.superharness.server.api.AgentSoulBootstrapHttpTest.xml")
+        self.assertEqual(passing["failed"], [])
+        failed = known_intermittent.failed_tests([upload])
+        self.assertEqual(failed[0]["test"], "DeerFlowUploadRunContextHttpTest")
+        self.assertEqual(failed[0]["module"], "super-harness-server")
+
+    def test_reactor_skipped_modules_from_the_log_excerpt(self):
+        log = (SUREFIRE_FIXTURES / "reactor-log-excerpt.txt").read_text(encoding="utf-8")
+        mapping = {"Super Harness DeerFlow Compatibility Server": "super-harness-server",
+                   "Super Harness Evidence Harness": "super-harness-harness"}
+        self.assertEqual(known_intermittent.reactor_skipped_modules(log, mapping), ["super-harness-harness"])
+
+    def test_abstract_and_interface_test_types_are_not_report_gaps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            module = Path(directory) / "super-harness-server"
+            tests = module / "src/test/java/pkg"
+            tests.mkdir(parents=True)
+            (tests / "AbstractBaseApiTest.java").write_text(
+                "package pkg;\nabstract class AbstractBaseApiTest { }\n", encoding="utf-8")
+            (tests / "ContractTest.java").write_text("package pkg;\npublic interface ContractTest { }\n", encoding="utf-8")
+            (tests / "RealApiTest.java").write_text(
+                "package pkg;\nclass RealApiTest extends AbstractBaseApiTest { }\n", encoding="utf-8")
+            (tests / "Helper.java").write_text("package pkg;\nclass Helper { }\n", encoding="utf-8")
+            self.assertEqual(known_intermittent.expected_test_classes(module), {"RealApiTest"})
+            self.assertEqual(known_intermittent.module_report_gaps(module, []), ["RealApiTest"])
+            self.assertEqual(known_intermittent.module_report_gaps(module, [{"name": "pkg.RealApiTest"}]), [])
+
+    def test_plan_names_targeted_reruns_per_module_and_skipped_module_tests(self):
+        entries = self.entries()
+        upload = self.upload_failure()
+        plan = known_intermittent.intermittent_plan(
+            [upload], entries, [], {}, skipped=["super-harness-harness"],
+            skipped_tests={"super-harness-harness": ["EvidenceReportTest", "ContractOracleTest"]})
+        self.assertTrue(plan["use"])
+        self.assertEqual(plan["rerunByModule"],
+                         [{"module": "super-harness-server", "classes": ["DeerFlowUploadRunContextHttpTest"]}])
+        self.assertEqual(plan["skippedModuleTests"],
+                         [{"module": "super-harness-harness", "classes": ["ContractOracleTest", "EvidenceReportTest"]}])
+        denied = known_intermittent.intermittent_plan([upload], entries, [], {}, no_known_intermittent=True)
+        self.assertEqual(denied["rerunByModule"], [])
+        self.assertEqual(denied["skippedModuleTests"], [])
+
+    def test_unknown_change_scope_denies_the_branch(self):
+        entries = self.entries()
+        upload = self.upload_failure()
+        denied = known_intermittent.intermittent_plan([upload], entries, None, {})
+        self.assertFalse(denied["use"])
+        self.assertIn("change scope", denied["reason"])
+        self.assertTrue(known_intermittent.intermittent_plan([upload], entries, [], {})["use"])
+
+    def test_change_scope_on_a_branch_on_the_base_branch_and_without_a_base(self):
+        def git(repo, *args):
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                           check=True, capture_output=True)
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            repo.mkdir()
+            git(repo, "init", "-q", "-b", "main")
+            (repo / "a.txt").write_text("a", encoding="utf-8")
+            git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", "one")
+            (repo / "covered.java").write_text("x", encoding="utf-8")
+            git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", "two")
+            # On the base branch itself the scope is the last commit, not "nothing".
+            files, described = known_intermittent.change_scope(repo, "main")
+            self.assertEqual(files, ["covered.java"])
+            self.assertIn("last commit", described)
+            git(repo, "checkout", "-q", "-b", "feature")
+            (repo / "b.txt").write_text("b", encoding="utf-8")
+            git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", "three")
+            (repo / "untracked.txt").write_text("u", encoding="utf-8")
+            files, described = known_intermittent.change_scope(repo, "main")
+            self.assertEqual(files, ["b.txt", "untracked.txt"])
+            self.assertIn("merge base", described)
+            files, described = known_intermittent.change_scope(repo, "no-such-branch")
+            self.assertIsNone(files)
+            self.assertIn("no merge base", described)
+
+    def test_manifest_loads(self):
+        entries = known_intermittent.load_manifest(ROOT / "tests/known-intermittent.json")
+        self.assertEqual([entry["issue"] for entry in entries],
+                         ["W04-UPLOAD-DUPLICATE-INTERMITTENT", "W08-SUBTASK-CANCEL-INTERMITTENT"])
+        self.assertTrue(all("covers" in entry for entry in entries))
+
+    def test_plan_allowed_and_each_denial(self):
+        entries = self.entries()
+        upload = self.upload_failure()
+        allowed = known_intermittent.intermittent_plan(
+            [upload], entries, ["super-harness-server/src/main/java/Other.java"], {})
+        self.assertTrue(allowed["use"])
+        self.assertEqual(allowed["reruns"], 3)
+        self.assertEqual(allowed["rerunClasses"], [upload["class"]])
+
+        unregistered = {**upload, "class": "io.x.OtherTest", "test": "OtherTest"}
+        self.assertFalse(known_intermittent.intermittent_plan([unregistered], entries, [], {})["use"])
+        self.assertFalse(known_intermittent.intermittent_plan([upload, upload, upload], entries, [], {})["use"])
+        touched = known_intermittent.intermittent_plan(
+            [upload], entries,
+            ["super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/DeerFlowUploadContext.java"], {})
+        self.assertFalse(touched["use"])
+        self.assertIn("covered", touched["reason"])
+        gap = known_intermittent.intermittent_plan([upload], entries, [], {"super-harness-server": ["NestedTest"]})
+        self.assertFalse(gap["use"])
+        self.assertIn("no surefire report", gap["reason"])
+        disabled = known_intermittent.intermittent_plan([upload], entries, [], {}, no_known_intermittent=True)
+        self.assertFalse(disabled["use"])
+
+    def test_method_qualified_entry_requires_the_method(self):
+        entries = self.entries()
+        base = {"class": "io.haifa.agent.superharness.server.api.DeerFlowSubtaskProjectionApiTest",
+                "test": "DeerFlowSubtaskProjectionApiTest", "module": "super-harness-server",
+                "kind": "failure", "type": "java.lang.AssertionError", "message": ""}
+        wrong = {**base, "method": "someOtherMethod"}
+        self.assertFalse(known_intermittent.intermittent_plan([wrong], entries, [], {})["use"])
+        right = {**base, "method": "cancellingThreeActualChildrenClosesTwoWaitingRequestsWithoutInventingChildFrames"}
+        self.assertTrue(known_intermittent.intermittent_plan([right], entries, [], {})["use"])
+
+    def test_module_report_gaps_from_source_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            module = Path(directory) / "super-harness-server"
+            (module / "src/test/java/a").mkdir(parents=True)
+            (module / "src/test/java/a/AlphaTest.java").write_text("", encoding="utf-8")
+            (module / "src/test/java/a/BetaTest.java").write_text("", encoding="utf-8")
+            (module / "src/test/java/a/Helper.java").write_text("", encoding="utf-8")
+            self.assertEqual(known_intermittent.module_report_gaps(module, [{"name": "a.AlphaTest"}]), ["BetaTest"])
+
+    def test_cover_matching(self):
+        self.assertTrue(known_intermittent.path_matches_cover(
+            "super-harness-server/src/main/java/x/A.java", "super-harness-server/src/main/java/x/A.java"))
+        self.assertTrue(known_intermittent.path_matches_cover("a/b/c.java", "a/b/*.java"))
+        self.assertFalse(known_intermittent.path_matches_cover("a/bc/c.java", "a/b"))
 
 
 if __name__ == "__main__":

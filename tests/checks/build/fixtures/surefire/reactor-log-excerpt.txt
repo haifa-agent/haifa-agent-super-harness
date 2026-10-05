@@ -1,0 +1,9 @@
+[INFO] Reactor Summary for Haifa Super Harness 0.1.0-SNAPSHOT:
+[INFO] Haifa Super Harness ................................ SUCCESS [  1.948 s]
+[INFO] Super Harness Application Foundation ............... SUCCESS [ 14.010 s]
+[INFO] Super Harness Event Projection Core ................ SUCCESS [  2.256 s]
+[INFO] Super Harness Restricted Workspace ................. SUCCESS [  8.603 s]
+[INFO] Super Harness DeerFlow Compatibility Server ........ FAILURE [11:42 min]
+[INFO] Super Harness Evidence Harness ..................... SKIPPED
+[INFO] BUILD FAILURE
+[ERROR]   mvn <args> -rf :super-harness-server

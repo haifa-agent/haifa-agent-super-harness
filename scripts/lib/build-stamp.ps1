@@ -12,12 +12,17 @@
                                    NEXT_PUBLIC_STATIC_WEBSITE_ONLY=false build profile; the
                                    repository HEAD is deliberately not part of it, because the
                                    build output does not depend on commits outside frontend/
-      server (exec JAR directory): HEAD and the Haifa SDK version it was built against
+      server (exec JAR directory): the Java input fingerprint (see source-fingerprint.ps1):
+                                   the exclusion-filtered source tree, the published SDK JAR
+                                   identity, and the JDK and Maven versions. sourceSha and the
+                                   SDK version are recorded too but do not decide reuse.
 
     Output built from uncommitted sources gets no stamp and therefore cannot be reused.
     A failed assertion never falls back to rebuilding; the caller reruns without -SkipBuild.
 #>
 Set-StrictMode -Version Latest
+
+. (Join-Path $PSScriptRoot 'source-fingerprint.ps1')
 
 $script:ServerSourcePaths = @('pom.xml', 'super-harness-app', 'super-harness-events', 'super-harness-harness', 'super-harness-server', 'super-harness-workspace')
 
@@ -63,10 +68,14 @@ function Get-FrontendStampFields {
 }
 
 function Get-ServerStampFields {
-    param([string]$RepositoryRoot, [string]$HaifaVersion)
+    param([string]$RepositoryRoot, [string]$HaifaVersion, [string]$MavenRepo)
+    $fingerprint = Get-SourceFingerprint -RepositoryRoot $RepositoryRoot -MavenRepo $MavenRepo -Version $HaifaVersion
     return [ordered]@{
         sourceSha = Invoke-StampGit $RepositoryRoot @('rev-parse', 'HEAD')
         haifaVersion = $HaifaVersion
+        sourceTree = $fingerprint.sourceTree
+        sdkIdentity = $fingerprint.sdkIdentity
+        javaInputFingerprint = $fingerprint.javaInputFingerprint
     }
 }
 
@@ -121,23 +130,36 @@ function Assert-FrontendBuildStamp {
 function Write-ServerBuildStamp {
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
-        [Parameter(Mandatory = $true)][string]$HaifaVersion
+        [Parameter(Mandatory = $true)][string]$HaifaVersion,
+        [string]$MavenRepo
     )
     $path = Get-ServerBuildStampPath $RepositoryRoot
     if (Test-StampSourcesDirty $RepositoryRoot $script:ServerSourcePaths) {
         Remove-BuildStamp $path
         return
     }
-    Write-BuildStamp $path (Get-ServerStampFields $RepositoryRoot $HaifaVersion)
+    Write-BuildStamp $path (Get-ServerStampFields $RepositoryRoot $HaifaVersion $MavenRepo)
 }
 
 function Assert-ServerBuildStamp {
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
-        [Parameter(Mandatory = $true)][string]$HaifaVersion
+        [Parameter(Mandatory = $true)][string]$HaifaVersion,
+        [string]$MavenRepo
     )
     if (Test-StampSourcesDirty $RepositoryRoot $script:ServerSourcePaths) {
         throw 'Server sources have uncommitted changes; rerun without -SkipBuild.'
     }
-    Assert-BuildStamp 'Server' (Get-ServerBuildStampPath $RepositoryRoot) (Get-ServerStampFields $RepositoryRoot $HaifaVersion)
+    # Comparison is by Java input fingerprint, not by commit: a docs/UI/test/script-only commit
+    # keeps the same JAR reusable, while a source or SDK content change does not. An old stamp
+    # without the field is a mismatch, never a fallback to sourceSha.
+    $expected = Get-ServerStampFields $RepositoryRoot $HaifaVersion $MavenRepo
+    # Without the published SDK JARs the fingerprint cannot tell two SDK builds apart, so the
+    # JAR is not reusable. Only a fixture that passes its own -MavenRepo may compare without.
+    if ($expected.sdkIdentity -ceq 'UNAVAILABLE' -and [string]::IsNullOrWhiteSpace($MavenRepo)) {
+        throw 'Server build stamp cannot be checked: the SDK identity is unavailable; rerun without -SkipBuild.'
+    }
+    Assert-BuildStamp 'Server' (Get-ServerBuildStampPath $RepositoryRoot) ([ordered]@{
+        javaInputFingerprint = $expected.javaInputFingerprint
+    })
 }

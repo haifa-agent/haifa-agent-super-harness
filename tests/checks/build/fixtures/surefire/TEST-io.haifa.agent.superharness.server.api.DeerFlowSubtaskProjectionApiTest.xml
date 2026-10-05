@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="3.0.2" name="io.haifa.agent.superharness.server.api.DeerFlowSubtaskProjectionApiTest" time="42.693" tests="9" errors="0" skipped="0" failures="1">
+  <properties/>
+  <testcase name="rejectedTaskHasAuthoritativeToolMessageButNoInventedChildCustomOrSteps" classname="io.haifa.agent.superharness.server.api.DeerFlowSubtaskProjectionApiTest" time="1.934"/>
+  <testcase name="cancellingThreeActualChildrenClosesTwoWaitingRequestsWithoutInventingChildFrames" classname="io.haifa.agent.superharness.server.api.DeerFlowSubtaskProjectionApiTest" time="3.044">
+    <failure message="Expecting empty but was: [Event[name=error, data={&quot;message&quot;:&quot;Tool invocation failed&quot;}]]" type="java.lang.AssertionError"><![CDATA[java.lang.AssertionError: Expecting empty but was: [Event[name=error]]
+	at io.haifa.agent.superharness.server.api.DeerFlowSubtaskProjectionApiTest.customs(DeerFlowSubtaskProjectionApiTest.java:612)
+]]></failure>
+  </testcase>
+  <testcase name="largeAuthorizedTextAndArgumentsRemainBoundedWithRealTruncationFlags" classname="io.haifa.agent.superharness.server.api.DeerFlowSubtaskProjectionApiTest" time="3.195"/>
+</testsuite>

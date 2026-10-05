@@ -8,10 +8,11 @@
 - 更新时刻：<带时区>
 - Task/范围：<SHPM ID；本次交付与延期范围>
 - Worktree/branch：<绝对路径；分支>
-- Source：<HEAD SHA；dirty路径；最后验证的源码状态>
-- SDK：<selection ABSENT/SELECTED；坐标；上游发布清单路径/commit；JAR hash>
+- Source：<HEAD SHA；sourceTree 哈希；javaInputFingerprint；dirty路径；最后验证的源码状态>
+- SDK：<selection ABSENT/SELECTED；坐标；sdkIdentity；上游发布清单路径/commit；JAR hash>
 - 槽位/数据：<完整端口组；本轮独立data-root>
 - 正在等待：<精确session/PID；deadline；日志路径；无则写无>
+- 偶发重跑：<是否命中 known-intermittent；issue；实际重跑次数；首次失败归档路径；无则写无>
 
 | Case/断言 | 结果 | 源码/SDK绑定 | 原始证据 |
 |---|---|---|---|

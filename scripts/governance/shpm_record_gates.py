@@ -16,6 +16,12 @@ exactly: PASS stays PASS; FAIL, FAIL_PREFLIGHT and FAIL_NO_TESTS_MATCHED become 
 never retries, and never delivers, accepts or decides a stage. Without --execute the table of
 ``shpm verify add`` rows is only printed.
 
+A full-gate summary carries its provenance in its description: a ``reuse`` object names the
+source summary, commit and fingerprint; a ``knownIntermittent`` object names the issues and the
+real rerun count. A known-intermittent summary is registered as PASS with that rerun count, and
+each issue also gets one non-required FAIL record ``known-intermittent-<issue>`` whose raw path
+is the archived first failure, so occurrences accumulate per issue.
+
 The idempotency key is ``<task>-<check>-<commit>-<evidence identity>``: it deliberately carries
 no date, so the same evidence re-registered on a later day is still idempotent. The evidence
 identity is a summary file name, or the UI evidence directory's ``run-*`` identity taken from
@@ -112,6 +118,7 @@ def classify_json(path: Path) -> tuple[str, dict | None]:
 
 def verify_full_records(path: Path, summary: dict, anchor: Path) -> list[dict]:
     failures = summary.get("preflightFailures") or []
+    known = summary.get("knownIntermittent") or {}
     detail = (
         "preflight: " + "; ".join(failures)
         if failures
@@ -119,7 +126,15 @@ def verify_full_records(path: Path, summary: dict, anchor: Path) -> list[dict]:
             tests=summary.get("tests"), failures=summary.get("failures"), errors=summary.get("errors"),
             skipped=summary.get("skipped"), forks=summary.get("forks"), sdk=summary.get("haifaVersion"))
     )
-    return [{
+    reuse = summary.get("reuse") or {}
+    if reuse:
+        detail += " reused from {summary} ({sha}) fingerprint={fingerprint}".format(
+            summary=reuse.get("fromSummary"), sha=(reuse.get("fromSourceSha") or "")[:12],
+            fingerprint=(reuse.get("fingerprint") or "")[:12])
+    issues = ", ".join(str(entry.get("issue")) for entry in known.get("entries", []))
+    if known:
+        detail += f" knownIntermittent reruns={known.get('reruns')} issues=[{issues}]"
+    records = [{
         "base_name": "verify-full",
         "round": False,
         "criteria": "Offline mvn clean verify passes at the delivered commit",
@@ -128,13 +143,34 @@ def verify_full_records(path: Path, summary: dict, anchor: Path) -> list[dict]:
         "sha": summary.get("sourceSha") or "",
         "raw": str(path),
         "duration": f"{int((summary.get('elapsedMs') or 0) / 1000)}s",
-        "retry": 0,
+        "retry": int(known.get("reruns") or 0),
+        "required": True,
         "summary": detail,
         "identity": path.stem,
         "start": parse_summary_start(path.stem),
         "local_path": path,
         "anchor": anchor,
     }]
+    for entry in known.get("entries", []):
+        issue = entry.get("issue")
+        records.append({
+            "base_name": f"known-intermittent-{issue}",
+            "round": False,
+            "criteria": f"Known intermittent failure {issue} occurred",
+            "result": "FAIL",
+            "command": summary.get("command") or "scripts/verify-full.ps1",
+            "sha": summary.get("sourceSha") or "",
+            "raw": entry.get("firstFailureEvidence") or str(path),
+            "duration": "0s",
+            "retry": 0,
+            "required": False,
+            "summary": f"issue={issue} test={entry.get('test')} module={entry.get('module')}",
+            "identity": f"{path.stem}-{issue}",
+            "start": parse_summary_start(path.stem),
+            "local_path": path,
+            "anchor": anchor,
+        })
+    return records
 
 
 def script_records(path: Path, summary: dict, anchor: Path) -> list[dict]:
@@ -333,11 +369,15 @@ def idempotency_key(task: str, record: dict) -> str:
 
 
 def build_command(task: str, record: dict, db: str) -> list[str]:
-    return ["verify", "add", "--task", task, "--key", record["name"], "--criteria", record["criteria"],
-            "--result", record["result"], "--required", "--command", record["command"],
-            "--repo-sha", record["sha"], "--raw", record["raw"], "--duration", record["duration"],
-            "--retry-count", str(record["retry"]), "--summary", record["summary"],
-            "--idempotency-key", idempotency_key(task, record), "--json", "--db", db]
+    command = ["verify", "add", "--task", task, "--key", record["name"], "--criteria", record["criteria"],
+               "--result", record["result"]]
+    if record.get("required", True):
+        command.append("--required")
+    command += ["--command", record["command"],
+                "--repo-sha", record["sha"], "--raw", record["raw"], "--duration", record["duration"],
+                "--retry-count", str(record["retry"]), "--summary", record["summary"],
+                "--idempotency-key", idempotency_key(task, record), "--json", "--db", db]
+    return command
 
 
 def format_table(records: list[dict], task: str) -> str:

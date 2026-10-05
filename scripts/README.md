@@ -9,7 +9,7 @@
 | 文件 | 用途 |
 | --- | --- |
 | `test-targeted.ps1` | 定向 Maven 测试，固定带 `-am`，读取本 worktree 的 SDK 版本选择 |
-| `verify-full.ps1` | 完整离线门禁（`mvn clean verify`）与服务端构建戳 |
+| `verify-full.ps1` | 完整离线门禁（`mvn clean verify`）、按 Java 输入指纹复用、已登记偶发失败分支与服务端构建戳 |
 | `verify-scripts.ps1` | 运行 `tests/checks/build/` 与 `tests/checks/ui/` 清单内的全部脚本回归检查 |
 | `start-main-super-harness.ps1` | 主工作树 Gateway（18018）+ 冻结前端（33018）启动 |
 | `refresh-main-service.ps1` | 主服务只读状态检查与一键刷新（复制 JAR、精确停旧 PID、前端复用/启动、回退） |
@@ -89,11 +89,12 @@
 | --- | --- |
 | `audit-work-package-delivery.ps1` | SHPM 与实际交付/worktree 审计 |
 | `audit_disconnected_branches.py` | 用相同文件树连接新旧历史，批量核对旧分支内容并导出未确认差异 |
-| `change_scope.py` | 按 main 以来的改动给出所需门禁（Python） |
+| `change_scope.py` | 按 main 以来的改动给出所需门禁（Python）：Rule B 按 Java 输入指纹给出 `verify-full` / `verify-full-reuse`，Rule D 给出 `ui-live-round-*` / `ui-controlled-round-*` |
+| `evidence_reuse.py` | 只读核对旧证据能否复用（`--target` 逐份判 `REUSABLE`/`STALE`），并供 `verify-full.ps1` 选出同指纹的真实 PASS 摘要（Python） |
 | `pr_review_digest.py` | 只读读取 PR 机器人审查并输出 `botVerdict`/`findings`（Python） |
-| `sdk_api_digest.py` | 从本地仓库 JAR 分批 `javap` 生成 SDK 公开/受保护签名摘要（Python，主控运行） |
+| `sdk_api_digest.py` | 从本地仓库 JAR 分批 `javap` 生成 SDK 公开/受保护签名摘要；`sdk_identity()` 供内容指纹复用（Python，主控运行） |
 | `shpm_dispatch.py` | 一次性完成 task create、sprint link、task start、assign create |
-| `shpm_record_gates.py` | 从门禁摘要 JSON 与 UI 证据目录按时间顺序登记结果（幂等键含证据身份、不含日期） |
+| `shpm_record_gates.py` | 从门禁摘要 JSON 与 UI 证据目录按时间顺序登记结果（幂等键含证据身份、不含日期）；复用摘要写入 `reuse` 来源，偶发通过写 PASS 加每 issue 一条非必需 FAIL |
 
 历史更换后的旧分支内容审计（只读 Git，不调用模型、不删除分支）：
 
@@ -125,10 +126,13 @@ python scripts/governance/audit_disconnected_branches.py `
 | `preflight.ps1` | 入口公共预检（代理/端口等） |
 | `quick_checks.py` | 秒级预检：SDK 基线门禁、`git diff --check`、secret scan |
 | `gate_resources.py` | 全仓门禁按空闲内存自动选择并行进程数（阈值 = 2026-10-05 实测峰值 + 2 GB；供 `verify-full.ps1`） |
-| `script_regressions.py` | 脚本回归清单、运行与摘要（供 `verify-scripts.ps1`） |
+| `source_fingerprint.py` | 提交的源码树哈希、SDK JAR 身份与 Java 输入指纹；排除目录引用回归检查 |
+| `source-fingerprint.ps1` | `source_fingerprint.py` 的薄封装（供构建戳、全仓门禁、UI flow-health 调用） |
+| `known_intermittent.py` | surefire 解析、reactor 跳过模块识别与已登记偶发失败分支判定（供 `verify-full.ps1`） |
+| `script_regressions.py` | 脚本回归清单、运行与摘要，摘要含 `sourceTree`/`sdkIdentity`/`sourceDirty`（供 `verify-scripts.ps1`） |
 | `main_service.py` | 主服务状态检查、JAR 复制/构建戳树比对/回退、前端复用与启动、真实 smoke 与刷新摘要（供 `refresh-main-service.ps1`） |
 | `sdk-selection.ps1` | 解析本 worktree 消费的 SDK 版本 |
-| `build-stamp.ps1` | 构建戳读写，决定 `-SkipBuild` 能否复用 |
+| `build-stamp.ps1` | 构建戳读写；服务端按 Java 输入指纹（含 SDK JAR 身份）比较，决定 `-SkipBuild` 能否复用 |
 | `frontend-gate-cache.ps1` / `frontend_gate_cache.py` | 复用冻结前端来源门禁结果 |
 | `frontend_build_cache.py` | 冻结前端构建缓存（共享 `.next`） |
 | `run-fixture.ps1` | UI 验收生命周期：槽位预检、启动、就绪等待、精确清理 |

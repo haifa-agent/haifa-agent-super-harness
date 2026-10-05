@@ -153,7 +153,7 @@ pwsh -NoProfile -File scripts/verify-scripts.ps1
 python scripts/governance/shpm_record_gates.py --task $taskId <证据组目录> [--raw-root <已归档位置>] [--execute]
 ```
 
-`verify-scripts.ps1` 统一运行 `tests/checks/build/` 与 `tests/checks/ui/` 清单内的检查并写 `local-tmp/verify-scripts/`；出现清单外的检查文件时直接失败，不提供跳过单项的开关。`shpm_record_gates.py` 从证据组目录递归发现全仓门禁摘要、脚本回归摘要、UI 证据目录和主服务刷新摘要，无法识别的 JSON 忽略并列出；不带 `--execute` 时只打印一张表（检查名、结果、提交、耗时、原件路径、幂等键），加时才逐条写入、失败即停。幂等键带证据身份（摘要文件名或 UI 证据目录的 `run-*` 身份），同一份证据重复登记仍幂等；UI 检查名带 `acceptanceProfile`，同一次调用里同 profile、同提交的多份证据目录按开始时间追加 `-r1`/`-r2`。`--raw-root` 用于证据已归档到别处时改写原件路径，目标不存在则报错。结果原样登记，脚本不自动提升阶段 `PASS`/`GO`。
+`verify-scripts.ps1` 统一运行 `tests/checks/build/` 与 `tests/checks/ui/` 清单内的检查并写 `local-tmp/verify-scripts/`；出现清单外的检查文件时直接失败，不提供跳过单项的开关。`shpm_record_gates.py` 从证据组目录递归发现全仓门禁摘要、脚本回归摘要、UI 证据目录和主服务刷新摘要，无法识别的 JSON 忽略并列出；不带 `--execute` 时只打印一张表（检查名、结果、提交、耗时、原件路径、幂等键），加时才逐条写入、失败即停。幂等键带证据身份（摘要文件名或 UI 证据目录的 `run-*` 身份），同一份证据重复登记仍幂等；UI 检查名带 `acceptanceProfile`，同一次调用里同 profile、同提交的多份证据目录按开始时间追加 `-r1`/`-r2`。`--raw-root` 用于证据已归档到别处时改写原件路径，目标不存在则报错。结果原样登记，脚本不自动提升阶段 `PASS`/`GO`。带 `reuse` 的全仓门禁摘要把复用来源（源摘要、提交、Java 输入指纹）写进说明并如实记录耗时；带 `knownIntermittent` 的摘要登记为 `PASS` 并填实际重跑次数，同时为每个 issue 追加一条非必需的 `known-intermittent-<issue>` `FAIL` 记录（原件指向首次失败归档目录），用于累计该 issue 的发生次数。
 
 独立复审通过、改动合入且证据绑定最终主线 SHA 后接受，再确认本任务端口和子进程已清理并释放派工：
 

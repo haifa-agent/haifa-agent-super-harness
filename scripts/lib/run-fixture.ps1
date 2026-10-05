@@ -2,6 +2,8 @@
 # Shared acceptance lifecycle. No SHPM writes and no process-name-wide termination.
 Set-StrictMode -Version Latest
 
+. (Join-Path $PSScriptRoot 'source-fingerprint.ps1')
+
 function ConvertTo-CmdQuoted {
     param([string]$Value)
     if ($Value -match '[\r\n%]') { throw 'Detached process tokens cannot contain newlines or cmd environment expansion.' }
@@ -406,7 +408,14 @@ function Write-FixtureFlowHealth {
         if ($firstCaseFailure) { $Fixture.FirstFailure.case = $firstCaseFailure.name; $Fixture.FirstFailure.signature = $firstCaseFailure.firstFailure }
     }
     $Fixture.Timings.evidenceArchiveMs = $archive.ElapsedMilliseconds
+    $sourceVersion = if ($Extra.ContainsKey('haifaVersion')) { [string]$Extra['haifaVersion'] } else { '' }
+    # Best effort: this runs in the runner's finally block, where a failure here would lose
+    # the round's flow-health file. Evidence without these fields is simply not reusable.
+    $sourceFingerprint = [pscustomobject]@{ sourceTree = $null; sdkIdentity = $null }
+    try { $sourceFingerprint = Get-SourceFingerprint -RepositoryRoot $Fixture.Root -Version $sourceVersion }
+    catch { Write-Host "run-fixture: source fingerprint unavailable ($($_.Exception.Message))." }
     $health = [ordered]@{ sourceSha = (& git -C $Fixture.Root rev-parse HEAD)
+        sourceTree = $sourceFingerprint.sourceTree; sdkIdentity = $sourceFingerprint.sdkIdentity
         sourceDirty = [bool](& git -C $Fixture.Root status --porcelain); buildMode = $Fixture.BuildMode
         timings = $Fixture.Timings; totalMs = $Fixture.Watch.ElapsedMilliseconds
         firstFailure = $Fixture.FirstFailure; retryCount = $Fixture.RetryCount; testExitCode = $Fixture.TestExitCode

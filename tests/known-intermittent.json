@@ -1,0 +1,28 @@
+{
+  "entries": [
+    {
+      "test": "DeerFlowUploadRunContextHttpTest",
+      "module": "super-harness-server",
+      "issue": "W04-UPLOAD-DUPLICATE-INTERMITTENT",
+      "since": "2026-10-05",
+      "firstFailureEvidence": "",
+      "covers": [
+        "super-harness-server/src/test/java/io/haifa/agent/superharness/server/api/DeerFlowUploadRunContextHttpTest.java",
+        "super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/DeerFlowUploadContext.java",
+        "super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/DeerFlowThreadRunApi.java"
+      ]
+    },
+    {
+      "test": "DeerFlowSubtaskProjectionApiTest#cancellingThreeActualChildrenClosesTwoWaitingRequestsWithoutInventingChildFrames",
+      "module": "super-harness-server",
+      "issue": "W08-SUBTASK-CANCEL-INTERMITTENT",
+      "since": "2026-10-05",
+      "firstFailureEvidence": "",
+      "covers": [
+        "super-harness-server/src/test/java/io/haifa/agent/superharness/server/api/DeerFlowSubtaskProjectionApiTest.java",
+        "super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/DeerFlowSubtaskProjection.java",
+        "super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/DeerFlowSubtaskStream.java"
+      ]
+    }
+  ]
+}
