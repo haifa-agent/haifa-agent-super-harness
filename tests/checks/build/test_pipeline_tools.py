@@ -66,6 +66,7 @@ class ChangeScopeTest(unittest.TestCase):
 
     def test_gates_follow_the_widest_class(self):
         self.assertEqual(change_scope.required_gates(["README.md"]), ["docs-check"])
+        self.assertEqual(change_scope.ui_model_decision(["tests/known-intermittent.json", "scripts/lib/x.py"])[0], "controlled")
         self.assertEqual(change_scope.required_gates(["scripts/governance/x.py"]), ["script-regressions"])
         self.assertEqual(
             change_scope.required_gates(["tests/ui/smoke/x.spec.cjs"]),

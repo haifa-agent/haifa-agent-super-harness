@@ -65,6 +65,7 @@ UI_CONTROLLED_PATTERNS = (
     ("docs/ or any *.md", re.compile(r"(^docs/|\.md$)")),
     ("scripts/", re.compile(r"^scripts/")),
     ("tests/checks/", re.compile(r"^tests/checks/")),
+    ("the known-intermittent manifest", re.compile(r"^tests/known-intermittent\.json$")),
     ("module src/test/", re.compile(r"^super-harness-[^/]+/src/test/")),
     ("tests/ui/ spec or support file without 'live' in the name", re.compile(r"^tests/ui/")),
 )
