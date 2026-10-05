@@ -11,6 +11,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 from pathlib import Path
 
@@ -32,6 +33,7 @@ gate_cache = load("scripts/lib/frontend_gate_cache.py")
 build_cache = load("scripts/lib/frontend_build_cache.py")
 pr_review = load("scripts/governance/pr_review_digest.py")
 script_regressions = load("scripts/lib/script_regressions.py")
+sdk_api_digest = load("scripts/governance/sdk_api_digest.py")
 
 BOT = pr_review.DEFAULT_BOT
 
@@ -370,6 +372,142 @@ class PrReviewDigestTest(unittest.TestCase):
         self.assertEqual(digest["botVerdict"], "FINDINGS")
         self.assertEqual(digest["counts"]["findings"], 1)
         self.assertEqual(digest["headSha"], head)
+
+
+class SdkApiDigestTest(unittest.TestCase):
+    VERSION = "0.1.2-SNAPSHOT"
+    BOM = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>io.haifa</groupId>
+    <artifactId>haifa-agent-bom</artifactId>
+    <version>{version}</version>
+    <packaging>pom</packaging>
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.haifa</groupId>
+                <artifactId>haifa-agent-fixture</artifactId>
+                <version>{version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+</project>
+"""
+    WORKTREE_POM = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>example</groupId>
+    <artifactId>fixture-worktree</artifactId>
+    <version>1.0.0</version>
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.haifa</groupId>
+                <artifactId>haifa-agent-bom</artifactId>
+                <version>${{haifa.version}}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+</project>
+"""
+
+    def git(self, repo, *args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    def fixture(self, root):
+        worktree = root / "worktree"
+        (worktree / "local-tmp").mkdir(parents=True)
+        (worktree / ".gitignore").write_text("local-tmp/\n", encoding="utf-8")
+        (worktree / "pom.xml").write_text(self.WORKTREE_POM, encoding="utf-8")
+        self.git(worktree, "init", "-q")
+        self.git(worktree, "config", "core.autocrlf", "false")
+        self.git(worktree, "add", "-A")
+        self.git(worktree, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "seed")
+
+        maven = root / "repo"
+        bom_dir = maven / "io/haifa/haifa-agent-bom" / self.VERSION
+        bom_dir.mkdir(parents=True)
+        (bom_dir / f"haifa-agent-bom-{self.VERSION}.pom").write_text(
+            self.BOM.format(version=self.VERSION), encoding="utf-8")
+
+        sources = root / "src/fixture"
+        sources.mkdir(parents=True)
+        (sources / "Sample.java").write_text("package fixture;\npublic record Sample(int a, String b) {}\n", encoding="utf-8")
+        (sources / "Widget.java").write_text(
+            "package fixture;\npublic class Widget {\n"
+            "    public void visible() {}\n    protected void guarded() {}\n    void hidden() {}\n"
+            "    public static Runnable anonymous() { return new Runnable() { public void run() {} }; }\n}\n",
+            encoding="utf-8")
+        (sources / "Hidden.java").write_text("package fixture;\nclass Hidden { public void x() {} }\n", encoding="utf-8")
+        classes = root / "classes"
+        classes.mkdir()
+        subprocess.run(["javac", "-d", str(classes), *[str(p) for p in sorted(sources.glob("*.java"))]], check=True)
+        jar_dir = maven / "io/haifa/haifa-agent-fixture" / self.VERSION
+        jar_dir.mkdir(parents=True)
+        self.jar = jar_dir / f"haifa-agent-fixture-{self.VERSION}.jar"
+        subprocess.run(["jar", "--create", "--file", str(self.jar), "-C", str(classes), "."], check=True)
+        return worktree, maven
+
+    def test_version_resolution_two_cases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree = Path(directory)
+            selection = worktree / "local-tmp/sdk-selection.json"
+            selection.parent.mkdir(parents=True)
+            self.assertEqual(sdk_api_digest.read_version(selection, None), self.VERSION)
+            selection.write_text(json.dumps({"haifaVersion": "0.1.2-feature-SNAPSHOT"}), encoding="utf-8")
+            self.assertEqual(sdk_api_digest.read_version(selection, None), "0.1.2-feature-SNAPSHOT")
+            self.assertEqual(sdk_api_digest.read_version(selection, "9.9.9"), "9.9.9")
+            selection.write_text(json.dumps({"haifaVersion": "not-a-version"}), encoding="utf-8")
+            with self.assertRaises(sdk_api_digest.SdkDigestError):
+                sdk_api_digest.read_version(selection, None)
+
+    def test_output_directory_must_be_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            worktree, _ = self.fixture(root)
+            target = sdk_api_digest.output_directory(worktree, self.VERSION)
+            self.assertEqual(target, (worktree / "local-tmp/sdk-api" / self.VERSION).resolve())
+
+            bare = root / "bare"
+            bare.mkdir()
+            self.git(bare, "init", "-q")
+            with self.assertRaises(sdk_api_digest.SdkDigestError):
+                sdk_api_digest.output_directory(bare, self.VERSION)
+
+    def test_signature_filtering_record_accessors_and_expiry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree, maven = self.fixture(Path(directory))
+            result = sdk_api_digest.generate(worktree, maven, self.VERSION)
+            self.assertEqual(result["status"], "GENERATED")
+            output = worktree / "local-tmp/sdk-api" / self.VERSION
+
+            widget = (output / "haifa-agent-fixture.api.txt").read_text(encoding="utf-8")
+            self.assertIn("public void visible()", widget)
+            self.assertIn("protected void guarded()", widget)
+            self.assertNotIn("hidden()", widget)
+
+            sample = (output / "haifa-agent-fixture.api.txt").read_text(encoding="utf-8")
+            self.assertIn("int a()", sample)
+            self.assertIn("java.lang.String b()", sample)
+
+            classes = (output / "classes.txt").read_text(encoding="utf-8")
+            self.assertIn("fixture.Sample\thaifa-agent-fixture", classes)
+            self.assertIn("fixture.Widget\thaifa-agent-fixture", classes)
+            self.assertNotIn("Widget$1", classes)
+            self.assertNotIn("fixture.Hidden", classes)
+
+            index = json.loads((output / "index.json").read_text(encoding="utf-8"))
+            self.assertEqual(index["artifacts"][0]["artifactId"], "haifa-agent-fixture")
+            self.assertEqual(index["artifacts"][0]["length"], self.jar.stat().st_size)
+            self.assertGreaterEqual(index["artifacts"][0]["classCount"], 3)
+
+            self.assertEqual(sdk_api_digest.generate(worktree, maven, self.VERSION)["status"], "UNCHANGED")
+            with zipfile.ZipFile(self.jar, "a") as archive:
+                archive.writestr("fixture/extra.txt", "changed")
+            self.assertEqual(sdk_api_digest.generate(worktree, maven, self.VERSION)["status"], "GENERATED")
 
 
 if __name__ == "__main__":

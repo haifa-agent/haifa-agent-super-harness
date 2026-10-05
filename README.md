@@ -128,6 +128,10 @@ SDK 版本规则见 `AGENTS.md`「范围与依赖」。工作包 worktree 消费
 `test-targeted.ps1` 与 UI runner 读取它并传 `-Dhaifa.version`；文件不存在时使用基线并输出
 `sdkSelection=ABSENT`。直接运行 `mvn` 不读取该文件，仍使用基线。
 
+需要把 SDK 公开类型事实交给执行者时，主控运行 `python scripts/governance/sdk_api_digest.py --worktree <worktree>`
+生成只含 public/protected 签名的摘要到 `local-tmp/sdk-api/<版本>/`；执行者读该摘要而不访问本地 Maven 仓库，
+SDK 重新发布后重跑脚本。
+
 流水线辅助脚本：
 
 ```powershell
