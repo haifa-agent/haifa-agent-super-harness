@@ -11,6 +11,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 from pathlib import Path
 
@@ -30,6 +31,13 @@ record_gates = load("scripts/governance/shpm_record_gates.py")
 dispatch = load("scripts/governance/shpm_dispatch.py")
 gate_cache = load("scripts/lib/frontend_gate_cache.py")
 build_cache = load("scripts/lib/frontend_build_cache.py")
+pr_review = load("scripts/governance/pr_review_digest.py")
+script_regressions = load("scripts/lib/script_regressions.py")
+sdk_api_digest = load("scripts/governance/sdk_api_digest.py")
+main_service = load("scripts/lib/main_service.py")
+gate_resources = load("scripts/lib/gate_resources.py")
+
+BOT = pr_review.DEFAULT_BOT
 
 
 class ChangeScopeTest(unittest.TestCase):
@@ -80,41 +88,192 @@ class SecretScanTest(unittest.TestCase):
 
 
 class RecordGatesTest(unittest.TestCase):
+    def ui_dir(self, root, tag, identity, profile, cases, sha="abcdef0123"):
+        directory = root / tag
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "flow-health.json").write_text(json.dumps({
+            "acceptanceProfile": profile, "sourceSha": sha, "totalMs": 97000, "retryCount": 0,
+            "cleanup": {"success": True}, "evidenceRoot": f"D:/evidence/{identity}",
+        }), encoding="utf-8")
+        (directory / "case-results.json").write_text(json.dumps(cases), encoding="utf-8")
+        return directory
+
+    def keys(self, roots):
+        records, _ = record_gates.discover([Path(root) for root in roots])
+        record_gates.assign_rounds(records)
+        return [(r["name"], record_gates.idempotency_key("T", r)) for r in records]
+
     def test_results_are_copied_without_promotion(self):
         self.assertEqual(record_gates.shpm_result("PASS"), "PASS")
-        for failure in ("FAIL", "FAIL_PREFLIGHT", "FAIL_NO_TESTS_MATCHED"):
+        for failure in ("FAIL", "FAIL_PREFLIGHT", "FAIL_NO_TESTS_MATCHED", "FAIL_MANIFEST"):
             self.assertEqual(record_gates.shpm_result(failure), "FAIL")
         self.assertEqual(record_gates.shpm_result(None), "NOT_RUN")
         self.assertEqual(record_gates.shpm_result("BLOCKED_EXTERNAL"), "BLOCKED_EXTERNAL")
 
-    def test_reads_verify_full_summary_and_ui_round(self):
+    def test_idempotency_key_has_no_date(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            summary = root / "verify-full.json"
+            (root / "verify-full-20261005-100000-000.json").write_text(json.dumps({
+                "status": "PASS", "sourceSha": "abcdef0123", "forks": 3, "sdkSelection": "ABSENT"}), encoding="utf-8")
+            records, _ = record_gates.discover([root])
+            record_gates.assign_rounds(records)
+            key = record_gates.idempotency_key("T", records[0])
+            self.assertEqual(key, "T-verify-full-abcdef01-verify-full-20261005-100000-000")
+            self.assertNotIn("2026-10-05", key)
+
+    def test_summaries_are_written_in_time_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            failing = root / "verify-full-20261005-100000-000.json"
+            passing = root / "verify-full-20261005-110000-000.json"
+            failing.write_text(json.dumps({
+                "status": "FAIL", "sourceSha": "abcdef0123", "forks": 3, "sdkSelection": "ABSENT"}), encoding="utf-8")
+            passing.write_text(json.dumps({
+                "status": "PASS", "sourceSha": "abcdef0123", "forks": 3, "sdkSelection": "ABSENT"}), encoding="utf-8")
+            for roots in ([passing, failing], [failing, passing]):
+                records, _ = record_gates.discover(roots)
+                record_gates.assign_rounds(records)
+                record_gates.sort_by_time(records)
+                self.assertEqual([r["result"] for r in records], ["FAIL", "PASS"])
+
+    def test_reads_verify_full_and_ui_with_profile_in_the_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            summary = root / "verify-full-1.json"
             summary.write_text(json.dumps({
-                "status": "FAIL_PREFLIGHT", "sourceSha": "abcdef0123", "preflightFailures": ["git diff --check: x"],
+                "status": "FAIL_PREFLIGHT", "exitCode": 1, "sourceSha": "abcdef0123",
+                "preflightFailures": ["git diff --check: x"],
             }), encoding="utf-8")
-            round_dir = root / "run"
-            round_dir.mkdir()
-            (round_dir / "flow-health.json").write_text(json.dumps({
-                "buildMode": "warm-reuse", "sourceSha": "abcdef0123", "totalMs": 97000, "retryCount": 0,
-                "cleanup": {"success": True},
-            }), encoding="utf-8")
-            (round_dir / "case-results.json").write_text(json.dumps([
+            ui = self.ui_dir(root, "run", "run-20261005-100000-000-aaaaaaaa", "w05-demo-artifact", [
                 {"name": "Artifact survives reload", "result": "PASS", "firstFailure": None},
                 {"name": "Second case", "result": "FAIL", "firstFailure": "timeout"},
-            ]), encoding="utf-8")
-
+            ])
             gate = record_gates.records_for(summary)
             self.assertEqual([r["result"] for r in gate], ["FAIL"])
             self.assertIn("preflight", gate[0]["summary"])
-            ui = record_gates.records_for(round_dir)
-            self.assertEqual([r["result"] for r in ui], ["PASS", "FAIL"])
-            self.assertEqual(ui[0]["key"], "ui-warm-reuse-artifact-survives-reload")
-            self.assertIn("first failure: timeout", ui[1]["summary"])
-            command = record_gates.build_command("W05-task-1", ui[1], "db", "2026-10-03")
+            self.assertEqual(gate[0]["identity"], "verify-full-1")
+            cases = record_gates.records_for(ui)
+            self.assertEqual([r["result"] for r in cases], ["PASS", "FAIL"])
+            record_gates.assign_rounds(cases)
+            self.assertEqual(cases[0]["name"], "ui-w05-demo-artifact-artifact-survives-reload")
+            self.assertIn("first failure: timeout", cases[1]["summary"])
+            command = record_gates.build_command("W05-task-1", cases[1], "db")
             self.assertEqual(command[command.index("--result") + 1], "FAIL")
-            self.assertIn("2026-10-03-W05-task-1-ui-warm-reuse-second-case-abcdef01", command)
+
+    def test_two_rounds_get_distinct_names_and_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            early = self.ui_dir(root, "a", "run-20261005-100000-000-aaaaaaaa", "w05-demo-artifact",
+                                [{"name": "Case One", "result": "FAIL", "firstFailure": None}])
+            late = self.ui_dir(root, "b", "run-20261005-110000-000-bbbbbbbb", "w05-demo-artifact",
+                               [{"name": "Case One", "result": "PASS", "firstFailure": None}])
+            rows = dict(self.keys([late, early]))
+            self.assertEqual(set(rows), {"ui-w05-demo-artifact-case-one-r1", "ui-w05-demo-artifact-case-one-r2"})
+            self.assertIn("run-20261005-100000-000-aaaaaaaa", rows["ui-w05-demo-artifact-case-one-r1"])
+            self.assertIn("run-20261005-110000-000-bbbbbbbb", rows["ui-w05-demo-artifact-case-one-r2"])
+
+    def test_same_directory_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ui = self.ui_dir(root, "run", "run-20261005-100000-000-aaaaaaaa", "p", [{"name": "C", "result": "PASS"}])
+            self.assertEqual(self.keys([ui]), self.keys([ui]))
+
+    def test_different_profiles_do_not_collide(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            one = self.ui_dir(root, "a", "run-20261005-100000-000-aaaaaaaa", "p1", [{"name": "Same", "result": "PASS"}])
+            two = self.ui_dir(root, "b", "run-20261005-100000-000-bbbbbbbb", "p2", [{"name": "Same", "result": "PASS"}])
+            names = {name for name, _ in self.keys([one, two])}
+            self.assertEqual(names, {"ui-p1-same", "ui-p2-same"})
+
+    def test_recursively_discovers_the_four_kinds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "full-gate").mkdir()
+            (root / "full-gate" / "verify-full-1.json").write_text(json.dumps({
+                "status": "PASS", "sourceSha": "abcdef0123", "forks": 1, "sdkSelection": "ABSENT"}), encoding="utf-8")
+            (root / "scripts").mkdir()
+            (root / "scripts" / "verify-scripts-1.json").write_text(json.dumps({
+                "status": "PASS", "sourceSha": "abcdef0123", "logDirectory": "d",
+                "checks": [{"name": "node-x", "status": "PASS", "exitCode": 0, "elapsedMs": 100, "log": "l"}]}),
+                encoding="utf-8")
+            self.ui_dir(root, "ui/x/original-evidence", "run-20261005-100000-000-aaaaaaaa", "p",
+                        [{"name": "C", "result": "FAIL"}])
+            (root / "service").mkdir()
+            (root / "service" / "refresh-1.json").write_text(json.dumps({
+                "status": "PASS", "sourceSha": "abcdef0123", "jarSha256": "aa", "steps": []}), encoding="utf-8")
+            (root / "unknown.json").write_text(json.dumps({"anything": True}), encoding="utf-8")
+
+            records, unrecognized = record_gates.discover([root])
+            self.assertEqual(len(records), 4)
+            self.assertEqual({r["base_name"] for r in records},
+                             {"verify-full", "scripts-node-x", "ui-p-c", "main-service-refresh"})
+            self.assertEqual(unrecognized, [root / "unknown.json"])
+            record_gates.assign_rounds(records)
+            results = {r["base_name"]: r["result"] for r in records}
+            self.assertEqual(results, {"verify-full": "PASS", "scripts-node-x": "PASS",
+                                       "ui-p-c": "FAIL", "main-service-refresh": "PASS"})
+
+    def test_missing_acceptance_profile_stops(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ui = self.ui_dir(root, "run", "run-20261005-100000-000-aaaaaaaa", "p", [{"name": "C", "result": "PASS"}])
+            flow = json.loads((ui / "flow-health.json").read_text(encoding="utf-8"))
+            del flow["acceptanceProfile"]
+            (ui / "flow-health.json").write_text(json.dumps(flow), encoding="utf-8")
+            with self.assertRaises(record_gates.EvidenceError):
+                record_gates.discover([ui])
+
+    def test_raw_root_rewrites_existing_paths_and_rejects_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ui = self.ui_dir(root, "ui/run", "run-20261005-100000-000-aaaaaaaa", "p", [{"name": "C", "result": "PASS"}])
+            records, _ = record_gates.discover([root])
+            moved = root / "moved"
+            (moved / "ui").mkdir(parents=True)
+            (moved / "ui" / "run").mkdir()
+            record_gates.apply_raw_root(records, moved)
+            self.assertEqual(records[0]["raw"], str(moved / "ui" / "run"))
+            with self.assertRaises(record_gates.EvidenceError):
+                record_gates.apply_raw_root(records, root / "does-not-exist")
+
+
+class ScriptRegressionsTest(unittest.TestCase):
+    def test_manifest_matches_the_repository(self):
+        self.assertEqual(script_regressions.manifest_errors(ROOT), [])
+
+    def test_extra_check_file_fails_before_any_check_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tests/checks/build").mkdir(parents=True)
+            (root / "tests/checks/ui").mkdir(parents=True)
+            (root / "tests/checks/build/verify-haifa-version-baseline.ps1").write_text("# x", encoding="utf-8")
+            (root / "tests/checks/ui/unlisted.test.cjs").write_text("// x", encoding="utf-8")
+            errors = script_regressions.manifest_errors(root)
+            self.assertEqual(script_regressions.aggregate_status([], errors), "FAIL_MANIFEST")
+            self.assertTrue(any("not listed" in error for error in errors))
+            self.assertTrue(any("does not exist" in error for error in errors))
+
+    def test_one_failure_fails_the_run_and_others_still_count(self):
+        checks = [{"name": "a", "status": "PASS"}, {"name": "b", "status": "FAIL"}]
+        self.assertEqual(script_regressions.aggregate_status(checks, []), "FAIL")
+        self.assertEqual(script_regressions.aggregate_status([{"name": "a", "status": "PASS"}], []), "PASS")
+        self.assertEqual(script_regressions.aggregate_status([], []), "FAIL")
+
+    def test_run_check_logs_output_and_marks_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "run"
+            run_dir.mkdir()
+            check = {"name": "demo", "kind": "node", "path": "tests/checks/ui/x.test.cjs"}
+
+            def fake_runner(command, **kwargs):
+                return subprocess.CompletedProcess(command, 3, stdout="out", stderr="err")
+
+            result = script_regressions.run_check(check, root, run_dir, runner=fake_runner)
+            self.assertEqual(result["status"], "FAIL")
+            self.assertEqual(result["exitCode"], 3)
+            self.assertIn("out", (run_dir / "demo.log").read_text(encoding="utf-8"))
 
 
 class DispatchTest(unittest.TestCase):
@@ -192,6 +351,400 @@ class FrontendBuildCacheTest(unittest.TestCase):
             self.assertEqual((target / "server" / "app" / "route.js").read_bytes(), b"frozen route")
             self.assertFalse((target / "obsolete.js").exists())
             self.assertEqual((source / "server" / "app" / "route.js").read_bytes(), b"frozen route")
+
+
+class PrReviewDigestTest(unittest.TestCase):
+    def bot_comment(self, commit, body, reply_to=None, line=10):
+        return {
+            "user": {"login": BOT}, "commit_id": commit, "body": body, "path": "src/X.java",
+            "line": line, "original_line": line, "in_reply_to_id": reply_to, "html_url": f"https://x/{line}",
+        }
+
+    def thumbs_up(self, created="2026-10-05T02:38:37Z"):
+        return {"content": "+1", "user": {"login": BOT}, "created_at": created, "html_url": "https://x/r"}
+
+    def test_three_verdicts(self):
+        head = "a" * 40
+        self.assertEqual(pr_review.compute_verdict(head, [], [self.thumbs_up()], BOT), "CLEAN")
+        self.assertEqual(pr_review.compute_verdict(head, [], [], BOT), "NO_REVIEW_YET")
+        finding = self.bot_comment(head, "**<sub>![P2 Badge](https://img.shields.io/badge/P2-yellow)</sub> Problem**\n\nDetails")
+        self.assertEqual(pr_review.compute_verdict(head, [finding], [], BOT), "FINDINGS")
+        self.assertEqual(pr_review.compute_verdict(head, [finding], [self.thumbs_up()], BOT), "FINDINGS")
+
+    def summary_comment(self, status, commit, trigger):
+        return {"user": {"login": BOT}, "created_at": "2026-10-05T06:23:54Z", "body": (
+            "<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\n"
+            "| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n"
+            f"| \U0001F4DD **Code Review** | \u26A0\uFE0F **{status}** "
+            '<relative-time datetime="2026-10-05T06:24:53.490867Z">2026-10-05T06:24:53.490867Z</relative-time> '
+            f"| `{commit}` | {trigger} |\n")}
+
+    def test_review_summary_rows_and_failed_review(self):
+        head = "de233fb" + "0" * 33
+        failed = pr_review.review_summary([self.summary_comment("Failed", "de233fb", "Draft marked ready")], BOT)
+        self.assertEqual(failed, [{"review": "Code Review", "status": "Failed",
+                                   "at": "2026-10-05T06:24:53.490867Z", "commit": "de233fb",
+                                   "trigger": "Draft marked ready"}])
+        self.assertEqual(pr_review.compute_verdict(head, [], [], BOT, failed), "REVIEW_FAILED")
+        # A thumbs up or a comment on the current head still wins over a failed attempt.
+        self.assertEqual(pr_review.compute_verdict(head, [], [self.thumbs_up()], BOT, failed), "CLEAN")
+        self.assertEqual(pr_review.compute_verdict(head, [self.bot_comment(head, "**t**")], [], BOT, failed), "FINDINGS")
+        completed = pr_review.review_summary([self.summary_comment("Completed", "33fa688", "PR opened")], BOT)
+        self.assertEqual(completed[0]["status"], "Completed")
+        self.assertEqual(pr_review.compute_verdict(head, [], [], BOT, completed), "NO_REVIEW_YET")
+        self.assertEqual(pr_review.review_summary([{"user": {"login": "someone"}, "body": "plain"}], BOT), [])
+
+    def test_digest_reports_whether_the_latest_review_covers_the_head(self):
+        head = "de233fb" + "0" * 33
+        pull = {"number": 17, "draft": False, "head": {"sha": head}, "base": {"repo": {"full_name": "o/r"}}}
+        covered = pr_review.build_digest(pull, [], [], BOT, [self.summary_comment("Failed", "de233fb", "Draft marked ready")])
+        self.assertEqual(covered["botVerdict"], "REVIEW_FAILED")
+        self.assertTrue(covered["reviewedHead"])
+        stale = pr_review.build_digest(pull, [], [self.thumbs_up()], BOT, [self.summary_comment("Completed", "33fa688", "PR opened")])
+        self.assertEqual(stale["botVerdict"], "CLEAN")
+        self.assertFalse(stale["reviewedHead"])
+
+    def test_human_replies_are_not_findings_but_block_clean_only_when_bot_authored(self):
+        head = "a" * 40
+        bot = self.bot_comment(head, "**title**\n\nbody")
+        bot_reply = self.bot_comment(head, "reply", reply_to=1)
+        human = {"user": {"login": "someone"}, "commit_id": head, "body": "human", "in_reply_to_id": None}
+        self.assertEqual(len(pr_review.bot_findings([bot, bot_reply, human], head, BOT)), 1)
+        self.assertEqual(pr_review.compute_verdict(head, [human], [self.thumbs_up()], BOT), "CLEAN")
+
+    def test_outdated_flag_tracks_the_head(self):
+        head = "a" * 40
+        self.assertTrue(pr_review.finding(self.bot_comment("b" * 40, "old"), head)["outdated"])
+        self.assertFalse(pr_review.finding(self.bot_comment(head, "new"), head)["outdated"])
+
+    def test_priority_and_first_line(self):
+        body = "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Redact only the value**\n\nMore."
+        self.assertEqual(pr_review.parse_priority(body), "P1")
+        self.assertIsNone(pr_review.parse_priority("**No badge**\n\ntext"))
+        self.assertEqual(pr_review.first_line(body), "Redact only the value")
+        self.assertEqual(pr_review.first_line("plain first line"), "plain first line")
+
+    def test_digest_counts_bot_findings_only(self):
+        head = "a" * 40
+        digest = pr_review.build_digest(
+            {"number": 9, "draft": False, "head": {"sha": head},
+             "base": {"repo": {"full_name": "o/r"}}},
+            [self.bot_comment(head, "**t**\n\nb")], [self.thumbs_up()], BOT)
+        self.assertEqual(digest["botVerdict"], "FINDINGS")
+        self.assertEqual(digest["counts"]["findings"], 1)
+        self.assertEqual(digest["headSha"], head)
+
+
+class SdkApiDigestTest(unittest.TestCase):
+    VERSION = "0.1.2-SNAPSHOT"
+    BOM = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>io.haifa</groupId>
+    <artifactId>haifa-agent-bom</artifactId>
+    <version>{version}</version>
+    <packaging>pom</packaging>
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.haifa</groupId>
+                <artifactId>haifa-agent-fixture</artifactId>
+                <version>{version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+</project>
+"""
+    WORKTREE_POM = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>example</groupId>
+    <artifactId>fixture-worktree</artifactId>
+    <version>1.0.0</version>
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.haifa</groupId>
+                <artifactId>haifa-agent-bom</artifactId>
+                <version>${{haifa.version}}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+</project>
+"""
+
+    def git(self, repo, *args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    def fixture(self, root):
+        worktree = root / "worktree"
+        (worktree / "local-tmp").mkdir(parents=True)
+        (worktree / ".gitignore").write_text("local-tmp/\n", encoding="utf-8")
+        (worktree / "pom.xml").write_text(self.WORKTREE_POM, encoding="utf-8")
+        self.git(worktree, "init", "-q")
+        self.git(worktree, "config", "core.autocrlf", "false")
+        self.git(worktree, "add", "-A")
+        self.git(worktree, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "seed")
+
+        maven = root / "repo"
+        bom_dir = maven / "io/haifa/haifa-agent-bom" / self.VERSION
+        bom_dir.mkdir(parents=True)
+        (bom_dir / f"haifa-agent-bom-{self.VERSION}.pom").write_text(
+            self.BOM.format(version=self.VERSION), encoding="utf-8")
+
+        sources = root / "src/fixture"
+        sources.mkdir(parents=True)
+        (sources / "Sample.java").write_text("package fixture;\npublic record Sample(int a, String b) {}\n", encoding="utf-8")
+        (sources / "Widget.java").write_text(
+            "package fixture;\npublic class Widget {\n"
+            "    public void visible() {}\n    protected void guarded() {}\n    void hidden() {}\n"
+            "    public static class Nested { public int n; }\n"
+            "    public static Runnable anonymous() { return new Runnable() { public void run() {} }; }\n}\n",
+            encoding="utf-8")
+        (sources / "Hidden.java").write_text("package fixture;\nclass Hidden { public void x() {} }\n", encoding="utf-8")
+        classes = root / "classes"
+        classes.mkdir()
+        subprocess.run(["javac", "-d", str(classes), *[str(p) for p in sorted(sources.glob("*.java"))]], check=True)
+        jar_dir = maven / "io/haifa/haifa-agent-fixture" / self.VERSION
+        jar_dir.mkdir(parents=True)
+        self.jar = jar_dir / f"haifa-agent-fixture-{self.VERSION}.jar"
+        subprocess.run(["jar", "--create", "--file", str(self.jar), "-C", str(classes), "."], check=True)
+        return worktree, maven
+
+    def test_version_resolution_two_cases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree = Path(directory)
+            selection = worktree / "local-tmp/sdk-selection.json"
+            selection.parent.mkdir(parents=True)
+            self.assertEqual(sdk_api_digest.read_version(selection, None), self.VERSION)
+            selection.write_text(json.dumps({"haifaVersion": "0.1.2-feature-SNAPSHOT"}), encoding="utf-8")
+            self.assertEqual(sdk_api_digest.read_version(selection, None), "0.1.2-feature-SNAPSHOT")
+            self.assertEqual(sdk_api_digest.read_version(selection, "9.9.9"), "9.9.9")
+            selection.write_text(json.dumps({"haifaVersion": "not-a-version"}), encoding="utf-8")
+            with self.assertRaises(sdk_api_digest.SdkDigestError):
+                sdk_api_digest.read_version(selection, None)
+
+    def test_output_directory_must_be_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            worktree, _ = self.fixture(root)
+            target = sdk_api_digest.output_directory(worktree, self.VERSION)
+            self.assertEqual(target, (worktree / "local-tmp/sdk-api" / self.VERSION).resolve())
+
+            bare = root / "bare"
+            bare.mkdir()
+            self.git(bare, "init", "-q")
+            with self.assertRaises(sdk_api_digest.SdkDigestError):
+                sdk_api_digest.output_directory(bare, self.VERSION)
+
+    def test_signature_filtering_record_accessors_and_expiry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree, maven = self.fixture(Path(directory))
+            result = sdk_api_digest.generate(worktree, maven, self.VERSION)
+            self.assertEqual(result["status"], "GENERATED")
+            output = worktree / "local-tmp/sdk-api" / self.VERSION
+
+            widget = (output / "haifa-agent-fixture.api.txt").read_text(encoding="utf-8")
+            self.assertIn("public void visible()", widget)
+            self.assertIn("protected void guarded()", widget)
+            self.assertNotIn("hidden()", widget)
+
+            sample = (output / "haifa-agent-fixture.api.txt").read_text(encoding="utf-8")
+            self.assertIn("int a()", sample)
+            self.assertIn("java.lang.String b()", sample)
+
+            classes = (output / "classes.txt").read_text(encoding="utf-8")
+            self.assertIn("fixture.Sample\thaifa-agent-fixture", classes)
+            self.assertIn("fixture.Widget\thaifa-agent-fixture", classes)
+            self.assertNotIn("Widget$1", classes)
+            self.assertNotIn("fixture.Hidden", classes)
+
+            index = json.loads((output / "index.json").read_text(encoding="utf-8"))
+            self.assertEqual(index["artifacts"][0]["artifactId"], "haifa-agent-fixture")
+            self.assertEqual(index["artifacts"][0]["length"], self.jar.stat().st_size)
+            self.assertGreaterEqual(index["artifacts"][0]["classCount"], 3)
+
+            self.assertEqual(sdk_api_digest.generate(worktree, maven, self.VERSION)["status"], "UNCHANGED")
+            with zipfile.ZipFile(self.jar, "a") as archive:
+                archive.writestr("fixture/extra.txt", "changed")
+            self.assertEqual(sdk_api_digest.generate(worktree, maven, self.VERSION)["status"], "GENERATED")
+
+    def test_batched_javap_matches_per_class_filtering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.fixture(Path(directory))
+            names = sdk_api_digest.classes_of(self.jar)
+            batched = []
+            for batch in sdk_api_digest.batch_class_names(names, batch_size=2, max_command_chars=24000):
+                self.assertLessEqual(len(batch), 2)
+                sections = sdk_api_digest.split_javap_output(
+                    sdk_api_digest.javap_batch(self.jar, batch), batch)
+                for name in batch:
+                    self.assertIn(name, sections)
+                    batched.append((name, sdk_api_digest.is_public_surface(sections[name])))
+            individual = [(name, sdk_api_digest.is_public_surface(sdk_api_digest.javap(self.jar, name)))
+                          for name in names]
+            self.assertEqual(batched, individual)
+            surface = {name for name, public in individual if public}
+            self.assertIn("fixture.Sample", surface)
+            self.assertIn("fixture.Widget", surface)
+            self.assertIn("fixture.Widget$Nested", surface)
+            self.assertNotIn("fixture.Hidden", surface)
+
+    def test_batch_class_names_respects_count_and_length(self):
+        names = [f"fixture.Class{i:02d}" for i in range(250)]
+        batches = sdk_api_digest.batch_class_names(names)
+        self.assertTrue(all(len(batch) <= 100 for batch in batches))
+        self.assertTrue(all(sum(len(name) + 1 for name in batch) <= 24000 for batch in batches))
+        self.assertEqual([name for batch in batches for name in batch], names)
+        narrow = sdk_api_digest.batch_class_names(["a" * 100, "b" * 100, "c" * 100], max_command_chars=150)
+        self.assertEqual([len(batch) for batch in narrow], [1, 1, 1])
+
+    def test_publish_manifest_name_and_sdk_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, maven = self.fixture(Path(directory))
+            bom = maven / "io/haifa/haifa-agent-bom" / self.VERSION / f"haifa-agent-bom-{self.VERSION}.pom"
+            (bom.parent / "haifa-sdk-publish-manifest.json").write_text(
+                json.dumps({"sdkCommit": "deadbeef", "version": self.VERSION}), encoding="utf-8")
+            self.assertEqual(sdk_api_digest.MANIFEST_NAMES[0], "haifa-sdk-publish-manifest.json")
+            self.assertEqual(sdk_api_digest.parse_sdk_commit(bom), "deadbeef")
+
+
+class MainServiceTest(unittest.TestCase):
+    def test_command_line_feature_detection(self):
+        jar = "D:\\w\\main-service\\abcdef12\\super-harness-server-0.1.0-SNAPSHOT-exec.jar"
+        self.assertTrue(main_service.looks_like_main_service(f'"D:\\jdk\\bin\\java.exe" -jar "{jar}"'))
+        self.assertFalse(main_service.looks_like_main_service('java -jar D:\\w\\other-tool.jar'))
+        self.assertFalse(main_service.looks_like_main_service(None))
+        self.assertFalse(main_service.looks_like_main_service('pwsh -File start.ps1'))
+        self.assertTrue(main_service.looks_like_main_service(f'java -jar "{jar}"', jar_path="D:\\w\\main-service\\abcdef12\\super-harness-server-0.1.0-SNAPSHOT-exec.jar"))
+
+    def test_jar_path_from_command_line(self):
+        jar = "D:\\a b\\main-service\\abcdef12\\super-harness-server-0.1.0-SNAPSHOT-exec.jar"
+        self.assertEqual(main_service.jar_from_command_line(f'java -jar "{jar}" --x'), jar)
+        self.assertIsNone(main_service.jar_from_command_line("java -jar other.jar"))
+
+    def test_build_stamp_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            jar = Path(directory) / "super-harness-server-0.1.0-SNAPSHOT-exec.jar"
+            jar.write_bytes(b"jar")
+            with self.assertRaises(main_service.MainServiceError):
+                main_service.stamp_source_sha(jar)
+            (Path(directory) / "haifa-build-stamp.json").write_text(
+                json.dumps({"sourceSha": "abc123", "haifaVersion": "0.1.2-SNAPSHOT"}), encoding="utf-8")
+            self.assertEqual(main_service.stamp_source_sha(jar), "abc123")
+
+    def test_rollback_decision(self):
+        self.assertEqual(main_service.rollback_decision(True, False), "keep")
+        self.assertEqual(main_service.rollback_decision(False, True), "rollback")
+        self.assertEqual(main_service.rollback_decision(False, False), "stop")
+
+    def test_scope_enforcement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree = Path(directory).resolve()
+            fixed_data = worktree / "local-tmp/main-service-data"
+            main_service.validate_scope(worktree, 18018, 33018, fixed_data, worktree / "local-tmp/main-service", False)
+            with self.assertRaises(main_service.MainServiceError):
+                main_service.validate_scope(worktree, 20618, 25618, fixed_data, worktree / "local-tmp/main-service", False)
+            with self.assertRaises(main_service.MainServiceError):
+                main_service.validate_scope(worktree, 18018, 33018, worktree / "other-data", worktree / "local-tmp/main-service", False)
+            slot_data = worktree / "local-tmp/slot-1/data"
+            main_service.validate_scope(worktree, 20618, 25618, slot_data, worktree / "local-tmp/main-service", True)
+            with self.assertRaises(main_service.MainServiceError):
+                main_service.validate_scope(worktree, 20618, 25618, Path("C:/outside"), worktree / "local-tmp/main-service", True)
+
+    def test_stamp_matches_same_commit_or_same_tree(self):
+        self.assertEqual(main_service.stamps_match("a", "a", None, None), (True, False))
+        self.assertEqual(main_service.stamps_match("a", "b", "tree", "tree"), (True, True))
+        self.assertEqual(main_service.stamps_match("a", "b", "t1", "t2"), (False, False))
+        self.assertEqual(main_service.stamps_match("a", "b", None, "tree"), (False, False))
+        self.assertEqual(main_service.stamps_match("a", "b", "tree", None), (False, False))
+
+    def test_frontend_tree_resolves_the_subtree_of_a_commit(self):
+        repo = Path(__file__).resolve().parents[3]
+        head = main_service.rev_parse(repo, "HEAD")
+        subtree = main_service.frontend_tree_of(repo, head)
+        self.assertRegex(subtree or "", r"^[0-9a-f]{40}$")
+        self.assertEqual(subtree, main_service.rev_parse(repo, "HEAD:frontend"))
+        self.assertNotEqual(subtree, main_service.tree_of(repo, head))
+        self.assertIsNone(main_service.frontend_tree_of(repo, "0" * 40))
+
+    def test_frontend_decision_branches(self):
+        self.assertEqual(main_service.frontend_decision(True, False, False, False), "FAIL_NO_ROOT")
+        self.assertEqual(main_service.frontend_decision(False, True, True, False), "REUSED")
+        self.assertEqual(main_service.frontend_decision(False, True, False, True), "FAIL_TREE")
+        self.assertEqual(main_service.frontend_decision(True, True, False, True), "REUSED")
+        self.assertEqual(main_service.frontend_decision(True, False, True, True), "FAIL_FOREIGN")
+        self.assertEqual(main_service.frontend_decision(True, False, False, True), "START")
+
+    def test_frontend_start_args_match_the_production_launcher(self):
+        launcher = Path("C:/fr/scripts/frontend/start-haifa-frontend.ps1")
+        args = main_service.frontend_start_args(launcher, Path("C:/fr"), Path("D:/w/deer-flow"),
+                                                Path("D:/w/slot/data"), "http://127.0.0.1:20618", 25618)
+        self.assertEqual(args[0], "pwsh")
+        self.assertEqual(args[args.index("-File") + 1], str(launcher))
+        self.assertEqual(args[args.index("-RepositoryRoot") + 1], str(Path("C:/fr")))
+        self.assertEqual(args[args.index("-SourceRepository") + 1], str(Path("D:/w/deer-flow")))
+        self.assertEqual(args[args.index("-DataDirectory") + 1], str(Path("D:/w/slot/data")))
+        self.assertEqual(args[args.index("-GatewayBaseUrl") + 1], "http://127.0.0.1:20618")
+        self.assertEqual(args[args.index("-FrontendPort") + 1], "25618")
+        self.assertIn("-Production", args)
+
+    def test_evaluate_stream_answer_error_empty_and_tools_only(self):
+        answer = ('event: messages\n'
+                  'data: [{"type":"ai","content":"pong"},{"langgraph_node":"model"}]\n\n'
+                  'event: end\ndata:\n\n')
+        self.assertEqual(main_service.evaluate_stream(answer), {"hasAnswer": True, "hasError": False})
+        error = 'event: error\ndata: {"message":"boom"}\n\n'
+        self.assertEqual(main_service.evaluate_stream(error), {"hasAnswer": False, "hasError": True})
+        self.assertEqual(main_service.evaluate_stream(""), {"hasAnswer": False, "hasError": False})
+        tools_only = ('event: messages\n'
+                      'data: [{"type":"ai","content":"","tool_calls":[{"name":"read_file"}]},{}]\n\n')
+        self.assertEqual(main_service.evaluate_stream(tools_only), {"hasAnswer": False, "hasError": False})
+        parts = 'event: messages\ndata: [{"type":"ai","content":[{"type":"text","text":"hi"}]},{}]\n\n'
+        self.assertEqual(main_service.evaluate_stream(parts), {"hasAnswer": True, "hasError": False})
+
+    def test_model_name_picks_the_first_executable_model(self):
+        self.assertEqual(main_service.model_name({"models": [{"name": "first"}, {"name": "second"}]}), "first")
+        self.assertIsNone(main_service.model_name({"models": []}))
+        self.assertIsNone(main_service.model_name({"models": [{"display": "x"}]}))
+        self.assertIsNone(main_service.model_name(None))
+
+
+class GateResourcesTest(unittest.TestCase):
+    def test_high_memory_selects_three_forks(self):
+        self.assertEqual(gate_resources.select_forks(16000, 32000), (3, False))
+        self.assertEqual(
+            gate_resources.select_forks(gate_resources.THREE_FORKS_MIN_FREE_PHYSICAL_MB,
+                                        gate_resources.THREE_FORKS_MIN_FREE_COMMIT_MB), (3, False))
+
+    def test_measured_thresholds_skip_the_two_fork_band(self):
+        # The measured 2-fork peaks are not below the 3-fork peaks, so its thresholds are
+        # higher and the 2-fork guard can never win: even at the 2-fork thresholds the
+        # 3-fork guard fires first. The branch stays tested with a synthetic ordering.
+        self.assertEqual(
+            gate_resources.select_forks(gate_resources.TWO_FORKS_MIN_FREE_PHYSICAL_MB,
+                                        gate_resources.TWO_FORKS_MIN_FREE_COMMIT_MB), (3, False))
+        with patch.object(gate_resources, "TWO_FORKS_MIN_FREE_PHYSICAL_MB", 2000), \
+                patch.object(gate_resources, "TWO_FORKS_MIN_FREE_COMMIT_MB", 4000):
+            self.assertEqual(gate_resources.select_forks(2500, 4500), (2, False))
+
+    def test_low_memory_selects_one_fork_with_low_memory(self):
+        self.assertEqual(gate_resources.select_forks(1024, 2048), (1, True))
+        self.assertEqual(
+            gate_resources.select_forks(gate_resources.THREE_FORKS_MIN_FREE_PHYSICAL_MB - 1,
+                                        gate_resources.THREE_FORKS_MIN_FREE_COMMIT_MB - 1), (1, True))
+
+    def test_missing_probe_falls_back_to_default(self):
+        self.assertEqual(gate_resources.select_forks(None, 32000), (gate_resources.DEFAULT_FORKS, False))
+        self.assertEqual(gate_resources.select_forks(16000, None), (gate_resources.DEFAULT_FORKS, False))
+
+    def test_selection_shape(self):
+        result = gate_resources.selection()
+        self.assertIn(result["forks"], (1, 2, 3))
+        self.assertIsInstance(result["lowMemory"], bool)
+        self.assertIn("probeAvailable", result)
 
 
 if __name__ == "__main__":

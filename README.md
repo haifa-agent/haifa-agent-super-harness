@@ -96,8 +96,18 @@ pwsh -NoProfile -File scripts/verify-full.ps1
 ```
 
 先跑秒级预检（SDK 基线门禁、`git diff --check`、对 main 以来改动的 secret scan），失败即输出
-`FAIL_PREFLIGHT` 且不启动 Maven；再以并行 fork 运行 `mvn -o -ntp clean verify`，摘要 JSON 写到
-`local-tmp/verify-full/`，并为产出的 exec JAR 写入服务端构建戳。内存紧张时用 `-Forks 1 -LowMemory`。
+`FAIL_PREFLIGHT` 且不启动 Maven；再运行 `mvn -o -ntp clean verify`，摘要 JSON 写到 `local-tmp/verify-full/`，
+并为产出的 exec JAR 写入服务端构建戳。不传 `-Forks` 时按当时空闲物理内存与空闲提交内存自动选择 3/2/1 个
+并行进程（1 档自动加 `-LowMemory`）；显式 `-Forks` 或 `-LowMemory` 行为不变，内存探测失败回退默认 3 个进程。
+阈值 = 实测内存峰值 + 2 GB（2026-10-05 实测：1 进程低内存约 811 秒、2 进程约 387 秒、3 进程约 270–285 秒；
+2 进程峰值不低于 3 进程，故 2 档实际不会被选中）。
+
+脚本回归入口统一运行 `tests/checks/build/` 与 `tests/checks/ui/` 清单内的检查，摘要写到
+`local-tmp/verify-scripts/`：
+
+```powershell
+pwsh -NoProfile -File scripts/verify-scripts.ps1
+```
 
 ## 定向测试与 SDK 版本选择
 
@@ -121,10 +131,15 @@ SDK 版本规则见 `AGENTS.md`「范围与依赖」。工作包 worktree 消费
 `test-targeted.ps1` 与 UI runner 读取它并传 `-Dhaifa.version`；文件不存在时使用基线并输出
 `sdkSelection=ABSENT`。直接运行 `mvn` 不读取该文件，仍使用基线。
 
+需要把 SDK 公开类型事实交给执行者时，主控运行 `python scripts/governance/sdk_api_digest.py --worktree <worktree>`
+生成只含 public/protected 签名的摘要到 `local-tmp/sdk-api/<版本>/`；执行者读该摘要而不访问本地 Maven 仓库，
+SDK 重新发布后重跑脚本。
+
 流水线辅助脚本：
 
 ```powershell
 python scripts/governance/change_scope.py
+python scripts/governance/pr_review_digest.py --repo <owner/name> --pr <编号>
 python scripts/governance/shpm_dispatch.py --task ... --execute
 python scripts/governance/shpm_record_gates.py --task ... local-tmp/verify-full/<run>.json <UI 证据目录> --execute
 python -m unittest discover -s tests/checks/build -p "test_*.py"
@@ -170,7 +185,19 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1
 脚本校验冻结 DeerFlow 来源和前端工具链后，启动 Gateway 与受保护前端，在有界超时内等待 `/health`、
 `/api/v1/auth/me` 与前端就绪，最后输出访问地址、精确 PID、数据目录与日志路径。人工验收入口为
 `http://127.0.0.1:33018/`。端口占用时脚本拒绝启动，不结束未知进程；加 `-Build` 可先执行离线 Maven Reactor
-`package`。
+`package`；`-JarPath` 指定要运行的 exec JAR，`-FrontendRoot` 指定前端所在检出。
+
+主线合入后刷新固定端口服务用 `scripts/refresh-main-service.ps1`：只读检查用 `-Status`；刷新用
+`-Jar <exec JAR> -ExpectSha <提交> [-FrontendRoot <检出>] [-LiveSmoke]`，会校验 JAR 旁的构建戳（提交相同，或
+在 `--worktree` 仓库里两个提交的 `^{tree}` 相同，squash 合并后仍可复用）、复制到
+`local-tmp/main-service/<短 SHA>/` 并记录 `service.json`、只按精确 PID 停止命令行匹配的旧 Gateway、等待端口
+释放、脱离调用者启动复制的 Gateway。`service.json` 没有可用 `active` 时，被停止进程命令行里的 JAR 会作为
+回退目标。前端按 `--frontend-root` 的 `HEAD:frontend` 树与 `--expect-sha` 的 `frontend` 树比对：健康则复用，
+不健康且端口空闲则用该检出的 `scripts/frontend/start-haifa-frontend.ps1` 以生产模式启动；端口被别的进程占用
+则失败且不停止它。`-LiveSmoke` 取 `GET /api/models` 的第一个可执行模型发起一次最短 Run，要求有非空 AI 文本且
+无 `error` 帧。整体 `PASS` 要求 Gateway 就绪、smoke、前端和 live-smoke 全部通过；Gateway 就绪但后续检查失败只
+记为 `FAIL`，不回退也不停止 Gateway。摘要写 `refresh-<时间戳>.json`。不带回归开关时只接受 `18018`/`33018`
+与固定数据目录。
 
 - 只重启 Gateway（受保护前端仍在运行）：先核对并只停止监听 `18018` 的 PID，再执行
 

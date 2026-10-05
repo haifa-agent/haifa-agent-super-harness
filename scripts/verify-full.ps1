@@ -74,11 +74,37 @@ if ($preflightFailures.Count -gt 0) {
     exit 1
 }
 
+$forksSelection = 'explicit'
+$freePhysicalMb = $null
+$freeCommitMb = $null
+$useLowMemory = [bool]$LowMemory
+if (-not $PSBoundParameters.ContainsKey('Forks') -and -not $LowMemory) {
+    $probe = $null
+    try {
+        $probeJson = & python -B (Join-Path $PSScriptRoot 'lib/gate_resources.py') 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($probeJson)) {
+            $probe = $probeJson | ConvertFrom-Json
+        }
+    }
+    catch { $probe = $null }
+    if ($null -eq $probe -or -not $probe.probeAvailable) {
+        $Forks = 3
+        $forksSelection = 'default-probe-unavailable'
+    }
+    else {
+        $Forks = [int]$probe.forks
+        $useLowMemory = [bool]$probe.lowMemory
+        $freePhysicalMb = [int]$probe.freePhysicalMb
+        $freeCommitMb = [int]$probe.freeCommitMb
+        $forksSelection = 'auto'
+    }
+}
+
 $mavenArguments = @('-o', '-ntp', "-DforkCount=$Forks", '-DreuseForks=true')
 if ($sdk.MavenArgument) {
     $mavenArguments += $sdk.MavenArgument
 }
-if ($LowMemory) {
+if ($useLowMemory) {
     $mavenArguments += '-DargLine=-Xmx768m -XX:+UseSerialGC'
 }
 $mavenArguments += @('clean', 'verify')
@@ -87,7 +113,7 @@ $savedMavenOpts = $env:MAVEN_OPTS
 $watch = [Diagnostics.Stopwatch]::StartNew()
 Push-Location $root
 try {
-    if ($LowMemory) {
+    if ($useLowMemory) {
         $env:MAVEN_OPTS = '-Xmx512m -XX:+UseSerialGC'
     }
     & mvn.cmd @mavenArguments *> $logPath
@@ -125,6 +151,10 @@ Write-Summary ([ordered]@{
     sdkSelection = $sdk.Status
     haifaVersion = $sdk.HaifaVersion
     forks = $Forks
+    forksSelection = $forksSelection
+    lowMemory = $useLowMemory
+    freePhysicalMb = $freePhysicalMb
+    freeCommitMb = $freeCommitMb
     tests = $counts.tests
     failures = $counts.failures
     errors = $counts.errors

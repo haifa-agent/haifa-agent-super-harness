@@ -27,7 +27,12 @@
 
 ### 验收提速（不降低门禁）
 
-- 开发按“实现 → 受影响定向测试/单case冒烟 → 一轮集中自审与修复 → 稳定候选版本正式门禁”执行。自审发现的问题先按根因攒批，禁止每修一个点就重跑全仓/UI整套；正式门禁失败先保存原件并定位，再按影响范围修复复验。最终源码、SDK构件或断言改变时，不沿用失效PASS；该规则不减少提交前门禁或人工验收。
+- 开发按“实现 → 定向测试 / 单 case 冒烟 → 集中自审修复 → 推送分支并开 PR → 一次性读取机器人审查并集中处理 → 固定候选提交 → 正式门禁 → 报告可合并”执行。自审发现的问题先按根因攒批，禁止每修一个点就重跑全仓/UI整套；正式门禁失败先保存原件并定位，再按影响范围修复复验。最终源码、SDK构件或断言改变时，不沿用失效PASS；该规则不减少提交前门禁或人工验收。
+- PR 以可审查状态打开，不用 draft：机器人只在 PR 打开、draft 转 ready 或评论 `@codex review` 时审查，不审查 draft。此时的 PR 不代表任何门禁通过，PR 描述须写明正式门禁尚未运行。
+- 开 PR 后最多等机器人 10 分钟，超时按 `NO_REVIEW_YET` 记录并继续。结论为 `REVIEW_FAILED`（机器人自身的审查失败）时，可以评论一次 `@codex review` 重新触发；仍然失败就如实记录并继续。
+- 审查意见只处理一轮：正确的采纳，不采纳的各写一句理由；不再主动请求重新审查。
+- 正式门禁通过后才出现的新意见，只有确认会导致错误行为的才修改并重跑受影响门禁，其余登记为后续事项。
+- 向人工报告 PR 可合并之前，必须运行 `python scripts/governance/pr_review_digest.py --repo <owner/name> --pr <编号>` 并给出结论。
 - 独立检索和读取合并到同一工具轮次，默认回传退出码、测试计数、首个失败签名和原始证据路径；仅为定位问题展开必要日志片段，不反复输出同一全文。依赖步骤和修改顺序仍串行，重型构建不为减少轮次而并发。
 - 每个执行worktree在`local-tmp/acceptance-handoff.md`维护短交接，模板见`docs/acceptance-handoff-template.md`：只记录范围、源码SHA/dirty、SDK选择与发布来源/hash、断言/证据映射、首个FAIL、未运行项及下一步。事实变化时更新，不复制长日志、密钥或reasoning正文；该交接不是另一份任务账本，不替代SHPM。
 - 后台任务使用有界进程等待并在完成时合并读取结果摘要；等待期间推进不依赖它的检查，避免固定sleep后反复读完整日志。每次等待必须有对象、deadline和超时证据，不增加原预算或自动重试；长任务至少每60秒给出有意义的进展/卡点更新。
@@ -45,7 +50,7 @@
   - A. 快进合入不重跑：最终门禁前先把分支变基到 main 最新提交，合入使用快进。快进后 main 的 SHA 与已验证 SHA 相同，主控核对门禁摘要 JSON（`local-tmp/verify-full/*.json`）的 `sourceSha`、`haifaVersion` 和 UI `flow-health.json` 的 `sourceSha` 与合入后 HEAD 一致，即直接复用这些结果，不在 main 上重跑门禁和 UI；非快进合入（merge commit、冲突解决、合入前 main 已前进）必须在合入后的 SHA 上重跑。固定端口主服务的刷新与 smoke 照常执行；客户演示「同一主线 SHA 连续两轮 L3」不受本条影响。
   - B. 按改动范围定门禁：运行 `python scripts/governance/change_scope.py` 得到建议门禁。只改文档 → 文档检查；只改脚本 → 脚本回归，改到 `scripts/lib/`、`scripts/ui/` 再加一轮暖轮；只改 Java 测试 → 全仓门禁；改产品代码、UI 脚本或用例 → 全仓门禁加两轮暖轮；改冻结前端 → 加一轮冷轮。建议只是下限，主控或复审可以要求更多。
   - C. UI 默认两次暖轮：同一提交上默认跑两次暖轮（满足同脚本重复运行）；冷轮只在冻结前端、前端依赖、槽位或代理目标变化、构建戳失效时跑。新 worktree 首次运行没有构建戳，第一轮自然就是冷轮。
-  - D. SHPM 登记用薄封装：派工用 `python scripts/governance/shpm_dispatch.py`（一次完成 task create、sprint link、task start、assign create），门禁结果用 `python scripts/governance/shpm_record_gates.py` 从门禁摘要 JSON 和 UI 证据目录登记。两者默认只打印命令，加 `--execute` 才写入；结果原样登记（FAIL 仍是 FAIL），`deliver`、`accept`、阶段结果和 `GO` 仍由主控手工执行。
+  - D. SHPM 登记用薄封装：派工用 `python scripts/governance/shpm_dispatch.py`（一次完成 task create、sprint link、task start、assign create）；脚本回归用 `pwsh -NoProfile -File scripts/verify-scripts.ps1`（统一运行 `tests/checks/build/` 与 `tests/checks/ui/` 清单内的检查，摘要写 `local-tmp/verify-scripts/`）；门禁结果用 `python scripts/governance/shpm_record_gates.py` 从证据组目录递归登记全仓门禁摘要、脚本回归摘要、UI 证据目录和主服务刷新摘要。登记默认只打印一张表，加 `--execute` 才写入；幂等键带证据身份，UI 检查名带 profile，同一次调用里同 profile、同提交多轮按开始时间追加 `-r1`/`-r2`，`--raw-root` 在证据已归档时改写原件路径。结果原样登记（FAIL 仍是 FAIL，`NOT_RUN` 仍是 `NOT_RUN`），`deliver`、`accept`、阶段结果和 `GO` 仍由主控手工执行。
 - 每轮分别记录准备/构建、服务就绪、功能断言、证据归档、复审及返工耗时和首次卡点；证据目录与 SHPM 记录可由脚本汇总，但原始日志、首次 FAIL、`NOT_RUN` 和人工裁决须保留，脚本不得自动提升阶段 `PASS`/`GO`。仅并行执行真正独立且资源、端口、数据目录隔离的检查；本机内存不足时不要并发重型 Maven/Next/Java 任务。
 
 ## 环境与排障记录
@@ -59,7 +64,7 @@
 - 在仓库根目录使用 Java 21、Maven 3.9.15 和 PowerShell 7（`pwsh`）；也可用 `mvnw.cmd` / `./mvnw`，Wrapper 首次使用需下载分发包，之后可离线复用。
 - 新 Java 验收测试从 `ProductionWriteFileHttpTest` 黄金样例起步，复用 `testsupport` 中的模型、审批、Gateway 与进程夹具；独立数据、证据和端口的配置见 [README「定向测试与 SDK 版本选择」](README.md#定向测试与-sdk-版本选择)。
 - 定向测试：`pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'ProductionWriteFileHttpTest,AcceptanceFixturesTest' -LowMemory`。替换 `-Test` 即可选择用例，其他模块用 `-Module`；入口固定带 `-am`，匹配 0 个测试算失败，不传额外 Maven goal、`-DskipTests` 或 `-Dhaifa.version`。
-- 全仓门禁：`pwsh -NoProfile -File scripts/verify-full.ps1`，先跑秒级预检（SDK 基线门禁、`git diff --check`、对 main 以来改动的 secret scan），失败即停、不启动 Maven；再以三个并行 fork（`-Forks 3`，内存紧张时 `-Forks 1 -LowMemory`）运行离线 `clean verify`，生成 exec JAR、构建戳和摘要 JSON。执行前保存需保留的原始证据，并停止当前 worktree 中占用该 JAR 的精确进程。
+- 全仓门禁：`pwsh -NoProfile -File scripts/verify-full.ps1`，先跑秒级预检（SDK 基线门禁、`git diff --check`、对 main 以来改动的 secret scan），失败即停、不启动 Maven；再运行离线 `clean verify`，生成 exec JAR、构建戳和摘要 JSON。不传 `-Forks` 时按当时空闲物理内存与空闲提交内存自动选择 3/2/1 个并行进程（每个进程数的阈值 = 实测内存峰值 + 2 GB，见 `scripts/lib/gate_resources.py`；1 档自动加 `-LowMemory`），显式 `-Forks` 或 `-LowMemory` 行为与改动前相同，内存探测失败回退默认 3 个进程；摘要含 `forksSelection`/`lowMemory`/`freePhysicalMb`/`freeCommitMb`。实测耗时（2026-10-05，本机 16 核 31 GB）：1 进程低内存约 811 秒、2 进程约 387 秒、3 进程约 270–285 秒；实测 2 进程峰值不低于 3 进程，2 档实际不会被选中。执行前保存需保留的原始证据，并停止当前 worktree 中占用该 JAR 的精确进程。
 - SDK 选择沿用「范围与依赖」规则，由入口读取本 worktree 的 `local-tmp/sdk-selection.json`；提交前运行 `pwsh -NoProfile -File tests/checks/build/verify-haifa-version-baseline.ps1`。测试日志位于 `local-tmp/test-targeted/`、`local-tmp/verify-full/`，stdout 输出 JSON 汇总。
 - `scripts/ui/run-w18-ui-smoke.ps1` 自动避免无意义的构建：后端 JAR 的构建戳（源码 SHA、SDK 版本）仍匹配时直接复用，例如同一提交的全仓门禁或上一轮的产物；前端构建戳只含冻结前端源码树、lockfile 和代理目标，不含仓库 HEAD，匹配就复用本地构建，否则从主检出的共享缓存 `local-tmp/shared/frontend-build/` 恢复（键见 `scripts/lib/frontend_build_cache.py`），两者都没有才执行 `pnpm build` 并存入缓存；`flow-health.json` 的 `serverBuild`/`frontendBuild` 记录 `REUSED`/`RESTORED`/`BUILT`。`-SkipServerBuild`/`-SkipBuild` 仍可用于强制复用并在构建戳不符时失败。冻结前端来源校验在源码与 DeerFlow 检出未变时复用本 worktree 的上次 PASS（`local-tmp/cache/frontend-source-gate/`，键见 `scripts/lib/frontend_gate_cache.py`）。复用由构建戳校验源码、SDK 版本、前端依赖和代理目标，输入变化后重新构建验证；每轮仍使用独立数据与证据。
 
@@ -151,6 +156,7 @@ try {
 
 - OpenCode 只读取分配的 worktree；命令、文件清单和哈希清单使用相对该根目录的路径，不使用 `..`，不读取 `~/.m2` 等外部目录。Maven 通过仓库入口使用已配置的本地仓库。
 - `private-docs` 的提示词正文内联传入；需要的冻结源码由主控将最小只读副本放到 `local-tmp/<slot>/frozen-deerflow/`，注明路径和冻结 SHA。提示词中不包含密钥、SDK 源码或依赖副本。
+- 任务需要 SDK 类型事实时，主控在派工前运行 `python scripts/governance/sdk_api_digest.py --worktree <worktree>`，并在提示词里写明摘要位于 `local-tmp/sdk-api/<版本>/`。执行者在该目录检索公开签名，不读取 `~/.m2`；摘要里没有的信息在交接里写明并停下。SDK 重新发布后主控重新运行脚本。
 - 验收服务优先由仓库 runner 管理；自行启动的常驻服务在同一次 shell 调用的 `try/finally` 中启动、使用和清理，避免继承调用方管道后留存。CLI 直接运行或交给既有后台执行器，不使用 PowerShell `Start-Job` 承载。
 - 用 `opencode-run.log`、Git 改动、checkpoint 和真实测试证据检查进展与交付；退出码 0 不能单独判定完成。权限拒绝或上下文不足时交回主控，不放宽外部目录权限绕过；检查和清理只针对本任务的精确进程。
 
@@ -168,7 +174,7 @@ try {
 ## 派单与子智能体调度
 
 - 主控每次开工、派单或向人工汇报前运行 `pwsh -NoProfile -File scripts/governance/audit-work-package-delivery.ps1`，并同时运行 `shpm reconcile --json`（只报告不修改），检查演示阶段、工作包、worktree、checkpoint、端口和实际子智能体列表；二者都无法读取智能体状态，须另行人工核对。主控在每次派工、复审、合入、失败或门禁变更时同次核对 SHPM 记录与实际 worktree；失败史保留。
-- 端口：主目录固定 Gateway `18018`、Frontend `33018`，供人工验收，不因子槽冲突迁移，不参与子槽公式。三个子智能体槽位：槽位 1 Gateway `20618`、Frontend `25618`；槽位 2 Gateway `30618`、Frontend `35618`；槽位 3 Gateway `40618`、Frontend `45618`（逐组 `+10000`，槽内 Frontend=Gateway+`5000`）。W18 差分 runner 的受控测试 Provider 独占 `46618`，不属于槽位，也需绑定预检。每次均须按公共规则预检。派单前须确认目标 worktree 的启动器与本端口表一致，否则从当前 main 新建独立 worktree，不得用旧默认端口运行。派单必须声明槽位、完整端口组和独立数据目录；同一时刻每槽仅一任务，完成后释放。主线合入后主控刷新或重启固定端口服务并做 smoke。
+- 端口：主目录固定 Gateway `18018`、Frontend `33018`，供人工验收，不因子槽冲突迁移，不参与子槽公式。三个子智能体槽位：槽位 1 Gateway `20618`、Frontend `25618`；槽位 2 Gateway `30618`、Frontend `35618`；槽位 3 Gateway `40618`、Frontend `45618`（逐组 `+10000`，槽内 Frontend=Gateway+`5000`）。W18 差分 runner 的受控测试 Provider 独占 `46618`，不属于槽位，也需绑定预检。每次均须按公共规则预检。派单前须确认目标 worktree 的启动器与本端口表一致，否则从当前 main 新建独立 worktree，不得用旧默认端口运行。派单必须声明槽位、完整端口组和独立数据目录；同一时刻每槽仅一任务，完成后释放。主线合入后主控用 `pwsh -NoProfile -File scripts/refresh-main-service.ps1 -Status` 检查、用 `-Jar <exec JAR> -ExpectSha <提交> [-LiveSmoke]` 刷新固定端口服务并做 smoke。
 - 并发上限：每个需要启动服务的子智能体（含 OpenCode 进程）必须独占一个子槽位，因此同时运行的此类子智能体最多 3 个。
 - 选择执行者：范围清楚、无需频繁与主控交互、可凭最终提交和独立门禁验收的任务优先交给 OpenCode；需要持续协商失败语义、架构或跨仓边界的任务优先交给可交互子智能体。不设 OpenCode 派单比例。派给 OpenCode 时必须在启动命令中显式指定 `--model deepseek/deepseek-flash`，不得依赖默认模型，checkpoint 与交付证据须记录实际模型。主控在 `shpm assign create` 中记录实际执行者（`--executor`/`--ref`）与模型（`--model`），分配理由写入首个 `shpm assign checkpoint`；工具选择不放宽设计提示词、代码评审、自动门禁、真实证据、密钥和外部目录边界。OpenCode 同样遵守独立 worktree/端口/数据目录与 15 分钟 checkpoint/失联恢复规则；无法安全取得上下文或执行门禁时由主控收回或改派，不算已完成派单。
 - 多智能体执行采用“15 分钟无声上限”：每个运行中的子智能体至少每 15 分钟向主控回报一次 checkpoint，至少包含当前工作包、已完成证据、正在执行的命令或步骤、首个失败或阻塞、worktree 变更及下一交付点；长时间命令须在启动前说明目的，并在结束后立即回报。若距上次有效回报或可观察进展达到 15 分钟，主控必须发送一次非中断式点名消息，不得因智能体状态仍显示 `running` 而无限等待。

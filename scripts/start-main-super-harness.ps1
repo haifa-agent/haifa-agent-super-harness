@@ -3,12 +3,15 @@ param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$SourceRepository,
     [string]$DataDirectory,
+    [string]$JarPath,
+    [string]$FrontendRoot,
     [int]$GatewayPort = 18018,
     [int]$FrontendPort = 33018,
     [int]$ReadyTimeoutSeconds = 180,
     [switch]$GatewayOnly,
     [switch]$ProductionFrontend,
-    [switch]$Build
+    [switch]$Build,
+    [switch]$AllowSlot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,8 +29,17 @@ $sourceRoot = (Resolve-Path -LiteralPath $SourceRepository).Path
 $gatewayUrl = "http://127.0.0.1:$GatewayPort"
 $frontendUrl = "http://127.0.0.1:$FrontendPort"
 
-if ($GatewayPort -ne 18018 -or $FrontendPort -ne 33018) {
-    throw 'The main worktree must use its fixed Gateway 18018 / Frontend 33018 ports.'
+if (-not $AllowSlot -and ($GatewayPort -ne 18018 -or $FrontendPort -ne 33018)) {
+    throw 'The main worktree must use its fixed Gateway 18018 / Frontend 33018 ports. Use -AllowSlot only for a slot rehearsal.'
+}
+if (-not $AllowSlot) {
+    $expectedDataRoot = [IO.Path]::GetFullPath((Join-Path $root 'local-tmp/main-service-data'))
+    if ($dataRoot -ne $expectedDataRoot) {
+        throw "The main worktree data directory must be '$expectedDataRoot'. Use -AllowSlot only for a slot rehearsal."
+    }
+}
+elseif (-not $dataRoot.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "-AllowSlot requires the data directory to stay inside '$root'."
 }
 if ($ReadyTimeoutSeconds -lt 10 -or $ReadyTimeoutSeconds -gt 600) {
     throw 'ReadyTimeoutSeconds must be between 10 and 600.'
@@ -43,8 +55,17 @@ foreach ($port in $portsToCheck) {
 
 $java = Get-Command java.exe -ErrorAction Stop
 $shell = Get-Command pwsh.exe -ErrorAction Stop
-$launcher = Join-Path $root 'scripts/frontend/start-haifa-frontend.ps1'
-$jar = Join-Path $root 'super-harness-server/target/super-harness-server-0.1.0-SNAPSHOT-exec.jar'
+$frontendRepo = $root
+if (-not [string]::IsNullOrWhiteSpace($FrontendRoot)) {
+    $frontendRepo = (Resolve-Path -LiteralPath $FrontendRoot).Path
+}
+$launcher = Join-Path $frontendRepo 'scripts/frontend/start-haifa-frontend.ps1'
+$jar = if ([string]::IsNullOrWhiteSpace($JarPath)) {
+    Join-Path $root 'super-harness-server/target/super-harness-server-0.1.0-SNAPSHOT-exec.jar'
+}
+else {
+    (Resolve-Path -LiteralPath $JarPath).Path
+}
 
 if ($Build) {
     Push-Location $root
@@ -57,13 +78,13 @@ if ($Build) {
 if (-not (Test-Path -LiteralPath $jar -PathType Leaf)) {
     throw "Server executable JAR is missing: $jar. Run mvn -o -ntp clean verify first."
 }
-if (-not (Test-Path -LiteralPath (Join-Path $root 'frontend/node_modules/.bin/next.cmd'))) {
+if (-not (Test-Path -LiteralPath (Join-Path $frontendRepo 'frontend/node_modules/.bin/next.cmd'))) {
     throw 'Frozen frontend dependencies are missing. Follow the offline Corepack installation instructions in AGENTS.md.'
 }
 
 # Perform the frozen source, pinned toolchain, loopback and same-origin gates before starting either process.
 $null = & $shell.Source -NoProfile -File $launcher -DryRun `
-    -RepositoryRoot $root -SourceRepository $sourceRoot -DataDirectory $dataRoot `
+    -RepositoryRoot $frontendRepo -SourceRepository $sourceRoot -DataDirectory $dataRoot `
     -GatewayBaseUrl $gatewayUrl -FrontendPort $FrontendPort -Production:$ProductionFrontend
 if ($LASTEXITCODE -ne 0) { throw 'Frozen frontend dry-run gate failed.' }
 
@@ -128,7 +149,7 @@ if ($GatewayOnly) {
 
 $frontendArgs = @(
     '-NoProfile', '-File', "`"$launcher`"",
-    '-RepositoryRoot', "`"$root`"",
+    '-RepositoryRoot', "`"$frontendRepo`"",
     '-SourceRepository', "`"$sourceRoot`"",
     '-DataDirectory', "`"$dataRoot`"",
     '-GatewayBaseUrl', $gatewayUrl,
