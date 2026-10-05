@@ -124,6 +124,7 @@ public final class LeadPromptComposer {
         // template and all guidance, SOUL/Skill/other inputs with just that generated data
         // omitted. Never regex-remove blocks from user-controlled rendered text.
         Map<String, String> toolInstructionValues = new LinkedHashMap<>(values);
+        toolInstructionValues.put("skills_section", renderSkills(inputs.skills(), false));
         if (delegation) toolInstructionValues.put("subagent_section", renderSubagents(inputs, false));
         Set<String> mentioned = mentionedTools(format(template.adaptedTemplate(), toolInstructionValues));
         Set<String> unregistered = new LinkedHashSet<>(mentioned);
@@ -192,6 +193,10 @@ public final class LeadPromptComposer {
     }
 
     private static String renderSkills(List<LeadPromptInputs.Skill> skills) {
+        return renderSkills(skills, true);
+    }
+
+    private static String renderSkills(List<LeadPromptInputs.Skill> skills, boolean includeCatalogData) {
         if (skills.isEmpty()) {
             return "";
         }
@@ -203,7 +208,7 @@ public final class LeadPromptComposer {
                 .append("2. Read and follow the returned instructions precisely.\n")
                 .append("3. Call `skill_resource_read` with the `skill` and `path` arguments for referenced resources only when needed during execution.\n\n")
                 .append("<available_skills>\n");
-        for (LeadPromptInputs.Skill skill : skills) {
+        for (LeadPromptInputs.Skill skill : includeCatalogData ? skills : List.<LeadPromptInputs.Skill>of()) {
             out.append("    <skill>\n")
                     .append("        <name>").append(escape(skill.name())).append("</name>\n")
                     .append("        <description>").append(escape(skill.description())).append("</description>\n")

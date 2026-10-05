@@ -45,6 +45,22 @@ class LeadPromptComposerTest {
     }
 
     @Test
+    void skillCatalogDescriptionsDoNotRequireToolsNamedAsData() {
+        Set<String> tools = new java.util.HashSet<>(BASE_TOOLS);
+        tools.addAll(Set.of("skill_load", "skill_resource_read"));
+        var skills = List.of(new LeadPromptInputs.Skill("task", "Use this for a task involving bash or tool_search"));
+        var rendered = composer.compose(new LeadPromptInputs(null, null, false, skills), tools);
+        assertThat(rendered.instructions()).contains("<name>task</name>", "task involving bash or tool_search");
+        assertThat(rendered.mentionedToolNames()).contains("skill_load", "skill_resource_read")
+                .doesNotContain("task", "bash", "tool_search");
+        assertThatThrownBy(() -> composer.compose(new LeadPromptInputs(null, "Invoke bash now", false, skills), tools))
+                .hasMessageContaining("unregistered tools").hasMessageContaining("bash");
+        tools.remove("skill_resource_read");
+        assertThatThrownBy(() -> composer.compose(new LeadPromptInputs(null, null, false, skills), tools))
+                .hasMessageContaining("skill_resource_read");
+    }
+
+    @Test
     void emptyInputsRenderTheFrozenStaticSectionsWithoutOrphans() {
         var composition = composer.compose(emptyInputs(), BASE_TOOLS);
         String text = composition.instructions();

@@ -30,7 +30,8 @@ final class SkillReviewApprovals {
         if (!java.util.Set.of("allow", "warn").contains(decision)) throw new IllegalArgumentException("Skill review did not permit publication");
         return json.createObjectNode().put("registration_digest", registration.registrationDigest().value())
                 .put("package_digest", registration.packageIndex().digest().value())
-                .put("issued_at", Instant.now().toString()).put("decision", decision).put("revoked", false);
+                .put("issued_at", Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS).toString())
+                .put("decision", decision).put("revoked", false);
     }
 
     static SkillPackageReviewGrant grant(SkillRegistration registration, JsonNode evidence) {
@@ -42,13 +43,15 @@ final class SkillReviewApprovals {
         var caller = SdkCaller.defaultPublicUser();
         Instant issued = Instant.parse(evidence.path("issued_at").asText());
         boolean revoked = evidence.path("revoked").asBoolean(false);
-        return new SkillPackageReviewGrant("sh-review-" + registration.packageIndex().digest().value(), 1, 1,
+        boolean human = "human".equals(evidence.path("authorization_source").asText());
+        return new SkillPackageReviewGrant("sh-review-" + registration.registrationDigest().value(), 1, 1,
                 caller.tenant(), caller.principal(), PRODUCT,
                 registration.coordinate().scope().scope() == SkillScope.USER ? SkillTrustScope.USER : SkillTrustScope.PRODUCT, Optional.empty(),
                 registration.coordinate(), registration.registrationDigest(), registration.packageIndex().digest(),
                 issued, Optional.empty(), revoked ? Optional.of(issued) : Optional.empty(),
                 revoked ? SkillTrustGrantState.REVOKED : SkillTrustGrantState.ACTIVE,
-                "configured-skill-screen", "product-package-publication", "SCREENED_PACKAGE");
+                human ? "human-operator" : "configured-skill-screen", "product-package-publication",
+                human ? "HUMAN_AUTHORIZED_PACKAGE" : "SCREENED_PACKAGE");
     }
 
     static SkillTrustSnapshot snapshot(List<SkillPackageReviewGrant> grants) {
