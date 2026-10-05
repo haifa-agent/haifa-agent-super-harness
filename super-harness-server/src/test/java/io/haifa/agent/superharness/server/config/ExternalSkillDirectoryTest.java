@@ -65,6 +65,20 @@ class ExternalSkillDirectoryTest {
         assertThat(store.projection(SkillRunTools.Selection.all()).allowedSkills()).hasSize(21);
     }
 
+    @Test void humanAuthorizationRetainsExactPackageChecks() throws Exception {
+        var store = store(packages());
+        var pkg = store.projection(SkillRunTools.Selection.all()).selectedPackages().stream()
+                .filter(value -> value.name().equals("bootstrap")).findFirst().orElseThrow();
+        var registration = pkg.source().discover(SkillReviewApprovals.discovery()).registrations().getFirst();
+        var evidence = SkillReviewApprovals.evidence(json, registration, json.createObjectNode().put("decision", "allow"));
+        evidence.put("authorization_source", "human");
+        var grant = SkillReviewApprovals.grant(registration, evidence);
+        assertThat(grant.toString()).contains("human-operator", "HUMAN_AUTHORIZED_PACKAGE");
+        evidence.put("package_digest", "sha256:" + "0".repeat(64));
+        assertThatThrownBy(() -> SkillReviewApprovals.grant(registration, evidence))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("exact SDK package");
+    }
+
     @Test void reviewedAliasAndCompatibilityPackageBindAndSurviveRestart() throws Exception {
         Path root = packages(); var store = store(root); AtomicInteger screens = new AtomicInteger();
         store.configureWriteScreening((directory, files) -> {
