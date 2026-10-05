@@ -169,8 +169,8 @@ pwsh -NoProfile -File scripts/test-targeted.ps1 -Test '<受影响用例>' -LowMe
 pwsh -NoProfile -File tests/checks/build/verify-haifa-version-baseline.ps1
 # 推送分支并开 PR（不用 draft）后一次性读取机器人审查（只读；退出码 0=CLEAN、2=FINDINGS、3=NO_REVIEW_YET、4=REVIEW_FAILED）。
 python scripts/governance/pr_review_digest.py --repo <owner/name> --pr <编号>
-# Oracle 和正式预检完成、原件外置后，按范围执行；不传 -Forks 时按空闲内存自动选 3/2/1 档（1 档自动低内存），
-# 显式 -Forks / -LowMemory 行为不变。实测 2026-10-05（16 核 31 GB）：1 进程低内存约 811s、2 进程约 387s、3 进程约 270–285s。
+# Oracle 和正式预检完成、原件外置后，按范围执行；不传 -Forks 时按空闲内存自动选 3 个进程或 1 个进程（1 个进程时自动低内存），
+# 显式 -Forks / -LowMemory 行为不变。实测 2026-10-05（16 核 31 GB）：1 进程低内存约 811s、3 进程约 250–380s。
 # 预检后若已有同 Java 输入指纹的真实 PASS 摘要则自动复用并在摘要写 reuse 来源；-NoReuse 强制真跑，
 # -NoKnownIntermittent 关闭已登记偶发失败分支。
 pwsh -NoProfile -File scripts/verify-full.ps1

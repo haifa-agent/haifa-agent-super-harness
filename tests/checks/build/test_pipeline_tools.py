@@ -828,22 +828,20 @@ class GateResourcesTest(unittest.TestCase):
             gate_resources.select_forks(gate_resources.THREE_FORKS_MIN_FREE_PHYSICAL_MB,
                                         gate_resources.THREE_FORKS_MIN_FREE_COMMIT_MB), (3, False))
 
-    def test_measured_thresholds_skip_the_two_fork_band(self):
-        # The measured 2-fork peaks are not below the 3-fork peaks, so its thresholds are
-        # higher and the 2-fork guard can never win: even at the 2-fork thresholds the
-        # 3-fork guard fires first. The branch stays tested with a synthetic ordering.
-        self.assertEqual(
-            gate_resources.select_forks(gate_resources.TWO_FORKS_MIN_FREE_PHYSICAL_MB,
-                                        gate_resources.TWO_FORKS_MIN_FREE_COMMIT_MB), (3, False))
-        with patch.object(gate_resources, "TWO_FORKS_MIN_FREE_PHYSICAL_MB", 2000), \
-                patch.object(gate_resources, "TWO_FORKS_MIN_FREE_COMMIT_MB", 4000):
-            self.assertEqual(gate_resources.select_forks(2500, 4500), (2, False))
+    def test_there_is_no_two_fork_tier(self):
+        # Two forks need at least as much memory as three (measured), so the choice is 3 or 1.
+        for physical in range(1024, 8192, 512):
+            for commit in range(2048, 16384, 1024):
+                self.assertIn(gate_resources.select_forks(physical, commit)[0], (1, 3))
+        self.assertEqual(gate_resources.select_forks(4623, 10851), (3, False),
+                         "the lowest free memory at which a three-fork gate was observed to pass")
 
     def test_low_memory_selects_one_fork_with_low_memory(self):
         self.assertEqual(gate_resources.select_forks(1024, 2048), (1, True))
         self.assertEqual(
-            gate_resources.select_forks(gate_resources.THREE_FORKS_MIN_FREE_PHYSICAL_MB - 1,
-                                        gate_resources.THREE_FORKS_MIN_FREE_COMMIT_MB - 1), (1, True))
+            gate_resources.select_forks(gate_resources.THREE_FORKS_MIN_FREE_PHYSICAL_MB - 1, 32000), (1, True))
+        self.assertEqual(
+            gate_resources.select_forks(16000, gate_resources.THREE_FORKS_MIN_FREE_COMMIT_MB - 1), (1, True))
 
     def test_missing_probe_falls_back_to_default(self):
         self.assertEqual(gate_resources.select_forks(None, 32000), (gate_resources.DEFAULT_FORKS, False))
@@ -851,7 +849,7 @@ class GateResourcesTest(unittest.TestCase):
 
     def test_selection_shape(self):
         result = gate_resources.selection()
-        self.assertIn(result["forks"], (1, 2, 3))
+        self.assertIn(result["forks"], (1, 3))
         self.assertIsInstance(result["lowMemory"], bool)
         self.assertIn("probeAvailable", result)
 

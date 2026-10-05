@@ -1,20 +1,24 @@
 """Picks the full-gate fork count from the free memory at the moment it starts.
 
 ``scripts/verify-full.ps1`` asks this module only when the caller passed neither ``-Forks``
-nor ``-LowMemory``. The thresholds are the measured memory peak of a run plus 2 GB. Free
-physical memory is compared against the Java working-set peak and free commit memory against
-the private-bytes peak, both taken from the controller's four-run measurement on 2026-10-05
-(16 cores, 31 GB, commit 7077325; ``local-tmp/<slot>/evidence/fork-measure/measure-summary.json``):
+nor ``-LowMemory``. There are two outcomes: three forks, or one fork with the low-memory Maven
+parameters.
 
-- 3 forks: working-set peak 2634 MB (max of 2634/2326) and private peak 3259 MB (max of
-  3259/3044) -> 4682 / 5307 MB thresholds;
-- 2 forks: working-set peak 2918 MB and private peak 3914 MB -> 4966 / 5962 MB thresholds;
-- otherwise 1 fork with the low-memory Maven parameters.
+Basis (controller measurements on 2026-10-05, 16 cores, 31 GB; four-run measurement at commit
+7077325 plus later gates on 8f7911f and d5ac624):
 
-The measured 2-fork peaks are not below the 3-fork peaks, so the 2-fork thresholds are higher
-than the 3-fork thresholds and the 2-fork band can never satisfy its own guard before the
-3-fork guard: the 2-fork tier is not reachable in practice and the constants are kept as
-measured rather than tuned to make all three tiers appear.
+- memory use barely depends on the fork count: Java private bytes peaked at 3.0-3.9 GB and the
+  working set at 1.9-2.9 GB for one, two and three forks alike, while three forks took
+  247-376 s against 811 s for one fork. A two-fork tier would need at least as much memory as
+  three forks, so it is not offered;
+- three forks passed with as little as 4623 MB free physical memory at the start; free
+  physical memory never fell below 3.1 GB and free commit never below 9.5 GB during a run.
+
+Free commit is the hard limit (a JVM that cannot reserve its heap fails), so it keeps the
+"measured peak + 2 GB" margin: 3914 + 2048, rounded up to 6144 MB. Free physical memory only
+has to hold the working set; the first rule ("peak + 2 GB" = 4682 MB) sent a 4.6 GB machine
+to the 811-second single-fork run although three forks pass there, so the human decision on
+2026-10-05 relaxed it to 4096 MB.
 
     python scripts/lib/gate_resources.py      # {"forks": n, "lowMemory": bool, ...}
 """
@@ -25,11 +29,9 @@ import ctypes
 import json
 import sys
 
-# Measured 2026-10-05 (commit 7077325): each threshold is the observed peak + 2048 MB.
-THREE_FORKS_MIN_FREE_PHYSICAL_MB = 4682
-THREE_FORKS_MIN_FREE_COMMIT_MB = 5307
-TWO_FORKS_MIN_FREE_PHYSICAL_MB = 4966
-TWO_FORKS_MIN_FREE_COMMIT_MB = 5962
+# See the module docstring for the measurements behind both values.
+THREE_FORKS_MIN_FREE_PHYSICAL_MB = 4096
+THREE_FORKS_MIN_FREE_COMMIT_MB = 6144
 DEFAULT_FORKS = 3
 
 
@@ -53,8 +55,6 @@ def select_forks(free_physical_mb: int | None, free_commit_mb: int | None) -> tu
         return DEFAULT_FORKS, False
     if free_physical_mb >= THREE_FORKS_MIN_FREE_PHYSICAL_MB and free_commit_mb >= THREE_FORKS_MIN_FREE_COMMIT_MB:
         return 3, False
-    if free_physical_mb >= TWO_FORKS_MIN_FREE_PHYSICAL_MB and free_commit_mb >= TWO_FORKS_MIN_FREE_COMMIT_MB:
-        return 2, False
     return 1, True
 
 

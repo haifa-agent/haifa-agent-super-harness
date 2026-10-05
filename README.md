@@ -102,10 +102,10 @@ pwsh -NoProfile -File scripts/verify-full.ps1
 `mvn -o -ntp clean verify`，摘要 JSON 写到 `local-tmp/verify-full/`，并为产出的 exec JAR 写入服务端构建戳。
 失败时从 surefire 报告读出 `failedTests`；只命中 `tests/known-intermittent.json` 且未触及条目 `covers` 时
 按已登记偶发失败分支重跑失败的测试类 3 次并补完构建，摘要带 `knownIntermittent` 与重跑次数，
-`-NoKnownIntermittent` 关闭该分支。不传 `-Forks` 时按当时空闲物理内存与空闲提交内存自动选择 3/2/1 个
-并行进程（1 档自动加 `-LowMemory`）；显式 `-Forks` 或 `-LowMemory` 行为不变，内存探测失败回退默认 3 个进程。
-阈值 = 实测内存峰值 + 2 GB（2026-10-05 实测：1 进程低内存约 811 秒、2 进程约 387 秒、3 进程约 270–285 秒；
-2 进程峰值不低于 3 进程，故 2 档实际不会被选中）。
+`-NoKnownIntermittent` 关闭该分支。不传 `-Forks` 时按当时空闲物理内存与空闲提交内存自动选择 3 个
+并行进程或 1 个进程（空闲物理内存不低于 4096 MB 且空闲提交内存不低于 6144 MB 时用 3 个，否则 1 个并自动加 `-LowMemory`）；显式 `-Forks` 或 `-LowMemory` 行为不变，内存探测失败回退默认 3 个进程。
+2026-10-05 实测：1 进程低内存约 811 秒、3 进程约 250–380 秒；各进程数的内存峰值相近（3–4 GB），
+所以不设 2 进程一档。
 
 UI runner 的服务端构建戳同样以 Java 输入指纹比较：只改文档、脚本、测试或 UI 用例的提交不再使 JAR 失效，
 `-SkipServerBuild` 可继续复用并报告 `REUSED`；`flow-health.json` 记录 `sourceTree` 和 `sdkIdentity` 供合入后
