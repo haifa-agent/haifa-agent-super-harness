@@ -115,9 +115,13 @@ def stamps_match(recorded_sha: str, expected_sha: str, recorded_tree: str | None
 
 
 def frontend_decision(tree_match: bool, healthy: bool, port_busy: bool, has_root: bool) -> str:
-    """One of FAIL_NO_ROOT, FAIL_TREE, REUSED, FAIL_FOREIGN, START."""
+    """One of FAIL_NO_ROOT, FAIL_TREE, REUSED, FAIL_FOREIGN, START.
+
+    Without ``--frontend-root`` a healthy frontend is reused as it is (its tree cannot be
+    compared); only an unhealthy one needs the root to be started.
+    """
     if not has_root:
-        return "FAIL_NO_ROOT"
+        return "REUSED" if healthy else "FAIL_NO_ROOT"
     if not tree_match:
         return "FAIL_TREE"
     if healthy:
@@ -730,7 +734,8 @@ def _frontend_result(args, worktree: Path, gateway_url: str, log_dir: Path, stam
     decision = frontend_decision(tree_match, healthy, busy, frontend_root is not None)
 
     if decision == "REUSED":
-        return {"status": "REUSED", "tree": actual_tree, "frontendRoot": str(frontend_root)}
+        return {"status": "REUSED", "tree": actual_tree,
+                "frontendRoot": str(frontend_root) if frontend_root else None}
     if decision == "FAIL_TREE":
         return {"status": "FAIL", "reason": "frontend tree does not match the expected commit",
                 "expectedTree": expected_tree, "actualTree": actual_tree}

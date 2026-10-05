@@ -630,6 +630,7 @@ class MainServiceTest(unittest.TestCase):
 
     def test_frontend_decision_branches(self):
         self.assertEqual(main_service.frontend_decision(True, False, False, False), "FAIL_NO_ROOT")
+        self.assertEqual(main_service.frontend_decision(False, True, True, False), "REUSED")
         self.assertEqual(main_service.frontend_decision(False, True, False, True), "FAIL_TREE")
         self.assertEqual(main_service.frontend_decision(True, True, False, True), "REUSED")
         self.assertEqual(main_service.frontend_decision(True, False, True, True), "FAIL_FOREIGN")
