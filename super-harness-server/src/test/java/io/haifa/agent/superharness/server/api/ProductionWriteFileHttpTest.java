@@ -420,16 +420,18 @@ class ProductionWriteFileHttpTest {
     }
 
     /**
-     * W15-task-13: a Run that crosses an SDK budget threshold must keep its SSE stream open. The SDK
-     * emits a {@code budget.threshold-reached} DeliveryLifecycle event; frozen DeerFlow has no wire
-     * mapping for it, so the Gateway must skip it without writing an error frame or ending the
-     * stream. The controlled Provider issues nine read-only Tool calls (16-call Run budget, so the
-     * 50% threshold is crossed) and then answers. The same frame writer serves the live creator
-     * stream and every replay/join, so this case checks the live stream and the terminal replay.
+     * W15-task-13/14: a Run that crosses an SDK budget threshold must keep its SSE stream open. The
+     * SDK emits a {@code budget.threshold-reached} DeliveryLifecycle event; frozen DeerFlow has no
+     * wire mapping for it, so the Gateway must skip it without writing an error frame or ending the
+     * stream. The controlled Provider issues read-only Tool calls until the Run crosses 50% of the
+     * DeerFlow-aligned 100-iteration / 100-model-call structural limit, then answers. The same frame
+     * writer serves the live creator stream and every replay/join, so this case checks the live
+     * stream and the terminal replay.
      */
     @Test
     void runStreamIgnoresSdkBudgetThresholdEventAndProjectsEveryToolMessage() throws Exception {
-        int toolCalls = 9;
+        // One Tool call per model turn; >50 turns crosses 50% of maxIterations/maxModelCalls (100).
+        int toolCalls = 55;
         String answer = "BUDGET_THRESHOLD_DONE";
         String threadId = "budget-threshold";
         try (var provider = new ControlledProvider(evidence, true, (request, call) ->
