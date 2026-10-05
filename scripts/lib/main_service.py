@@ -358,13 +358,23 @@ def git_output(repo: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def tree_of(repo: Path, revision: str) -> str | None:
-    """``<revision>^{tree}`` in ``repo``, or None when the revision cannot be resolved."""
-    result = subprocess.run(["git", "-C", str(repo), "rev-parse", f"{revision}^{{tree}}"],
+def rev_parse(repo: Path, spec: str) -> str | None:
+    """``git rev-parse <spec>`` in ``repo``, or None when it cannot be resolved."""
+    result = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", spec],
                             capture_output=True, text=True, encoding="utf-8", errors="replace")
     if result.returncode != 0:
         return None
     return result.stdout.strip() or None
+
+
+def tree_of(repo: Path, revision: str) -> str | None:
+    """``<revision>^{tree}`` in ``repo``, or None when the revision cannot be resolved."""
+    return rev_parse(repo, f"{revision}^{{tree}}")
+
+
+def frontend_tree_of(repo: Path, revision: str) -> str | None:
+    """The ``frontend`` subtree of ``revision`` (``<revision>:frontend``), or None."""
+    return rev_parse(repo, f"{revision}:frontend")
 
 
 def java_executable() -> str:
@@ -725,8 +735,8 @@ def _sha256(path: Path) -> str:
 
 def _frontend_result(args, worktree: Path, gateway_url: str, log_dir: Path, stamp: str) -> dict:
     frontend_root = args.frontend_root.resolve() if args.frontend_root else None
-    expected_tree = tree_of(worktree, f"{args.expect_sha}:frontend") if frontend_root else None
-    actual_tree = tree_of(frontend_root, "HEAD:frontend") if frontend_root else None
+    expected_tree = frontend_tree_of(worktree, args.expect_sha) if frontend_root else None
+    actual_tree = frontend_tree_of(frontend_root, "HEAD") if frontend_root else None
     tree_match = bool(expected_tree and actual_tree and expected_tree == actual_tree)
     frontend_url = f"http://127.0.0.1:{args.frontend_port}"
     healthy = http_status(frontend_url) in range(200, 400)

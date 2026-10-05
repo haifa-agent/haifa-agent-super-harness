@@ -12,7 +12,9 @@
 
     -Jar <exec JAR> -ExpectSha <commit> copies the JAR next to service.json, stops only the
     exact main-service PIDs, waits for both ports to bind again, starts the copied Gateway,
-    checks the frontend checkout, runs smoke checks and writes refresh-<timestamp>.json. The
+    checks the frontend checkout (starting it from -FrontendRoot when it is not healthy; the frozen
+    DeerFlow checkout defaults to <RepositoryRoot>/deer-flow, override with -SourceRepository),
+    runs smoke checks and writes refresh-<timestamp>.json. The
     build stamp beside the JAR must record -ExpectSha. Without -AllowSlot this entry point
     only accepts Gateway 18018 / Frontend 33018 and the fixed main-service data directory;
     -AllowSlot is for the slot rehearsal only.
@@ -28,6 +30,7 @@ param(
     [string]$Jar,
     [string]$ExpectSha,
     [string]$FrontendRoot,
+    [string]$SourceRepository,
     [switch]$LiveSmoke,
     [switch]$GatewayOnly,
     [int]$GatewayPort = 18018,
@@ -71,6 +74,7 @@ else {
         '--main-service-root', $MainServiceRoot, '--ready-timeout-seconds', [string]$ReadyTimeoutSeconds)
     if ($GatewayOnly) { $cliArgs += '--gateway-only' }
     if (-not [string]::IsNullOrWhiteSpace($FrontendRoot)) { $cliArgs += @('--frontend-root', $FrontendRoot) }
+    if (-not [string]::IsNullOrWhiteSpace($SourceRepository)) { $cliArgs += @('--source-repository', $SourceRepository) }
     if ($LiveSmoke) { $cliArgs += '--live-smoke' }
 }
 

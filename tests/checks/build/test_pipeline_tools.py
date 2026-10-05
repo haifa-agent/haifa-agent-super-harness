@@ -628,6 +628,15 @@ class MainServiceTest(unittest.TestCase):
         self.assertEqual(main_service.stamps_match("a", "b", None, "tree"), (False, False))
         self.assertEqual(main_service.stamps_match("a", "b", "tree", None), (False, False))
 
+    def test_frontend_tree_resolves_the_subtree_of_a_commit(self):
+        repo = Path(__file__).resolve().parents[3]
+        head = main_service.rev_parse(repo, "HEAD")
+        subtree = main_service.frontend_tree_of(repo, head)
+        self.assertRegex(subtree or "", r"^[0-9a-f]{40}$")
+        self.assertEqual(subtree, main_service.rev_parse(repo, "HEAD:frontend"))
+        self.assertNotEqual(subtree, main_service.tree_of(repo, head))
+        self.assertIsNone(main_service.frontend_tree_of(repo, "0" * 40))
+
     def test_frontend_decision_branches(self):
         self.assertEqual(main_service.frontend_decision(True, False, False, False), "FAIL_NO_ROOT")
         self.assertEqual(main_service.frontend_decision(False, True, True, False), "REUSED")
