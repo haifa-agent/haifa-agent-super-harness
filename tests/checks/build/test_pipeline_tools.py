@@ -31,6 +31,7 @@ dispatch = load("scripts/governance/shpm_dispatch.py")
 gate_cache = load("scripts/lib/frontend_gate_cache.py")
 build_cache = load("scripts/lib/frontend_build_cache.py")
 pr_review = load("scripts/governance/pr_review_digest.py")
+script_regressions = load("scripts/lib/script_regressions.py")
 
 BOT = pr_review.DEFAULT_BOT
 
@@ -83,6 +84,21 @@ class SecretScanTest(unittest.TestCase):
 
 
 class RecordGatesTest(unittest.TestCase):
+    def ui_dir(self, root, tag, identity, profile, cases, sha="abcdef0123"):
+        directory = root / tag
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "flow-health.json").write_text(json.dumps({
+            "acceptanceProfile": profile, "sourceSha": sha, "totalMs": 97000, "retryCount": 0,
+            "cleanup": {"success": True}, "evidenceRoot": f"D:/evidence/{identity}",
+        }), encoding="utf-8")
+        (directory / "case-results.json").write_text(json.dumps(cases), encoding="utf-8")
+        return directory
+
+    def keys(self, roots):
+        records, _ = record_gates.discover([Path(root) for root in roots])
+        record_gates.assign_rounds(records)
+        return [(r["name"], record_gates.idempotency_key("2026-10-05", "T", r)) for r in records]
+
     def test_results_are_copied_without_promotion(self):
         self.assertEqual(record_gates.shpm_result("PASS"), "PASS")
         for failure in ("FAIL", "FAIL_PREFLIGHT", "FAIL_NO_TESTS_MATCHED"):
@@ -90,34 +106,144 @@ class RecordGatesTest(unittest.TestCase):
         self.assertEqual(record_gates.shpm_result(None), "NOT_RUN")
         self.assertEqual(record_gates.shpm_result("BLOCKED_EXTERNAL"), "BLOCKED_EXTERNAL")
 
-    def test_reads_verify_full_summary_and_ui_round(self):
+    def test_reads_verify_full_and_ui_with_profile_in_the_name(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            summary = root / "verify-full.json"
+            summary = root / "verify-full-1.json"
             summary.write_text(json.dumps({
                 "status": "FAIL_PREFLIGHT", "sourceSha": "abcdef0123", "preflightFailures": ["git diff --check: x"],
+                "forks": 1, "sdkSelection": "ABSENT",
             }), encoding="utf-8")
-            round_dir = root / "run"
-            round_dir.mkdir()
-            (round_dir / "flow-health.json").write_text(json.dumps({
-                "buildMode": "warm-reuse", "sourceSha": "abcdef0123", "totalMs": 97000, "retryCount": 0,
-                "cleanup": {"success": True},
-            }), encoding="utf-8")
-            (round_dir / "case-results.json").write_text(json.dumps([
+            ui = self.ui_dir(root, "run", "run-20261005-100000-000-aaaaaaaa", "w05-demo-artifact", [
                 {"name": "Artifact survives reload", "result": "PASS", "firstFailure": None},
                 {"name": "Second case", "result": "FAIL", "firstFailure": "timeout"},
-            ]), encoding="utf-8")
-
+            ])
             gate = record_gates.records_for(summary)
             self.assertEqual([r["result"] for r in gate], ["FAIL"])
             self.assertIn("preflight", gate[0]["summary"])
-            ui = record_gates.records_for(round_dir)
-            self.assertEqual([r["result"] for r in ui], ["PASS", "FAIL"])
-            self.assertEqual(ui[0]["key"], "ui-warm-reuse-artifact-survives-reload")
-            self.assertIn("first failure: timeout", ui[1]["summary"])
-            command = record_gates.build_command("W05-task-1", ui[1], "db", "2026-10-03")
+            self.assertEqual(gate[0]["identity"], "verify-full-1")
+            cases = record_gates.records_for(ui)
+            self.assertEqual([r["result"] for r in cases], ["PASS", "FAIL"])
+            record_gates.assign_rounds(cases)
+            self.assertEqual(cases[0]["name"], "ui-w05-demo-artifact-artifact-survives-reload")
+            self.assertIn("first failure: timeout", cases[1]["summary"])
+            command = record_gates.build_command("W05-task-1", cases[1], "db", "2026-10-03")
             self.assertEqual(command[command.index("--result") + 1], "FAIL")
-            self.assertIn("2026-10-03-W05-task-1-ui-warm-reuse-second-case-abcdef01", command)
+
+    def test_two_rounds_get_distinct_names_and_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            early = self.ui_dir(root, "a", "run-20261005-100000-000-aaaaaaaa", "w05-demo-artifact",
+                                [{"name": "Case One", "result": "FAIL", "firstFailure": None}])
+            late = self.ui_dir(root, "b", "run-20261005-110000-000-bbbbbbbb", "w05-demo-artifact",
+                               [{"name": "Case One", "result": "PASS", "firstFailure": None}])
+            rows = dict(self.keys([late, early]))
+            self.assertEqual(set(rows), {"ui-w05-demo-artifact-case-one-r1", "ui-w05-demo-artifact-case-one-r2"})
+            self.assertIn("run-20261005-100000-000-aaaaaaaa", rows["ui-w05-demo-artifact-case-one-r1"])
+            self.assertIn("run-20261005-110000-000-bbbbbbbb", rows["ui-w05-demo-artifact-case-one-r2"])
+
+    def test_same_directory_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ui = self.ui_dir(root, "run", "run-20261005-100000-000-aaaaaaaa", "p", [{"name": "C", "result": "PASS"}])
+            self.assertEqual(self.keys([ui]), self.keys([ui]))
+
+    def test_different_profiles_do_not_collide(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            one = self.ui_dir(root, "a", "run-20261005-100000-000-aaaaaaaa", "p1", [{"name": "Same", "result": "PASS"}])
+            two = self.ui_dir(root, "b", "run-20261005-100000-000-bbbbbbbb", "p2", [{"name": "Same", "result": "PASS"}])
+            names = {name for name, _ in self.keys([one, two])}
+            self.assertEqual(names, {"ui-p1-same", "ui-p2-same"})
+
+    def test_recursively_discovers_the_four_kinds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "full-gate").mkdir()
+            (root / "full-gate" / "verify-full-1.json").write_text(json.dumps({
+                "status": "PASS", "sourceSha": "abcdef0123", "forks": 1, "sdkSelection": "ABSENT"}), encoding="utf-8")
+            (root / "scripts").mkdir()
+            (root / "scripts" / "verify-scripts-1.json").write_text(json.dumps({
+                "status": "PASS", "sourceSha": "abcdef0123", "logDirectory": "d",
+                "checks": [{"name": "node-x", "status": "PASS", "exitCode": 0, "elapsedMs": 100, "log": "l"}]}),
+                encoding="utf-8")
+            self.ui_dir(root, "ui/x/original-evidence", "run-20261005-100000-000-aaaaaaaa", "p",
+                        [{"name": "C", "result": "FAIL"}])
+            (root / "service").mkdir()
+            (root / "service" / "refresh-1.json").write_text(json.dumps({
+                "status": "PASS", "sourceSha": "abcdef0123", "jarSha256": "aa", "steps": []}), encoding="utf-8")
+            (root / "unknown.json").write_text(json.dumps({"anything": True}), encoding="utf-8")
+
+            records, unrecognized = record_gates.discover([root])
+            self.assertEqual(len(records), 4)
+            self.assertEqual({r["base_name"] for r in records},
+                             {"verify-full", "scripts-node-x", "ui-p-c", "main-service-refresh"})
+            self.assertEqual(unrecognized, [root / "unknown.json"])
+            record_gates.assign_rounds(records)
+            results = {r["base_name"]: r["result"] for r in records}
+            self.assertEqual(results, {"verify-full": "PASS", "scripts-node-x": "PASS",
+                                       "ui-p-c": "FAIL", "main-service-refresh": "PASS"})
+
+    def test_missing_acceptance_profile_stops(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ui = self.ui_dir(root, "run", "run-20261005-100000-000-aaaaaaaa", "p", [{"name": "C", "result": "PASS"}])
+            flow = json.loads((ui / "flow-health.json").read_text(encoding="utf-8"))
+            del flow["acceptanceProfile"]
+            (ui / "flow-health.json").write_text(json.dumps(flow), encoding="utf-8")
+            with self.assertRaises(record_gates.EvidenceError):
+                record_gates.discover([ui])
+
+    def test_raw_root_rewrites_existing_paths_and_rejects_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ui = self.ui_dir(root, "ui/run", "run-20261005-100000-000-aaaaaaaa", "p", [{"name": "C", "result": "PASS"}])
+            records, _ = record_gates.discover([root])
+            moved = root / "moved"
+            (moved / "ui").mkdir(parents=True)
+            (moved / "ui" / "run").mkdir()
+            record_gates.apply_raw_root(records, moved)
+            self.assertEqual(records[0]["raw"], str(moved / "ui" / "run"))
+            with self.assertRaises(record_gates.EvidenceError):
+                record_gates.apply_raw_root(records, root / "does-not-exist")
+
+
+class ScriptRegressionsTest(unittest.TestCase):
+    def test_manifest_matches_the_repository(self):
+        self.assertEqual(script_regressions.manifest_errors(ROOT), [])
+
+    def test_extra_check_file_fails_before_any_check_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tests/checks/build").mkdir(parents=True)
+            (root / "tests/checks/ui").mkdir(parents=True)
+            (root / "tests/checks/build/verify-haifa-version-baseline.ps1").write_text("# x", encoding="utf-8")
+            (root / "tests/checks/ui/unlisted.test.cjs").write_text("// x", encoding="utf-8")
+            errors = script_regressions.manifest_errors(root)
+            self.assertEqual(script_regressions.aggregate_status([], errors), "FAIL_MANIFEST")
+            self.assertTrue(any("not listed" in error for error in errors))
+            self.assertTrue(any("does not exist" in error for error in errors))
+
+    def test_one_failure_fails_the_run_and_others_still_count(self):
+        checks = [{"name": "a", "status": "PASS"}, {"name": "b", "status": "FAIL"}]
+        self.assertEqual(script_regressions.aggregate_status(checks, []), "FAIL")
+        self.assertEqual(script_regressions.aggregate_status([{"name": "a", "status": "PASS"}], []), "PASS")
+        self.assertEqual(script_regressions.aggregate_status([], []), "FAIL")
+
+    def test_run_check_logs_output_and_marks_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "run"
+            run_dir.mkdir()
+            check = {"name": "demo", "kind": "node", "path": "tests/checks/ui/x.test.cjs"}
+
+            def fake_runner(command, **kwargs):
+                return subprocess.CompletedProcess(command, 3, stdout="out", stderr="err")
+
+            result = script_regressions.run_check(check, root, run_dir, runner=fake_runner)
+            self.assertEqual(result["status"], "FAIL")
+            self.assertEqual(result["exitCode"], 3)
+            self.assertIn("out", (run_dir / "demo.log").read_text(encoding="utf-8"))
 
 
 class DispatchTest(unittest.TestCase):

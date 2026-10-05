@@ -50,7 +50,7 @@
   - A. 快进合入不重跑：最终门禁前先把分支变基到 main 最新提交，合入使用快进。快进后 main 的 SHA 与已验证 SHA 相同，主控核对门禁摘要 JSON（`local-tmp/verify-full/*.json`）的 `sourceSha`、`haifaVersion` 和 UI `flow-health.json` 的 `sourceSha` 与合入后 HEAD 一致，即直接复用这些结果，不在 main 上重跑门禁和 UI；非快进合入（merge commit、冲突解决、合入前 main 已前进）必须在合入后的 SHA 上重跑。固定端口主服务的刷新与 smoke 照常执行；客户演示「同一主线 SHA 连续两轮 L3」不受本条影响。
   - B. 按改动范围定门禁：运行 `python scripts/governance/change_scope.py` 得到建议门禁。只改文档 → 文档检查；只改脚本 → 脚本回归，改到 `scripts/lib/`、`scripts/ui/` 再加一轮暖轮；只改 Java 测试 → 全仓门禁；改产品代码、UI 脚本或用例 → 全仓门禁加两轮暖轮；改冻结前端 → 加一轮冷轮。建议只是下限，主控或复审可以要求更多。
   - C. UI 默认两次暖轮：同一提交上默认跑两次暖轮（满足同脚本重复运行）；冷轮只在冻结前端、前端依赖、槽位或代理目标变化、构建戳失效时跑。新 worktree 首次运行没有构建戳，第一轮自然就是冷轮。
-  - D. SHPM 登记用薄封装：派工用 `python scripts/governance/shpm_dispatch.py`（一次完成 task create、sprint link、task start、assign create），门禁结果用 `python scripts/governance/shpm_record_gates.py` 从门禁摘要 JSON 和 UI 证据目录登记。两者默认只打印命令，加 `--execute` 才写入；结果原样登记（FAIL 仍是 FAIL），`deliver`、`accept`、阶段结果和 `GO` 仍由主控手工执行。
+  - D. SHPM 登记用薄封装：派工用 `python scripts/governance/shpm_dispatch.py`（一次完成 task create、sprint link、task start、assign create）；脚本回归用 `pwsh -NoProfile -File scripts/verify-scripts.ps1`（统一运行 `tests/checks/build/` 与 `tests/checks/ui/` 清单内的检查，摘要写 `local-tmp/verify-scripts/`）；门禁结果用 `python scripts/governance/shpm_record_gates.py` 从证据组目录递归登记全仓门禁摘要、脚本回归摘要、UI 证据目录和主服务刷新摘要。登记默认只打印一张表，加 `--execute` 才写入；幂等键带证据身份，UI 检查名带 profile，同一次调用里同 profile、同提交多轮按开始时间追加 `-r1`/`-r2`，`--raw-root` 在证据已归档时改写原件路径。结果原样登记（FAIL 仍是 FAIL，`NOT_RUN` 仍是 `NOT_RUN`），`deliver`、`accept`、阶段结果和 `GO` 仍由主控手工执行。
 - 每轮分别记录准备/构建、服务就绪、功能断言、证据归档、复审及返工耗时和首次卡点；证据目录与 SHPM 记录可由脚本汇总，但原始日志、首次 FAIL、`NOT_RUN` 和人工裁决须保留，脚本不得自动提升阶段 `PASS`/`GO`。仅并行执行真正独立且资源、端口、数据目录隔离的检查；本机内存不足时不要并发重型 Maven/Next/Java 任务。
 
 ## 环境与排障记录

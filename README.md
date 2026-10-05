@@ -99,6 +99,13 @@ pwsh -NoProfile -File scripts/verify-full.ps1
 `FAIL_PREFLIGHT` 且不启动 Maven；再以并行 fork 运行 `mvn -o -ntp clean verify`，摘要 JSON 写到
 `local-tmp/verify-full/`，并为产出的 exec JAR 写入服务端构建戳。内存紧张时用 `-Forks 1 -LowMemory`。
 
+脚本回归入口统一运行 `tests/checks/build/` 与 `tests/checks/ui/` 清单内的检查，摘要写到
+`local-tmp/verify-scripts/`：
+
+```powershell
+pwsh -NoProfile -File scripts/verify-scripts.ps1
+```
+
 ## 定向测试与 SDK 版本选择
 
 开发内环使用 `scripts/test-targeted.ps1`，固定带 `-o -ntp -pl super-harness-server -am`（`-Module` 可换模块），
