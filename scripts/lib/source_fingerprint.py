@@ -37,7 +37,7 @@ from pathlib import Path
 
 EXCLUDED_PREFIXES = ("docs/", "tests/", "scripts/")
 BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
-LINE_COMMENT = re.compile(r"//[^\n]*")
+LINE_COMMENT = re.compile(r"(?<!:)//[^\n]*")
 EXCLUDED_REFERENCE = re.compile(r"(?<![A-Za-z0-9_./-])((?:docs|scripts|tests)/[A-Za-z0-9_./-]*)")
 
 
