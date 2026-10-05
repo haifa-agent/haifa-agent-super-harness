@@ -34,6 +34,7 @@ build_cache = load("scripts/lib/frontend_build_cache.py")
 pr_review = load("scripts/governance/pr_review_digest.py")
 script_regressions = load("scripts/lib/script_regressions.py")
 sdk_api_digest = load("scripts/governance/sdk_api_digest.py")
+main_service = load("scripts/lib/main_service.py")
 
 BOT = pr_review.DEFAULT_BOT
 
@@ -508,6 +509,50 @@ class SdkApiDigestTest(unittest.TestCase):
             with zipfile.ZipFile(self.jar, "a") as archive:
                 archive.writestr("fixture/extra.txt", "changed")
             self.assertEqual(sdk_api_digest.generate(worktree, maven, self.VERSION)["status"], "GENERATED")
+
+
+class MainServiceTest(unittest.TestCase):
+    def test_command_line_feature_detection(self):
+        jar = "D:\\w\\main-service\\abcdef12\\super-harness-server-0.1.0-SNAPSHOT-exec.jar"
+        self.assertTrue(main_service.looks_like_main_service(f'"D:\\jdk\\bin\\java.exe" -jar "{jar}"'))
+        self.assertFalse(main_service.looks_like_main_service('java -jar D:\\w\\other-tool.jar'))
+        self.assertFalse(main_service.looks_like_main_service(None))
+        self.assertFalse(main_service.looks_like_main_service('pwsh -File start.ps1'))
+        self.assertTrue(main_service.looks_like_main_service(f'java -jar "{jar}"', jar_path="D:\\w\\main-service\\abcdef12\\super-harness-server-0.1.0-SNAPSHOT-exec.jar"))
+
+    def test_jar_path_from_command_line(self):
+        jar = "D:\\a b\\main-service\\abcdef12\\super-harness-server-0.1.0-SNAPSHOT-exec.jar"
+        self.assertEqual(main_service.jar_from_command_line(f'java -jar "{jar}" --x'), jar)
+        self.assertIsNone(main_service.jar_from_command_line("java -jar other.jar"))
+
+    def test_build_stamp_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            jar = Path(directory) / "super-harness-server-0.1.0-SNAPSHOT-exec.jar"
+            jar.write_bytes(b"jar")
+            with self.assertRaises(main_service.MainServiceError):
+                main_service.stamp_source_sha(jar)
+            (Path(directory) / "haifa-build-stamp.json").write_text(
+                json.dumps({"sourceSha": "abc123", "haifaVersion": "0.1.2-SNAPSHOT"}), encoding="utf-8")
+            self.assertEqual(main_service.stamp_source_sha(jar), "abc123")
+
+    def test_rollback_decision(self):
+        self.assertEqual(main_service.rollback_decision(True, False), "keep")
+        self.assertEqual(main_service.rollback_decision(False, True), "rollback")
+        self.assertEqual(main_service.rollback_decision(False, False), "stop")
+
+    def test_scope_enforcement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worktree = Path(directory).resolve()
+            fixed_data = worktree / "local-tmp/main-service-data"
+            main_service.validate_scope(worktree, 18018, 33018, fixed_data, worktree / "local-tmp/main-service", False)
+            with self.assertRaises(main_service.MainServiceError):
+                main_service.validate_scope(worktree, 20618, 25618, fixed_data, worktree / "local-tmp/main-service", False)
+            with self.assertRaises(main_service.MainServiceError):
+                main_service.validate_scope(worktree, 18018, 33018, worktree / "other-data", worktree / "local-tmp/main-service", False)
+            slot_data = worktree / "local-tmp/slot-1/data"
+            main_service.validate_scope(worktree, 20618, 25618, slot_data, worktree / "local-tmp/main-service", True)
+            with self.assertRaises(main_service.MainServiceError):
+                main_service.validate_scope(worktree, 20618, 25618, Path("C:/outside"), worktree / "local-tmp/main-service", True)
 
 
 if __name__ == "__main__":

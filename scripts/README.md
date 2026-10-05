@@ -12,6 +12,7 @@
 | `verify-full.ps1` | 完整离线门禁（`mvn clean verify`）与服务端构建戳 |
 | `verify-scripts.ps1` | 运行 `tests/checks/build/` 与 `tests/checks/ui/` 清单内的全部脚本回归检查 |
 | `start-main-super-harness.ps1` | 主工作树 Gateway（18018）+ 冻结前端（33018）启动 |
+| `refresh-main-service.ps1` | 主服务只读状态检查与一键刷新（复制 JAR、精确停旧 PID、回退） |
 | `check_w08_oracle12.py` | W08 Oracle12 静态一致性/截断检查（Python） |
 | `w08_frozen_steps.mjs` | Oracle12 的 Node 桥，执行冻结 TypeScript 函数，断言在 Python 中 |
 
@@ -124,6 +125,7 @@ python scripts/governance/audit_disconnected_branches.py `
 | `preflight.ps1` | 入口公共预检（代理/端口等） |
 | `quick_checks.py` | 秒级预检：SDK 基线门禁、`git diff --check`、secret scan |
 | `script_regressions.py` | 脚本回归清单、运行与摘要（供 `verify-scripts.ps1`） |
+| `main_service.py` | 主服务状态检查、JAR 复制/回退与刷新摘要（供 `refresh-main-service.ps1`） |
 | `sdk-selection.ps1` | 解析本 worktree 消费的 SDK 版本 |
 | `build-stamp.ps1` | 构建戳读写，决定 `-SkipBuild` 能否复用 |
 | `frontend-gate-cache.ps1` / `frontend_gate_cache.py` | 复用冻结前端来源门禁结果 |
