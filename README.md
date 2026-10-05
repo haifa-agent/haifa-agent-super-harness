@@ -96,11 +96,21 @@ pwsh -NoProfile -File scripts/verify-full.ps1
 ```
 
 先跑秒级预检（SDK 基线门禁、`git diff --check`、对 main 以来改动的 secret scan），失败即输出
-`FAIL_PREFLIGHT` 且不启动 Maven；再运行 `mvn -o -ntp clean verify`，摘要 JSON 写到 `local-tmp/verify-full/`，
-并为产出的 exec JAR 写入服务端构建戳。不传 `-Forks` 时按当时空闲物理内存与空闲提交内存自动选择 3/2/1 个
+`FAIL_PREFLIGHT` 且不启动 Maven。预检通过后按提交的 Java 输入指纹（排除 `docs/`、`tests/`、`scripts/`、
+根目录 `*.md` 后的源码树，加每个 Haifa JAR 的 SHA-256 身份及 JDK/Maven 版本）查找本 worktree 内同指纹的
+真实 PASS 摘要：找到就直接复用、摘要带 `reuse` 来源，`-NoReuse` 强制真跑；否则运行
+`mvn -o -ntp clean verify`，摘要 JSON 写到 `local-tmp/verify-full/`，并为产出的 exec JAR 写入服务端构建戳。
+失败时从 surefire 报告读出 `failedTests`；只命中 `tests/known-intermittent.json` 且未触及条目 `covers` 时
+按已登记偶发失败分支重跑失败的测试类 3 次并补完构建，摘要带 `knownIntermittent` 与重跑次数，
+`-NoKnownIntermittent` 关闭该分支。不传 `-Forks` 时按当时空闲物理内存与空闲提交内存自动选择 3/2/1 个
 并行进程（1 档自动加 `-LowMemory`）；显式 `-Forks` 或 `-LowMemory` 行为不变，内存探测失败回退默认 3 个进程。
 阈值 = 实测内存峰值 + 2 GB（2026-10-05 实测：1 进程低内存约 811 秒、2 进程约 387 秒、3 进程约 270–285 秒；
 2 进程峰值不低于 3 进程，故 2 档实际不会被选中）。
+
+UI runner 的服务端构建戳同样以 Java 输入指纹比较：只改文档、脚本、测试或 UI 用例的提交不再使 JAR 失效，
+`-SkipServerBuild` 可继续复用并报告 `REUSED`；`flow-health.json` 记录 `sourceTree` 和 `sdkIdentity` 供合入后
+按内容核对。合入后用 `python scripts/governance/evidence_reuse.py --target <合入后提交> <证据>` 逐份判断
+是否 `REUSABLE`。
 
 脚本回归入口统一运行 `tests/checks/build/` 与 `tests/checks/ui/` 清单内的检查，摘要写到
 `local-tmp/verify-scripts/`：
@@ -139,9 +149,11 @@ SDK 重新发布后重跑脚本。
 
 ```powershell
 python scripts/governance/change_scope.py
+python scripts/governance/evidence_reuse.py --target <合入后提交> <证据文件或目录>
 python scripts/governance/pr_review_digest.py --repo <owner/name> --pr <编号>
 python scripts/governance/shpm_dispatch.py --task ... --execute
 python scripts/governance/shpm_record_gates.py --task ... local-tmp/verify-full/<run>.json <UI 证据目录> --execute
+python scripts/lib/source_fingerprint.py --repo . --commit HEAD
 python -m unittest discover -s tests/checks/build -p "test_*.py"
 ```
 

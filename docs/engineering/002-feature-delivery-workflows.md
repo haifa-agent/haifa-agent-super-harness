@@ -58,9 +58,9 @@ flowchart TD
     REVIEW --> RC{"复审通过？"}
     RC -->|"否，保留阻断"| HOLD["主控登记问题并确定返工 / 前置恢复<br/>在独立 worktree 修复后重新交付；不 accept"]
     HOLD --> I
-    RC -->|"是"| MERGE{"main 未前进且可快进到已验证 SHA？"}
-    MERGE -->|"是"| FF["快进合入；核对源码 / SDK / UI 摘要<br/>符合 Rule A 时复用结果"]
-    MERGE -->|"否，尚未合入"| REBASE
+    RC -->|"是"| MERGE{"合入后 main 的源码树哈希与 SDK 身份<br/>与已验证候选一致？"}
+    MERGE -->|"是"| FF["合入（方式不限）；evidence_reuse.py 逐份判 REUSABLE<br/>符合 Rule A 时复用门禁与 UI 结果"]
+    MERGE -->|"树哈希不同"| NEW
     MERGE -->|"已产生 merge commit / 冲突解决"| NEW["在最终合入 SHA 上重跑必需门禁<br/>追加证据并由主控复审"]
     NEW --> NC{"最终 SHA 门禁与复审通过？"}
     NC -->|"否"| HOLD
@@ -85,13 +85,13 @@ flowchart TD
 
 | 改动范围 | 门禁下限 |
 | --- | --- |
-| 只改文档 | 文档检查 |
-| 只改普通脚本 | 脚本回归；涉及 `scripts/lib/` 时加一轮暖轮 |
-| 只改 Java 测试 | 全仓门禁 |
-| 改产品代码、UI 脚本或用例 | 全仓门禁 + 两次暖轮 |
+| 只改文档 | 文档检查；Java 输入指纹未变时全仓门禁记 `verify-full-reuse` |
+| 只改普通脚本 | 脚本回归；Java 输入指纹未变时全仓门禁记 `verify-full-reuse`；涉及 `scripts/lib/` 时加一轮 UI 轮次（受控模型） |
+| 只改 Java 测试 | 全仓门禁（Java 测试计在指纹内，指纹变化须真跑） |
+| 改产品代码、UI 脚本或用例 | 全仓门禁 + 两次 UI 轮次；UI 轮次模型按 `change_scope.py` 的受控表判定 |
 | 改冻结前端 | 上述相应门禁 + 一轮冷轮；仍须满足冻结来源规则 |
 
-`change_scope.py` 输出是建议，必须对照上表和任务 Oracle 复核，不能因建议漏列某项就跳过它。冷轮也在前端依赖、槽位、代理目标变化或构建戳失效时执行；新 worktree 无构建戳时首轮自然为冷轮。需要 UI 的任务仍按任务要求完成暖轮和同脚本重复运行，冷轮、局部冒烟及另一 SHA 的结果不能替代必需轮次。
+`change_scope.py` 输出是建议，必须对照上表和任务 Oracle 复核，不能因建议漏列某项就跳过它。规则 B 按 Java 输入指纹判断全仓门禁是否可复用：指纹与某份真实通过摘要相同即 `verify-full-reuse`（`verify-full.ps1` 自动复用并注明来源），不同则 `verify-full`。规则 D 决定 UI 正式轮次的模型：改动全部落在受控表内可用受控模型（门禁名 `ui-controlled-round-*`），否则用真实模型（`ui-live-round-*`）。冷轮也在前端依赖、槽位、代理目标变化或构建戳失效时执行；新 worktree 无构建戳时首轮自然为冷轮。需要 UI 的任务仍按任务要求完成暖轮和同脚本重复运行，冷轮、局部冒烟及另一 SHA 的结果不能替代必需轮次。
 
 每轮报告准备/构建、就绪、断言、归档、复审及返工耗时，启动与总耗时、重试、首个超时/卡点、Next 动态编译时间、trace/截图/日志位置及端口/子进程清理结果。等待必须有对象、deadline 和超时证据；重型构建、UI 与共享 Provider 由主控排队。
 
@@ -99,8 +99,8 @@ flowchart TD
 
 ### 1.3 合入、复用与 SHPM 结算
 
-- **Rule A**：快进后 `main` 与已验证候选为同一 SHA，主控核对全仓摘要 `sourceSha` / `haifaVersion` 以及 UI `flow-health.json` 的 `sourceSha` 后，可复用适用门禁，不在 `main` 重跑。若相应门禁按范围不适用，应在交接中写明依据。非快进合入、冲突解决或合入前 `main` 已前进导致最终 SHA 改变，须在最终 SHA 上重新验证。客户演示“同一主线 SHA 连续两轮 L3”不受此裁剪影响。
-- **构建复用**：后端检查源码 SHA 和 SDK 版本；前端检查冻结源码树、lockfile、代理目标和构建 profile。复用产物不复用 Run、Thread、数据目录或测试结果。SDK 同版本重新发布后的额外重建规则见 §2.2。
+- **Rule A**：合入方式不限；合入后 `main` 的源码树哈希和 SDK 身份与已验证候选相同即可复用，用 `python scripts/governance/evidence_reuse.py --target <合入后提交> <证据>` 逐份核对，全部 `REUSABLE` 才复用，`STALE` 一律在合入后的提交上重跑。全仓门禁用 Java 输入指纹判定，脚本回归摘要和 UI 证据用 `sourceTree` + `sdkIdentity` + `sourceDirty=false` 判定；缺字段的旧证据记为 `STALE`。若相应门禁按范围不适用，应在交接中写明依据。客户演示“同一主线 SHA 连续两轮 L3”不受此裁剪影响。
+- **构建复用**：后端比较 Java 输入指纹（排除 `docs/`、`tests/`、`scripts/`、根目录 `*.md` 后的源码树，加每个 Haifa JAR 的 SHA-256 身份及 JDK/Maven 版本），前端检查冻结源码树、lockfile、代理目标和构建 profile。复用产物不复用 Run、Thread、数据目录或测试结果。SDK 同版本重新发布后的额外重建规则见 §2.2。
 - **状态链**：主控按 `start / assign → checkpoint → deliver → verify → 独立验收 → accept / release` 推进。`deliver` 只进入 `ready_for_acceptance`；`accept` 需要独立复审、已合入及最终主线 SHA 证据，之后确认本任务端口和子进程清理并释放派工。复审失败保留必需 FAIL 和阻断 Issue，合法返工状态处理按 SHPM 手册执行，不虚假 accept。
 - **分开结算**：单任务 finished 不等于工作包完成。全部任务及工作包退出条件满足后，主控再执行 `wp state ready_for_acceptance` / `wp complete`；演示阶段另查依赖、登记阶段验证与结果，`GO` 通过 `sprint decide` 设置，不自动关闭长期工作包。
 
@@ -152,10 +152,10 @@ flowchart TD
 1. **上游分支与验证**：在 `D:\workspace\haifa-agent` 从最新 `origin/dev` 创建 `feat-*` 分支，worktree 放在 `D:\workspace\haifa-agent-worktrees\`；不在 `dev` 上开发。先做受影响定向验证，再按上游规则完成同一 SHA 的 L3 `-Pci-fast clean verify`。Integration 必须有同 SHA Unit PASS，并核对测试配置、显式开关与当前任务授权；不能将任意 `ci-integration-only` 结果视为全部真实 Provider 用例通过。
 2. **发布与来源**：只有 `scripts/publish-local-sdk.ps1` 可向本地 Maven 仓库发布 SDK；发布要求工作树 clean。特性 worktree 坐标为 `0.1.2-<worktree 目录名>-SNAPSHOT`，基线 `0.1.2-SNAPSHOT` 只由上游主检出的 `dev` 发布。按实际 `haifa-sdk-publish-manifest.json` 核对版本、`sdkCommit`、分支、worktree 和公开构件 hash/长度，并核对 BOM/POM；公开模块清单以发布脚本当前分类为准，不把历史构件数量当作永久常量。发布脚本跳过测试，其 SUCCESS 不替代同 SHA 测试门禁。
 3. **下游选择**：由主控在已分配的下游 worktree 写入 `local-tmp/sdk-selection.json`，执行者不自行更换版本、不用修改 POM 或直接传 `-Dhaifa.version` 来选择候选 SDK。带标识版本不进入被跟踪文件；只能消费公开 JAR/BOM，不依赖 SDK 源码或产品 JAR。
-4. **修改与重发布**：候选 SDK 的问题须由主控验收确认后再修改并重新发布。重发布时版本号可能不变，旧服务端构建戳不能证明字节未变；先保留首次 FAIL，再重新构建消费方后端并重跑受影响门禁。
+4. **修改与重发布**：候选 SDK 的问题须由主控验收确认后再修改并重新发布。重发布时版本号可能不变，但服务端构建戳现含每个 Haifa JAR 的 SHA-256 身份，会识别同版本重发布的内容变化并使旧产物不可复用；先保留首次 FAIL，再重新构建消费方后端并重跑受影响门禁。
 5. **人工 PR 卡点**：特性分支向 `dev` 发起英文 GitHub PR，由主控在 SHPM 登记 `verify` / `issue` 和关联状态，提醒人工审查合并。智能体不得自行合并，除非人工针对该具体 PR 另行书面授权。人工合并后，须将上游主检出更新到已合入的 `dev`，再重新发布基线，不能把远端 PR 已合并等同于本机基线已更新。
 6. **基线正式回归**：下游删除 selection，核对新基线发布清单、SDK commit 和实际落盘构件，运行基线版本检查；最终门禁前 rebase 并固定下游 SHA。`verify-full.ps1` 的 `clean verify` 重新构建后端，然后在基线上重跑必需 UI、协议、双后端差分（若任务要求）及真实 smoke。候选 SDK 的 PASS 不替代基线回归；依赖尚未合入上游 `dev` 的分支不得合入下游 `main`。
-7. **复用边界**：SDK 更新后的消费方重建不带 `-SkipBuild` / `-SkipServerBuild`；先通过 `verify-full.ps1` 重建后端，再让 UI runner 使用该新产物。无需清空 Maven 本地仓库，也不无条件清空前端缓存：冻结源码、lockfile、代理目标及 profile 未变且构建戳通过时，runner 可以自动复用前端产物。每轮仍使用独立数据与新证据。
+7. **复用边界**：SDK 更新后的消费方重建不带 `-SkipBuild` / `-SkipServerBuild`；构建戳会因 JAR 身份变化而失效，先通过 `verify-full.ps1` 重建后端，再让 UI runner 使用该新产物。无需清空 Maven 本地仓库，也不无条件清空前端缓存：冻结源码、lockfile、代理目标及 profile 未变且构建戳通过时，runner 可以自动复用前端产物。只改文档、脚本、测试或 UI 用例而不动 Java 输入的提交，Java 输入指纹不变，可复用已有 JAR。每轮仍使用独立数据与新证据。
 
 ## 3. 常用入口与命令模板
 
@@ -171,7 +171,11 @@ pwsh -NoProfile -File tests/checks/build/verify-haifa-version-baseline.ps1
 python scripts/governance/pr_review_digest.py --repo <owner/name> --pr <编号>
 # Oracle 和正式预检完成、原件外置后，按范围执行；不传 -Forks 时按空闲内存自动选 3/2/1 档（1 档自动低内存），
 # 显式 -Forks / -LowMemory 行为不变。实测 2026-10-05（16 核 31 GB）：1 进程低内存约 811s、2 进程约 387s、3 进程约 270–285s。
+# 预检后若已有同 Java 输入指纹的真实 PASS 摘要则自动复用并在摘要写 reuse 来源；-NoReuse 强制真跑，
+# -NoKnownIntermittent 关闭已登记偶发失败分支。
 pwsh -NoProfile -File scripts/verify-full.ps1
+# 合入后逐份核对旧证据：全部 REUSABLE 才复用，任一 STALE 在合入后的提交上重跑（退出码 0=全可复用、2=有 STALE）。
+python scripts/governance/evidence_reuse.py --target <合入后提交> <证据文件或目录>...
 # 示例为常规槽位 2；新槽位或构建戳失效时 runner 会构建，暖轮按构建戳规则复用。
 pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 `
   -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 `
@@ -239,5 +243,5 @@ shpm assign release $assignmentId --idempotency-key "$operationKey-release" --js
 | SDK | 已发布基线 | 研发期主控指定候选坐标；合入前切回重新发布的基线 |
 | 最终门禁 | 最终 rebase 后的候选 SHA，按范围与 Oracle 执行 | 上游同 SHA 门禁及发布来源；下游正式基线上的最终候选门禁 |
 | 合入前提 | 必需门禁与主控复审通过；最终源码状态与证据一致 | 另要求 SDK PR 已获授权合并入 dev，基线已发布，selection 已删除且基线回归通过 |
-| 产物复用 | 后端源码 SHA/SDK 版本与前端独立构建输入匹配 | SDK 同版本重发布仍强制重建消费方后端；前端按独立输入校验 |
+| 产物复用 | 后端按 Java 输入指纹（含 SDK JAR 身份）、前端按独立构建输入匹配；合入后按源码树哈希与 SDK 身份核对 | SDK 同版本重发布使构建戳失效，强制重建消费方后端；前端按独立输入校验 |
 | 结算 | deliver → verify → 独立验收 → accept / release；工作包、阶段与 GO 分开 | 同左；候选 SDK 验证不等于正式基线交付 |
