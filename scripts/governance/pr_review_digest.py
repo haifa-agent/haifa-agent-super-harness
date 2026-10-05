@@ -30,6 +30,11 @@ import json
 import re
 import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+
+import quick_checks  # noqa: E402  (path added above)
 
 DEFAULT_BOT = "chatgpt-codex-connector[bot]"
 PRIORITY_PATTERN = re.compile(r"badge/(P[0-3])[-)]", re.IGNORECASE)
@@ -204,6 +209,7 @@ def collect(repo: str, pr: int, bot: str) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    quick_checks.force_utf8_stdout()
     parser = argparse.ArgumentParser(description="Read a PR's automated review (read-only)")
     parser.add_argument("--repo", required=True, help="owner/name")
     parser.add_argument("--pr", required=True, type=int)

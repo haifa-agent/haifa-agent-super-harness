@@ -45,6 +45,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+import quick_checks  # noqa: E402  (path added above)
 import source_fingerprint  # noqa: E402  (path added above)
 
 # Docs first: any *.md is documentation even under scripts/ or tests/.
@@ -179,6 +180,7 @@ def sdk_identity_changed(repo: Path, merge_base: str) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
+    quick_checks.force_utf8_stdout()
     parser = argparse.ArgumentParser(description="Change-scoped gate advice")
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--base", default="main")
