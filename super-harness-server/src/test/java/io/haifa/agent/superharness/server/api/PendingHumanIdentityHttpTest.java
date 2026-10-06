@@ -88,6 +88,10 @@ class PendingHumanIdentityHttpTest {
                         .isEqualTo("local-human-A__user");
                 assertThat(historyHumanId(base, withClientThread, "pending-human-with-id-history.json"))
                         .isEqualTo("local-human-A__user");
+                assertThat(http.get(base, "/api/threads/" + withClientThread, "pending-human-with-id-thread.json")
+                        .path("metadata").has("haifa_run_client_human_id"))
+                        .as("the kept client id is server-owned and never part of public thread metadata")
+                        .isFalse();
 
                 release.get().countDown();
                 HttpResponse<String> responseA = finish(blockedA);

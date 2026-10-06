@@ -154,6 +154,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     public static final String USER_INPUT_FRAMING_METADATA_KEY = "haifa_user_input_framing_from_sequence";
     static final String MCP_SELECTION_METADATA_KEY = "haifa_mcp_plugins";
     private static final String RUN_STREAM_MODES_METADATA_KEY = "haifa_run_stream_modes";
+    // The client id of the newest Run's user message, kept so a restarted Gateway projects the same
+    // in-flight identity. One entry per thread: a thread has one active Run at a time.
+    private static final String RUN_CLIENT_HUMAN_ID_METADATA_KEY = "haifa_run_client_human_id";
     // A digest-only admission index, never a second model snapshot. The SDK owns recovery parameters.
     static final String MODEL_CONFIGURATION_DIGEST_METADATA_KEY = "haifa_model_configuration_digest";
     // Frozen DynamicContextMiddleware re-keys a submitted HumanMessage(id=X) to HumanMessage(id=X__user);
@@ -469,6 +472,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         // Server-owned: only a Run may record the MCP projection used for restart recovery.
         metadata.remove(MCP_SELECTION_METADATA_KEY);
         metadata.remove(RUN_STREAM_MODES_METADATA_KEY);
+        metadata.remove(RUN_CLIENT_HUMAN_ID_METADATA_KEY);
         metadata.remove(SKILL_SELECTION_METADATA_KEY);
         metadata.remove(SKILL_VERSIONS_METADATA_KEY);
         metadata.remove(LEAD_SIGNATURE_METADATA_KEY);
@@ -824,7 +828,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return;
         }
         // Client-generated id of this Turn's user message; keys the in-flight pending projection
-        // only, never persistence/replay. See RunRecord#clientHumanMessageId.
+        // only, never the settled transcript or replay. See RunRecord#clientHumanMessageId.
         String clientHumanMessageId = extractHumanMessageId(body.path("input").path("messages")).orElse(null);
         // Whether this Turn's user message is a visible chat bubble. The frozen UI must fold its
         // optimistic copy onto the live echo to keep the Run's own steps ordered below it; a hidden
@@ -1129,6 +1133,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     titleCandidate);
             runs.put(run.runId.value(), run);
             thread.setRunStreamModes(run.runId, run.streamModes);
+            thread.setClientHumanMessageId(run.runId, clientHumanMessageId);
             if (clarificationAck != null) {
                 markClarificationAnswered(thread, clarificationAck, run);
             }
@@ -3328,8 +3333,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
      * frozen UI folds that suffix onto the optimistic {@code local-human-*} bubble. The SDK commits
      * this Run's user turn before the model call, so it (not the transient overlay) is what the UI
      * sees while the Run is active; project it with the captured client id for the live overlay
-     * only. Once the Run settles, the durable id stays synthetic, so persistence and replay are
-     * unchanged and a restored Run (no captured id) falls back to the synthetic id.
+     * only. Once the Run settles, the durable id stays synthetic, so the settled transcript and
+     * replay are unchanged. The client id is kept in thread metadata while its Run is the newest
+     * one, so a Run restored after a Gateway restart projects the same in-flight id.
      */
     private String humanWireId(ThreadRecord thread, AgentRunId runId, int ordinal, boolean liveOverlay) {
         if (liveOverlay) {
@@ -3801,7 +3807,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 thread.threadId,
                 null,
                 turn.text(),
-                null,
+                thread.clientHumanMessageId(requested),
                 false,
                 bridge,
                 turn.createdAt(),
@@ -4694,7 +4700,24 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private Map<String, Object> publicMetadata() {
             Map<String, Object> result = new LinkedHashMap<>(metadata);
             result.remove(RUN_STREAM_MODES_METADATA_KEY);
+            result.remove(RUN_CLIENT_HUMAN_ID_METADATA_KEY);
             return Collections.unmodifiableMap(result);
+        }
+
+        private String clientHumanMessageId(AgentRunId runId) {
+            return metadata.get(RUN_CLIENT_HUMAN_ID_METADATA_KEY) instanceof Map<?, ?> stored
+                    && stored.get(runId.value()) instanceof String id && !id.isBlank() ? id : null;
+        }
+
+        /** Replaces the previous Run's entry; a Run without a client id clears it. */
+        private void setClientHumanMessageId(AgentRunId runId, String clientHumanMessageId) {
+            Map<String, Object> updated = new LinkedHashMap<>(metadata);
+            if (clientHumanMessageId == null || clientHumanMessageId.isBlank()) {
+                updated.remove(RUN_CLIENT_HUMAN_ID_METADATA_KEY);
+            } else {
+                updated.put(RUN_CLIENT_HUMAN_ID_METADATA_KEY, Map.of(runId.value(), clientHumanMessageId));
+            }
+            metadata = Collections.unmodifiableMap(updated);
         }
 
         private Set<String> runStreamModes(AgentRunId runId) {
@@ -4851,7 +4874,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
          * The client-generated id of this Turn's submitted user message, captured at admission
          * only to key the in-flight projection: the frozen UI folds the server echo {@code X__user}
          * onto the optimistic {@code X}, so the pending human must reuse it while the Run is
-         * active. It never enters persistence or replay; a restored Run projects the synthetic id.
+         * active. It never becomes the settled message id or part of replay; thread metadata
+         * keeps it for the newest Run only, so a restored active Run projects the same id.
          */
         private final String clientHumanMessageId;
         /**
