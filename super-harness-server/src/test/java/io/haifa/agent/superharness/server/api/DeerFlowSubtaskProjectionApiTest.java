@@ -19,7 +19,10 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -507,11 +510,14 @@ class DeerFlowSubtaskProjectionApiTest {
                         java.util.stream.StreamSupport.stream(message.path("tool_calls").spliterator(), false))
                         .filter(tool -> "task".equals(tool.path("name").asText())).map(tool -> tool.path("id").asText()).toList();
                 assertThat(tasks).hasSize(5).doesNotHaveDuplicates();
+                Instant cancelRequestedAt = Instant.now();
                 assertThat(http.request(gateway.base, "POST", location + "/cancel?action=interrupt&wait=0", "", "cancel-request.http").statusCode()).isEqualTo(202);
+                Instant releaseGateOpenedAt = Instant.now();
                 release.countDown();
                 String body = GatewayFixture.drain(stream);
                 Files.writeString(evidence.resolve("cancel-queued.sse"), body);
-                var custom = customs(body).stream().filter(event -> event.path("type").asText().startsWith("task_")).toList();
+                List<JsonNode> custom = cancelCustomOrCollectFailure(gateway.base, location, tasks, body,
+                        cancelRequestedAt, releaseGateOpenedAt);
                 var starts = custom.stream().filter(event -> "task_started".equals(event.path("type").asText()))
                         .map(event -> event.path("task_id").asText()).toList();
                 var terminals = custom.stream().filter(event -> "task_cancelled".equals(event.path("type").asText()))
@@ -657,5 +663,248 @@ class DeerFlowSubtaskProjectionApiTest {
     private static Map<String, String> environment() {
         return Map.of("HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF", "env://W08_PROJECTION_TEST_KEY",
                 "W08_PROJECTION_TEST_KEY", Base64.getEncoder().encodeToString(new byte[32]));
+    }
+
+    /**
+     * Preserves the original "no error frame" assertion while capturing, only on failure, the public
+     * Parent/Child terminal facts needed to settle whether the SDK cancellation ordering is at fault.
+     */
+    private List<JsonNode> cancelCustomOrCollectFailure(URI base, String location, List<String> taskOrder,
+            String body, Instant cancelRequestedAt, Instant releaseGateOpenedAt) throws Exception {
+        if (!SseEvents.read(body).named("error").isEmpty()) {
+            Path report = null;
+            String collectionFailure = null;
+            try {
+                report = writeCancelFailureEvidence(base, location, taskOrder, body, cancelRequestedAt, releaseGateOpenedAt);
+            } catch (Exception collection) {
+                collectionFailure = collection.getClass().getSimpleName() + ": " + collection.getMessage();
+            }
+            try {
+                customs(body);
+            } catch (AssertionError assertion) {
+                String suffix = report != null
+                        ? System.lineSeparator() + "Evidence file: " + report.toAbsolutePath()
+                        : System.lineSeparator() + "Evidence collection failed: " + collectionFailure;
+                throw new AssertionError(assertion.getMessage() + suffix, assertion);
+            }
+            throw new AssertionError(report != null
+                    ? "Error frame present without an assertion failure; evidence: " + report.toAbsolutePath()
+                    : "Error frame present without an assertion failure; evidence collection failed: " + collectionFailure);
+        }
+        return customs(body).stream().filter(event -> event.path("type").asText().startsWith("task_")).toList();
+    }
+
+    private Path writeCancelFailureEvidence(URI base, String location, List<String> taskOrder, String body,
+            Instant cancelRequestedAt, Instant releaseGateOpenedAt) throws Exception {
+        var report = new LinkedHashMap<String, Object>();
+        report.put("evidence_kind", "cancel_error_frame_diagnostics");
+        report.put("thread_id", "cancel-queued");
+        report.put("run_location", location);
+        report.put("cancel_requested_at", cancelRequestedAt.toString());
+        report.put("release_gate_opened_at", releaseGateOpenedAt.toString());
+
+        var parent = new LinkedHashMap<String, Object>();
+        JsonNode run = null;
+        var runResponse = http.request(base, "GET", location, null, "cancel-failure-run.json");
+        parent.put("http_status", runResponse.statusCode());
+        if (runResponse.statusCode() == 200) {
+            run = GatewayFixture.JSON.readTree(runResponse.body());
+            parent.put("status", textField(run, "status"));
+            parent.put("stop_reason", textField(run, "stop_reason"));
+            JsonNode diagnostics = run.path("diagnostics");
+            for (String field : List.of("sdk_status", "stop_reason", "error_code", "diagnostic_id",
+                    "incomplete_reason", "last_updated_at")) {
+                parent.put("diagnostics_" + field, textField(diagnostics, field));
+            }
+            parent.put("diagnostics_projection_complete", diagnostics.path("projection_complete").asBoolean(false));
+        } else {
+            parent.put("unavailable", "GET " + location + " -> HTTP " + runResponse.statusCode());
+        }
+        var messages = new ArrayList<String>();
+        for (var event : SseEvents.read(body).named("error")) messages.add(textField(event.data(), "message"));
+        parent.put("error_frame_messages", messages);
+        parent.put("error_message_source", "captured Parent SSE error frame; run diagnostics exposes wire code and diagnostic_id, not message text");
+        report.put("parent_run", parent);
+
+        var byToolCallId = new LinkedHashMap<String, JsonNode>();
+        JsonNode toolCalls = run == null ? null : run.path("diagnostics").path("tool_calls");
+        boolean toolCallsAvailable = toolCalls != null && toolCalls.isArray();
+        if (toolCallsAvailable) {
+            for (JsonNode call : toolCalls) {
+                if ("task".equals(call.path("name").asText())) byToolCallId.put(call.path("tool_call_id").asText(), call);
+            }
+        }
+        var taskFacts = new ArrayList<Object>();
+        for (int index = 0; index < taskOrder.size(); index++) {
+            var fact = new LinkedHashMap<String, Object>();
+            fact.put("order", index + 1);
+            fact.put("task_tool_call_id", taskOrder.get(index));
+            JsonNode call = byToolCallId.get(taskOrder.get(index));
+            if (call == null) {
+                fact.put("parent_task_status", null);
+                fact.put("parent_task_error_code", null);
+                fact.put("unavailable", toolCallsAvailable
+                        ? "not present in run diagnostics tool_calls"
+                        : "run diagnostics tool_calls unavailable");
+            } else {
+                fact.put("parent_task_status", textField(call, "status"));
+                fact.put("parent_task_error_code", textField(call, "error_code"));
+                fact.put("parent_task_result_successful", call.path("result_successful").isBoolean()
+                        ? call.path("result_successful").asBoolean() : null);
+                fact.put("parent_task_requested_at", textField(call, "requested_at"));
+                fact.put("parent_task_completed_at", textField(call, "completed_at"));
+            }
+            taskFacts.add(fact);
+        }
+        report.put("parent_task_tool_calls_in_model_order", taskFacts);
+
+        var custom = SseEvents.read(body).named("custom").stream().map(SseEvents.Event::data).toList();
+        var childFacts = new ArrayList<Object>();
+        for (int index = 0; index < taskOrder.size(); index++) {
+            String taskId = taskOrder.get(index);
+            var fact = new LinkedHashMap<String, Object>();
+            fact.put("order", index + 1);
+            fact.put("task_tool_call_id", taskId);
+            boolean created = custom.stream().anyMatch(event -> taskId.equals(textField(event, "task_id"))
+                    && "task_started".equals(textField(event, "type")));
+            fact.put("created", created);
+            if (!created) {
+                fact.put("child_run_status", "not_created");
+                fact.put("note", "no task_started projection for this request; not treated as an actual Child Run");
+            } else {
+                var terminal = custom.stream().filter(event -> taskId.equals(textField(event, "task_id"))
+                        && terminalChildType(textField(event, "type"))).findFirst();
+                fact.put("child_run_terminal_event", terminal.map(event -> textField(event, "type")).orElse(null));
+                fact.put("child_run_status", terminal.map(event -> childRunStatus(textField(event, "type"))).orElse(null));
+                fact.put("child_run_termination_reason", terminal.map(event -> textField(event, "error")).orElse(null));
+                if (terminal.isEmpty()) fact.put("note", "no Child terminal projection in the captured stream");
+            }
+            childFacts.add(fact);
+        }
+        report.put("actual_child_runs", childFacts);
+        report.put("child_run_note", "Child status/reason is taken only from the public Parent custom lifecycle projection; "
+                + "the Child's own AgentRunSnapshot is not exposed by any public HTTP endpoint or public bridge accessor.");
+
+        var stateFacts = new ArrayList<Object>();
+        var stateResponse = http.request(base, "GET", "/api/threads/cancel-queued/state", null, "cancel-failure-state.json");
+        if (stateResponse.statusCode() == 200) {
+            JsonNode state = GatewayFixture.JSON.readTree(stateResponse.body());
+            for (int index = 0; index < taskOrder.size(); index++) {
+                String taskId = taskOrder.get(index);
+                var fact = new LinkedHashMap<String, Object>();
+                fact.put("order", index + 1);
+                fact.put("task_tool_call_id", taskId);
+                JsonNode message = DelegationHttpFixture.messages(state).stream()
+                        .filter(candidate -> taskId.equals(candidate.path("tool_call_id").asText())).findFirst().orElse(null);
+                if (message == null) {
+                    fact.put("unavailable", "no tool result message in refreshed state");
+                } else {
+                    JsonNode kwargs = message.path("additional_kwargs");
+                    for (String field : List.of("subagent_status", "subagent_error", "subagent_stop_reason",
+                            "subagent_model_name")) {
+                        fact.put("state_" + field, textField(kwargs, field));
+                    }
+                }
+                stateFacts.add(fact);
+            }
+        } else {
+            stateFacts.add(Map.of("unavailable", "GET state -> HTTP " + stateResponse.statusCode()));
+        }
+        report.put("child_terminal_status_state_projection", stateFacts);
+
+        report.put("parent_run_stream_last_frames", tailFrames(body, 16));
+        try {
+            var replay = http.request(base, "GET", location + "/stream", null, "cancel-failure-replay.sse");
+            if (replay.statusCode() == 200) {
+                var gaps = SseEvents.read(replay.body()).named("gap");
+                if (gaps.isEmpty()) {
+                    report.put("parent_persisted_event_stream_last_frames", tailFrames(replay.body(), 16));
+                } else {
+                    var gap = gaps.getFirst().data();
+                    var gapFacts = new LinkedHashMap<String, Object>();
+                    for (String field : List.of("code", "recovery", "requested_event_id",
+                            "earliest_available_event_id", "latest_available_event_id")) {
+                        gapFacts.put(field, textField(gap, field));
+                    }
+                    report.put("parent_persisted_event_stream_gap", gapFacts);
+                    report.put("parent_persisted_event_stream_last_frames", tailFrames(body, 16));
+                    report.put("parent_persisted_event_stream_note",
+                            "A cursorless durable replay returned a replay gap (the in-memory projection window no longer "
+                                    + "holds sequence 0), so the durable tail is represented by the captured run stream frames; "
+                                    + "the SDK's raw event store is not exposed by any public HTTP endpoint.");
+                }
+            } else {
+                report.put("parent_persisted_event_stream_last_frames",
+                        Map.of("unavailable", "GET " + location + "/stream -> HTTP " + replay.statusCode()));
+            }
+        } catch (Exception replayFailure) {
+            report.put("parent_persisted_event_stream_last_frames",
+                    Map.of("unavailable", "durable replay failed: " + replayFailure.getClass().getSimpleName()));
+        }
+        report.put("event_frame_note", "Frames carry only event type, SSE id/sequence and any server timestamp field found "
+                + "in the frame data; no prompt, model content or credentials are copied.");
+        report.put("evidence_source", "public HTTP: GET run, GET thread state, GET run /stream, plus the captured Parent SSE body");
+
+        Path path = evidence.resolve("cancel-failure-evidence.json");
+        http.save("cancel-failure-evidence.json", report);
+        return path;
+    }
+
+    private static boolean terminalChildType(String type) {
+        return List.of("task_completed", "task_cancelled", "task_failed", "task_timed_out").contains(type);
+    }
+
+    private static String childRunStatus(String terminalEventType) {
+        return switch (terminalEventType) {
+            case "task_completed" -> "COMPLETED";
+            case "task_cancelled" -> "CANCELLED";
+            case "task_timed_out" -> "TIMEOUT";
+            default -> "FAILED";
+        };
+    }
+
+    private static List<Map<String, Object>> tailFrames(String body, int limit) {
+        var all = new ArrayList<Map<String, Object>>();
+        String event = "message";
+        String id = null;
+        var data = new StringBuilder();
+        for (String line : (body + "\n\n").split("\r\n|\n|\r", -1)) {
+            if (line.isEmpty()) {
+                if (data.length() > 0 || id != null) {
+                    var frame = new LinkedHashMap<String, Object>();
+                    frame.put("event", event);
+                    frame.put("id", id);
+                    frame.put("timestamp", frameTimestamp(data.toString()));
+                    all.add(frame);
+                    data.setLength(0);
+                    id = null;
+                    event = "message";
+                }
+            } else if (line.startsWith("event:")) {
+                event = line.substring("event:".length()).strip();
+            } else if (line.startsWith("id:")) {
+                id = line.substring("id:".length()).strip();
+            } else if (line.startsWith("data:")) {
+                data.append(line.substring("data:".length()).strip());
+            }
+        }
+        return List.copyOf(all.subList(Math.max(0, all.size() - limit), all.size()));
+    }
+
+    private static String frameTimestamp(String raw) {
+        if (raw.isBlank()) return null;
+        try {
+            JsonNode data = GatewayFixture.JSON.readTree(raw);
+            for (String field : List.of("timestamp", "created_at", "at", "time", "updated_at")) {
+                if (data.hasNonNull(field)) return data.get(field).asText();
+            }
+        } catch (Exception notJson) {
+            return null;
+        }
+        return null;
+    }
+
+    private static String textField(JsonNode node, String field) {
+        return node != null && node.hasNonNull(field) ? node.get(field).asText() : null;
     }
 }
