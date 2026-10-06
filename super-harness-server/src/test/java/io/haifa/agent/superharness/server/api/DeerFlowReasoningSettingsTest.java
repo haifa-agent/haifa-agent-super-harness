@@ -47,7 +47,7 @@ class DeerFlowReasoningSettingsTest {
 
     @Test
     void rejectsInvalidUnsupportedAndUndeliveredExecutionPaths() {
-        for (String context : new String[]{"{\"mode\":\"turbo\"}", "{\"mode\":\"pro\"}",
+        for (String context : new String[]{"{\"mode\":\"turbo\"}",
                 "{\"subagent_enabled\":\"true\"}", "{\"reasoning_effort\":\"max\"}",
                 "{\"thinking_enabled\":\"false\"}", "{\"mode\":\"flash\",\"thinking_enabled\":true}"}) {
             assertThatThrownBy(() -> DeerFlowReasoningSettings.resolve(node(context), null, true))
@@ -65,9 +65,19 @@ class DeerFlowReasoningSettingsTest {
         assertThat(DeerFlowReasoningSettings.resolve(
                 node("{\"mode\":\"thinking\",\"subagent_enabled\":true}"), null, true).frozenOptions())
                 .containsEntry("thinking", "enabled").containsEntry("reasoning_effort", "low");
-        assertThatThrownBy(() -> DeerFlowReasoningSettings.resolve(
-                node("{\"mode\":\"ultra\",\"subagent_enabled\":true,\"is_plan_mode\":true}"), null, true))
-                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("W07 plan execution");
+        assertThat(DeerFlowReasoningSettings.resolve(
+                node("{\"mode\":\"ultra\",\"subagent_enabled\":true,\"is_plan_mode\":true}"), null, true).frozenOptions())
+                .containsEntry("thinking", "enabled").containsEntry("reasoning_effort", "high");
+        assertThat(DeerFlowReasoningSettings.isPlanMode(
+                node("{\"mode\":\"ultra\",\"subagent_enabled\":true,\"is_plan_mode\":true}"))).isTrue();
+    }
+
+    @Test
+    void proModeResolvesThinkingAndRecognizesPlanMode() throws Exception {
+        var pro = node("{\"mode\":\"pro\",\"is_plan_mode\":true}");
+        assertThat(DeerFlowReasoningSettings.resolve(pro, null, true).frozenOptions())
+                .containsEntry("thinking", "enabled").containsEntry("reasoning_effort", "high");
+        assertThat(DeerFlowReasoningSettings.isPlanMode(pro)).isTrue();
     }
 
     private JsonNode node(String value) throws Exception {

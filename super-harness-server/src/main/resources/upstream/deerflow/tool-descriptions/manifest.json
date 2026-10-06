@@ -99,6 +99,13 @@
       "source_function": "review_skill_package",
       "source_lineno": 27,
       "description_sha256": "492cfc8785a9abfae142835130d42bc32e3694212ccc46c828a68f4eb15a8dfd"
+    },
+    {
+      "tool": "write_todos",
+      "source_file": "deerflow/agents/lead_agent/agent.py",
+      "source_function": "_create_todo_list_middleware",
+      "source_lineno": 408,
+      "description_sha256": "d23e05e338b031152b2e0289fea622994244347040af6b032c95ba9407b32d63"
     }
   ]
 }

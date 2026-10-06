@@ -89,7 +89,20 @@ public final class DeerFlowToolTranscriptProjection {
         additional.put("haifa_tool_status", wireStatus(call.status()));
         if (call.result().isPresent()) {
             ToolResultView result = call.result().orElseThrow();
-            message.put("content", result.summary().text());
+            if ("write_todos".equals(call.toolName())) {
+                Object todos = call.arguments().values().get("todos");
+                if (todos != null) {
+                    try {
+                        message.put("content", "Updated todo list to " + JSON.writeValueAsString(todos));
+                    } catch (JsonProcessingException fallback) {
+                        message.put("content", "Updated todo list to " + todos);
+                    }
+                } else {
+                    message.put("content", result.summary().text());
+                }
+            } else {
+                message.put("content", result.summary().text());
+            }
             additional.put("haifa_tool_result", result.structuredData().values());
             additional.put("haifa_tool_result_truncated", result.truncated());
             if (call.toolName().equals("review_skill_package")) {
