@@ -20,7 +20,6 @@
 
 - 后续新增脚本以 Python 为主，核心逻辑集中在 Python 中；如需方便不同平台调用，可提供 `.ps1` 和 `.sh` 薄封装，仅负责必要的环境准备、调用 Python、透传参数与退出码，避免在封装中重复实现核心逻辑。
 - 每个工作包使用独立 branch/worktree、端口和数据目录。
-- Git commit message（标题与正文）以及 GitHub PR 的标题、描述和评论（含 review comment）必须使用英文；适用于本仓库及上游 `D:\workspace\haifa-agent` 的 PR。命令、路径、配置键和 API 名称保留原样。
 - 提交前须运行范围内定向测试、按改动范围确定的门禁（见「验收提速」B 条）、`git diff --check`、secret scan 与真实 smoke，并保留真实 Run/Tool/Artifact 证据；失败项和未运行项分别记录为 `FAIL`/`NOT_RUN`，不得用静态验证替代运行证据，不得放宽断言或删除失败测试换取绿灯。
 - Playwright 验收除功能断言外还必须报告流程健康度：各轮（冷轮仅在跑了时）启动与总耗时、是否重试、首个超时或卡点、Next 动态编译时间、trace/screenshot/日志位置，以及结束后端口和子进程是否清理；至少做一次同脚本重复运行以区分稳定问题与偶发问题。不得用无界等待掩盖启动或断言失败；等待必须有明确对象、超时和失败证据。
 - 原始证据外置：运行任何 `mvn clean` 或重跑前，须把需保留的 Playwright trace、截图及前后端/Provider 原始日志复制到该工作包的外置独立证据目录（例如 worktree 的 `local-tmp/<slot>/evidence`，不能是另一个 `target`），并记录原始与复制路径。原始日志已消失时，只能明确标注为从先前终端输出重建的摘要，不得冒充原始证据。首次失败的证据同样保留，不得改记为 `NOT_RUN`。
@@ -58,6 +57,11 @@
   - C. UI 重复运行：同一提交上的重复运行可以在一次启动内完成（`-Passes 2 -SkipBuild`），仅限 runner 里已在真实运行中验证过可重复的 profile，其余 profile 仍分开启动；每次启动使用独立数据目录。冷轮单独启动。不适用于客户演示连续两轮 L3。
   - 以上各条都不适用于客户演示「同一主线 SHA 连续两轮 L3」。
 - 每轮分别记录准备/构建、服务就绪、功能断言、证据归档、复审及返工耗时和首次卡点；证据目录与 SHPM 记录可由脚本汇总，但原始日志、首次 FAIL、`NOT_RUN` 和人工裁决须保留，脚本不得自动提升阶段 `PASS`/`GO`。仅并行执行真正独立且资源、端口、数据目录隔离的检查；本机内存不足时不要并发重型 Maven/Next/Java 任务。
+
+## Git 与 GitHub
+
+- Git commit message（标题与正文）以及 GitHub PR 的标题、描述和评论（含 review comment）必须使用英文；适用于本仓库及上游 `D:\workspace\haifa-agent` 的 PR。命令、路径、配置键和 API 名称保留原样。
+- `haifa-agent-super-harness` 的 GitHub PR 一律使用 squash merge。
 
 ## 环境与排障记录
 
@@ -166,6 +170,29 @@ try {
 - 任务需要 SDK 类型事实时，主控在派工前运行 `python scripts/governance/sdk_api_digest.py --worktree <worktree>`，并在提示词里写明摘要位于 `local-tmp/sdk-api/<版本>/`。执行者在该目录检索公开签名，不读取 `~/.m2`；摘要里没有的信息在交接里写明并停下。SDK 重新发布后主控重新运行脚本。
 - 验收服务优先由仓库 runner 管理；自行启动的常驻服务在同一次 shell 调用的 `try/finally` 中启动、使用和清理，避免继承调用方管道后留存。CLI 直接运行或交给既有后台执行器，不使用 PowerShell `Start-Job` 承载。
 - 用 `opencode-run.log`、Git 改动、checkpoint 和真实测试证据检查进展与交付；退出码 0 不能单独判定完成。权限拒绝或上下文不足时交回主控，不放宽外部目录权限绕过；检查和清理只针对本任务的精确进程。
+
+### agy CLI（Antigravity）
+
+- 固定使用 `--model gemini-3.8-flash-high`；任务隔离、SDK 摘要、提示词与验收边界沿用 OpenCode 章节。
+- 执行目录由进程 `cwd` 指定：PowerShell 用 `Push-Location`，Python 用 `subprocess.Popen(..., cwd=worktree)`；`--add-dir` 仅添加目录。提示词文件先按 UTF-8 读取正文，再传给 `--print`（别名 `--prompt`），不能把文件路径当作正文。
+- 在专用 PowerShell 7 启动会话注入 HTTP 代理，仅作用于进程。单轮调用：
+
+```powershell
+$env:HTTP_PROXY='http://127.0.0.1:2081'
+$env:HTTPS_PROXY=$env:HTTP_PROXY
+$env:ALL_PROXY=$env:HTTP_PROXY
+$env:NO_PROXY='127.0.0.1,localhost,::1'
+$taskPrompt = Get-Content -LiteralPath '<提示词文件绝对路径>' -Raw -Encoding utf8
+Push-Location '<已分配的 worktree 根目录>'
+try {
+    agy --model gemini-3.8-flash-high --output-format json --print $taskPrompt
+} finally {
+    Pop-Location
+}
+```
+
+- 流式调用用 `agy --model gemini-3.8-flash-high --input-format stream-json --output-format stream-json --print ""`。stdin 逐行写 `{"event":"user","message":{"role":"user","content":"提示词正文"}}` 并 flush；stdout 逐行解析 `init`、`step_update`、`result`，可实时读取文本增量与工具结果，stderr 单独保存。追加消息实测排队到下一轮，不是当前轮即时 steering。
+- 调用方设置独立 deadline，保留 stdout/stderr 与 `--log-file` 日志；不能仅依赖 `--print-timeout`。只读任务加 `--mode plan`；交付须核对最终状态、文件改动和真实验收证据，不能只看退出码。
 
 # 主控 Agent 规则
 
