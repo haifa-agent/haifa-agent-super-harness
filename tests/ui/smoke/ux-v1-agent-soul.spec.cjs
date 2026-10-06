@@ -54,7 +54,8 @@ async function complete(page, context, pending, info, label, identities) {
   expect(modelCalls.length, `${label}: actual managed model calls`).toBeGreaterThan(0);
   for (const call of modelCalls) {
     expect(call.run_id).toBe(identity.runId);
-    expect(call.provider_id).toBe("super-harness-managed-openai-compatible");
+    // The official DeepSeek endpoint binds the SDK provider id "deepseek" (per-Run thinking, PR #3).
+    expect(call.provider_id).toBe("deepseek");
     expect(call.model_id).toBe(PROVIDER_MODEL);
     expect(call.status).toBe("SUCCEEDED");
   }
