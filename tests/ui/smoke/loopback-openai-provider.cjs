@@ -95,6 +95,105 @@ const W08_CHILD_MARK = "W08-CHILD-MARKER";
 const W08_CHILD_AGENT = "w08-child";
 const w08Calls = [];
 
+// ---- W05 live-rendering controlled fixture -----------------------------------
+// Three bounded scenes keep a Run deliberately in flight so the spec can assert
+// what the frozen UI renders *during* the run. Each scene blocks the model call
+// on an explicit release gate (POST /__release) with a hard timeout, never a
+// fixed sleep; the gate is released by the spec or when the client disconnects.
+const W05_LIVE_FIRST = "W05-LIVE02-FIRST-HALF";
+const W05_LIVE_SECOND = "W05-LIVE02-SECOND-HALF";
+const W05_LIVE_BLOCK_TIMEOUT_MS = 30_000;
+const w05LiveCalls = [];
+const w05LiveReleases = [];
+
+function releaseW05Live() {
+  let released = 0;
+  while (w05LiveReleases.length > 0) {
+    w05LiveReleases.shift()();
+    released += 1;
+  }
+  return released;
+}
+
+// Resolves when the spec calls /__release, when the bounded timeout expires, or
+// when the client disconnects. The timer is always cleared so a release cannot
+// leak a pending handle into a later scene.
+function blockW05Live(response, record) {
+  record.blocked = true;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      record.blocked = false;
+      resolve();
+    };
+    const timer = setTimeout(finish, W05_LIVE_BLOCK_TIMEOUT_MS);
+    w05LiveReleases.push(() => {
+      clearTimeout(timer);
+      finish();
+    });
+    if (response) {
+      response.on("close", () => {
+        clearTimeout(timer);
+        finish();
+      });
+    }
+  });
+}
+
+function w05LiveMarker(body) {
+  return /w05-live-(01|02|03)-[A-Za-z0-9-]+/.exec(messagesText(body));
+}
+
+// Returns true when the request belongs to this fixture and was fully handled.
+async function handleW05LiveRendering(response, body) {
+  const match = w05LiveMarker(body);
+  if (!match) return false;
+  const scenario = match[1];
+  const marker = match[0];
+  const id = `w05-live-${scenario}-${Date.now()}`;
+  const record = {
+    type: "w05_live",
+    scenario,
+    marker,
+    at: Date.now(),
+    stream: body.stream === true,
+    toolResults: toolResultCount(body),
+    offeredListUploads: toolNames(body).includes("list_uploaded_files"),
+  };
+  w05LiveCalls.push(record);
+  console.log(JSON.stringify(record));
+  if (scenario === "02" && body.stream === true) {
+    // Stream a recognisable first half, then hold the open SSE response before
+    // the second half so the page snapshot can be inspected mid-run.
+    sseHeaders(response);
+    frame(response, completionChunk(id, `${W05_LIVE_FIRST} `, null));
+    await blockW05Live(response, record);
+    record.blocked = false;
+    frame(response, completionChunk(id, `${W05_LIVE_SECOND} ${marker}`, "stop"));
+    frame(response, { id, model: "w18-controlled-model", choices: [], usage: { prompt_tokens: 6, completion_tokens: 8 } });
+    frame(response, "[DONE]");
+    response.end();
+    return true;
+  }
+  if (scenario === "03") {
+    if (record.toolResults === 0 && record.offeredListUploads) {
+      finishWithToolCall(response, id, `w05-live03-${Date.now()}`, "list_uploaded_files", {});
+      return true;
+    }
+    // Hold the post-Tool model call so the Tool step must already be visible.
+    await blockW05Live(response, record);
+    completeW08Text(response, body, id, `W05-LIVE03-DONE ${marker}`);
+    return true;
+  }
+  // LIVE-01: hold the model call so the Run stays in flight while the page is
+  // asserted; the answer is irrelevant to the assertion.
+  await blockW05Live(response, record);
+  completeW08Text(response, body, id, `W05-LIVE01-DONE ${marker}`);
+  return true;
+}
+
 function messagesText(body) {
   return JSON.stringify(body.messages ?? []);
 }
@@ -422,7 +521,13 @@ const server = http.createServer((request, response) => {
     return;
   }
   if (request.method === "GET" && url.pathname === "/__state") {
-    sendJson(response, 200, { polishCalls, chatCalls, w08Calls });
+    sendJson(response, 200, { polishCalls, chatCalls, w08Calls, w05LiveCalls });
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/__release") {
+    // Explicit gate for the W05 live-rendering scenes; returns how many blocked
+    // model calls this release actually unblocked.
+    sendJson(response, 200, { released: releaseW05Live() });
     return;
   }
   if (request.method !== "POST" || url.pathname !== "/v1/chat/completions") {
@@ -436,7 +541,7 @@ const server = http.createServer((request, response) => {
     raw += chunk;
     if (raw.length > 1024 * 1024) request.destroy();
   });
-  request.on("end", () => {
+  request.on("end", async () => {
     let body;
     try {
       body = JSON.parse(raw);
@@ -496,6 +601,15 @@ const server = http.createServer((request, response) => {
     // by arrival order; the request stream is otherwise untouched.
     if (isW08Child(body) || messagesText(body).includes("W08-UI")) {
       handleW08Delegation(response, body, prompt, offeredTools);
+      return;
+    }
+
+    // W05 live-rendering scenes: hold a Run mid-flight behind an explicit
+    // release gate so the spec can assert the frozen UI while it is running.
+    // The post-run follow-up-suggestions request echoes the transcript, so it
+    // must never be mistaken for a scene.
+    if (w05LiveMarker(body) && !isSuggestionsRequest(body)) {
+      await handleW05LiveRendering(response, body);
       return;
     }
 
