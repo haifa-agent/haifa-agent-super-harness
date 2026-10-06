@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.haifa.agent.superharness.server.testsupport.ControlledProvider;
 import io.haifa.agent.superharness.server.testsupport.DelegationHttpFixture;
 import io.haifa.agent.superharness.server.testsupport.GatewayFixture;
+import io.haifa.agent.superharness.server.testsupport.SseEvents;
 import java.net.URI;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
@@ -26,6 +27,10 @@ import org.junit.jupiter.api.Test;
  * folds that reserved suffix back onto the optimistic {@code local-human-*} bubble. Without a
  * client id it keeps the synthetic {@code <run>-human-0}; after the Run settles the durable id is
  * unchanged (the client id never enters persistence or replay).
+ *
+ * <p>The live stream echoes the same pending user message as its first {@code messages} frame, as
+ * frozen DeerFlow does when it re-keys the submitted message: the frozen UI orders the Run's steps
+ * below the user bubble only once it has that echo. A hidden reply is never echoed.
  */
 class PendingHumanIdentityHttpTest {
     private Path dataRoot;
@@ -86,6 +91,11 @@ class PendingHumanIdentityHttpTest {
 
                 release.get().countDown();
                 HttpResponse<String> responseA = finish(blockedA);
+                assertThat(humanFrameIds(responseA))
+                        .as("the live stream echoes the user message once, under the pending id")
+                        .containsExactly("local-human-A__user");
+                assertThat(firstMessageFrame(responseA).path("type").asText())
+                        .as("the echo precedes every step of the Run").isEqualTo("human");
                 JsonNode settledA = http.get(base, "/api/threads/" + withClientThread + "/state",
                         "pending-human-with-id-settled-state.json");
                 List<JsonNode> settledMessagesA = DelegationHttpFixture.messages(settledA);
@@ -113,15 +123,51 @@ class PendingHumanIdentityHttpTest {
                         .doesNotContain("__user");
 
                 release.get().countDown();
-                finish(blockedB);
+                assertThat(humanFrameIds(finish(blockedB)))
+                        .as("without a client id the echo uses the synthetic wire id")
+                        .containsExactly(pendingIdB);
                 JsonNode settledB = http.get(base, "/api/threads/" + withoutClientThread + "/state",
                         "pending-human-no-id-settled-state.json");
                 assertThat(DelegationHttpFixture.messages(settledB)).hasSize(2);
                 assertThat(settledB.path("values").path("messages").get(0).path("id").asText())
                         .as("the synthetic pending id equals the durable id the Run settles into")
                         .isEqualTo(pendingIdB);
+
+                // -------- Run C: a hidden reply has no user bubble to echo -------------------
+                assertThat(http.request(base, "POST", "/api/threads",
+                        "{\"thread_id\":\"pending-human-hidden\"}").statusCode()).isEqualTo(200);
+                entered.set(new CountDownLatch(1));
+                release.set(new CountDownLatch(1));
+                BlockedRun blockedC = startBlockedRun(
+                        base, "pending-human-hidden", hiddenRunBody("local-human-C", "hidden reply"),
+                        "pending-human-hidden.sse", entered);
+                release.get().countDown();
+                assertThat(humanFrameIds(finish(blockedC)))
+                        .as("a hidden reply must not be projected as a user bubble").isEmpty();
             }
         }
+    }
+
+    private static List<String> humanFrameIds(HttpResponse<String> response) {
+        return SseEvents.read(response.body()).named("messages").stream()
+                .map(event -> event.data().path(0))
+                .filter(message -> message.path("type").asText().equals("human"))
+                .map(message -> message.path("id").asText())
+                .toList();
+    }
+
+    private static JsonNode firstMessageFrame(HttpResponse<String> response) {
+        return SseEvents.read(response.body()).named("messages").get(0).data().path(0);
+    }
+
+    private static String hiddenRunBody(String humanId, String content) {
+        return """
+                {"assistant_id":"lead_agent","input":{"messages":[{"id":"%s","type":"human","content":"%s",
+                "additional_kwargs":{"hide_from_ui":true}}]},
+                "stream_mode":["messages-tuple","updates","custom"],
+                "context":{"mode":"flash","model_name":"w08"},
+                "on_disconnect":"continue","multitask_strategy":"reject"}
+                """.formatted(humanId, content);
     }
 
     private static String runBody(String humanId, String content) {

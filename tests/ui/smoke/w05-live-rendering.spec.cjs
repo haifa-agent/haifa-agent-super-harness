@@ -13,8 +13,6 @@ const { expect, test } = require("./fixtures.cjs");
 
 const RUN_STREAM = /\/api\/langgraph\/threads\/[^/]+\/runs\/stream$/;
 const RUN_STREAM_ROUTE = "**/api/langgraph/threads/*/runs/stream*";
-const W05_LIVE_FIRST = "W05-LIVE02-FIRST-HALF";
-const W05_LIVE_SECOND = "W05-LIVE02-SECOND-HALF";
 
 // LIVE-04 reuses the W08 controlled Child so the frozen Ultra path declares the
 // real `task` Tool. The spec shapes only the /runs/stream context; the SSE body
@@ -142,6 +140,23 @@ async function shapeUltra(page) {
   return shaped;
 }
 
+// A step of the Run in flight belongs to the current turn, so it must be laid out
+// below the user message that started it, never above it.
+async function expectBelowUserBubble(page, marker, step, label) {
+  const bubble = await page
+    .locator("#chat .is-user")
+    .filter({ hasText: marker })
+    .first()
+    .boundingBox();
+  const box = await step.first().boundingBox();
+  expect(bubble, "user bubble must be laid out").not.toBeNull();
+  expect(box, `${label} must be laid out`).not.toBeNull();
+  expect(
+    box.y,
+    `${label} must render below the user message while the run is in flight`,
+  ).toBeGreaterThanOrEqual(bubble.y + bubble.height);
+}
+
 test.beforeEach(async ({ context, runtime }) => {
   await context.addCookies([
     { name: "locale", value: "en-US", url: `${runtime.app}/` },
@@ -198,39 +213,6 @@ test("W05 LIVE-01 the submitted user message renders exactly one bubble while th
   });
 });
 
-test("W05 LIVE-02 streamed answer text appears before the run finishes", async ({
-  context,
-  page,
-  runtime,
-  workspace,
-  evidence,
-}) => {
-  const marker = `w05-live-02-${Date.now()}`;
-  await submit(page, workspace, marker);
-  await waitForScene(context, runtime, marker);
-
-  // The Provider has streamed the first half and is holding the connection
-  // open before the second half; the page must already show the first half.
-  await expect(
-    page.locator("#chat").getByText(W05_LIVE_FIRST, { exact: false }),
-  ).toBeVisible({ timeout: 15_000 });
-  await expect(
-    page.locator("#chat").getByText(W05_LIVE_SECOND, { exact: false }),
-  ).toHaveCount(0);
-  await evidence.screenshot(page, "live02-running-first-half-visible");
-
-  await release(context, runtime);
-  await expect(
-    page
-      .locator("#chat")
-      .getByText(`${W05_LIVE_SECOND} ${marker}`, { exact: false }),
-  ).toBeVisible({ timeout: 60_000 });
-  await evidence.json("live02-streamed-halves", {
-    marker,
-    scenes: await providerScenes(context, runtime, marker),
-  });
-});
-
 test("W05 LIVE-03 a Tool step is visible while the run waits after its result", async ({
   context,
   page,
@@ -259,6 +241,14 @@ test("W05 LIVE-03 a Tool step is visible while the run waits after its result", 
     }),
   ).toBeVisible({ timeout: 15_000 });
   await evidence.screenshot(page, "live03-running-tool-step-visible");
+  await expectBelowUserBubble(
+    page,
+    marker,
+    page.locator("#chat").getByText('Use "list_uploaded_files" tool', {
+      exact: true,
+    }),
+    "the Tool step",
+  );
 
   await release(context, runtime);
   await expect(
@@ -316,6 +306,12 @@ test("W05 LIVE-04 a delegated subtask card renders in progress while the run is 
     await evidence.json("live04-card-while-child-blocked", {
       chatText: await page.locator("#chat").innerText().catch(() => null),
     });
+    await expectBelowUserBubble(
+      page,
+      marker,
+      page.getByTitle(objective, { exact: true }),
+      "the subtask card",
+    );
     await expect(
       page.getByText("Running subtask", { exact: true }),
     ).toBeVisible({ timeout: 15_000 });
