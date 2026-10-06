@@ -80,7 +80,7 @@ foreach ($assignment in $running) {
     })
 }
 
-$slotPorts = @(20618, 25618, 30618, 35618, 40618, 45618)
+$slotPorts = @(20618, 25618, 30618, 35618, 40618, 45618, 11618, 16618)
 $assignedPorts = @($running | ForEach-Object {
     $ports = [string]$_.ports_json | ConvertFrom-Json
     [int]$ports.gateway; [int]$ports.frontend
