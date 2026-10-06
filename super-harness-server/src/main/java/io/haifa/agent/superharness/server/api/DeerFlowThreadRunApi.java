@@ -1067,14 +1067,12 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     workspaceRecordingEnabled = true;
                 } catch (RuntimeException failure) {
                     // Recording is diagnostic evidence and cannot block the Run, but a swallowed
-                    // publish failure silently disables workspace changes for this Run.
+                    // publish failure silently disables workspace changes for this Run. Record the
+                    // error family and the underlying file-system reason only; never file content.
                     if (!closed) {
                         INTERACTION_LOG.log(System.Logger.Level.WARNING,
                                 "Workspace baseline publish failed for run " + started.runId().value()
-                                        + " (" + failure.getClass().getSimpleName()
-                                        + (failure instanceof WorkspaceException workspaceFailure
-                                                ? ":" + workspaceFailure.error().name() : "")
-                                        + ")");
+                                        + " (" + workspaceFailureDetail(failure) + ")");
                     }
                     workspaceChanges.discardRunChanges(staged);
                 }
@@ -3593,12 +3591,6 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         if (liveRunVisible) {
             completeWorkspaceChangesIfTerminal(liveRun);
         }
-        // An active Run legitimately has no changes yet. A terminal Run that recorded a baseline but
-        // whose completed snapshot is missing is a real failure and must not reuse the active-Run
-        // unavailable envelope, otherwise a transient publish failure is silently hidden.
-        boolean liveRunTerminalRecorded = liveRunVisible
-                && liveRun.workspaceRecordingEnabled
-                && liveRun.bridge.snapshot(liveRun.runId).status().isTerminal();
         WorkspaceBinding binding;
         try {
             binding = workspaceChanges.requireThreadWorkspace(DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId);
@@ -3611,12 +3603,6 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             changes = workspaceChanges.readRunChanges(
                     DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId, binding.workspaceId(), runId);
         } catch (WorkspaceException failure) {
-            if (liveRunTerminalRecorded
-                    && (failure.error() == WorkspaceError.RUN_BASELINE_NOT_FOUND
-                            || failure.error() == WorkspaceError.RUN_CHANGES_NOT_COMPLETED)) {
-                sendJson(exchange, 500, Map.of("detail", "Workspace changes are unavailable"));
-                return;
-            }
             if ((failure.error() == WorkspaceError.RUN_BASELINE_NOT_FOUND
                     || failure.error() == WorkspaceError.RUN_CHANGES_NOT_COMPLETED) && liveRunVisible) {
                 sendJson(exchange, 200, emptyWorkspaceChanges());
@@ -3973,13 +3959,32 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             // Recording is best-effort; keep the Run outcome while exposing a bounded diagnostic.
             if (!closed) INTERACTION_LOG.log(System.Logger.Level.WARNING,
                     "Workspace completion failed for run " + run.runId.value()
-                            + " (" + failure.getClass().getSimpleName()
-                            + (failure instanceof WorkspaceException workspaceFailure
-                                    ? ":" + workspaceFailure.error().name() : "")
-                            + (failure.getCause() == null ? "" : ":" + failure.getCause().getClass().getSimpleName())
-                            + ")");
+                            + " (" + workspaceFailureDetail(failure) + ")");
             return false;
         }
+    }
+
+    /**
+     * Bounded diagnostic detail for a workspace failure. Includes the exception family, the persisted
+     * error code when available, and the underlying file-system reason (for example a Windows sharing
+     * or access denial). It never includes file content.
+     */
+    private static String workspaceFailureDetail(RuntimeException failure) {
+        StringBuilder detail = new StringBuilder(failure.getClass().getSimpleName());
+        if (failure instanceof WorkspaceException workspaceFailure) {
+            detail.append(':').append(workspaceFailure.error().name());
+        }
+        Throwable cause = failure.getCause();
+        if (cause != null) {
+            detail.append(':').append(cause.getClass().getSimpleName());
+            if (cause instanceof java.nio.file.FileSystemException fileSystemFailure) {
+                String reason = fileSystemFailure.getReason();
+                if (reason != null && !reason.isBlank()) {
+                    detail.append('[').append(reason).append(']');
+                }
+            }
+        }
+        return detail.toString();
     }
 
     private void observeWorkspaceCompletion(RunRecord run) {

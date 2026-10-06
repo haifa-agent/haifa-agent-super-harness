@@ -7,6 +7,7 @@ import io.haifa.agent.project.filesystem.ReadOptions;
 import io.haifa.agent.project.filesystem.SearchRequest;
 import io.haifa.agent.project.path.ProjectPath;
 import io.haifa.agent.project.path.WorkspacePath;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -14,6 +15,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -164,6 +166,45 @@ class PersistentProjectWorkspaceServiceTest {
                 .files()).extracting(change -> change.path().value()).doesNotContain("outputs/later.txt");
         assertError(WorkspaceError.RUN_BASELINE_NOT_FOUND,
                 () -> changes.publishRunChanges(staged, "run-staged"));
+    }
+
+    @Test
+    void publishesAndCompletesWhenTheStagedDirectoryRenameIsDeniedByAHeldHandle() throws Exception {
+        Assumptions.assumeTrue(
+                System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("win"),
+                "A held handle denies a directory rename only on Windows; other platforms publish atomically.");
+        RestrictedWorkspaceService workspace = workspace();
+        WorkspaceBinding binding = workspace.bind("owner-a", "thread-denied");
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(), "workspace/before.txt", bytes("before\n"),
+                Optional.empty());
+        PersistentProjectWorkspaceService changes = projects();
+        StagedRunChanges staged = changes.stageRunChanges("owner-a", "thread-denied", binding.workspaceId());
+        Path stagedRoot = storageRoot.resolve("workspace-changes").resolve(".baseline-" + staged.token);
+        Path probe = storageRoot.resolve("workspace-changes").resolve("probe-" + staged.token);
+        Path heldPayload;
+        try (var payloads = Files.list(stagedRoot.resolve("payloads"))) {
+            heldPayload = payloads.findFirst().orElseThrow();
+        }
+
+        // A handle on a file inside the staged directory makes a direct directory rename fail on
+        // Windows, exactly like a watcher or indexer that touches the just-written snapshot.
+        try (java.io.InputStream held = Files.newInputStream(heldPayload)) {
+            assertThatThrownBy(() -> Files.move(stagedRoot, probe, StandardCopyOption.ATOMIC_MOVE))
+                    .isInstanceOf(java.nio.file.FileSystemException.class);
+            assertThat(stagedRoot).isDirectory();
+            assertThat(probe).doesNotExist();
+
+            changes.publishRunChanges(staged, "run-denied");
+            workspace.writeWorkingFile("owner-a", binding.workspaceId(), "outputs/created.txt",
+                    bytes("created\n"), Optional.empty());
+            changes.completeRunChanges("owner-a", "thread-denied", binding.workspaceId(), "run-denied");
+
+            WorkspaceChanges result = projects().readRunChanges(
+                    "owner-a", "thread-denied", binding.workspaceId(), "run-denied");
+            assertThat(result.files()).extracting(change -> change.path().value())
+                    .containsExactly("outputs/created.txt");
+            assertThat(result.diff().unifiedDiff()).contains("+created");
+        }
     }
 
     @Test

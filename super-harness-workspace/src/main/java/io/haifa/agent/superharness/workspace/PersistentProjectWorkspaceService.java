@@ -734,7 +734,7 @@ public final class PersistentProjectWorkspaceService {
         validateStage(properties, staged.token);
         WorkspaceId workspaceId = new WorkspaceId(properties.getProperty("workspaceId"));
         Path target = runRoot(workspaceId, run);
-        if (Files.exists(target)) {
+        if (isPublishedRun(target)) {
             throw new WorkspaceException(WorkspaceError.RUN_ALREADY_TRACKED,
                     "a baseline already exists for this workspace and run");
         }
@@ -748,11 +748,46 @@ public final class PersistentProjectWorkspaceService {
             Files.createDirectories(target.getParent());
             WorkspaceRegistry.moveAtomically(temporary, target);
         } catch (FileAlreadyExistsException exception) {
+            if (!isPublishedRun(target)) {
+                publishRunChangesByMovingContent(temporary, target, exception);
+                return;
+            }
             throw new WorkspaceException(WorkspaceError.RUN_ALREADY_TRACKED,
                     "a baseline already exists for this workspace and run", exception);
         } catch (IOException exception) {
-            throw WorkspaceRegistry.ioFailure("failed to publish run baseline", exception);
+            publishRunChangesByMovingContent(temporary, target, exception);
         }
+    }
+
+    private static boolean isPublishedRun(Path runRoot) {
+        return Files.isRegularFile(runRoot.resolve(BASELINE_FILE), LinkOption.NOFOLLOW_LINKS);
+    }
+
+    /**
+     * Publishes a run baseline when the directory rename is denied because another process holds a
+     * handle on the staged directory (Windows watchers, indexers or sync clients). Payloads are moved
+     * individually and the {@code baseline.properties} marker is placed last, so readers that key on
+     * the marker never observe a partial snapshot. A target may already hold content from an
+     * interrupted attempt; content-addressed payloads make that retry idempotent, and a partial
+     * directory without the marker is never mistaken for an already tracked run.
+     */
+    private void publishRunChangesByMovingContent(Path staged, Path target, IOException renameFailure) {
+        try {
+            Files.createDirectories(target);
+            movePayloadFiles(staged, target);
+            movePublishedMarker(staged.resolve(BASELINE_FILE), target.resolve(BASELINE_FILE));
+        } catch (FileAlreadyExistsException raced) {
+            if (isPublishedRun(target)) {
+                throw new WorkspaceException(WorkspaceError.RUN_ALREADY_TRACKED,
+                        "a baseline already exists for this workspace and run", raced);
+            }
+            renameFailure.addSuppressed(raced);
+            throw WorkspaceRegistry.ioFailure("failed to publish run baseline", renameFailure);
+        } catch (IOException fallbackFailure) {
+            renameFailure.addSuppressed(fallbackFailure);
+            throw WorkspaceRegistry.ioFailure("failed to publish run baseline", renameFailure);
+        }
+        deleteTreeBestEffort(staged.getParent(), staged, "\\.baseline-[0-9a-f-]{36}");
     }
 
     public synchronized void discardRunChanges(StagedRunChanges staged) {
@@ -797,11 +832,71 @@ public final class PersistentProjectWorkspaceService {
         } catch (FileAlreadyExistsException raced) {
             deleteTreeBestEffort(root, temporary, "\\.completed-[0-9a-f-]{36}");
         } catch (IOException failure) {
+            if (!publishCompletedChangesByMovingContent(temporary, completed, failure)) {
+                throw WorkspaceRegistry.ioFailure("failed to publish completed workspace changes", failure);
+            }
             deleteTreeBestEffort(root, temporary, "\\.completed-[0-9a-f-]{36}");
-            throw WorkspaceRegistry.ioFailure("failed to publish completed workspace changes", failure);
         } catch (RuntimeException failure) {
             deleteTreeBestEffort(root, temporary, "\\.completed-[0-9a-f-]{36}");
             throw failure;
+        }
+    }
+
+    /**
+     * Completes a run when the directory rename is denied because a handle is held on the staged
+     * directory. Mirrors {@link #publishRunChangesByMovingContent}: payloads move first and the
+     * {@code baseline.properties} marker moves last, so a reader never sees a partial snapshot.
+     * Returns true when the completed snapshot is published, false when the caller must fail.
+     */
+    private boolean publishCompletedChangesByMovingContent(Path staged, Path completed, IOException renameFailure) {
+        if (isPublishedRun(completed)) {
+            return true;
+        }
+        try {
+            Files.createDirectories(completed);
+            movePayloadFiles(staged, completed);
+            movePublishedMarker(staged.resolve(BASELINE_FILE), completed.resolve(BASELINE_FILE));
+            return true;
+        } catch (FileAlreadyExistsException raced) {
+            // A concurrent completion placed the marker first; that snapshot is authoritative.
+            if (isPublishedRun(completed)) {
+                return true;
+            }
+            renameFailure.addSuppressed(raced);
+            return false;
+        } catch (IOException fallbackFailure) {
+            renameFailure.addSuppressed(fallbackFailure);
+            return false;
+        }
+    }
+
+    private static void movePayloadFiles(Path staged, Path target) throws IOException {
+        Path stagedPayloads = staged.resolve("payloads");
+        if (!Files.isDirectory(stagedPayloads, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        Path targetPayloads = target.resolve("payloads");
+        Files.createDirectories(targetPayloads);
+        try (Stream<Path> entries = Files.list(stagedPayloads)) {
+            for (Path entry : entries.sorted().toList()) {
+                moveFileIfAbsent(entry, targetPayloads.resolve(entry.getFileName()));
+            }
+        }
+    }
+
+    private static void moveFileIfAbsent(Path source, Path target) throws IOException {
+        try {
+            Files.move(source, target);
+        } catch (FileAlreadyExistsException alreadyPresent) {
+            Files.deleteIfExists(source);
+        }
+    }
+
+    private static void movePublishedMarker(Path source, Path target) throws IOException {
+        try {
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+        } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+            Files.move(source, target);
         }
     }
 
