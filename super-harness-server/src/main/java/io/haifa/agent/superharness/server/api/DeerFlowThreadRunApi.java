@@ -1065,7 +1065,15 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 try {
                     workspaceChanges.publishRunChanges(staged, started.runId().value());
                     workspaceRecordingEnabled = true;
-                } catch (RuntimeException ignored) {
+                } catch (RuntimeException failure) {
+                    // Recording is diagnostic evidence and cannot block the Run, but a swallowed
+                    // publish failure silently disables workspace changes for this Run. Record the
+                    // error family and the underlying file-system reason only; never file content.
+                    if (!closed) {
+                        INTERACTION_LOG.log(System.Logger.Level.WARNING,
+                                "Workspace baseline publish failed for run " + started.runId().value()
+                                        + " (" + workspaceFailureDetail(failure) + ")");
+                    }
                     workspaceChanges.discardRunChanges(staged);
                 }
             }
@@ -3951,13 +3959,32 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             // Recording is best-effort; keep the Run outcome while exposing a bounded diagnostic.
             if (!closed) INTERACTION_LOG.log(System.Logger.Level.WARNING,
                     "Workspace completion failed for run " + run.runId.value()
-                            + " (" + failure.getClass().getSimpleName()
-                            + (failure instanceof WorkspaceException workspaceFailure
-                                    ? ":" + workspaceFailure.error().name() : "")
-                            + (failure.getCause() == null ? "" : ":" + failure.getCause().getClass().getSimpleName())
-                            + ")");
+                            + " (" + workspaceFailureDetail(failure) + ")");
             return false;
         }
+    }
+
+    /**
+     * Bounded diagnostic detail for a workspace failure. Includes the exception family, the persisted
+     * error code when available, and the underlying file-system reason (for example a Windows sharing
+     * or access denial). It never includes file content.
+     */
+    private static String workspaceFailureDetail(RuntimeException failure) {
+        StringBuilder detail = new StringBuilder(failure.getClass().getSimpleName());
+        if (failure instanceof WorkspaceException workspaceFailure) {
+            detail.append(':').append(workspaceFailure.error().name());
+        }
+        Throwable cause = failure.getCause();
+        if (cause != null) {
+            detail.append(':').append(cause.getClass().getSimpleName());
+            if (cause instanceof java.nio.file.FileSystemException fileSystemFailure) {
+                String reason = fileSystemFailure.getReason();
+                if (reason != null && !reason.isBlank()) {
+                    detail.append('[').append(reason).append(']');
+                }
+            }
+        }
+        return detail.toString();
     }
 
     private void observeWorkspaceCompletion(RunRecord run) {
