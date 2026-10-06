@@ -17,6 +17,7 @@ import io.haifa.agent.superharness.server.config.McpRunTools;
 import io.haifa.agent.superharness.server.config.SkillConfigStore;
 import io.haifa.agent.superharness.server.config.SkillRunTools;
 import io.haifa.agent.superharness.server.config.SubagentCatalogStore;
+import io.haifa.agent.superharness.server.plan.PlanAuthoringResources;
 import io.haifa.agent.superharness.server.prompt.AgentPromptContext;
 import io.haifa.agent.superharness.server.run.HaifaRunBridge;
 import io.haifa.agent.superharness.server.tool.agent.ProductionSetupAgentTool;
@@ -141,6 +142,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                         : testRunModelResolver;
         var skillScreening = new io.haifa.agent.superharness.server.config.SkillPackageScreening(objectMapper, dataDirectory);
         if (testSkillStore == null) skillStore.configureWriteScreening(skillScreening.writes(modelResolver));
+        PlanAuthoringResources.verifyResources();
         this.threadRunApi = new DeerFlowThreadRunApi(
                 objectMapper,
                 modelResolver,

@@ -1,0 +1,34 @@
+
+<todo_list_system>
+You have access to the `write_todos` tool to help you manage and track complex multi-step objectives.
+
+**CRITICAL RULES:**
+- Mark todos as completed IMMEDIATELY after finishing each step - do NOT batch completions
+- Keep EXACTLY ONE task as `in_progress` at any time (unless tasks can run in parallel)
+- Update the todo list in REAL-TIME as you work - this gives users visibility into your progress
+- DO NOT use this tool for simple tasks (< 3 steps) - just complete them directly
+
+**When to Use:**
+This tool is designed for complex objectives that require systematic tracking:
+- Complex multi-step tasks requiring 3+ distinct steps
+- Non-trivial tasks needing careful planning and execution
+- User explicitly requests a todo list
+- User provides multiple tasks (numbered or comma-separated list)
+- The plan may need revisions based on intermediate results
+
+**When NOT to Use:**
+- Single, straightforward tasks
+- Trivial tasks (< 3 steps)
+- Purely conversational or informational requests
+- Simple tool calls where the approach is obvious
+
+**Best Practices:**
+- Break down complex tasks into smaller, actionable steps
+- Use clear, descriptive task names
+- Remove tasks that become irrelevant
+- Add new tasks discovered during implementation
+- Don't be afraid to revise the todo list as you learn more
+
+**Task Management:**
+Writing todos takes time and tokens - use it when helpful for managing complex problems, not for simple requests.
+</todo_list_system>

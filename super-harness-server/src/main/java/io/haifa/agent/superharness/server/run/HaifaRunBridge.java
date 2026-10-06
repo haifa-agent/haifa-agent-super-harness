@@ -24,8 +24,11 @@ import io.haifa.agent.runtime.api.InteractionView;
 import io.haifa.agent.runtime.api.RunEventCursor;
 import io.haifa.agent.runtime.api.RunEventPage;
 import io.haifa.agent.runtime.api.ToolCallView;
+import io.haifa.agent.runtime.api.AgentPlanView;
 import io.haifa.agent.runtime.api.ChildRunView;
 import io.haifa.agent.sdk.api.AgentMetadata;
+import io.haifa.agent.sdk.plan.PlanAuthoringSpec;
+import io.haifa.agent.superharness.server.plan.PlanAuthoringResources;
 import io.haifa.agent.sdk.api.HaifaAgent;
 import io.haifa.agent.sdk.api.HaifaAgentBuilder;
 import io.haifa.agent.sdk.api.HaifaAgents;
@@ -80,6 +83,7 @@ public final class HaifaRunBridge implements AutoCloseable {
     private final HaifaAgent agent;
     private final ModelBinding binding;
     private final boolean hasTools;
+    private final boolean isPlanMode;
     private final String mcpSignature;
     private final String skillSignature;
     private final String promptSignature;
@@ -95,6 +99,7 @@ public final class HaifaRunBridge implements AutoCloseable {
     public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools) {
         this.binding = binding;
         this.hasTools = !tools.isEmpty();
+        this.isPlanMode = false;
         this.mcpSignature = "";
         this.skillSignature = "";
         this.promptSignature = "";
@@ -157,13 +162,22 @@ public final class HaifaRunBridge implements AutoCloseable {
             DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
             SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
             SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity) {
+        this(binding, tools, foundation, mcpProjection, skillProjection, agentContext, delegation, childRunCapacity, false);
+    }
+
+    public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
+            boolean isPlanMode) {
         java.util.Objects.requireNonNull(childRunCapacity, "childRunCapacity");
         this.agentContext = java.util.Objects.requireNonNull(agentContext, "agent context must not be null");
+        this.isPlanMode = isPlanMode;
         List<McpServerSpec> mcpSpecs = mcpProjection.specs();
         this.binding = binding;
         // MCP ToolLifecycle events are projected by the frozen transcript only when the
         // bridge advertises tools; a bridge whose only tools come from MCP still does.
-        this.hasTools = delegation.enabled() || !tools.isEmpty() || !mcpSpecs.isEmpty()
+        this.hasTools = isPlanMode || delegation.enabled() || !tools.isEmpty() || !mcpSpecs.isEmpty()
                 || (skillProjection != null && skillProjection.installTools());
         // The canonical fingerprint covers every field that shaped the SDK declaration, so
         // a header credential reference or timeout change forces a later Run to rebuild.
@@ -245,6 +259,12 @@ public final class HaifaRunBridge implements AutoCloseable {
                     builder.childAgent(new ChildAgentSpec(child.name(), child.description(), child.instructions(),
                             Optional.of(new ProductRunProfileRef(child.profileId(), "1.0.0")), childTools));
                 }
+            }
+            if (isPlanMode) {
+                builder.planAuthoring(PlanAuthoringSpec.of(
+                        "write_todos",
+                        PlanAuthoringResources.toolDescription(),
+                        PlanAuthoringResources.systemPrompt()));
             }
             // Human B1 decision: only these production read-only network tools skip the
             // standard network ASK. All other network/MCP and writing tools retain their policy.
@@ -417,6 +437,14 @@ public final class HaifaRunBridge implements AutoCloseable {
 
     public Optional<AgentRunSnapshot> findRun(AgentRunId runId) {
         return agent.runs().find(runId);
+    }
+
+    public boolean isPlanMode() {
+        return isPlanMode;
+    }
+
+    public Optional<AgentPlanView> plan(AgentRunId runId) {
+        return agent.runs().plan(runId);
     }
 
     /** Authoritative SDK facts; also available on a read bridge with no current declarations. */

@@ -10,7 +10,9 @@ import io.haifa.agent.core.session.AgentSessionId;
 import io.haifa.agent.project.changeset.FileChange;
 import io.haifa.agent.project.changeset.FileChangeType;
 import io.haifa.agent.project.changeset.FileVersion;
+import io.haifa.agent.runtime.api.AgentPlanView;
 import io.haifa.agent.runtime.api.AgentRunEvent;
+import io.haifa.agent.superharness.server.plan.PlanAuthoringResources;
 import io.haifa.agent.runtime.api.AgentRunSnapshot;
 import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
 import io.haifa.agent.runtime.api.FrozenInstructionDiagnostic;
@@ -631,11 +633,12 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
         int limit = limitNode == null ? 10 : limitNode.intValue();
         Map<Long, Integer> ordinals = computeTurnOrdinals(thread);
+        Optional<List<Map<String, Object>>> todos = resolveThreadTodos(thread);
         List<Map<String, Object>> response = new ArrayList<>(
                 historyProjections(thread, limit, beforeSequence).stream()
-                        .map(projection -> threadHistoryResponse(thread, projection, ordinals))
+                        .map(projection -> threadHistoryResponse(thread, projection, ordinals, todos))
                         .toList());
-        if (beforeSequence == null) overlayHistoryHead(thread, response, limit, ordinals);
+        if (beforeSequence == null) overlayHistoryHead(thread, response, limit, ordinals, todos);
         sendJson(exchange, 200, response);
     }
 
@@ -962,6 +965,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             boolean createdBridge = thread.bridge == null;
             HaifaRunBridge selectedBridge;
             boolean switchingModel;
+            boolean switchingPlanMode;
             boolean switchingMcp;
             boolean switchingSkills;
             boolean switchingPrompt;
@@ -976,9 +980,10 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 sendJson(exchange, 409, Map.of("detail", "Child configuration is unavailable"));
                 return;
             }
+            boolean isPlanMode = DeerFlowReasoningSettings.isPlanMode(body.path("context"));
             try {
                 if (thread.bridge == null) {
-                    HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt, delegation);
+                    HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt, delegation, isPlanMode);
                     // Restoring the Conversation is read-only; claim the selected model only
                     // after the SDK has admitted the new Run successfully.
                     attachBridge(thread, bridge, false);
@@ -987,6 +992,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 // Keep the old Run's bridge for replay/Interaction; only the new Turn changes model.
                 selectedBridge = thread.bridge;
                 switchingModel = !selectedBridge.matchesModelBinding(binding);
+                switchingPlanMode = selectedBridge.isPlanMode() != isPlanMode;
                 // A configuration change only affects the tool snapshot of later Runs; a Turn whose
                 // MCP projection differs from the attached bridge rebuilds it rather than hot-editing
                 // the active Run.
@@ -1002,8 +1008,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 switchingDelegation = !selectedBridge.delegationSignature().equals(
                         delegation.signature(toolsForThread(thread, agentPrompt), mcpProjection.fingerprint(),
                                 skillProjection == null ? "" : skillProjection.fingerprint(), selectedBridge.mcpToolNames()));
-                if (switchingModel || switchingMcp || switchingSkills || switchingPrompt || switchingDelegation) {
-                    selectedBridge = newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt, delegation);
+                if (switchingModel || switchingMcp || switchingSkills || switchingPrompt || switchingDelegation || switchingPlanMode) {
+                    selectedBridge = newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt, delegation, isPlanMode);
                 }
             } catch (RuntimeException failure) {
                 if (createdBridge && thread.bridge != null) {
@@ -1489,15 +1495,24 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             AgentPromptContext agentPrompt) {
         // Restart history only reads SDK facts. A later Run separately admits fresh declarations.
         return newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt,
-                io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled());
+                io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled(), false);
     }
 
     private HaifaRunBridge newBridge(HaifaRunBridge.ModelBinding binding, ThreadRecord thread,
             McpRunTools.Projection mcpProjection, SkillRunTools.Projection skillProjection,
             AgentPromptContext agentPrompt,
             io.haifa.agent.superharness.server.config.SubagentRunConfiguration delegation) {
+        return newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt, delegation, false);
+    }
+
+    private HaifaRunBridge newBridge(HaifaRunBridge.ModelBinding binding, ThreadRecord thread,
+            McpRunTools.Projection mcpProjection, SkillRunTools.Projection skillProjection,
+            AgentPromptContext agentPrompt,
+            io.haifa.agent.superharness.server.config.SubagentRunConfiguration delegation,
+            boolean isPlanMode) {
         bridgeBuilds.incrementAndGet();
-        return new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt), foundation, mcpProjection, skillProjection, agentPrompt, delegation, childRunCapacity);
+        return new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt), foundation, mcpProjection,
+                skillProjection, agentPrompt, delegation, childRunCapacity, isPlanMode);
     }
 
     private List<? extends JavaTool<?, ?>> toolsForThread(ThreadRecord thread, AgentPromptContext agentPrompt) {
@@ -2399,6 +2414,61 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         String messageId = (String) message.get("id");
         if (!run.projectedToolMessageIds.add(messageId)) return;
         writeSse(output, "messages", List.of(message, Map.of("langgraph_node", "tools")), cursor);
+        if ("tool".equals(message.get("type")) && "write_todos".equals(message.get("name"))) {
+            maybePublishTodos(output, run);
+        }
+    }
+
+    private void maybePublishTodos(OutputStream output, RunRecord run) throws IOException {
+        if (!run.streamModes.contains("updates")) {
+            return;
+        }
+        Optional<AgentPlanView> plan = run.bridge.plan(run.runId);
+        if (plan.isPresent()) {
+            Optional<List<Map<String, Object>>> todos =
+                    PlanAuthoringResources.projectTodos(plan.get(), run.threadId, run.runId.value());
+            if (todos.isPresent()) {
+                writeSse(output, "updates", Map.of("tools", Map.of("todos", todos.get())), null);
+            }
+        }
+    }
+
+    private Optional<List<Map<String, Object>>> resolveThreadTodos(ThreadRecord thread) {
+        List<AgentRunId> candidateRunIds = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        runs.values().stream()
+                .filter(run -> run.threadId.equals(thread.threadId))
+                .sorted((left, right) -> right.createdAt.compareTo(left.createdAt))
+                .forEach(run -> {
+                    if (seen.add(run.runId.value())) {
+                        candidateRunIds.add(run.runId);
+                    }
+                });
+        if (thread.persistedSessionId != null) {
+            HaifaRunBridge bridge = bridgeForPersistedThread(thread);
+            for (ConversationTurn turn : newestRunTurns(thread, bridge)) {
+                turn.runId().ifPresent(runId -> {
+                    if (seen.add(runId.value())) {
+                        candidateRunIds.add(runId);
+                    }
+                });
+            }
+        }
+        if (candidateRunIds.isEmpty()) {
+            return Optional.empty();
+        }
+        HaifaRunBridge fallbackBridge = thread.persistedSessionId != null ? bridgeForPersistedThread(thread) : null;
+        for (AgentRunId runId : candidateRunIds) {
+            RunRecord run = runs.get(runId.value());
+            HaifaRunBridge bridge = (run != null && run.bridge != null) ? run.bridge : fallbackBridge;
+            if (bridge != null) {
+                Optional<AgentPlanView> plan = bridge.plan(runId);
+                if (plan.isPresent()) {
+                    return PlanAuthoringResources.projectTodos(plan.get(), thread.threadId, runId.value());
+                }
+            }
+        }
+        return Optional.empty();
     }
 
     private void maybePublishTitle(OutputStream output, ThreadRecord thread, RunRecord run)
@@ -2915,12 +2985,13 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private Map<String, Object> threadStateResponse(ThreadRecord thread) {
         List<ConversationTurn> turns = scanTurns(thread, 200);
         Map<Long, Integer> ordinals = computeTurnOrdinals(thread);
+        Optional<List<Map<String, Object>>> todos = resolveThreadTodos(thread);
         ConversationTurn checkpoint = turns.stream()
                 .filter(turn -> turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT)
                 .reduce((left, right) -> right)
                 .orElse(null);
         Map<String, Object> response = checkpoint == null
-                ? emptyThreadHistoryResponse(thread, turns, ordinals)
+                ? emptyThreadHistoryResponse(thread, turns, ordinals, todos)
                 : threadHistoryResponse(thread, new HistoryProjection(
                         checkpoint,
                         List.copyOf(turns),
@@ -2930,13 +3001,14 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                                 .map(ConversationTurn::sequence)
                                 .filter(sequence -> sequence < checkpoint.sequence())
                                 .max(Long::compareTo)
-                                .orElse(null)), ordinals);
+                                .orElse(null)), ordinals, todos);
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("messages", overlaidMessages(thread, turns, ordinals, true));
         values.put("artifacts", artifactPaths(thread, turns, true));
         if (thread.title() != null) {
             values.put("title", thread.title());
         }
+        todos.ifPresent(items -> values.put("todos", items));
         response.put("values", values);
         response.put("checkpoint", Map.of());
         response.put("tasks", List.of());
@@ -3010,11 +3082,14 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private Map<String, Object> emptyThreadHistoryResponse(
-            ThreadRecord thread, List<ConversationTurn> turns, Map<Long, Integer> ordinals) {
+            ThreadRecord thread, List<ConversationTurn> turns, Map<Long, Integer> ordinals,
+            Optional<List<Map<String, Object>>> todos) {
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("values", Map.of(
-                "messages", overlaidMessages(thread, turns, ordinals, true),
-                "artifacts", artifactPaths(thread, turns, true)));
+        Map<String, Object> values = new LinkedHashMap<>();
+        values.put("messages", overlaidMessages(thread, turns, ordinals, true));
+        values.put("artifacts", artifactPaths(thread, turns, true));
+        todos.ifPresent(items -> values.put("todos", items));
+        response.put("values", values);
         response.put("next", List.of());
         response.put("metadata", Map.of());
         response.put("checkpoint_id", null);
@@ -3024,12 +3099,15 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private Map<String, Object> threadHistoryResponse(
-            ThreadRecord thread, HistoryProjection projection, Map<Long, Integer> ordinals) {
+            ThreadRecord thread, HistoryProjection projection, Map<Long, Integer> ordinals,
+            Optional<List<Map<String, Object>>> todos) {
         ConversationTurn checkpoint = projection.checkpoint();
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("values", Map.of(
-                "messages", overlaidMessages(thread, projection.messages(), ordinals, false),
-                "artifacts", artifactPaths(thread, projection.messages(), false)));
+        Map<String, Object> values = new LinkedHashMap<>();
+        values.put("messages", overlaidMessages(thread, projection.messages(), ordinals, false));
+        values.put("artifacts", artifactPaths(thread, projection.messages(), false));
+        todos.ifPresent(items -> values.put("todos", items));
+        response.put("values", values);
         response.put("next", List.of());
         response.put("metadata", Map.of());
         response.put("checkpoint_id", historyCursor(checkpoint.sequence()));
@@ -3210,7 +3288,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private void overlayHistoryHead(
-            ThreadRecord thread, List<Map<String, Object>> response, int limit, Map<Long, Integer> ordinals) {
+            ThreadRecord thread, List<Map<String, Object>> response, int limit, Map<Long, Integer> ordinals,
+            Optional<List<Map<String, Object>>> todos) {
         List<ConversationTurn> turns = scanTurns(thread, HISTORY_MESSAGE_RETENTION);
         List<Map<String, Object>> messages = overlaidMessages(thread, turns, ordinals, true);
         Set<String> answeredRuns = new HashSet<>();
@@ -3233,16 +3312,20 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             List<ConversationTurn> headTurns = turns.stream()
                     .filter(turn -> turn.sequence() <= headSequence)
                     .toList();
-            response.getFirst().put("values", Map.of(
-                    "messages", overlaidMessages(thread, headTurns, ordinals, false),
-                    "artifacts", artifactPaths(thread, headTurns, false)));
+            Map<String, Object> headValues = new LinkedHashMap<>();
+            headValues.put("messages", overlaidMessages(thread, headTurns, ordinals, false));
+            headValues.put("artifacts", artifactPaths(thread, headTurns, false));
+            todos.ifPresent(items -> headValues.put("todos", items));
+            response.getFirst().put("values", headValues);
             return;
         }
         RunRecord run = inFlight.orElseThrow();
         Map<String, Object> head = new LinkedHashMap<>();
-        head.put("values", Map.of(
-                "messages", messages,
-                "artifacts", artifactPaths(thread, turns, true)));
+        Map<String, Object> headValues = new LinkedHashMap<>();
+        headValues.put("messages", messages);
+        headValues.put("artifacts", artifactPaths(thread, turns, true));
+        todos.ifPresent(items -> headValues.put("todos", items));
+        head.put("values", headValues);
         head.put("next", List.of());
         head.put("metadata", Map.of());
         head.put("checkpoint_id", historyCursor(run.humanSequence));
@@ -3856,8 +3939,13 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         response.put("created_at", record.createdAt.toString());
         response.put("updated_at", record.updatedAt.toString());
         response.put("metadata", record.publicMetadata());
+        Map<String, Object> values = new LinkedHashMap<>();
         Object title = record.metadata.get("title");
-        response.put("values", title instanceof String ? Map.of("title", title) : Map.of());
+        if (title instanceof String) {
+            values.put("title", title);
+        }
+        resolveThreadTodos(record).ifPresent(todos -> values.put("todos", todos));
+        response.put("values", values);
         response.put("interrupts", Map.of());
         return response;
     }

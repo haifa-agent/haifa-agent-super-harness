@@ -49,10 +49,7 @@ final class DeerFlowReasoningSettings {
             }
             mode = value.asText();
         }
-        if (Boolean.TRUE.equals(booleanValue(context, "is_plan_mode")) || "pro".equals(mode)
-                || "ultra".equals(mode)) {
-            throw new IllegalArgumentException("Plan mode requires W07 plan execution");
-        }
+        booleanValue(context, "is_plan_mode");
         // W08 admits the Child declaration separately; this parser validates the field
         // without treating delegation as a reasoning or plan capability.
         booleanValue(context, "subagent_enabled");
@@ -66,6 +63,11 @@ final class DeerFlowReasoningSettings {
             throw new IllegalArgumentException("reasoning_effort is not supported in flash mode");
         }
         return mode;
+    }
+
+    static boolean isPlanMode(JsonNode context) {
+        if (context == null || !context.isObject()) return false;
+        return Boolean.TRUE.equals(booleanValue(context, "is_plan_mode"));
     }
 
     private static Boolean booleanValue(JsonNode source, String field) {
