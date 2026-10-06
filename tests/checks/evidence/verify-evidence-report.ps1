@@ -101,7 +101,7 @@ function Set-DevelopingTask([object]$Snapshot, [string]$TaskId, [string]$Assignm
         [string]$DataRoot, [string]$Last = '2026-09-28T12:00:00+08:00', [string]$Next = '2026-09-28T12:15:00+08:00') {
     # Slot-negative fixtures must be independent of the live export's unrelated
     # running lanes. Otherwise two synthetic assignments can hit the global
-    # three-slot limit before the intended shared-port/data-root assertion.
+    # slot-count limit before the intended shared-port/data-root assertion.
     $liveRunning = @($Snapshot.tables.assignment | Where-Object {
         $_.state -eq 'running' -and $_.id -notlike 'asg-test-*'
     })
@@ -133,6 +133,24 @@ function Remove-ActiveAssignmentsFromFixture([object]$Snapshot) {
         (Get-Row $Snapshot 'task' ([string]$assignment.task_id)).state = 'blocked'
     }
     $Snapshot.tables.assignment = @($Snapshot.tables.assignment | Where-Object state -ne 'running')
+}
+
+function Set-AllSlotAssignments([object]$Snapshot, [int]$Lanes = 4) {
+    # The table is restated here (AGENTS.md port table) so the check does not read it back from the
+    # code under test. Lanes past the fourth reuse slot 4: there is no fifth port group to give them.
+    $slotPorts = @('20618/25618', '30618/35618', '40618/45618', '11618/16618')
+    Remove-ActiveAssignmentsFromFixture $Snapshot
+    foreach ($lane in 1..$Lanes) {
+        # Copies keep the lanes independent of which live tasks happen to be free. They sit in the
+        # cross-cutting W00 package so they never reach the per-package cap of a delivery package.
+        $task = (Get-Row $Snapshot 'task' 'W04-task-2').PSObject.Copy()
+        $task.id = "W00-slot-fixture-$lane"
+        $task.number = "slot-fixture-$lane"
+        $task.work_package_id = 'W00'
+        $Snapshot.tables.task = @($Snapshot.tables.task) + $task
+        $slot = [Math]::Min($lane, 4)
+        Set-DevelopingTask $Snapshot $task.id "asg-test-slot-$lane" $slot $slotPorts[$slot - 1] "D:/workspace/test/slot-$lane"
+    }
 }
 
 function Invoke-Generator([string]$Root, [string]$Output = 'target/evidence', [switch]$RequireSurefire) {
@@ -296,6 +314,23 @@ try {
     Assert-True ((Read-EvidenceManifest $stagePrerequisite).governance.status -eq 'PASS') 'legal stage prerequisites must pass governance'
     Assert-True ((Get-Row (Read-Snap $stagePrerequisite) 'sprint_stage' 'UX-V1/M3').result -eq 'NOT_RUN') 'prerequisite validation must not upgrade stage NOT_RUN'
 
+    # Slot 4 is a regular child slot (11618/16618); it does not follow the +10000 series of slots 1-3.
+    $slotFour = New-Fixture 'slot-four-assignment'
+    $snap = Read-Snap $slotFour
+    Set-DevelopingTask $snap 'W04-task-2' 'asg-test-slot4' 4 '11618/16618' 'D:/workspace/test/slot4'
+    Write-Snap $slotFour $snap
+    $slotFourResult = Invoke-Generator $slotFour
+    Assert-True ($slotFourResult.ExitCode -eq 0) "a running assignment on slot 4 with 11618/16618 must pass: $($slotFourResult.Output)"
+    Assert-True ((Read-EvidenceManifest $slotFour).governance.status -eq 'PASS') 'slot 4 with its listed port group must pass governance'
+
+    $allSlots = New-Fixture 'all-four-slots-running'
+    $snap = Read-Snap $allSlots
+    Set-AllSlotAssignments $snap
+    Write-Snap $allSlots $snap
+    $allSlotsResult = Invoke-Generator $allSlots
+    Assert-True ($allSlotsResult.ExitCode -eq 0) "four running assignments on slots 1-4 must pass: $($allSlotsResult.Output)"
+    Assert-True ((Read-EvidenceManifest $allSlots).governance.status -eq 'PASS') 'all four child slots may be occupied at once'
+
     $finishedPrerequisite = New-Fixture 'stage-required-finished-task'
     $snap = Read-Snap $finishedPrerequisite
     Add-Relation $snap 'sprint_stage' 'DEMO-V0/M0' 'task' 'W05-task-2' 'requires' 1
@@ -326,6 +361,9 @@ try {
         'developing-without-assignment' = @({ param($s) $t = Get-Row $s 'task' 'W04-task-2'; $t.state = 'developing'; $t.prompt_path = 'private-docs/prompts/test.md' }, 'developing without exactly one running assignment')
         'started-without-prompt' = @({ param($s) $t = Get-Row $s 'task' 'W04-task-2'; $t.state = 'blocked'; $t.started_at = '2026-09-28T10:00:00+08:00' }, 'left pending without a prompt_path')
         'old-slot-ports' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '38018/53018' 'D:/workspace/test/a' }, 'slot and child port group do not match')
+        'slot-four-formula-ports' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 4 '50618/55618' 'D:/workspace/test/a' }, 'slot and child port group do not match')
+        'slot-four-ports-on-slot-three' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 3 '11618/16618' 'D:/workspace/test/a' }, 'slot and child port group do not match')
+        'five-running-assignments' = @({ param($s) Set-AllSlotAssignments $s 5 }, 'running assignments exceed the 4 child slots')
         'late-checkpoint' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '30618/35618' 'D:/workspace/test/a' '2026-09-28T12:00:00+08:00' '2026-09-28T12:30:00+08:00' }, 'next checkpoint must be within 15 minutes')
         'shared-port-group' = @({ param($s) Remove-ActiveAssignmentsFromFixture $s; Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '30618/35618' 'D:/workspace/test/a'; Set-DevelopingTask $s 'W04-task-3' 'asg-test-2' 2 '30618/35618' 'D:/workspace/test/b' }, 'cannot share a port group')
         'shared-data-root' = @({ param($s) Remove-ActiveAssignmentsFromFixture $s; Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '30618/35618' 'D:/workspace/test/a'; Set-DevelopingTask $s 'W04-task-3' 'asg-test-2' 3 '40618/45618' 'D:/workspace/test/a' }, 'cannot share a data root')

@@ -89,11 +89,11 @@ node tests\ui\smoke\loopback-openai-provider.cjs 0 target\provider-manual.ready.
 
 ### 3.2 推荐入口：仓库的 PowerShell runner
 
-runner 负责端口预检、构建、起服务、注入全部 env、跑 Playwright、结束清理。**默认槽位端口按公式校验，参数写错会直接抛错**：Gateway = `10618 + 10000×slot`，Frontend = `15618 + 10000×slot`。
+runner 负责端口预检、构建、起服务、注入全部 env、跑 Playwright、结束清理。**槽位端口按端口表校验，参数写错会直接抛错**：槽位 1–3 为 Gateway = `10618 + 10000×slot`、Frontend = `15618 + 10000×slot`；槽位 4 固定为 `11618`/`16618`，不套用该公式（见 `AGENTS.md`「派单与子智能体调度」端口表）。
 
 | runner | 覆盖用例 | 缺省槽位端口 | 关键参数 |
 | --- | --- | --- | --- |
-| `scripts/ui/run-w18-ui-smoke.ps1` | `tests/ui/smoke/<profile>.spec.cjs` | slot 2 → `30618`/`35618`；受控 Provider 用 OS 分配端口（`-ProviderPort` 必须为 0） | `-AgentSlot 1..3`、`-GatewayPort`、`-FrontendPort`、`-SourceRepository`、`-DataDirectory`、`-SkipBuild`，profile 开关见下 |
+| `scripts/ui/run-w18-ui-smoke.ps1` | `tests/ui/smoke/<profile>.spec.cjs` | slot 2 → `30618`/`35618`；受控 Provider 用 OS 分配端口（`-ProviderPort` 必须为 0） | `-AgentSlot 1..4`、`-GatewayPort`、`-FrontendPort`、`-SourceRepository`、`-DataDirectory`、`-SkipBuild`，profile 开关见下 |
 | `scripts/ui/run-w05-demo-artifact-ui.ps1` | `w05-demo-artifact.spec.cjs`（`-DemoArtifact`） | slot 1 → `20618`/`25618` | 数据目录 `local-tmp/slot-1-w05-m2` |
 | `scripts/ui/run-w05-interaction-smoke.ps1` | `w05-interaction.spec.cjs`（`-Interaction`，走 Maven 测试 classpath fixture，不需要 exec JAR） | slot 2 → `30618`/`35618` | 数据目录 `target/agent-slot-2-interaction-data` |
 | `scripts/ui/run-w03-input-polish-ui.ps1` | `w03-input-polish.spec.cjs`，同脚本连跑两轮独立 data-root | slot 1 → `20618`/`25618` | 证据 `local-tmp/slot-1-w03-input-polish-ui/evidence` |

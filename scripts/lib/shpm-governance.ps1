@@ -10,7 +10,8 @@ $script:ShpmStageStatuses = @('pending', 'in_progress', 'blocked', 'finished')
 $script:ShpmStageResults = @('PASS', 'FAIL', 'NOT_RUN', 'BLOCKED_EXTERNAL', 'UPSTREAM_UNSUPPORTED')
 # Human scope decision 2026-10-01, superseding 2026-09-28's 8 (mirrors SHPM MAX_DELIVERY_TASKS).
 $script:ShpmMaxDeliveryTasks = 16
-$script:ShpmSlotPorts = @{ 1 = '20618/25618'; 2 = '30618/35618'; 3 = '40618/45618' }
+# AGENTS.md port table: slots 1-3 step by +10000; slot 4 is listed, not computed, to stay below the dynamic port range.
+$script:ShpmSlotPorts = @{ 1 = '20618/25618'; 2 = '30618/35618'; 3 = '40618/45618'; 4 = '11618/16618' }
 $script:ShpmRequiredTables = @('work_package', 'task', 'sprint', 'sprint_stage', 'relation', 'assignment', 'verification', 'issue', 'todo', 'event')
 
 function Assert-ShpmCondition {
@@ -269,7 +270,7 @@ function Test-ShpmGovernance {
         Assert-ShpmCondition ($nextAt -gt $anchor -and $nextAt -le $anchor.AddMinutes(15).AddSeconds(5)) `
             "$id next checkpoint must be within 15 minutes"
     }
-    Assert-ShpmCondition ($running.Count -le 3) 'running assignments exceed the three child slots'
+    Assert-ShpmCondition ($running.Count -le $script:ShpmSlotPorts.Count) "running assignments exceed the $($script:ShpmSlotPorts.Count) child slots"
     Assert-ShpmCondition (@($portGroups | Sort-Object -Unique).Count -eq $portGroups.Count) 'running assignments cannot share a port group'
     Assert-ShpmCondition (@($dataRoots | Sort-Object -Unique).Count -eq $dataRoots.Count) 'running assignments cannot share a data root'
 
