@@ -1065,7 +1065,17 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 try {
                     workspaceChanges.publishRunChanges(staged, started.runId().value());
                     workspaceRecordingEnabled = true;
-                } catch (RuntimeException ignored) {
+                } catch (RuntimeException failure) {
+                    // Recording is diagnostic evidence and cannot block the Run, but a swallowed
+                    // publish failure silently disables workspace changes for this Run.
+                    if (!closed) {
+                        INTERACTION_LOG.log(System.Logger.Level.WARNING,
+                                "Workspace baseline publish failed for run " + started.runId().value()
+                                        + " (" + failure.getClass().getSimpleName()
+                                        + (failure instanceof WorkspaceException workspaceFailure
+                                                ? ":" + workspaceFailure.error().name() : "")
+                                        + ")");
+                    }
                     workspaceChanges.discardRunChanges(staged);
                 }
             }
@@ -3583,6 +3593,12 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         if (liveRunVisible) {
             completeWorkspaceChangesIfTerminal(liveRun);
         }
+        // An active Run legitimately has no changes yet. A terminal Run that recorded a baseline but
+        // whose completed snapshot is missing is a real failure and must not reuse the active-Run
+        // unavailable envelope, otherwise a transient publish failure is silently hidden.
+        boolean liveRunTerminalRecorded = liveRunVisible
+                && liveRun.workspaceRecordingEnabled
+                && liveRun.bridge.snapshot(liveRun.runId).status().isTerminal();
         WorkspaceBinding binding;
         try {
             binding = workspaceChanges.requireThreadWorkspace(DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId);
@@ -3595,6 +3611,12 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             changes = workspaceChanges.readRunChanges(
                     DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId, binding.workspaceId(), runId);
         } catch (WorkspaceException failure) {
+            if (liveRunTerminalRecorded
+                    && (failure.error() == WorkspaceError.RUN_BASELINE_NOT_FOUND
+                            || failure.error() == WorkspaceError.RUN_CHANGES_NOT_COMPLETED)) {
+                sendJson(exchange, 500, Map.of("detail", "Workspace changes are unavailable"));
+                return;
+            }
             if ((failure.error() == WorkspaceError.RUN_BASELINE_NOT_FOUND
                     || failure.error() == WorkspaceError.RUN_CHANGES_NOT_COMPLETED) && liveRunVisible) {
                 sendJson(exchange, 200, emptyWorkspaceChanges());

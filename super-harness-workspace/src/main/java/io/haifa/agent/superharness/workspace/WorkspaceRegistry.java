@@ -122,11 +122,13 @@ final class WorkspaceRegistry {
     /**
      * Renames atomically when the file system supports it.
      *
-     * <p>Windows reports both an existing target directory and a briefly held handle (a scanner or
-     * indexer touching a just-written file) as {@link java.nio.file.AccessDeniedException}. An
+     * <p>Windows reports a briefly held handle (a scanner, indexer or concurrent directory reader
+     * touching a just-written file) as an {@link java.nio.file.AccessDeniedException} or, for a
+     * sharing/lock violation, a plain {@link java.nio.file.FileSystemException}. Both are transient
+     * and are retried within a bounded window (about 1.5 seconds in total) before being reported. An
      * existing target is reported as {@link java.nio.file.FileAlreadyExistsException}, as on other
-     * platforms, so callers' "someone else published it" handling applies; otherwise the rename is
-     * retried briefly (about half a second in total) before the denial is reported.
+     * platforms, so callers' "someone else published it" handling applies. Failures that are not
+     * transient (missing source, non-empty target directory) are rethrown immediately.
      */
     static void moveAtomically(Path source, Path target) throws IOException {
         long backoffMillis = 10;
@@ -138,7 +140,11 @@ final class WorkspaceRegistry {
                     Files.move(source, target);
                 }
                 return;
-            } catch (java.nio.file.AccessDeniedException denied) {
+            } catch (java.nio.file.NoSuchFileException
+                    | java.nio.file.DirectoryNotEmptyException
+                    | java.nio.file.FileAlreadyExistsException fatal) {
+                throw fatal;
+            } catch (java.nio.file.FileSystemException denied) {
                 if (Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
                     var exists = new java.nio.file.FileAlreadyExistsException(
                             source.toString(), target.toString(), denied.getReason());
@@ -154,12 +160,12 @@ final class WorkspaceRegistry {
                     Thread.currentThread().interrupt();
                     throw denied;
                 }
-                backoffMillis = Math.min(100, backoffMillis * 2);
+                backoffMillis = Math.min(200, backoffMillis * 2);
             }
         }
     }
 
-    private static final int MOVE_ATTEMPTS = 8;
+    private static final int MOVE_ATTEMPTS = 12;
 
     static void createDirectories(Path path) {
         try {
