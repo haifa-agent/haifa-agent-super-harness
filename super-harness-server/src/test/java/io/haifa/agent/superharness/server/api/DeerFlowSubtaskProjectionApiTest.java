@@ -333,7 +333,7 @@ class DeerFlowSubtaskProjectionApiTest {
     }
 
     @Test void interleavedChildrenKeepIndependentPersistentCursorsAcrossConcurrentAppends() throws Exception {
-        interleavedChildrenKeepIndependentPersistentCursors(null, false);
+        interleavedChildrenKeepIndependentPersistentCursors(null);
     }
 
     /**
@@ -342,12 +342,12 @@ class DeerFlowSubtaskProjectionApiTest {
      * {@code id:} because the id-less subtask frames arrive before any Parent projection frame.
      */
     @Test void interleavedChildrenKeepIndependentPersistentCursorsUnderMonitoredDataDirectory() throws Exception {
-        try (var monitor = DirectoryMonitor.open(data, Duration.ofMillis(3))) {
-            interleavedChildrenKeepIndependentPersistentCursors(monitor, true);
+        try (var monitor = DirectoryMonitor.open(data)) {
+            interleavedChildrenKeepIndependentPersistentCursors(monitor);
         }
     }
 
-    private void interleavedChildrenKeepIndependentPersistentCursors(DirectoryMonitor monitor, boolean waitForCursor)
+    private void interleavedChildrenKeepIndependentPersistentCursors(DirectoryMonitor monitor)
             throws Exception {
         CountDownLatch atSecondModel = new CountDownLatch(2), release = new CountDownLatch(1);
         AtomicInteger lead = new AtomicInteger();
@@ -382,13 +382,13 @@ class DeerFlowSubtaskProjectionApiTest {
             DelegationHttpFixture.configure(http, gateway.base, 1); // The public fixture supplies the model; no Provider connection is made.
             DelegationHttpFixture.seed(http, gateway.base, "researcher", 30, 5, List.of("list_uploaded_files"));
             assertThat(http.request(gateway.base, "POST", "/api/threads", "{\"thread_id\":\"interleaved\"}").statusCode()).isEqualTo(200);
+            if (monitor != null) monitor.arm();
             HttpRequest request = HttpRequest.newBuilder(gateway.base.resolve("/api/threads/interleaved/runs/stream"))
                     .timeout(Duration.ofSeconds(40)).header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(DelegationHttpFixture.input(true).toString())).build();
             var response = http.client.send(request, HttpResponse.BodyHandlers.ofInputStream());
             try (var stream = response.body()) {
                 assertThat(response.statusCode()).isEqualTo(200);
-                if (monitor != null) monitor.arm();
                 String location = response.headers().firstValue("content-location").orElseThrow();
                 assertThat(atSecondModel.await(10, TimeUnit.SECONDS)).as("Both actual Children produced a durable first Tool result").isTrue();
                 JsonNode state = http.get(gateway.base, "/api/threads/interleaved/state", "interleaved-running-state.json");
@@ -406,7 +406,7 @@ class DeerFlowSubtaskProjectionApiTest {
                 var prefixFrames = SseEvents.readUntil(stream, events -> !events.named("messages").isEmpty()
                         && events.named("custom").stream()
                         .filter(event -> "task_running".equals(event.data().path("type").asText())).count() >= 4,
-                        Duration.ofSeconds(10), evidence.resolve("interleaved-disconnected-prefix.sse"), waitForCursor);
+                        Duration.ofSeconds(10), evidence.resolve("interleaved-disconnected-prefix.sse"), true);
                 Files.writeString(evidence.resolve("interleaved-disconnected-prefix.sse"), prefixFrames.body());
                 assertThat(prefixFrames.lastEventId()).isPresent();
                 assertThat(prefixFrames.lastEventId().orElseThrow()).isNotBlank();
@@ -495,7 +495,7 @@ class DeerFlowSubtaskProjectionApiTest {
 
     /** Same real cancellation Run under the external-style directory watcher. */
     @Test void cancellingThreeActualChildrenUnderMonitoredDataDirectory() throws Exception {
-        try (var monitor = DirectoryMonitor.open(data, Duration.ofMillis(40))) {
+        try (var monitor = DirectoryMonitor.open(data)) {
             cancellingThreeActualChildrenClosesTwoWaitingRequests(monitor);
         }
     }
@@ -526,13 +526,13 @@ class DeerFlowSubtaskProjectionApiTest {
             DelegationHttpFixture.configure(http, gateway.base, 1);
             DelegationHttpFixture.seed(http, gateway.base, "researcher", 30, 3, List.of("list_uploaded_files"));
             assertThat(http.request(gateway.base, "POST", "/api/threads", "{\"thread_id\":\"cancel-queued\"}").statusCode()).isEqualTo(200);
+            if (monitor != null) monitor.arm();
             var request = HttpRequest.newBuilder(gateway.base.resolve("/api/threads/cancel-queued/runs/stream"))
                     .timeout(Duration.ofSeconds(40)).header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(DelegationHttpFixture.input(true).toString())).build();
             var response = http.client.send(request, HttpResponse.BodyHandlers.ofInputStream());
             try (var stream = response.body()) {
                 assertThat(response.statusCode()).isEqualTo(200);
-                if (monitor != null) monitor.arm();
                 String location = response.headers().firstValue("content-location").orElseThrow();
                 assertThat(running.await(10, TimeUnit.SECONDS)).as("Three actual Children reached their public model calls").isTrue();
                 JsonNode before = http.get(gateway.base, "/api/threads/cancel-queued/state", "cancel-before-state.json");

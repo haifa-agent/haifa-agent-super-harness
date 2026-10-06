@@ -26,6 +26,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class DirectoryMonitor implements AutoCloseable {
     private static final Duration STOP_DEADLINE = Duration.ofSeconds(5);
 
+    /** Default time a monitored file is held open; long enough to perturb concurrent writes. */
+    public static final Duration DEFAULT_FILE_HOLD = Duration.ofMillis(40);
+
     private final Path root;
     private final Duration fileHold;
     private final WatchService service;
@@ -58,6 +61,11 @@ public final class DirectoryMonitor implements AutoCloseable {
      */
     public void arm() {
         armed.set(true);
+    }
+
+    /** Starts watching an already-existing directory with the {@link #DEFAULT_FILE_HOLD}. */
+    public static DirectoryMonitor open(Path root) throws IOException {
+        return open(root, DEFAULT_FILE_HOLD);
     }
 
     /** Starts watching an already-existing directory; later-created sub-directories are registered too. */
