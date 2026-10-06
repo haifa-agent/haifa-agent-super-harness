@@ -74,7 +74,8 @@ def resource_errors(args: argparse.Namespace) -> list[str]:
 
 def worktree_base_sha(repo: Path, worktree: str) -> str:
     """HEAD of the worktree, after confirming the worktree is a checkout of ``repo``."""
-    base_sha = git_value(worktree, "rev-parse", "--verify", "HEAD")
+    # git treats -C '' as the current directory, so an empty value would pass as this checkout.
+    base_sha = git_value(worktree, "rev-parse", "--verify", "HEAD") if worktree.strip() else None
     if base_sha is None:
         raise DispatchError(f"Worktree '{worktree}' is not a git checkout with a commit; create it before dispatching.")
     common = [git_value(path, "rev-parse", "--path-format=absolute", "--git-common-dir") for path in (repo, worktree)]

@@ -527,6 +527,8 @@ class DispatchTest(unittest.TestCase):
                 "--data-root is required": [*common, "--worktree", str(worktree), "--slot", "1"],
                 "not a git checkout": [*common, "--worktree", str(root / "absent"), "--slot", "1",
                                        "--data-root", "local-tmp/d"],
+                # git -C '' means the current directory, which is a checkout when run from the repository.
+                "Worktree '' is not a git checkout": [*common, "--worktree", "", "--slot", "1", "--data-root", "local-tmp/d"],
             }
             for fragment, extra in cases.items():
                 code, out, err, calls = self.run_main(root, harness, extra)
