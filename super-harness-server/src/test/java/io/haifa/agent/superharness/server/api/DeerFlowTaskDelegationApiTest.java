@@ -214,6 +214,93 @@ class DeerFlowTaskDelegationApiTest {
         }
     }
 
+    @Test void missingParentProviderUsageStaysUnknownWithKnownChildUsageAcrossRestart() throws Exception {
+        try (var provider = new ControlledProvider(evidence, true, (request, call) -> {
+            if (child(request)) {
+                return ControlledProvider.stop("child-" + call, "w08-model", "known child usage", 2, 3);
+            }
+            boolean hasTaskResult = java.util.stream.StreamSupport.stream(request.path("messages").spliterator(), false)
+                    .anyMatch(message -> message.path("role").asText().equals("tool"));
+            if (!hasTaskResult) {
+                return ControlledProvider.call("lead-" + call, "w08-model", "parent-usage-task-" + call,
+                        "task", Map.of("agent", "researcher", "objective", "Keep child usage known"), 0, 0);
+            }
+            ObjectNode response = ControlledProvider.stop("lead-" + call, "w08-model", "parent output", 0, 0);
+            if (request.path("messages").toString().contains("parent usage omitted")) response.remove("usage");
+            return response;
+        }, true)) {
+            Map<String, String> locations = new java.util.LinkedHashMap<>();
+            Map<String, JsonNode> states = new java.util.LinkedHashMap<>();
+            try (var gateway = GatewayFixture.production(data, Integer.getInteger("w08.gatewayPort", 14618), env, evidence)) {
+                configure(gateway.base, provider.port()); seed(gateway.base, "researcher", "CHILD-W08", 30, 5);
+                for (String thread : List.of("parent-usage-omitted", "parent-usage-zero")) {
+                    boolean omitted = thread.endsWith("omitted");
+                    ObjectNode request = input(true);
+                    ((ObjectNode) request.path("input").path("messages").get(0))
+                            .put("content", omitted ? "parent usage omitted" : "parent usage explicit zero");
+                    String location = execute(gateway.base, thread, request); locations.put(thread, location);
+                    JsonNode run = http.get(gateway.base, location, thread + "-run.json");
+                    assertThat(run.path("status").asText()).isEqualTo(omitted ? "error" : "success");
+                    assertThat(run.path("subagent_tokens").isIntegralNumber()).isTrue();
+                    assertThat(run.path("subagent_tokens").asLong()).isEqualTo(5);
+                    JsonNode state = http.get(gateway.base, "/api/threads/" + thread + "/state", thread + "-state.json");
+                    states.put(thread, state);
+                    JsonNode result = messages(state).stream().filter(message -> message.path("name").asText().equals("task"))
+                            .findFirst().orElseThrow();
+                    assertThat(result.path("additional_kwargs").path("subagent_status").asText()).isEqualTo("completed");
+                    assertThat(result.path("additional_kwargs").path("subagent_token_usage").path("total_tokens").asLong())
+                            .isEqualTo(5);
+                    JsonNode usage = http.get(gateway.base, "/api/threads/" + thread + "/token-usage", thread + "-thread-usage.json");
+                    if (omitted) {
+                        assertThat(run.has("lead_agent_tokens")).isFalse();
+                        for (String field : List.of("total_input_tokens", "total_output_tokens", "total_tokens", "llm_call_count")) {
+                            assertThat(run.path(field).isNull()).as(field).isTrue();
+                        }
+                        assertThat(run.path("diagnostics").toString()).contains("MODEL_RESPONSE_INVALID");
+                        assertThat(usage.isNull()).isTrue();
+                    } else {
+                        assertThat(run.path("lead_agent_tokens").isIntegralNumber()).isTrue();
+                        assertThat(run.path("lead_agent_tokens").asLong()).isZero();
+                        assertThat(run.path("total_tokens").asLong()).isEqualTo(5);
+                        assertThat(usage.path("total_tokens").asLong()).isEqualTo(5);
+                    }
+                }
+                assertThat(provider.calls.get()).isEqualTo(6);
+                assertThat(provider.responseDiagnostics.stream()
+                        .filter(frame -> Boolean.FALSE.equals(frame.get("usage_present"))).toList()).hasSize(1);
+                var missing = provider.responseDiagnostics.stream()
+                        .filter(frame -> Boolean.FALSE.equals(frame.get("usage_present"))).findFirst().orElseThrow();
+                String suffix = missing.get("response_kind").equals("openai-compatible-sse") ? ".sse" : ".json";
+                assertThat(Files.readString(evidence.resolve("provider-response-" + missing.get("call") + suffix)))
+                        .contains("parent output").doesNotContain("\"usage\"");
+            }
+            int calls = provider.calls.get();
+            try (var restarted = GatewayFixture.production(data, Integer.getInteger("w08.gatewayPort", 14618), env, evidence)) {
+                for (String thread : locations.keySet()) {
+                    JsonNode run = http.get(restarted.base, locations.get(thread), thread + "-restart-run.json");
+                    assertThat(run.path("subagent_tokens").asLong()).isEqualTo(5);
+                    assertThat(http.get(restarted.base, "/api/threads/" + thread + "/state", thread + "-restart-state.json")
+                            .path("values").path("messages")).isEqualTo(states.get(thread).path("values").path("messages"));
+                    JsonNode usage = http.get(restarted.base, "/api/threads/" + thread + "/token-usage", thread + "-restart-thread-usage.json");
+                    if (thread.endsWith("omitted")) {
+                        assertThat(run.path("status").asText()).isEqualTo("error");
+                        assertThat(run.has("lead_agent_tokens")).isFalse();
+                        assertThat(run.path("total_tokens").isNull()).isTrue();
+                        assertThat(usage.isNull()).isTrue();
+                    } else {
+                        assertThat(run.path("status").asText()).isEqualTo("success");
+                        assertThat(run.path("lead_agent_tokens").isIntegralNumber()).isTrue();
+                        assertThat(run.path("lead_agent_tokens").asLong()).isZero();
+                        assertThat(run.path("total_tokens").asLong()).isEqualTo(5);
+                        assertThat(usage.path("total_tokens").asLong()).isEqualTo(5);
+                    }
+                }
+                assertThat(provider.calls.get()).isEqualTo(calls);
+            }
+            assertThat(provider.failure.get()).isNull();
+        }
+    }
+
     @Test void unknownChildIsRejectedBeforeCreationAndParentContinues() throws Exception {
         try (var provider = new ControlledProvider(evidence, true, (request, call) -> call == 1
                 ? ControlledProvider.call("unknown-" + call, "w08-model", "unknown-provider", "task",

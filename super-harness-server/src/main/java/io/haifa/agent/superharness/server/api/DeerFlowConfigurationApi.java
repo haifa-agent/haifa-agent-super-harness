@@ -1225,7 +1225,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                 Files.write(temporary, key);
                 AtomicMoves.replace(temporary, keyFile);
             } finally {
-                Files.deleteIfExists(temporary);
+                AtomicMoves.deleteQuietly(temporary);
             }
         }
 

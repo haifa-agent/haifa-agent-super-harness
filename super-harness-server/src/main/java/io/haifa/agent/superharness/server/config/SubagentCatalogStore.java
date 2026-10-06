@@ -91,7 +91,7 @@ public final class SubagentCatalogStore {
             } catch (FileAlreadyExistsException exception) {
                 throw new CatalogException(409, "Managed subagent '" + name + "' already exists");
             } finally {
-                Files.deleteIfExists(temporary);
+                AtomicMoves.deleteQuietly(temporary);
             }
             return response(definition, "managed", true);
         }
@@ -113,7 +113,7 @@ public final class SubagentCatalogStore {
                 if (!Files.isRegularFile(file(name))) throw missing(name);
                 AtomicMoves.replace(temporary, file(name));
             } finally {
-                Files.deleteIfExists(temporary);
+                AtomicMoves.deleteQuietly(temporary);
             }
             return response(definition, "managed", true);
         }
@@ -135,7 +135,7 @@ public final class SubagentCatalogStore {
             try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.WRITE)) { channel.force(true); }
             return temporary;
         } catch (IOException exception) {
-            Files.deleteIfExists(temporary);
+            AtomicMoves.deleteQuietly(temporary);
             throw exception;
         }
     }

@@ -68,6 +68,16 @@ public final class SseEvents {
     /** Preserve actual bytes read even when EOF precedes the required assertion. */
     public static Prefix readUntil(InputStream input, Predicate<SseEvents> reached, Duration timeout,
             Path evidence) throws Exception {
+        return readUntil(input, reached, timeout, evidence, false);
+    }
+
+    /**
+     * As above, but optionally keep reading until a durable {@code id:} frame has arrived. This lets
+     * a test assert the cursor without ever completing on id-less frames (tool-request {@code messages}
+     * and subtask {@code custom} frames carry no cursor by design).
+     */
+    public static Prefix readUntil(InputStream input, Predicate<SseEvents> reached, Duration timeout,
+            Path evidence, boolean requireEventId) throws Exception {
         var executor = Executors.newVirtualThreadPerTaskExecutor();
         var task = executor.submit(() -> {
             var bytes = new ByteArrayOutputStream();
@@ -82,6 +92,9 @@ public final class SseEvents {
                         if ((body.endsWith("\n\n") || body.endsWith("\r\n\r\n")) && reached.test(read(body))) {
                             Optional<String> id = body.lines().filter(line -> line.startsWith("id:"))
                                     .map(line -> line.substring(3).stripLeading()).reduce((first, last) -> last);
+                            if (requireEventId && id.isEmpty()) {
+                                continue;
+                            }
                             return new Prefix(body, id);
                         }
                     }

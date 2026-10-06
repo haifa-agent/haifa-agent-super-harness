@@ -33,7 +33,10 @@ final class PersistentArtifactPayloadStore implements ArtifactPayloadStore {
                 try {
                     WorkspaceRegistry.moveAtomically(part, target);
                 } catch (java.nio.file.FileAlreadyExistsException concurrentPublish) {
-                    Files.deleteIfExists(part);
+                    // The concurrent publisher already stored the identical content-addressed
+                    // payload, so this temporary is garbage. Cleanup must never throw: a held
+                    // handle on the .part file would otherwise mask the successful publication.
+                    AtomicMoves.deleteQuietly(part);
                 }
             }
             return new ArtifactPayloadRef("payload-" + hash, "sha256:" + hash, copy.length, mediaType);

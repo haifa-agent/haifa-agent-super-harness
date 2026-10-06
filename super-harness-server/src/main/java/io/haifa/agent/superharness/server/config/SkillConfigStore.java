@@ -235,7 +235,7 @@ public final class SkillConfigStore {
             AtomicMoves.replace(temporary, stateFile);
             state = next;
         } finally {
-            Files.deleteIfExists(temporary);
+            AtomicMoves.deleteQuietly(temporary);
         }
     }
 
@@ -576,7 +576,7 @@ public final class SkillConfigStore {
                 Files.write(pending, SkillPackageFiles.export(directory, files));
                 AtomicMoves.create(pending, target);
             } finally {
-                Files.deleteIfExists(pending);
+                AtomicMoves.deleteQuietly(pending);
             }
         }
     }

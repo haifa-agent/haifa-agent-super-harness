@@ -141,7 +141,7 @@ public final class PersistentThreadCatalog {
             Files.write(temporary, bytes);
             AtomicMoves.replace(temporary, catalog);
         } finally {
-            Files.deleteIfExists(temporary);
+            AtomicMoves.deleteQuietly(temporary);
         }
     }
 
