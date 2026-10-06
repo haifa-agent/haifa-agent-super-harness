@@ -111,6 +111,64 @@ class DeerFlowThinkingIntegrationTest {
         }
     }
 
+    @Test
+    void frozenComposerProContextIsAcceptedAndRequestsThinking() throws Exception {
+        assertFrozenComposerContextRequestsThinking(
+                "thread-pro-flags",
+                """
+                {"model_name":"thinking-model","mode":"pro","thinking_enabled":true,
+                 "is_plan_mode":true,"reasoning_effort":"medium","subagent_enabled":false}
+                """);
+    }
+
+    @Test
+    void frozenComposerUltraContextIsAcceptedAndRequestsThinking() throws Exception {
+        assertFrozenComposerContextRequestsThinking(
+                "thread-ultra-flags",
+                """
+                {"model_name":"thinking-model","mode":"ultra","thinking_enabled":true,
+                 "is_plan_mode":true,"reasoning_effort":"high","subagent_enabled":true}
+                """);
+    }
+
+    /**
+     * The frozen composer's pro/ultra contexts carry thinking_enabled=true, so they only bind on the
+     * official DeepSeek endpoint form. This routes the unchanged official snapshot to a loopback
+     * Controlled Provider and asserts the composed request really enables thinking.
+     */
+    private void assertFrozenComposerContextRequestsThinking(String threadId, String contextJson) throws Exception {
+        Path data = GatewayFixture.dataDirectory();
+        Path evidence = GatewayFixture.evidenceDirectory();
+        try (var provider = new ControlledProvider(evidence, true, (request, call) ->
+                        ControlledProvider.stop("flags-" + call, MODEL, "flags answer " + call));
+                var transport = new FixtureTransport(provider.port())) {
+            try (var gateway = gateway(data, evidence, transport)) {
+                saveOfficialThinkingModel(gateway);
+                gateway.thread(threadId);
+                ObjectNode body = gateway.input(null, null, "perform the configured turn");
+                body.set("context", GatewayFixture.JSON.readTree(contextJson));
+                HttpResponse<String> stream =
+                        gateway.request("POST", "/api/threads/" + threadId + "/runs/stream", body);
+                assertThat(stream.statusCode()).as(stream.body()).isEqualTo(200);
+                assertThat(stream.body()).contains("event: end");
+                assertThat(provider.calls).hasValue(1);
+                JsonNode request = provider.requests.get(0);
+                assertThat(request.path("thinking").path("type").asText()).isEqualTo("enabled");
+            }
+        }
+    }
+
+    private static void saveOfficialThinkingModel(GatewayFixture gateway) throws Exception {
+        var model = GatewayFixture.JSON.createObjectNode().put("name", "thinking-model")
+                .put("display_name", "Thinking fixture").put("provider", "openai-compatible")
+                .put("model", MODEL).put("base_url", "https://api.deepseek.com")
+                .put("api_key", "fixture-key").put("enabled", true).put("supports_vision", false)
+                .put("context_window", 32768).put("max_tokens", 1024);
+        var save = GatewayFixture.JSON.createObjectNode().putNull("expected_revision");
+        save.set("config", model);
+        assertThat(gateway.request("PUT", "/api/managed-models", save).statusCode()).isEqualTo(200);
+    }
+
     private static void assertPublicBody(String body) {
         assertThat(body.contains(ORDINARY) || body.contains(TOOL)).as("protected payload stays out of public output").isFalse();
         assertThat(body).doesNotContain("modelContinuationId", "modelContinuationDigest", "modelContinuationBytes");
