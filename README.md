@@ -120,6 +120,14 @@ UI runner 的服务端构建戳同样以 Java 输入指纹比较：只改文档�
 按内容核对。合入后用 `python scripts/governance/evidence_reuse.py --target <合入后提交> <证据>` 逐份判断
 是否 `REUSABLE`。
 
+前端构建戳只含冻结前端源码树、lockfile 和代理目标，不含仓库 HEAD：匹配就复用本地构建，否则从主检出的
+共享缓存 `local-tmp/shared/frontend-build/` 恢复（键见 `scripts/lib/frontend_build_cache.py`），两者都没有才
+执行 `pnpm build` 并存入缓存；`flow-health.json` 的 `serverBuild`/`frontendBuild` 记录
+`REUSED`/`RESTORED`/`BUILT`。`-SkipServerBuild`/`-SkipBuild` 强制复用，构建戳不符时失败。冻结前端来源校验在
+源码与 DeerFlow 检出未变时复用本 worktree 的上次 PASS（`local-tmp/cache/frontend-source-gate/`，键见
+`scripts/lib/frontend_gate_cache.py`）。全仓门禁并行进程数的选择依据见 `scripts/lib/gate_resources.py`，摘要含
+`forksSelection`/`lowMemory`/`freePhysicalMb`/`freeCommitMb`。每轮 UI 仍使用独立数据与证据。
+
 脚本回归入口统一运行 `tests/checks/build/` 与 `tests/checks/ui/` 清单内的检查，摘要写到
 `local-tmp/verify-scripts/`：
 
