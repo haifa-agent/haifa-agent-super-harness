@@ -408,12 +408,7 @@ public final class RestrictedWorkspaceService {
             ensureNoLinks(root, target);
             Path part = Files.createTempFile(target.getParent(), ".write-", ".part");
             Files.write(part, content);
-            try {
-                Files.move(part, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            } catch (java.nio.file.AtomicMoveNotSupportedException exception) {
-                Files.move(part, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            }
+            AtomicMoves.replace(part, target);
         } catch (IOException exception) {
             throw WorkspaceRegistry.ioFailure("failed to write workspace file", exception);
         }

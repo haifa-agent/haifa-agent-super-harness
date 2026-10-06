@@ -3,12 +3,11 @@ package io.haifa.agent.superharness.server.config;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.haifa.agent.superharness.workspace.AtomicMoves;
 import java.io.IOException;
 import java.net.URI;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -312,15 +311,7 @@ public final class McpConfigStore {
         try {
             Files.createDirectories(file.getParent());
             json.writerWithDefaultPrettyPrinter().writeValue(temporary.toFile(), root);
-            try {
-                Files.move(
-                        temporary,
-                        file,
-                        StandardCopyOption.ATOMIC_MOVE,
-                        StandardCopyOption.REPLACE_EXISTING);
-            } catch (AtomicMoveNotSupportedException ignored) {
-                Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
-            }
+            AtomicMoves.replace(temporary, file);
         } catch (IOException exception) {
             try {
                 Files.deleteIfExists(temporary);

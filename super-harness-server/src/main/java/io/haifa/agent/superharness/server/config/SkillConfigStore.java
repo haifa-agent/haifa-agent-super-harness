@@ -12,10 +12,10 @@ import io.haifa.agent.skill.api.SkillSourceRef;
 import io.haifa.agent.skill.core.LocalDirectorySkillSource;
 import io.haifa.agent.skill.core.SkillPackageLimits;
 import io.haifa.agent.skill.core.SkillPackageParser;
+import io.haifa.agent.superharness.workspace.AtomicMoves;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -232,8 +232,7 @@ public final class SkillConfigStore {
         Path temporary = stateFile.resolveSibling(stateFile.getFileName() + "." + UUID.randomUUID() + ".tmp");
         try {
             Files.write(temporary, bytes);
-            Files.move(temporary, stateFile, StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING);
+            AtomicMoves.replace(temporary, stateFile);
             state = next;
         } finally {
             Files.deleteIfExists(temporary);
@@ -575,7 +574,7 @@ public final class SkillConfigStore {
             Path pending = parent.resolve(".pending-" + UUID.randomUUID());
             try {
                 Files.write(pending, SkillPackageFiles.export(directory, files));
-                Files.move(pending, target, StandardCopyOption.ATOMIC_MOVE);
+                AtomicMoves.create(pending, target);
             } finally {
                 Files.deleteIfExists(pending);
             }

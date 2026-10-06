@@ -4,12 +4,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.haifa.agent.superharness.workspace.AtomicMoves;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -111,7 +111,7 @@ public final class SubagentCatalogStore {
             try {
                 // The same lock covers read/merge/replace and delete, avoiding stale read races.
                 if (!Files.isRegularFile(file(name))) throw missing(name);
-                Files.move(temporary, file(name), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                AtomicMoves.replace(temporary, file(name));
             } finally {
                 Files.deleteIfExists(temporary);
             }
