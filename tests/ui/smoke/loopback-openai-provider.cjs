@@ -84,6 +84,25 @@ const POLISH_FENCE_TEXT = "Polished camera brief from fence.";
 const polishCalls = [];
 const chatCalls = [];
 
+// ---- W08 Child delegation controlled fixture ---------------------------------
+// The unmodified frozen frontend is driven against the real Haifa backend in Ultra
+// mode (the spec shapes only the /runs/stream context, never the response stream).
+// Parent and Child requests are distinguished by stable scenario inputs: the Child
+// run carries this managed system-prompt marker; the Parent carries the `task` Tool
+// actually declared by the backend. One ordered list of Tool calls is emitted per
+// model round, never one message per call.
+const W08_CHILD_MARK = "W08-CHILD-MARKER";
+const W08_CHILD_AGENT = "w08-child";
+const w08Calls = [];
+
+function messagesText(body) {
+  return JSON.stringify(body.messages ?? []);
+}
+
+function isW08Child(body) {
+  return messagesText(body).includes(W08_CHILD_MARK);
+}
+
 function isInputPolishRequest(body) {
   if (!Array.isArray(body.messages)) return false;
   return body.messages.some(
@@ -280,6 +299,89 @@ function finishWithToolCall(response, id, callId, name, args) {
   response.end();
 }
 
+function taskCallsFrame(id, calls) {
+  return {
+    id,
+    model: "w18-controlled-model",
+    choices: [
+      {
+        index: 0,
+        delta: {
+          tool_calls: calls.map((call, index) => ({
+            index,
+            id: call.callId,
+            type: "function",
+            function: { name: call.name, arguments: JSON.stringify(call.args) },
+          })),
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+  };
+}
+
+// One assistant message per model round even for parallel work: both `task` calls
+// share a single delta so the projection opens one frozen `assistant:subagent` group.
+function finishWithTaskCalls(response, id, calls) {
+  frame(response, taskCallsFrame(id, calls));
+  frame(response, { id, model: "w18-controlled-model", choices: [], usage: { prompt_tokens: 4, completion_tokens: 2 } });
+  frame(response, "[DONE]");
+  response.end();
+}
+
+function completeW08Text(response, body, id, text) {
+  if (body.stream === true) {
+    finishWithText(response, id, text);
+    return;
+  }
+  // A Child model call may be a one-shot non-streaming request; answer in the
+  // OpenAI completion shape rather than emitting an SSE body to a JSON reader.
+  sendJson(response, 200, {
+    id,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: "w18-controlled-model",
+    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 6, completion_tokens: 4, total_tokens: 10 },
+  });
+}
+
+function handleW08Delegation(response, body, prompt, offeredTools) {
+  // Scenario markers live anywhere in the transcript. The child's first model
+  // call can carry an injected RUNTIME_CONTROL_UPDATE as the last message, so
+  // gating on the last user text alone would misclassify it.
+  const text = messagesText(body);
+  const child = text.includes(W08_CHILD_MARK);
+  const childObjective = /W08-UI09-OBJECTIVE-(?:ALPHA|BETA)|W08-UI0[68]-OBJECTIVE/.exec(text)?.[0] ?? null;
+  const record = { child, prompt, offeredTools, objective: childObjective };
+  w08Calls.push(record);
+  console.log(JSON.stringify({ type: "w08_delegation", ...record }));
+  const id = `w08-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  if (child) {
+    completeW08Text(response, body, id, childObjective ? `W08-CHILD-RESULT:${childObjective}` : "W08-CHILD-RESULT:UNKNOWN");
+    return;
+  }
+  if (!offeredTools.includes("task")) {
+    completeW08Text(response, body, id, `Controlled provider: ${prompt}`);
+    return;
+  }
+  if (hasToolResult(body)) {
+    completeW08Text(response, body, id, `W08-PARENT-FINAL:${prompt}`);
+    return;
+  }
+  if (text.includes("W08-UI09-PARENT")) {
+    finishWithTaskCalls(response, id, [
+      { callId: "w08-task-alpha", name: "task", args: { agent: W08_CHILD_AGENT, objective: "W08-UI09-OBJECTIVE-ALPHA" } },
+      { callId: "w08-task-beta", name: "task", args: { agent: W08_CHILD_AGENT, objective: "W08-UI09-OBJECTIVE-BETA" } },
+    ]);
+    return;
+  }
+  const objective = text.includes("W08-UI08-PARENT") ? "W08-UI08-OBJECTIVE" : "W08-UI06-OBJECTIVE";
+  finishWithTaskCalls(response, id, [
+    { callId: `w08-task-${Date.now()}`, name: "task", args: { agent: W08_CHILD_AGENT, objective } },
+  ]);
+}
+
 function finishWithText(response, id, text) {
   frame(response, completionChunk(id, text, "stop"));
   frame(response, { id, model: "w18-controlled-model", choices: [], usage: { prompt_tokens: 6, completion_tokens: 4 } });
@@ -287,7 +389,21 @@ function finishWithText(response, id, text) {
   response.end();
 }
 
+// The W08 delegation branch is reached before the generic SSE writeHead, so every
+// streaming finish must set the event-stream headers itself. Guarded, so the
+// existing branches that already wrote them are unchanged.
+function sseHeaders(response) {
+  if (!response.headersSent) {
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+  }
+}
+
 function frame(response, value) {
+  sseHeaders(response);
   response.write(`data: ${typeof value === "string" ? value : JSON.stringify(value)}\n\n`);
 }
 
@@ -306,7 +422,7 @@ const server = http.createServer((request, response) => {
     return;
   }
   if (request.method === "GET" && url.pathname === "/__state") {
-    sendJson(response, 200, { polishCalls, chatCalls });
+    sendJson(response, 200, { polishCalls, chatCalls, w08Calls });
     return;
   }
   if (request.method !== "POST" || url.pathname !== "/v1/chat/completions") {
@@ -374,6 +490,14 @@ const server = http.createServer((request, response) => {
         authorization: /^Bearer\s+\S+$/i.test(request.headers.authorization ?? ""),
       }),
     );
+
+    // W08 Child-delegation scenes: only this bounded marker family. Parent vs Child
+    // is decided by the Child system-prompt marker and the declared `task` Tool, not
+    // by arrival order; the request stream is otherwise untouched.
+    if (isW08Child(body) || messagesText(body).includes("W08-UI")) {
+      handleW08Delegation(response, body, prompt, offeredTools);
+      return;
+    }
 
     if (body.stream !== true && !probe) {
       const suggestion = isSuggestionsRequest(body);
