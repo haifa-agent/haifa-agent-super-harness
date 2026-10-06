@@ -46,16 +46,56 @@ public final class DeerFlowToolTranscriptProjection {
         return boundary < 0 ? calls : List.copyOf(calls.subList(0, boundary + 1));
     }
 
-    static List<Map<String, Object>> messages(List<ToolCallView> calls) {
+    /**
+     * Frozen LangGraph stores one assistant message per model round carrying that round's entire
+     * {@code tool_calls} list, followed by the round's Tool results. The projection therefore emits
+     * one AI request per round, never one per call.
+     */
+    static List<Map<String, Object>> messages(List<List<ToolCallView>> rounds) {
         List<Map<String, Object>> messages = new ArrayList<>();
-        for (ToolCallView call : upToClarificationBoundary(calls)) {
-            messages.add(requestMessage(call));
-            resultMessage(call).ifPresent(messages::add);
+        for (List<ToolCallView> round : rounds) {
+            List<ToolCallView> visible = upToClarificationBoundary(round);
+            if (visible.isEmpty()) continue;
+            messages.add(requestMessage(visible));
+            for (ToolCallView call : visible) {
+                resultMessage(call).ifPresent(messages::add);
+            }
+            // Nothing after the clarification boundary is projected, in this round or a later one.
+            if (hasClarificationBoundary(round)) break;
         }
         return List.copyOf(messages);
     }
 
     static Map<String, Object> requestMessage(ToolCallView call) {
+        Map<String, Object> message = baseMessage(call, "request", "ai");
+        message.put("content", "");
+        message.put("tool_calls", List.of(toolCallEntry(call)));
+        message.put("additional_kwargs", Map.of("haifa_tool_status", wireStatus(call.status())));
+        return message;
+    }
+
+    /**
+     * One AI message for a whole model round. A single-call round is byte-identical to
+     * {@link #requestMessage(ToolCallView)}. A multi-call round keeps the first call's derived id and
+     * omits the per-call {@code haifa_tool_status}: it has no consumer and each call's status stays on
+     * its own result message.
+     */
+    static Map<String, Object> requestMessage(List<ToolCallView> round) {
+        if (round.size() == 1) {
+            return requestMessage(round.getFirst());
+        }
+        List<Map<String, Object>> toolCalls = new ArrayList<>();
+        for (ToolCallView call : round) {
+            toolCalls.add(toolCallEntry(call));
+        }
+        Map<String, Object> message = baseMessage(round.getFirst(), "request", "ai");
+        message.put("content", "");
+        message.put("tool_calls", List.copyOf(toolCalls));
+        message.put("additional_kwargs", Map.of());
+        return message;
+    }
+
+    private static Map<String, Object> toolCallEntry(ToolCallView call) {
         Map<String, Object> toolCall = new LinkedHashMap<>();
         toolCall.put("id", call.id().value());
         toolCall.put("name", call.toolName());
@@ -63,12 +103,21 @@ public final class DeerFlowToolTranscriptProjection {
                 ? DeerFlowDelegationProjection.arguments(call.arguments().values())
                 : call.arguments().values());
         toolCall.put("type", "tool_call");
+        return toolCall;
+    }
 
-        Map<String, Object> message = baseMessage(call, "request", "ai");
-        message.put("content", "");
-        message.put("tool_calls", List.of(toolCall));
-        message.put("additional_kwargs", Map.of("haifa_tool_status", wireStatus(call.status())));
-        return message;
+    /**
+     * The Tool call ids a projected message carries, in order. A round request is written again under
+     * the same message id only when this list grows; a single-call request and every result message
+     * keep one constant signature, so they are still written exactly once per stream.
+     */
+    static String messageSignature(Map<String, Object> message) {
+        if (!(message.get("tool_calls") instanceof List<?> calls)) return "";
+        StringBuilder ids = new StringBuilder();
+        for (Object call : calls) {
+            if (call instanceof Map<?, ?> entry) ids.append(entry.get("id")).append(',');
+        }
+        return ids.toString();
     }
 
     static Optional<Map<String, Object>> resultMessage(ToolCallView call) {

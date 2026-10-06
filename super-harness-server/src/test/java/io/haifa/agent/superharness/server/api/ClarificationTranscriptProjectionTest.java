@@ -31,7 +31,7 @@ class ClarificationTranscriptProjectionTest {
         ToolCallView ask = completed("ask_clarification", Map.of(
                 "content", "\u2753 Which env?", "humanInput", PAYLOAD, "error", ""));
 
-        List<Map<String, Object>> messages = DeerFlowToolTranscriptProjection.messages(List.of(ask));
+        List<Map<String, Object>> messages = DeerFlowToolTranscriptProjection.messages(List.of(List.of(ask)));
         assertThat(messages).hasSize(2);
 
         Map<String, Object> card = messages.get(1);
@@ -68,7 +68,9 @@ class ClarificationTranscriptProjectionTest {
         // No tool call after the boundary contributes messages or artifact paths: the first AI
         // tool-call request carries the name only inside tool_calls, so the projected result names
         // (read_file, then the clarification card) are the boundary-visible ones.
-        List<Map<String, Object>> messages = DeerFlowToolTranscriptProjection.messages(calls);
+        // Each call is its own model round here, as in the Run this fixture is taken from.
+        List<Map<String, Object>> messages = DeerFlowToolTranscriptProjection.messages(
+                calls.stream().map(List::of).toList());
         assertThat(messages).hasSize(4);
         assertThat(messages.get(1).get("name")).isEqualTo("read_file");
         assertThat(messages.get(3).get("name")).isEqualTo("ask_clarification");
