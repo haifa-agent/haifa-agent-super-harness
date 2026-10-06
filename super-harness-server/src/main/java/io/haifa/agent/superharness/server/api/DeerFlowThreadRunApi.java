@@ -2375,10 +2375,58 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return;
         }
         ToolCallView call = selected.orElseThrow();
-        writeToolMessage(output, run, DeerFlowToolTranscriptProjection.requestMessage(call), null);
+        // One assistant message per model round. When the SDK message view already names the whole
+        // round, the complete call list is written once; otherwise the known calls are written first
+        // and the same message id is rewritten with the fuller list, so a parallel round never opens
+        // two frontend subagent groups.
+        List<ToolCallView> round = liveRound(run.bridge, run.runId, calls, call.id().value());
+        writeToolMessage(output, run, DeerFlowToolTranscriptProjection.requestMessage(round), null);
         Optional<Map<String, Object>> result = DeerFlowToolTranscriptProjection.resultMessage(call);
         if (result.isPresent()) {
             writeToolMessage(output, run, result.orElseThrow(), cursor);
+        }
+    }
+
+    /**
+     * The whole model round that owns {@code toolCallId}. The SDK message view is authoritative:
+     * its assistant message carries exactly that round's Tool calls, so even a call whose siblings
+     * have not reached their lifecycle yet is projected with the complete list. When the view cannot
+     * place the call, the calls known so far are grouped the same way the transcript projection does;
+     * that fallback still emits a single message per round, never one message per call.
+     */
+    private List<ToolCallView> liveRound(
+            HaifaRunBridge bridge, AgentRunId runId, List<ToolCallView> known, String toolCallId) {
+        List<ToolCallView> fromView = roundFromMessageView(bridge, runId, toolCallId);
+        if (!fromView.isEmpty()) {
+            return DeerFlowToolTranscriptProjection.upToClarificationBoundary(fromView);
+        }
+        for (List<ToolCallView> round : toolCallRounds(bridge, runId, known)) {
+            if (round.stream().anyMatch(call -> call.id().value().equals(toolCallId))) {
+                return round;
+            }
+        }
+        return known.stream()
+                .filter(call -> call.id().value().equals(toolCallId))
+                .findFirst()
+                .map(List::of)
+                .orElse(List.of());
+    }
+
+    private List<ToolCallView> roundFromMessageView(
+            HaifaRunBridge bridge, AgentRunId runId, String toolCallId) {
+        RunMessageCursor cursor = RunMessageCursor.beforeFirst(runId);
+        int pages = 0;
+        while (true) {
+            RunMessagePage page = bridge.messages(runId, cursor, MESSAGE_ROUND_SCAN_PAGE_SIZE);
+            for (RunMessageView message : page.items()) {
+                if (message.toolCalls().stream().anyMatch(call -> call.id().value().equals(toolCallId))) {
+                    return message.toolCalls();
+                }
+            }
+            pages++;
+            if (!page.hasMore()) return List.of();
+            requireAnotherScanPage(pages);
+            cursor = page.nextCursor();
         }
     }
 
@@ -2392,11 +2440,10 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             selected = Optional.of(calls.getFirst());
         }
         if (selected.isPresent()) {
+            ToolCallView call = selected.orElseThrow();
+            List<ToolCallView> round = liveRound(run.bridge, run.runId, calls, call.id().value());
             writeToolMessage(
-                    output,
-                    run,
-                    DeerFlowToolTranscriptProjection.requestMessage(selected.orElseThrow()),
-                    cursor);
+                    output, run, DeerFlowToolTranscriptProjection.requestMessage(round), cursor);
         }
     }
 
@@ -2407,16 +2454,29 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private void writeAllToolMessages(OutputStream output, RunRecord run) throws IOException {
-        for (Map<String, Object> message : DeerFlowToolTranscriptProjection.messages(
-                run.bridge.toolCalls(run.runId))) {
-            writeToolMessage(output, run, message, null);
+        List<ToolCallView> calls = DeerFlowToolTranscriptProjection.upToClarificationBoundary(
+                run.bridge.toolCalls(run.runId));
+        for (List<ToolCallView> round : toolCallRounds(run.bridge, run.runId, calls)) {
+            if (round.isEmpty()) continue;
+            writeToolMessage(output, run, DeerFlowToolTranscriptProjection.requestMessage(round), null);
+            for (ToolCallView call : round) {
+                Optional<Map<String, Object>> result = DeerFlowToolTranscriptProjection.resultMessage(call);
+                if (result.isPresent()) {
+                    writeToolMessage(output, run, result.orElseThrow(), null);
+                }
+            }
         }
     }
 
     private void writeToolMessage(
             OutputStream output, RunRecord run, Map<String, Object> message, String cursor) throws IOException {
         String messageId = (String) message.get("id");
-        if (!run.projectedToolMessageIds.add(messageId)) return;
+        // A round request can grow as more calls of the same round become known, so the same message
+        // id is written again only when its tool_calls list changes (the frozen SDK overwrites a
+        // non-chunked AI message by id). Every other message is still written once.
+        String signature = DeerFlowToolTranscriptProjection.messageSignature(message);
+        String previous = run.projectedToolMessages.put(messageId, signature);
+        if (signature.equals(previous)) return;
         writeSse(output, "messages", List.of(message, Map.of("langgraph_node", "tools")), cursor);
         if ("tool".equals(message.get("type")) && "write_todos".equals(message.get("name"))) {
             maybePublishTodos(output, run);
@@ -3266,15 +3326,17 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         List<List<ToolCallView>> rounds = toolCallRounds(bridge, runId, calls);
         Map<Integer, List<Map<String, Object>>> interactions =
                 interactionMessagesByRound(thread, runId.value(), cached, rounds);
-        // Frozen DeerFlow stores one model round at a time: that round's Tool call messages, then
-        // its Interaction request/response, then that round's Tool results, before the next round.
-        // A single-round Run therefore projects byte-for-byte the same sequence as before.
+        // Frozen DeerFlow stores one model round at a time: one assistant message carrying that
+        // round's whole Tool call list, then its Interaction request/response, then that round's Tool
+        // results, before the next round. A single-round Run therefore projects byte-for-byte the same
+        // sequence as before.
         for (int index = 0; index < rounds.size(); index++) {
-            rounds.get(index).stream()
-                    .map(DeerFlowToolTranscriptProjection::requestMessage)
-                    .forEach(messages::add);
+            List<ToolCallView> round = rounds.get(index);
+            if (!round.isEmpty()) {
+                messages.add(DeerFlowToolTranscriptProjection.requestMessage(round));
+            }
             messages.addAll(interactions.getOrDefault(index, List.of()));
-            rounds.get(index).stream()
+            round.stream()
                     .map(DeerFlowToolTranscriptProjection::resultMessage)
                     .flatMap(Optional::stream)
                     .forEach(messages::add);
@@ -4725,7 +4787,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private final Set<Long> deferredEventSequences = ConcurrentHashMap.newKeySet();
         /** Attached streams: last delivered projection sequence and when the stream last looped. */
         private final Map<Object, long[]> liveObservers = new ConcurrentHashMap<>();
-        private final Set<String> projectedToolMessageIds = ConcurrentHashMap.newKeySet();
+        private final Map<String, String> projectedToolMessages = new ConcurrentHashMap<>();
 
         private RunRecord(
                 AgentRunId runId,
