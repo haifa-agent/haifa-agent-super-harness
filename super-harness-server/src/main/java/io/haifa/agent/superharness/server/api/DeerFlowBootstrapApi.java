@@ -699,6 +699,35 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                         .result(objectMapper.writeValueAsBytes(Map.of("detail", "Method Not Allowed")));
             }
         });
+
+        // An unhandled failure previously produced Javalin's default 500 with no server-side
+        // record. Log a bounded WARNING (method, path, exception class and reason/message - never
+        // the request body, file contents or credentials) and keep the existing 500 semantics.
+        // Explicit 4xx responses are not exceptions and keep their own handlers.
+        javalin.exception(Exception.class, (exception, ctx) -> {
+            System.getLogger(DeerFlowBootstrapApi.class.getName())
+                    .log(System.Logger.Level.WARNING, uncaughtFailureMessage(exception, ctx));
+            if (!ctx.res().isCommitted()) {
+                ctx.status(500).result("Server Error");
+            }
+        });
+    }
+
+    private static String uncaughtFailureMessage(Exception exception, io.javalin.http.Context ctx) {
+        String reason = exception instanceof java.nio.file.FileSystemException fileSystem
+                ? fileSystem.getReason()
+                : null;
+        String detail = reason != null && !reason.isBlank() ? reason : exception.getMessage();
+        StringBuilder message = new StringBuilder("Unhandled request failure ")
+                .append(ctx.method())
+                .append(' ')
+                .append(ctx.path())
+                .append(": ")
+                .append(exception.getClass().getName());
+        if (detail != null && !detail.isBlank()) {
+            message.append(" (").append(detail).append(')');
+        }
+        return message.toString();
     }
 
     private void registerExactGet(String path, Object body) {

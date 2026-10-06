@@ -5,11 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.haifa.agent.core.session.AgentSessionId;
+import io.haifa.agent.superharness.workspace.AtomicMoves;
 import java.io.IOException;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -140,15 +139,7 @@ public final class PersistentThreadCatalog {
         Path temporary = catalog.resolveSibling(catalog.getFileName() + ".tmp");
         try {
             Files.write(temporary, bytes);
-            try {
-                Files.move(
-                        temporary,
-                        catalog,
-                        StandardCopyOption.ATOMIC_MOVE,
-                        StandardCopyOption.REPLACE_EXISTING);
-            } catch (AtomicMoveNotSupportedException unsupported) {
-                Files.move(temporary, catalog, StandardCopyOption.REPLACE_EXISTING);
-            }
+            AtomicMoves.replace(temporary, catalog);
         } finally {
             Files.deleteIfExists(temporary);
         }

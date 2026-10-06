@@ -46,16 +46,15 @@ import io.haifa.agent.superharness.server.prompt.AgentPromptContext;
 import io.haifa.agent.superharness.server.run.HaifaRunBridge;
 import io.haifa.agent.superharness.server.tool.agent.ProductionSetupAgentTool;
 import io.haifa.agent.superharness.server.tool.agent.ProductionUpdateAgentTool;
+import io.haifa.agent.superharness.workspace.AtomicMoves;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.time.Clock;
@@ -1209,15 +1208,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                     }
                 }
                 json.writeValue(temporary.toFile(), persisted);
-                try {
-                    Files.move(
-                            temporary,
-                            file,
-                            StandardCopyOption.ATOMIC_MOVE,
-                            StandardCopyOption.REPLACE_EXISTING);
-                } catch (AtomicMoveNotSupportedException ignored) {
-                    Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
-                }
+                AtomicMoves.replace(temporary, file);
             } catch (IOException | GeneralSecurityException exception) {
                 try {
                     Files.deleteIfExists(temporary);
@@ -1232,15 +1223,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
             Path temporary = keyFile.resolveSibling(keyFile.getFileName() + "." + UUID.randomUUID() + ".tmp");
             try {
                 Files.write(temporary, key);
-                try {
-                    Files.move(
-                            temporary,
-                            keyFile,
-                            StandardCopyOption.ATOMIC_MOVE,
-                            StandardCopyOption.REPLACE_EXISTING);
-                } catch (AtomicMoveNotSupportedException ignored) {
-                    Files.move(temporary, keyFile, StandardCopyOption.REPLACE_EXISTING);
-                }
+                AtomicMoves.replace(temporary, keyFile);
             } finally {
                 Files.deleteIfExists(temporary);
             }

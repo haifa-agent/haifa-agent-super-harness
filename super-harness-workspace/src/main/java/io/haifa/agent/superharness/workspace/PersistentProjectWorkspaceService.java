@@ -889,18 +889,14 @@ public final class PersistentProjectWorkspaceService {
 
     private static void moveFileIfAbsent(Path source, Path target) throws IOException {
         try {
-            Files.move(source, target);
+            AtomicMoves.create(source, target);
         } catch (FileAlreadyExistsException alreadyPresent) {
             Files.deleteIfExists(source);
         }
     }
 
     private static void movePublishedMarker(Path source, Path target) throws IOException {
-        try {
-            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
-        } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
-            Files.move(source, target);
-        }
+        AtomicMoves.create(source, target);
     }
 
     /** Compare current files with the persisted baseline; neither baseline nor current files are modified. */
@@ -1664,11 +1660,7 @@ public final class PersistentProjectWorkspaceService {
             try (OutputStream output = Files.newOutputStream(part, StandardOpenOption.CREATE_NEW)) {
                 properties.store(output, comment);
             }
-            try {
-                Files.move(part, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
-                Files.move(part, target, StandardCopyOption.REPLACE_EXISTING);
-            }
+            AtomicMoves.replace(part, target);
         } catch (IOException exception) {
             try {
                 Files.deleteIfExists(part);
