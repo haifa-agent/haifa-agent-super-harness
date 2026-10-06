@@ -243,6 +243,19 @@ class PlanModeLifecycleHttpTest {
                 assertThat(todos).hasSize(1);
                 assertThat(todos.get(0).path("content").asText()).isEqualTo("Valid step");
                 assertThat(todos.get(0).path("status").asText()).isEqualTo("completed");
+
+                // Tool call ids are assigned by the SDK, so the two results are told apart by order.
+                List<JsonNode> toolResults = new java.util.ArrayList<>();
+                for (JsonNode msg : state.path("values").path("messages")) {
+                    if ("tool".equals(msg.path("type").asText())) toolResults.add(msg);
+                }
+                assertThat(toolResults).hasSize(2);
+                assertThat(toolResults.get(0).path("content").asText())
+                        .doesNotStartWith("Updated todo list to ")
+                        .contains("unknown_status");
+                assertThat(toolResults.get(1).path("content").asText())
+                        .startsWith("Updated todo list to [")
+                        .contains("Valid step");
             }
         }
     }
@@ -501,6 +514,55 @@ class PlanModeLifecycleHttpTest {
                 assertThat(todos).hasSize(1);
                 assertThat(todos.get(0).path("content").asText()).isEqualTo("Step before cancel");
                 assertThat(todos.get(0).path("status").asText()).isEqualTo("in_progress");
+            }
+        }
+    }
+
+    @Test
+    void streamModeWithoutUpdatesOmitsSseUpdatesFrame() throws Exception {
+        Files.createDirectories(evidence);
+        String threadId = "thread-no-updates-stream";
+        List<Map<String, Object>> todos = List.of(
+                Map.of("content", "Only messages tuple", "status", "in_progress"));
+
+        try (var provider = new ControlledProvider(evidence, true, (request, call) -> {
+            if (call == 1) {
+                return ControlledProvider.call("resp-no-upd-1", "demo-provider-id", "call-no-upd-1",
+                        "write_todos", Map.of("todos", todos));
+            }
+            return ControlledProvider.stop("resp-no-upd-2", "demo-provider-id", "Finished without updates stream.");
+        })) {
+            try (var api = GatewayFixture.production(dataRoot, 0, Map.of(), evidence)) {
+                URI base = api.base;
+                String model = """
+                        {"config":{"name":"demo-model","display_name":"Demo Model",
+                        "provider":"openai-compatible","model":"demo-provider-id",
+                        "base_url":"http://127.0.0.1:%s/v1","enabled":true,"supports_vision":false,
+                        "context_window":32768,"max_tokens":1024,"api_key":"controlled-key"},
+                        "expected_revision":null}
+                        """.formatted(provider.port());
+                assertThat(http.request(base, "PUT", "/api/managed-models", model).statusCode()).isEqualTo(200);
+                assertThat(http.request(base, "POST", "/api/threads", "{\"thread_id\":\"" + threadId + "\"}")
+                        .statusCode()).isEqualTo(200);
+
+                String runBody = """
+                        {"assistant_id":"lead_agent","input":{"messages":[{"type":"human","content":"pro request"}]},
+                        "stream_mode":["messages-tuple"],
+                        "context":{"model_name":"demo-model","mode":"pro","reasoning_effort":"minimal",
+                        "thinking_enabled":false,"is_plan_mode":true,"subagent_enabled":false},
+                        "on_disconnect":"continue","multitask_strategy":"reject"}
+                        """;
+
+                HttpResponse<String> response = http.request(base, "POST", "/api/threads/" + threadId + "/runs/stream", runBody, "no-updates.sse");
+                assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+                assertThat(response.body()).contains("event: end");
+                assertThat(response.body()).doesNotContain("event: updates");
+
+                JsonNode state = http.get(base, "/api/threads/" + threadId + "/state", "no-updates-state.json");
+                JsonNode stateTodos = state.path("values").path("todos");
+                assertThat(stateTodos).hasSize(1);
+                assertThat(stateTodos.get(0).path("content").asText()).isEqualTo("Only messages tuple");
+                assertThat(stateTodos.get(0).path("status").asText()).isEqualTo("in_progress");
             }
         }
     }

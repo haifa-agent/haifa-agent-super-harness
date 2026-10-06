@@ -2420,10 +2420,16 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private void maybePublishTodos(OutputStream output, RunRecord run) throws IOException {
+        if (!run.streamModes.contains("updates")) {
+            return;
+        }
         Optional<AgentPlanView> plan = run.bridge.plan(run.runId);
         if (plan.isPresent()) {
-            List<Map<String, Object>> todos = PlanAuthoringResources.projectTodos(plan.get());
-            writeSse(output, "updates", Map.of("tools", Map.of("todos", todos)), null);
+            Optional<List<Map<String, Object>>> todos =
+                    PlanAuthoringResources.projectTodos(plan.get(), run.threadId, run.runId.value());
+            if (todos.isPresent()) {
+                writeSse(output, "updates", Map.of("tools", Map.of("todos", todos.get())), null);
+            }
         }
     }
 
@@ -2458,7 +2464,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (bridge != null) {
                 Optional<AgentPlanView> plan = bridge.plan(runId);
                 if (plan.isPresent()) {
-                    return Optional.of(PlanAuthoringResources.projectTodos(plan.get()));
+                    return PlanAuthoringResources.projectTodos(plan.get(), thread.threadId, runId.value());
                 }
             }
         }

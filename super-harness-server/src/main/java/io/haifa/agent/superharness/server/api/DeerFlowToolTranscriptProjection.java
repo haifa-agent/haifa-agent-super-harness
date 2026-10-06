@@ -89,7 +89,11 @@ public final class DeerFlowToolTranscriptProjection {
         additional.put("haifa_tool_status", wireStatus(call.status()));
         if (call.result().isPresent()) {
             ToolResultView result = call.result().orElseThrow();
-            if ("write_todos".equals(call.toolName())) {
+            // The SDK plan tool reports rejected input as an ordinary result whose text starts with
+            // "Error:" and leaves the plan unchanged, so only an accepted call is shown as an update.
+            boolean writeTodosSuccess = result.successful()
+                    && (result.summary() == null || !result.summary().text().startsWith("Error:"));
+            if ("write_todos".equals(call.toolName()) && writeTodosSuccess) {
                 Object todos = call.arguments().values().get("todos");
                 if (todos != null) {
                     try {
