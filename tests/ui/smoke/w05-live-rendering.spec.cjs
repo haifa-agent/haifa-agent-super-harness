@@ -93,7 +93,9 @@ async function submit(page, workspace, text) {
   await input.fill(text);
   await page.getByRole("button", { name: "Submit" }).click();
   const response = await responsePromise;
-  expect(response.status(), await response.text()).toBe(200);
+  // Only the status is checked here: reading the body would wait for the whole SSE stream, that
+  // is until the Run ends, and every "while the run is in flight" assertion would then run late.
+  expect(response.status()).toBe(200);
   return response;
 }
 
@@ -288,6 +290,23 @@ test("W05 LIVE-04 a delegated subtask card renders in progress while the run is 
     marker,
     (entry) => entry.child === true,
   );
+  // Diagnostic ground truth for what the client has while the Child is blocked.
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(String(error.message ?? error)));
+  page.on("console", (message) => {
+    if (message.type() === "error") pageErrors.push(message.text());
+  });
+  // Fast DOM snapshot at the block, before any request that the frontend proxy
+  // may serialize behind the live stream (which would move the snapshot to the
+  // settled state).
+  await evidence.json("live04-block-dom", {
+    groupCount: await page.locator("[data-message-group-index]").count(),
+    userBubbles: await page.locator("#chat .is-user").count(),
+    chatText: await page.locator("#chat").innerText().catch(() => null),
+    cardCount: await page.getByTitle(objective, { exact: true }).count(),
+    runningCount: await page.getByText("Running subtask", { exact: true }).count(),
+    pageErrors,
+  });
   try {
     await expect(page.getByTitle(objective, { exact: true })).toBeVisible({
       timeout: 15_000,
