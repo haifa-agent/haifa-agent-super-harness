@@ -47,6 +47,7 @@
 - 审查意见只处理一轮：正确的采纳，不采纳的各写一句理由；不再主动请求重新审查。
 - 正式门禁通过后才出现的新意见，只有确认会导致错误行为的才修改并重跑受影响门禁，其余登记为后续事项。
 - 向人工报告 PR 可合并之前，必须运行 `python scripts/governance/pr_review_digest.py --repo <owner/name> --pr <编号>` 并给出结论。
+- 机器人不可用期间（额度用尽或服务故障，以人工告知为准）：开 PR 后运行一次 `pr_review_digest.py` 记录当时状态，不再等待 10 分钟，结论照实记 `NO_REVIEW_YET`，并在 SHPM 写明原因。改动产品代码的 PR，主控在报告可合并前对完整 diff 做一次独立代码审查（`/code-review` 或等价方式），意见按上面的规则处理一轮，结论写入 PR 评论和 SHPM；只改测试、脚本或文档的 PR 沿用主控的源码复核。向人工报告时分别写明机器人结论和替代审查结论，不得把替代审查记为机器人审查。机器人恢复后，对仍未合并的 PR 评论一次 `@codex review`；已合并的不追溯，除非人工要求。
 
 #### 按改动范围定门禁
 
@@ -94,7 +95,7 @@
 - 每个执行 worktree 在 `local-tmp/acceptance-handoff.md` 维护短交接，模板见 `docs/acceptance-handoff-template.md`：只记录范围、源码 SHA/dirty、SDK 选择与发布来源/hash、断言/证据映射、首个 FAIL、未运行项及下一步。事实变化时更新，不复制长日志、密钥或 reasoning 正文；该交接不是另一份任务账本，不替代 SHPM。
 - 后台任务使用有界进程等待并在完成时合并读取结果摘要；等待期间推进不依赖它的检查，避免固定 sleep 后反复读完整日志。等待方至少每 60 秒在自己的会话输出里给出有意义的进展或卡点；这不同于子智能体向主控的 15 分钟 checkpoint（见「派单与子智能体调度」）。
 
-批准记录：2026-09-30 批量验收；2026-10-03 按改动范围定门禁、UI 默认两次暖轮、SHPM 登记封装；2026-10-05 合入后按树哈希复用、指纹复用与 UI 模型选择、已登记的偶发失败、一次启动内重复运行；2026-10-06 本节合并改写，废止「快进合入不重跑」和手工门禁映射表，门禁时点改为报告可合并前，正式门禁由主控排队，Oracle 放宽须逐项批准，槽位 4（2026-10-03 批准为附加槽位）转为常规槽位，子智能体槽位共四个。
+批准记录：2026-09-30 批量验收；2026-10-03 按改动范围定门禁、UI 默认两次暖轮、SHPM 登记封装；2026-10-05 合入后按树哈希复用、指纹复用与 UI 模型选择、已登记的偶发失败、一次启动内重复运行；2026-10-06 本节合并改写，废止「快进合入不重跑」和手工门禁映射表，门禁时点改为报告可合并前，正式门禁由主控排队，Oracle 放宽须逐项批准，槽位 4（2026-10-03 批准为附加槽位）转为常规槽位，子智能体槽位共四个；同日批准机器人审查不可用期间的替代审查流程。
 
 ## Git 与 GitHub
 
@@ -227,6 +228,7 @@ try {
 ```
 
 - 流式调用用 `agy --model gemini-3.8-flash-high --input-format stream-json --output-format stream-json --print ""`。stdin 逐行写 `{"event":"user","message":{"role":"user","content":"提示词正文"}}` 并 flush；stdout 逐行解析 `init`、`step_update`、`result`，可实时读取文本增量与工具结果，stderr 单独保存。追加消息实测排队到下一轮，不是当前轮即时 steering。
+- 写权限：无头模式（`--print`）无法弹出权限确认，需要写文件的任务不加模式参数时，`write_file` 会被自动拒绝，stderr 报 `no output produced — a tool required the "write_file" permission that headless mode cannot prompt for`，最终回复为空。需要写文件或执行命令的任务在每次调用时加 `--mode accept-edits`；2026-10-06 实测该模式下可在 worktree 内写文件，并可执行 `git status`、`pwsh -NoProfile -Command ...`。不修改 agy 的 `settings.json`，不使用 `--dangerously-skip-permissions`。该模式下 JSON 结果可能出现 `status=ERROR`（`The stream was interrupted`）而各步骤实际已完成，以文件和实际改动为准。
 - 调用方设置独立 deadline，保留 stdout/stderr 与 `--log-file` 日志；不能仅依赖 `--print-timeout`。只读任务加 `--mode plan`；交付须核对最终状态、文件改动和真实验收证据，不能只看退出码。
 
 # 主控 Agent 规则
