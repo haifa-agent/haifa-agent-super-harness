@@ -811,7 +811,7 @@ public final class PersistentProjectWorkspaceService {
                 "run baseline does not exist");
         validateRunBinding(binding, run, baseline);
         Path completed = root.resolve(COMPLETED_DIR);
-        if (Files.isDirectory(completed, LinkOption.NOFOLLOW_LINKS)) {
+        if (isPublishedRun(completed)) {
             Properties existing = loadProperties(completed.resolve(BASELINE_FILE),
                     WorkspaceError.RUN_CHANGES_NOT_COMPLETED, "run changes are not completed");
             validateRunBinding(binding, run, existing);
@@ -830,6 +830,9 @@ public final class PersistentProjectWorkspaceService {
             storeNew(properties, temporary.resolve(BASELINE_FILE), "Super Harness completed workspace changes");
             WorkspaceRegistry.moveAtomically(temporary, completed);
         } catch (FileAlreadyExistsException raced) {
+            if (!publishCompletedChangesByMovingContent(temporary, completed, raced)) {
+                throw WorkspaceRegistry.ioFailure("failed to publish completed workspace changes", raced);
+            }
             deleteTreeBestEffort(root, temporary, "\\.completed-[0-9a-f-]{36}");
         } catch (IOException failure) {
             if (!publishCompletedChangesByMovingContent(temporary, completed, failure)) {

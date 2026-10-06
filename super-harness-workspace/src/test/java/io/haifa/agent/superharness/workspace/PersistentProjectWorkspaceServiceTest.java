@@ -208,6 +208,40 @@ class PersistentProjectWorkspaceServiceTest {
     }
 
     @Test
+    void completesAnInterruptedCompletionThatLeftAnUnpublishedCompletedDirectory() throws IOException {
+        RestrictedWorkspaceService workspace = workspace();
+        WorkspaceBinding binding = workspace.bind("owner-a", "thread-interrupted");
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(), "workspace/before.txt", bytes("before\n"),
+                Optional.empty());
+        PersistentProjectWorkspaceService changes = projects();
+        StagedRunChanges staged = changes.stageRunChanges("owner-a", "thread-interrupted", binding.workspaceId());
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(), "outputs/created.txt", bytes("created\n"),
+                Optional.empty());
+        changes.publishRunChanges(staged, "run-interrupted");
+
+        // A previous completion attempt interrupted after creating the target directory but before
+        // baseline.properties was placed must not be mistaken for an already completed run.
+        Path completed = baseline(binding, "run-interrupted").getParent().resolve("completed");
+        Files.createDirectories(completed.resolve("payloads"));
+        assertThat(completed.resolve("baseline.properties")).doesNotExist();
+
+        changes.completeRunChanges("owner-a", "thread-interrupted", binding.workspaceId(), "run-interrupted");
+
+        WorkspaceChanges first = projects().readRunChanges(
+                "owner-a", "thread-interrupted", binding.workspaceId(), "run-interrupted");
+        assertThat(first.files()).extracting(change -> change.path().value())
+                .containsExactly("outputs/created.txt");
+        assertThat(first.diff().unifiedDiff()).contains("+created");
+
+        // Completing again must be idempotent and must not alter the published snapshot.
+        changes.completeRunChanges("owner-a", "thread-interrupted", binding.workspaceId(), "run-interrupted");
+        WorkspaceChanges second = projects().readRunChanges(
+                "owner-a", "thread-interrupted", binding.workspaceId(), "run-interrupted");
+        assertThat(second.files()).isEqualTo(first.files());
+        assertThat(second.diff().unifiedDiff()).isEqualTo(first.diff().unifiedDiff());
+    }
+
+    @Test
     void discardAndRestartCleanupRemoveOnlyOpaqueStagedBaselines() throws IOException {
         RestrictedWorkspaceService workspace = workspace();
         WorkspaceBinding binding = workspace.bind("owner-a", "thread-cleanup");
