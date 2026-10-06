@@ -826,10 +826,6 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         // Client-generated id of this Turn's user message; keys the in-flight pending projection
         // only, never persistence/replay. See RunRecord#clientHumanMessageId.
         String clientHumanMessageId = extractHumanMessageId(body.path("input").path("messages")).orElse(null);
-        // Whether this Turn's user message is a visible chat bubble. The frozen UI must fold its
-        // optimistic copy onto the live echo to keep the Run's own steps ordered below it; a hidden
-        // Human-Input reply or a non-chat reply must never be projected as a new user bubble.
-        boolean liveHumanEcho = !hiddenHumanMessage(body.path("input").path("messages"));
         Optional<DeerFlowInteractionHttpProjection.FrozenResponse> interactionResponse;
         try {
             interactionResponse = DeerFlowInteractionHttpProjection.parseResponse(
@@ -1120,7 +1116,6 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     text(body, "assistant_id").orElse(null),
                     message,
                     clientHumanMessageId,
-                    liveHumanEcho,
                     selectedBridge,
                     Instant.now(),
                     humanSequence,
@@ -1883,22 +1878,6 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                                 "metadata",
                                 Map.of("run_id", run.runId.value(), "thread_id", run.threadId),
                                 null);
-                        // Echo this Turn's visible user bubble as the first message frame, under the
-                        // same identity the frozen UI folds with its optimistic copy (client id plus
-                        // `__user`). Without it the live Run's first step can merge above the still
-                        // optimistic user bubble, so the frozen UI classifies the step as a settled
-                        // pre-submit step and renders the subtask card above the user and without
-                        // progress. The frame is display-only, carries no seq, and is deduped by
-                        // identity against the durable history echo.
-                        if (run.liveHumanEcho
-                                && run.streamModes.contains("messages-tuple")
-                                && !run.bridge.snapshot(run.runId).status().isTerminal()) {
-                            writeSse(
-                                    output,
-                                    "messages",
-                                    List.of(pendingHumanMessage(run), Map.of("langgraph_node", "agent")),
-                                    null);
-                        }
                     }
                     ProjectionCursor delivered = initialCursor;
                     long nextHeartbeat = System.nanoTime() + java.time.Duration.ofMillis(100).toNanos();
@@ -3173,23 +3152,6 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         return Optional.empty();
     }
 
-    /**
-     * Whether the last submitted human message is hidden from the UI (a Human-Input reply or another
-     * control turn). Such a Turn has no visible user bubble to echo, so the live projection must not
-     * invent one.
-     */
-    private boolean hiddenHumanMessage(JsonNode messages) {
-        if (!messages.isArray()) return false;
-        for (int index = messages.size() - 1; index >= 0; index--) {
-            JsonNode message = messages.get(index);
-            String type = message.path("type").asText(message.path("role").asText());
-            if (type.equals("human") || type.equals("user")) {
-                return message.path("additional_kwargs").path("hide_from_ui").asBoolean(false);
-            }
-        }
-        return false;
-    }
-
     private Map<String, Object> emptyThreadHistoryResponse(
             ThreadRecord thread, List<ConversationTurn> turns, Map<Long, Integer> ordinals,
             Optional<List<Map<String, Object>>> todos) {
@@ -3798,7 +3760,6 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 null,
                 turn.text(),
                 null,
-                false,
                 bridge,
                 turn.createdAt(),
                 turn.sequence(),
@@ -4850,13 +4811,6 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
          * active. It never enters persistence or replay; a restored Run projects the synthetic id.
          */
         private final String clientHumanMessageId;
-        /**
-         * True when this Turn has a visible user bubble. The live stream echoes that bubble once
-         * before its steps so the frozen UI folds its optimistic copy ({@code X} vs the echo
-         * {@code X__user}) and orders the Run's steps below it. A hidden Human-Input reply stays
-         * false and is never projected as a user bubble.
-         */
-        private final boolean liveHumanEcho;
         private final HaifaRunBridge bridge;
         private final BoundedRunEventProjector projector;
         private final Instant createdAt;
@@ -4883,7 +4837,6 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 String assistantId,
                 String humanMessage,
                 String clientHumanMessageId,
-                boolean liveHumanEcho,
                 HaifaRunBridge bridge,
                 Instant createdAt,
                 long humanSequence,
@@ -4895,7 +4848,6 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             this.assistantId = assistantId;
             this.humanMessage = humanMessage;
             this.clientHumanMessageId = clientHumanMessageId;
-            this.liveHumanEcho = liveHumanEcho;
             this.bridge = bridge;
             this.projector = new BoundedRunEventProjector(
                     runId,
