@@ -23,6 +23,8 @@ import io.haifa.agent.runtime.api.InteractionView;
 import io.haifa.agent.runtime.api.RunEventCursor;
 import io.haifa.agent.runtime.api.RunEventPayloads;
 import io.haifa.agent.runtime.api.RunMessageCursor;
+import io.haifa.agent.runtime.api.RunMessagePage;
+import io.haifa.agent.runtime.api.RunMessageView;
 import io.haifa.agent.runtime.api.RuntimeContractException;
 import io.haifa.agent.runtime.api.ToolCallView;
 import io.haifa.agent.sdk.api.RunInputCommand;
@@ -133,6 +135,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final int MAXIMUM_TURN_SCAN_PAGES = 100;
     private static final int RUN_LIST_LIMIT = 100;
     private static final int HISTORY_MESSAGE_RETENTION = 200;
+    /** Page size for reading the SDK per-message Tool-call grouping during the round scan. */
+    private static final int MESSAGE_ROUND_SCAN_PAGE_SIZE = 100;
     private static final int TERMINAL_RUN_CACHE_LIMIT = 8;
     private static final java.time.Duration TERMINAL_EVENT_SETTLE_TIMEOUT =
             java.time.Duration.ofSeconds(2);
@@ -3256,16 +3260,121 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             AgentRunId runId,
             RunRecord cached,
             List<Map<String, Object>> messages) {
+        HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
         List<ToolCallView> calls = DeerFlowToolTranscriptProjection.upToClarificationBoundary(
-                cached == null
-                        ? bridgeForPersistedThread(thread).toolCalls(runId)
-                        : cached.bridge.toolCalls(runId));
-        calls.stream().map(DeerFlowToolTranscriptProjection::requestMessage).forEach(messages::add);
-        addInteractionMessages(thread, runId.value(), cached, messages);
-        calls.stream()
-                .map(DeerFlowToolTranscriptProjection::resultMessage)
-                .flatMap(Optional::stream)
-                .forEach(messages::add);
+                bridge.toolCalls(runId));
+        List<List<ToolCallView>> rounds = toolCallRounds(bridge, runId, calls);
+        Map<Integer, List<Map<String, Object>>> interactions =
+                interactionMessagesByRound(thread, runId.value(), cached, rounds);
+        // Frozen DeerFlow stores one model round at a time: that round's Tool call messages, then
+        // its Interaction request/response, then that round's Tool results, before the next round.
+        // A single-round Run therefore projects byte-for-byte the same sequence as before.
+        for (int index = 0; index < rounds.size(); index++) {
+            rounds.get(index).stream()
+                    .map(DeerFlowToolTranscriptProjection::requestMessage)
+                    .forEach(messages::add);
+            messages.addAll(interactions.getOrDefault(index, List.of()));
+            rounds.get(index).stream()
+                    .map(DeerFlowToolTranscriptProjection::resultMessage)
+                    .flatMap(Optional::stream)
+                    .forEach(messages::add);
+        }
+    }
+
+    /**
+     * Groups the caller-visible Tool calls by the model round that produced them. The public SDK
+     * exposes one assistant message per model round carrying exactly that round's Tool calls
+     * ({@link RunMessageView#toolCalls()}); SH only re-groups the existing flat Tool view and never
+     * changes which calls are projected. When the message view cannot place every call, the flat
+     * order is retained as one round (the previous projection). An empty call list keeps one empty
+     * round so an Interaction without a Tool call still projects exactly as before.
+     */
+    private List<List<ToolCallView>> toolCallRounds(
+            HaifaRunBridge bridge, AgentRunId runId, List<ToolCallView> calls) {
+        if (calls.isEmpty()) {
+            return List.of(new ArrayList<>());
+        }
+        Map<String, Integer> roundByCall = new LinkedHashMap<>();
+        RunMessageCursor cursor = RunMessageCursor.beforeFirst(runId);
+        int pages = 0;
+        int round = 0;
+        while (true) {
+            RunMessagePage page = bridge.messages(runId, cursor, MESSAGE_ROUND_SCAN_PAGE_SIZE);
+            for (RunMessageView message : page.items()) {
+                if (message.toolCalls().isEmpty()) continue;
+                for (ToolCallView call : message.toolCalls()) {
+                    roundByCall.putIfAbsent(call.id().value(), round);
+                }
+                round++;
+            }
+            pages++;
+            if (!page.hasMore()) break;
+            requireAnotherScanPage(pages);
+            cursor = page.nextCursor();
+        }
+        for (ToolCallView call : calls) {
+            if (!roundByCall.containsKey(call.id().value())) {
+                return List.of(new ArrayList<>(calls));
+            }
+        }
+        List<List<ToolCallView>> rounds = new ArrayList<>();
+        List<ToolCallView> current = null;
+        Integer currentRound = null;
+        for (ToolCallView call : calls) {
+            Integer nextRound = roundByCall.get(call.id().value());
+            if (current == null || !nextRound.equals(currentRound)) {
+                current = new ArrayList<>();
+                rounds.add(current);
+                currentRound = nextRound;
+            }
+            current.add(call);
+        }
+        return rounds;
+    }
+
+    /**
+     * Places each saved Interaction card with the model round that owns its Tool call. A card whose
+     * Tool call cannot be placed (or a Run with no Tool call at all) keeps the previous position in
+     * the first round, so the existing single-round approval ordering is unchanged.
+     */
+    private Map<Integer, List<Map<String, Object>>> interactionMessagesByRound(
+            ThreadRecord thread, String runId, RunRecord run, List<List<ToolCallView>> rounds) {
+        Map<String, Integer> roundByCall = new HashMap<>();
+        for (int index = 0; index < rounds.size(); index++) {
+            for (ToolCallView call : rounds.get(index)) {
+                roundByCall.putIfAbsent(call.id().value(), index);
+            }
+        }
+        Map<Integer, List<Map<String, Object>>> byRound = new LinkedHashMap<>();
+        synchronized (thread) {
+            for (var display : thread.interactionDisplays) {
+                if (!display.runId().equals(runId)) continue;
+                if (!isVisibleInteractionDisplay(thread, display)) continue;
+                int round = roundByCall.getOrDefault(display.toolCallId(), 0);
+                List<Map<String, Object>> bucket =
+                        byRound.computeIfAbsent(round, ignored -> new ArrayList<>());
+                bucket.add(requestMessage(display));
+                if (display.answeredOption() != null) bucket.add(responseMessage(display));
+            }
+        }
+        if (run != null) {
+            synchronized (run) {
+                if (run.interactionRequestMessage != null
+                        && thread.interactionDisplays.stream().noneMatch(display ->
+                                display.runId().equals(runId)
+                                        && display.requestId().equals(run.interactionRequestId))) {
+                    int round = roundByCall.getOrDefault(
+                            interactionMessageToolCallId(run.interactionRequestMessage), 0);
+                    byRound.computeIfAbsent(round, ignored -> new ArrayList<>())
+                            .add(run.interactionRequestMessage);
+                }
+            }
+        }
+        return byRound;
+    }
+
+    private static String interactionMessageToolCallId(Map<String, Object> message) {
+        return message.get("tool_call_id") instanceof String value ? value : "";
     }
 
     private List<String> artifactPaths(
@@ -3355,28 +3464,6 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 wireMessageId(run.runId.value(), "human", 0), "human", run.humanMessage);
         message.put("run_id", run.runId.value());
         return message;
-    }
-
-    private void addInteractionMessages(
-            ThreadRecord thread, String runId, RunRecord run, List<Map<String, Object>> messages) {
-        synchronized (thread) {
-            for (var display : thread.interactionDisplays) {
-                if (!display.runId().equals(runId)) continue;
-                if (!isVisibleInteractionDisplay(thread, display)) continue;
-                messages.add(requestMessage(display));
-                if (display.answeredOption() != null) messages.add(responseMessage(display));
-            }
-        }
-        if (run != null) {
-            synchronized (run) {
-                if (run.interactionRequestMessage != null
-                        && thread.interactionDisplays.stream().noneMatch(display ->
-                                display.runId().equals(runId)
-                                        && display.requestId().equals(run.interactionRequestId))) {
-                    messages.add(run.interactionRequestMessage);
-                }
-            }
-        }
     }
 
     private Map<String, Object> requestMessage(PersistentThreadCatalog.InteractionDisplay display) {
