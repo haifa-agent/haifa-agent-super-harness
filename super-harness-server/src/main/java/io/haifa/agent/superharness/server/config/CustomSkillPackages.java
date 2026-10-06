@@ -13,6 +13,7 @@ import io.haifa.agent.skill.api.SkillSourceRef;
 import io.haifa.agent.skill.core.InMemorySkillSource;
 import io.haifa.agent.skill.core.SkillPackageLimits;
 import io.haifa.agent.skill.core.SkillPackageParser;
+import io.haifa.agent.superharness.workspace.AtomicMoves;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -20,6 +21,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -317,8 +319,7 @@ final class CustomSkillPackages {
             requireNoLinkedAncestors(target);
             Files.createDirectories(target.getParent());
             requireNoLinks(target.getParent());
-            if (!Files.exists(target)) Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE);
-            else if (!SkillPackageFiles.digest(packageVersion(config, name, revision)).equals(revision)) throw new IOException("Immutable Skill version changed");
+            publishDirectory(staging, target, name, content, revision, config);
             ObjectNode record = record(config, name);
             ArrayNode versions = record.withArray("versions");
             boolean exists = false;
@@ -337,11 +338,111 @@ final class CustomSkillPackages {
             appendHistory(record, action, author, thread, file, previous, text(files.get(file)), scan);
             record.put("current", revision);
         } finally {
-            if (Files.exists(staging)) {
-                try (var walk = Files.walk(staging)) {
-                    for (Path path : walk.sorted(java.util.Comparator.reverseOrder()).toList()) Files.delete(path);
+            deleteTreeQuietly(staging);
+        }
+    }
+
+    private void publishDirectory(Path staging, Path target, String name, SkillPackageFiles.PackageContent content,
+            String revision, ObjectNode config) throws IOException {
+        if (Files.exists(target)) {
+            if (isVersionRegistered(config, name, revision)) {
+                if (!SkillPackageFiles.digest(packageVersion(config, name, revision)).equals(revision)) {
+                    throw new IOException("Immutable Skill version changed");
+                }
+                return;
+            }
+            cleanResidualDirectory(target);
+        }
+        if (!Files.exists(target)) {
+            try {
+                Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE);
+                return;
+            } catch (IOException renameFailure) {
+                publishByMovingContent(staging, target, name, content, revision, renameFailure);
+            }
+        } else {
+            publishByMovingContent(staging, target, name, content, revision, null);
+        }
+    }
+
+    private static boolean isVersionRegistered(ObjectNode config, String name, String revision) {
+        JsonNode versions = config.path("custom").path(name).path("versions");
+        if (versions.isArray()) {
+            for (JsonNode version : versions) {
+                if (revision.equals(version.path("revision").asText(""))) {
+                    return true;
                 }
             }
+        }
+        return false;
+    }
+
+    private static void cleanResidualDirectory(Path target) {
+        if (!Files.exists(target)) {
+            return;
+        }
+        try (var walk = Files.walk(target)) {
+            for (Path path : walk.sorted(Comparator.reverseOrder()).toList()) {
+                AtomicMoves.deleteQuietly(path);
+            }
+        } catch (IOException ignored) {
+            // Best effort cleanup of residual uncommitted files.
+        }
+    }
+
+    private void publishByMovingContent(Path staging, Path target, String name, SkillPackageFiles.PackageContent content,
+            String revision, IOException renameFailure) throws IOException {
+        try {
+            Path targetPackageDir = target.resolve(name);
+            Files.createDirectories(targetPackageDir);
+            for (String directory : content.emptyDirectories()) {
+                Files.createDirectories(targetPackageDir.resolve(directory));
+            }
+            Path stagingPackageDir = staging.resolve(name);
+            for (var entry : content.files().entrySet()) {
+                Path relativePath = Path.of(SkillPackageFiles.path(entry.getKey()));
+                Path sourceFile = stagingPackageDir.resolve(relativePath);
+                Path targetFile = targetPackageDir.resolve(relativePath);
+                Files.createDirectories(targetFile.getParent());
+                AtomicMoves.replace(sourceFile, targetFile);
+                if (Files.getFileAttributeView(targetFile, java.nio.file.attribute.PosixFileAttributeView.class) != null) {
+                    String permissions = content.executableFiles().contains(entry.getKey()) ? "rwxr-xr-x" : "rw-r--r--";
+                    Files.setPosixFilePermissions(targetFile, java.nio.file.attribute.PosixFilePermissions.fromString(permissions));
+                }
+            }
+            if (Files.isDirectory(targetPackageDir)) {
+                try (var walk = Files.walk(targetPackageDir)) {
+                    for (Path path : walk.filter(Files::isRegularFile).toList()) {
+                        String rel = SkillPackageFiles.path(targetPackageDir.relativize(path).toString().replace('\\', '/'));
+                        if (!content.files().containsKey(rel)) {
+                            AtomicMoves.deleteQuietly(path);
+                        }
+                    }
+                }
+            }
+            Map<String, byte[]> publishedFiles = SkillPackageFiles.directory(targetPackageDir);
+            var published = new SkillPackageFiles.PackageContent(publishedFiles, content.emptyDirectories(), content.executableFiles());
+            if (!SkillPackageFiles.digest(published).equals(revision)) {
+                throw new IOException("Skill version publish is incomplete");
+            }
+        } catch (IOException fallbackFailure) {
+            if (renameFailure != null) {
+                fallbackFailure.addSuppressed(renameFailure);
+            }
+            throw fallbackFailure;
+        }
+    }
+
+    private static void deleteTreeQuietly(Path directory) {
+        if (directory == null || !Files.exists(directory)) {
+            return;
+        }
+        try (var walk = Files.walk(directory)) {
+            for (Path path : walk.sorted(Comparator.reverseOrder()).toList()) {
+                AtomicMoves.deleteQuietly(path);
+            }
+        } catch (IOException ignored) {
+            // Cleanup failure must never mask publication results.
         }
     }
 
