@@ -391,18 +391,163 @@ class ScriptRegressionsTest(unittest.TestCase):
 
 
 class DispatchTest(unittest.TestCase):
-    def test_builds_idempotent_steps_in_order(self):
-        args = argparse.Namespace(
-            task="W05-task-9", wp="W05", title="Title", prompt="private-docs/p.md", exit="Exit", priority="P1",
+    PROMPT = "private-docs/p.md"
+
+    def namespace(self, **overrides):
+        values = dict(
+            task="W05-task-9", wp="W05", title="Title", prompt=self.PROMPT, exit="Exit", priority="P1",
             next="Next", stage="V2/M2", executor="opencode", ref="ref", model="deepseek/deepseek-flash",
             branch="codex/x", worktree="D:/w", slot=2, data_root="local-tmp/d", db="db",
         )
-        steps = dispatch.build_steps(args, Path("D:/repo"), "sha", "2026-10-03")
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def git(self, repo, *args):
+        return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                              check=True, capture_output=True, text=True).stdout.strip()
+
+    def repository(self, path):
+        path.mkdir(parents=True)
+        self.git(path, "init", "-q")
+        self.git(path, "commit", "-q", "--allow-empty", "-m", "seed")
+        return path.resolve()
+
+    def worktree(self, repo, path, branch):
+        """A worktree one commit ahead of the repository's own checkout."""
+        self.git(repo, "worktree", "add", "-q", "-b", branch, str(path))
+        self.git(path, "commit", "-q", "--allow-empty", "-m", "work")
+        return path.resolve()
+
+    def run_main(self, root, harness, extra, fail_on=None):
+        """Runs main() with a recording stand-in for shpm; git still runs for real."""
+        calls = []
+        real_run = subprocess.run
+
+        def run(command, **kwargs):
+            if command[0] != "shpm":
+                return real_run(command, **kwargs)
+            calls.append((command, kwargs.get("env", {}).get("SHPM_DB")))
+            return subprocess.CompletedProcess(command, 1 if command[1:3] == fail_on else 0, stdout="{}", stderr="")
+
+        database = root / "shpm" / "project.db"
+        argv = ["--task", "W05-task-9", "--wp", "W05", "--title", "Title", "--prompt", self.PROMPT,
+                "--exit", "Exit", "--executor", "opencode", "--db", str(database), *extra]
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.object(dispatch, "main_checkout", return_value=harness), \
+                patch.object(dispatch.subprocess, "run", side_effect=run), \
+                patch.object(sys, "stdout", stdout), patch.object(sys, "stderr", stderr):
+            code = dispatch.main(argv)
+        self.assertFalse(database.parent.exists(), "the stand-in must be the only shpm that runs")
+        self.assertTrue(all(db == str(database) for _, db in calls))
+        return code, stdout.getvalue(), stderr.getvalue(), [command for command, _ in calls]
+
+    def harness(self, root):
+        harness = self.repository(root / "harness")
+        (harness / self.PROMPT).parent.mkdir(parents=True)
+        (harness / self.PROMPT).write_text("prompt", encoding="utf-8")
+        return harness
+
+    def test_builds_idempotent_steps_in_order(self):
+        steps = dispatch.build_steps(self.namespace(), Path("D:/repo"), "sha", "2026-10-03")
         self.assertEqual([step[:2] for step in steps],
                          [["task", "create"], ["sprint", "link"], ["task", "start"], ["assign", "create"]])
         assign = steps[-1]
         self.assertEqual(assign[assign.index("--ports") + 1], "30618/35618")
+        self.assertEqual(assign[assign.index("--repo") + 1], str(Path("D:/repo")))
+        self.assertEqual(assign[assign.index("--base-sha") + 1], "sha")
+        self.assertEqual(assign[assign.index("--data-root") + 1], "local-tmp/d")
         self.assertTrue(all("--idempotency-key" in step and "--json" in step for step in steps))
+
+    def test_slot_ports_follow_the_agents_table(self):
+        expected = {1: "20618/25618", 2: "30618/35618", 3: "40618/45618", 4: "11618/16618"}
+        self.assertEqual(sorted(dispatch.SLOT_PORTS), sorted(expected))
+        for slot, ports in expected.items():
+            assign = dispatch.build_steps(self.namespace(slot=slot), Path("D:/repo"), "sha", "2026-10-06")[-1]
+            self.assertEqual(assign[assign.index("--slot") + 1], str(slot))
+            self.assertEqual(assign[assign.index("--ports") + 1], ports, slot)
+
+    def test_missing_slot_or_data_root_emits_no_step(self):
+        for overrides, fragment in (({"slot": None}, "--slot is required"), ({"slot": 5}, "Slot 5"),
+                                    ({"data_root": None}, "--data-root is required"),
+                                    ({"data_root": ""}, "--data-root is required")):
+            with self.assertRaises(dispatch.DispatchError) as raised:
+                dispatch.build_steps(self.namespace(**overrides), Path("D:/repo"), "sha", "2026-10-06")
+            self.assertIn(fragment, str(raised.exception))
+        both = dispatch.resource_errors(self.namespace(slot=None, data_root=None))
+        self.assertEqual(len(both), 2)
+
+    def test_dry_run_defaults_to_this_repository_and_the_worktree_head(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = self.harness(root)
+            worktree = self.worktree(harness, root / "wt", "codex/x")
+            head = self.git(worktree, "rev-parse", "HEAD")
+            self.assertNotEqual(head, self.git(harness, "rev-parse", "HEAD"))
+            code, out, _, calls = self.run_main(root, harness, [
+                "--branch", "codex/x", "--worktree", str(worktree), "--slot", "4", "--data-root", "local-tmp/d"])
+            self.assertEqual(code, 0)
+            self.assertEqual(calls, [])
+            lines = out.splitlines()
+            self.assertEqual([line.split()[1:3] for line in lines[:-1]],
+                             [["task", "create"], ["task", "start"], ["assign", "create"]])
+            self.assertIn(f"--repo {harness} --base-sha {head} ", lines[-2])
+            self.assertIn("--slot 4 --ports 11618/16618 --data-root local-tmp/d", lines[-2])
+            self.assertEqual(lines[-1], "(dry run: pass --execute to write these records)")
+
+    def test_repo_option_registers_the_upstream_repository(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = self.harness(root)
+            upstream = self.repository(root / "upstream")
+            worktree = self.worktree(upstream, root / "sdk-wt", "feat-x")
+            head = self.git(worktree, "rev-parse", "HEAD")
+            resources = ["--branch", "feat-x", "--worktree", str(worktree), "--slot", "3", "--data-root", "local-tmp/d"]
+
+            code, _, _, calls = self.run_main(root, harness, [*resources, "--repo", str(upstream), "--execute"])
+            self.assertEqual(code, 0)
+            self.assertEqual([call[1:3] for call in calls], [["task", "create"], ["task", "start"], ["assign", "create"]])
+            assign = calls[-1]
+            self.assertEqual(assign[assign.index("--repo") + 1], str(upstream))
+            self.assertEqual(assign[assign.index("--base-sha") + 1], head)
+
+            # Without --repo the worktree would be registered against the wrong repository.
+            code, _, err, calls = self.run_main(root, harness, [*resources, "--execute"])
+            self.assertEqual(code, 2)
+            self.assertEqual(calls, [])
+            self.assertIn("pass --repo", err)
+
+    def test_invalid_input_stops_before_the_task_is_created(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = self.harness(root)
+            worktree = self.worktree(harness, root / "wt", "codex/x")
+            common = ["--branch", "codex/x", "--execute"]
+            cases = {
+                "--slot is required": [*common, "--worktree", str(worktree), "--data-root", "local-tmp/d"],
+                "--data-root is required": [*common, "--worktree", str(worktree), "--slot", "1"],
+                "not a git checkout": [*common, "--worktree", str(root / "absent"), "--slot", "1",
+                                       "--data-root", "local-tmp/d"],
+            }
+            for fragment, extra in cases.items():
+                code, out, err, calls = self.run_main(root, harness, extra)
+                self.assertEqual(code, 2, fragment)
+                self.assertEqual(calls, [], fragment)
+                self.assertEqual(out, "", fragment)
+                self.assertIn(fragment, err)
+                self.assertIn("Nothing was written to SHPM.", err)
+
+    def test_execute_stops_at_the_first_failing_step(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = self.harness(root)
+            worktree = self.worktree(harness, root / "wt", "codex/x")
+            code, out, err, calls = self.run_main(root, harness, [
+                "--branch", "codex/x", "--worktree", str(worktree), "--slot", "1", "--data-root", "local-tmp/d",
+                "--stage", "V2/M2", "--execute"], fail_on=["sprint", "link"])
+            self.assertEqual(code, 1)
+            self.assertEqual([call[1:3] for call in calls], [["task", "create"], ["sprint", "link"]])
+            self.assertIn("shpm sprint link V2/M2", out)
+            self.assertIn("later steps were not run", err)
 
 
 class FrontendGateCacheTest(unittest.TestCase):

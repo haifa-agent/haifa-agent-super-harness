@@ -93,7 +93,7 @@
 | `evidence_reuse.py` | 只读核对旧证据能否复用（`--target` 逐份判 `REUSABLE`/`STALE`），并供 `verify-full.ps1` 选出同指纹的真实 PASS 摘要（Python） |
 | `pr_review_digest.py` | 只读读取 PR 机器人审查并输出 `botVerdict`/`findings`（Python） |
 | `sdk_api_digest.py` | 从本地仓库 JAR 分批 `javap` 生成 SDK 公开/受保护签名摘要；`sdk_identity()` 供内容指纹复用（Python，主控运行） |
-| `shpm_dispatch.py` | 一次性完成 task create、sprint link、task start、assign create |
+| `shpm_dispatch.py` | 一次性完成 task create、sprint link、task start、assign create；槽位 1–4 的端口按 `AGENTS.md` 端口表取值，`--repo` 指定 worktree 所属仓库（上游 SDK 任务），基线 SHA 取 worktree 的 `HEAD`，缺槽位或 data-root 时不执行任何步骤 |
 | `shpm_record_gates.py` | 从门禁摘要 JSON 与 UI 证据目录按时间顺序登记结果（幂等键含证据身份、不含日期）；复用摘要写入 `reuse` 来源，偶发通过写 PASS 加每 issue 一条非必需 FAIL |
 
 历史更换后的旧分支内容审计（只读 Git，不调用模型、不删除分支）：

@@ -210,6 +210,7 @@ python scripts/governance/shpm_dispatch.py `
   --branch 'codex/<任务分支>' --worktree '<独立worktree绝对路径>' `
   --slot 2 --data-root 'local-tmp/<任务>/data' --execute
 # 仅任务服务于演示阶段时，派工命令增加 --stage '<SPRINT/STAGE>'。
+# --slot（1–4）和 --data-root 必填；上游 SDK 任务的 worktree 属于 D:\workspace\haifa-agent 时增加 --repo 'D:\workspace\haifa-agent'。
 
 $taskId='<任务ID>'
 $assignmentId="asg-$taskId"

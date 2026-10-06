@@ -96,7 +96,25 @@ shpm assign create $taskId --id $assignmentId --executor opencode `
     --checkpoint-in 15m --idempotency-key "$operationKey-assign" --json
 ```
 
-`--executor` 可选 `main`、`codex`、`opencode`、`human`，`--ref` 与 `--model` 按实际执行者填写。派单消息注明任务 ID、派工 ID、提示词路径、SHA、端口、数据目录及 checkpoint 要求；OpenCode 调用方法见 `AGENTS.md`「OpenCode CLI」。
+`--executor` 可选 `main`、`codex`、`opencode`、`human`，`--ref` 与 `--model` 按实际执行者填写。`assign create` 缺少 `--data-root` 或端口时会拒绝登记。
+
+上面四步（`task create`、`sprint link`、`task start`、`assign create`）用薄封装一次完成，不手工逐条拼：
+
+```powershell
+python scripts/governance/shpm_dispatch.py --task $taskId --wp $wpId --title '<任务标题>' `
+    --prompt $promptPath --exit '<退出条件>' --executor opencode `
+    --ref '<执行者引用>' --model deepseek/deepseek-flash `
+    --branch $branchName --worktree $worktreeRoot --slot $slot --data-root $dataRoot `
+    [--repo 'D:\workspace\haifa-agent'] [--stage $stageId] [--execute]
+```
+
+- 不带 `--execute` 只打印将执行的命令，核对后再加；带上后按顺序写入，首个失败即停。各步幂等键为 `<日期>-<任务ID>-<动作>`，派工 ID 为 `asg-<任务ID>`。
+- `--slot` 取 1–4，端口按 `AGENTS.md`「派单与子智能体调度」端口表取值（槽位 4 为 `11618/16618`，不套用 `+10000`），不单独传端口。
+- `--slot`、`--data-root` 必填，`--worktree` 须是已创建且有提交的 Git 检出。任一项不满足时脚本以退出码 2 结束，不打印也不执行任何步骤，避免任务已 `start` 却没有派工。
+- 基线 SHA 取 `git -C <worktree> rev-parse HEAD`。
+- `--repo` 默认是本仓库主检出。上游 SDK 任务的 worktree 属于 `D:\workspace\haifa-agent`，须传 `--repo` 指向该仓库；worktree 不属于 `--repo` 所指仓库时脚本拒绝。提示词仍按本仓库主检出下的相对路径检查。
+
+派单消息注明任务 ID、派工 ID、提示词路径、SHA、端口、数据目录及 checkpoint 要求；OpenCode 调用方法见 `AGENTS.md`「OpenCode CLI」。
 
 ## 4. 记录进展、阻塞与恢复
 
