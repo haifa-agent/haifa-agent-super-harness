@@ -769,7 +769,72 @@ class DeerFlowConfigurationApiTest {
         assertThat(thinking.revision()).isEqualTo(flash.revision());
         assertThat(thinking.snapshot().configurationDigest()).isNotEqualTo(flash.snapshot().configurationDigest());
         assertThat(thinking.snapshot().maxOutputTokens()).isEqualTo(128);
-        assertThat(request("GET", "/api/models", null).body()).contains("\"supports_thinking\":false");
+        assertThat(request("GET", "/api/models", null).body())
+                .contains("\"supports_thinking\":true", "\"supports_reasoning_effort\":true");
+    }
+
+    @Test
+    void capabilityFlagsFollowVerifiedDeepSeekCapabilityWithoutFailingTheCatalogue() throws Exception {
+        HttpServer contractServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        DeerFlowConfigurationApi handler = new DeerFlowConfigurationApi(
+                json,
+                dataDirectory.resolve("capability-contract"),
+                null,
+                reference -> {
+                    if (reference.value().equals("os://MISSING_PROBE_KEY")) {
+                        throw new IllegalStateException("credential store unavailable");
+                    }
+                    return new ResolvedCredential("resolved-os-secret");
+                });
+        contractServer.createContext("/api", handler);
+        contractServer.start();
+        try {
+            URI contractBase = URI.create("http://127.0.0.1:" + contractServer.getAddress().getPort());
+            assertThat(requestAt(contractBase, "PUT", "/api/managed-models", capabilityModel(
+                            "deepseek-probe", "deepseek-v4-pro", "https://api.deepseek.com", "\"api_key\":\"probe-secret\""))
+                    .statusCode()).isEqualTo(200);
+            assertThat(requestAt(contractBase, "PUT", "/api/managed-models", capabilityModel(
+                            "loopback-probe", "demo-provider-id", "http://127.0.0.1:9/v1", "\"api_key\":\"probe-secret\""))
+                    .statusCode()).isEqualTo(200);
+            assertThat(requestAt(contractBase, "PUT", "/api/managed-models", capabilityModel(
+                            "unverified-probe", "demo-provider-id", "https://provider.invalid/v1", "\"api_key\":\"probe-secret\""))
+                    .statusCode()).isEqualTo(200);
+            assertThat(requestAt(contractBase, "PUT", "/api/managed-models", capabilityModel(
+                            "broken-probe", "deepseek-v4-pro", "https://api.deepseek.com", "\"credential_ref\":\"os://MISSING_PROBE_KEY\""))
+                    .statusCode()).isEqualTo(200);
+
+            HttpResponse<String> models = requestAt(contractBase, "GET", "/api/models", null);
+            assertThat(models.statusCode()).isEqualTo(200);
+            JsonNode list = json.readTree(models.body()).path("models");
+            assertThat(entry(list, "deepseek-probe").path("supports_thinking").asBoolean()).isTrue();
+            assertThat(entry(list, "deepseek-probe").path("supports_reasoning_effort").asBoolean()).isTrue();
+            assertThat(entry(list, "loopback-probe").path("supports_thinking").asBoolean()).isFalse();
+            assertThat(entry(list, "loopback-probe").path("supports_reasoning_effort").asBoolean()).isFalse();
+            assertThat(entry(list, "unverified-probe").path("supports_thinking").asBoolean()).isFalse();
+            assertThat(entry(list, "broken-probe").path("supports_thinking").asBoolean()).isFalse();
+            assertThat(entry(list, "broken-probe").path("supports_reasoning_effort").asBoolean()).isFalse();
+        } finally {
+            contractServer.stop(0);
+        }
+    }
+
+    private static JsonNode entry(JsonNode models, String name) {
+        for (JsonNode model : models) {
+            if (model.path("name").asText().equals(name)) return model;
+        }
+        throw new AssertionError("model not listed: " + name);
+    }
+
+    private static String capabilityModel(String name, String model, String endpoint, String credential) {
+        return """
+                {"config":{
+                  "name":"%s","display_name":"%s",
+                  "provider":"openai-compatible","model":"%s",
+                  "base_url":"%s","enabled":true,
+                  "supports_vision":false,"context_window":8192,"max_tokens":1024,%s
+                },"expected_revision":null}
+                """
+                .formatted(name, name, model, endpoint, credential);
     }
 
     @Test

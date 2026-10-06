@@ -76,6 +76,8 @@ import javax.crypto.spec.SecretKeySpec;
 
 /** Frozen DeerFlow model and custom-agent REST contracts for the local owner. */
 final class DeerFlowConfigurationApi implements HttpHandler {
+    private static final System.Logger LOG =
+            System.getLogger(DeerFlowConfigurationApi.class.getName());
     private static final int MAX_BODY_BYTES = 128 * 1024;
     private static final int MAX_SOUL_CHARS = 64 * 1024;
     private static final Pattern AGENT_PATH = Pattern.compile("^/api/agents/([^/]+)$");
@@ -725,14 +727,36 @@ final class DeerFlowConfigurationApi implements HttpHandler {
     private ModelItemResponse toModelItemResponse(ObjectNode stored) {
         String name = stored.path("name").asText();
         String displayName = stored.path("display_name").asText();
+        // Frozen config.example.yaml exposes supports_thinking and supports_reasoning_effort as
+        // separate per-model booleans. This repository has no such config keys, so a model that can
+        // enable thinking also advertises the selectable reasoning-effort levels (the composer's
+        // four levels are collapsed onto the SDK's two levels when the Run binding is resolved).
+        boolean supportsThinking = supportsThinkingCapability(stored);
         return new ModelItemResponse(
                 name,
                 name,
                 stored.path("model").asText(),
                 displayName.isBlank() ? name : displayName,
-                false,
-                false
+                supportsThinking,
+                supportsThinking
         );
+    }
+
+    /**
+     * Read-path capability probe. Never fails the catalogue: an unusable or unverified model reports
+     * both capability fields as false, and a check that throws degrades to false with one warning.
+     */
+    private boolean supportsThinkingCapability(ObjectNode stored) {
+        try {
+            return supportsReasoning(stored);
+        } catch (RuntimeException exception) {
+            LOG.log(
+                    System.Logger.Level.WARNING,
+                    "Thinking capability check failed for model {0}: {1}",
+                    stored.path("name").asText(),
+                    exception.getClass().getSimpleName());
+            return false;
+        }
     }
 
     private boolean supportsReasoning(ObjectNode config) {
