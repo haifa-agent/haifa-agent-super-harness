@@ -123,7 +123,10 @@ public final class DirectoryMonitor implements AutoCloseable {
 
     private void openBriefly(Path file) {
         if (!armed.get()) return;
-        Thread opener = Thread.ofVirtual().name("directory-monitor-open").start(() -> {
+        // Register the thread before starting it so a fast opener cannot remove itself before it
+        // was added; each opener drops its own reference when it finishes, so fileOpeners does not
+        // grow with every file event.
+        Thread opener = Thread.ofVirtual().name("directory-monitor-open").unstarted(() -> {
             try (FileInputStream handle = new FileInputStream(file.toFile())) {
                 fileHandles.add(handle);
                 try {
@@ -133,9 +136,12 @@ public final class DirectoryMonitor implements AutoCloseable {
                 }
             } catch (IOException | InterruptedException unavailable) {
                 if (unavailable instanceof InterruptedException) Thread.currentThread().interrupt();
+            } finally {
+                fileOpeners.remove(Thread.currentThread());
             }
         });
         fileOpeners.add(opener);
+        opener.start();
     }
 
     @Override

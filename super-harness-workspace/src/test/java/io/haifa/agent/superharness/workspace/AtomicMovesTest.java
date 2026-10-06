@@ -124,13 +124,28 @@ class AtomicMovesTest {
         Path target = Files.writeString(directory.resolve("target.json"), "before");
         Path missing = directory.resolve("missing.tmp");
 
-        long started = System.nanoTime();
         assertThatThrownBy(() -> AtomicMoves.replace(missing, target))
                 .isInstanceOf(NoSuchFileException.class);
-        long elapsedMillis = Duration.ofNanos(System.nanoTime() - started).toMillis();
-        // The full retry window is about 0.85s; a permanent failure must return far sooner.
-        assertThat(elapsedMillis).isLessThan(400);
+        // A permanent failure is attempted exactly once; the retry window is never entered. This
+        // observes the attempt count directly instead of bounding wall-clock time, which a loaded
+        // three-process gate run can exceed even when no retry happens.
+        assertThat(AtomicMoves.lastMoveAttempts()).isEqualTo(1);
         assertThat(target).hasContent("before");
+    }
+
+    @Test
+    void createReplacesAnExistingRegularFileRatherThanFailing() throws Exception {
+        // This test records the observed behavior of create(), not a guarantee it must uphold.
+        // ATOMIC_MOVE onto an existing regular file replaces it with no exception (Windows and
+        // POSIX); only an existing directory is denied. Callers must not treat create() as a
+        // mutual-exclusion primitive. See AtomicMoves.create for the recommended alternative.
+        Path target = Files.writeString(directory.resolve("target.json"), "before");
+        Path source = Files.writeString(directory.resolve("source.tmp"), "after");
+
+        AtomicMoves.create(source, target);
+
+        assertThat(target).hasContent("after");
+        assertThat(source).doesNotExist();
     }
 
     private static void assumeWindowsSharingDenial() {
