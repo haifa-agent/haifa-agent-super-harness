@@ -1345,7 +1345,7 @@ class KnownIntermittentTest(unittest.TestCase):
     def test_manifest_loads(self):
         entries = known_intermittent.load_manifest(ROOT / "tests/known-intermittent.json")
         self.assertEqual([entry["issue"] for entry in entries],
-                         ["W04-UPLOAD-DUPLICATE-INTERMITTENT", "W08-SUBTASK-CANCEL-INTERMITTENT"])
+                         ["W04-UPLOAD-DUPLICATE-INTERMITTENT"])
         self.assertTrue(all("covers" in entry for entry in entries))
 
     def test_plan_allowed_and_each_denial(self):
