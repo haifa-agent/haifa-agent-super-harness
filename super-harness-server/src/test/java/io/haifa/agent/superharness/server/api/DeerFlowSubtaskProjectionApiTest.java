@@ -11,6 +11,7 @@ import io.haifa.agent.model.api.ModelUsage;
 import io.haifa.agent.superharness.server.testsupport.ControlledModel;
 import io.haifa.agent.superharness.server.testsupport.ControlledProvider;
 import io.haifa.agent.superharness.server.testsupport.DelegationHttpFixture;
+import io.haifa.agent.superharness.server.testsupport.DirectoryMonitor;
 import io.haifa.agent.superharness.server.testsupport.GatewayFixture;
 import io.haifa.agent.superharness.server.testsupport.SseEvents;
 import java.net.URI;
@@ -332,6 +333,22 @@ class DeerFlowSubtaskProjectionApiTest {
     }
 
     @Test void interleavedChildrenKeepIndependentPersistentCursorsAcrossConcurrentAppends() throws Exception {
+        interleavedChildrenKeepIndependentPersistentCursors(null, false);
+    }
+
+    /**
+     * Same real Run as the sibling test, but its data directory is held open by an external-style
+     * watcher. Reproduces the observed flake where the disconnected prefix can contain no durable
+     * {@code id:} because the id-less subtask frames arrive before any Parent projection frame.
+     */
+    @Test void interleavedChildrenKeepIndependentPersistentCursorsUnderMonitoredDataDirectory() throws Exception {
+        try (var monitor = DirectoryMonitor.open(data, Duration.ofMillis(3))) {
+            interleavedChildrenKeepIndependentPersistentCursors(monitor, true);
+        }
+    }
+
+    private void interleavedChildrenKeepIndependentPersistentCursors(DirectoryMonitor monitor, boolean waitForCursor)
+            throws Exception {
         CountDownLatch atSecondModel = new CountDownLatch(2), release = new CountDownLatch(1);
         AtomicInteger lead = new AtomicInteger();
         var phases = new ConcurrentHashMap<String, AtomicInteger>();
@@ -371,6 +388,7 @@ class DeerFlowSubtaskProjectionApiTest {
             var response = http.client.send(request, HttpResponse.BodyHandlers.ofInputStream());
             try (var stream = response.body()) {
                 assertThat(response.statusCode()).isEqualTo(200);
+                if (monitor != null) monitor.arm();
                 String location = response.headers().firstValue("content-location").orElseThrow();
                 assertThat(atSecondModel.await(10, TimeUnit.SECONDS)).as("Both actual Children produced a durable first Tool result").isTrue();
                 JsonNode state = http.get(gateway.base, "/api/threads/interleaved/state", "interleaved-running-state.json");
@@ -388,7 +406,7 @@ class DeerFlowSubtaskProjectionApiTest {
                 var prefixFrames = SseEvents.readUntil(stream, events -> !events.named("messages").isEmpty()
                         && events.named("custom").stream()
                         .filter(event -> "task_running".equals(event.data().path("type").asText())).count() >= 4,
-                        Duration.ofSeconds(10), evidence.resolve("interleaved-disconnected-prefix.sse"));
+                        Duration.ofSeconds(10), evidence.resolve("interleaved-disconnected-prefix.sse"), waitForCursor);
                 Files.writeString(evidence.resolve("interleaved-disconnected-prefix.sse"), prefixFrames.body());
                 assertThat(prefixFrames.lastEventId()).isPresent();
                 assertThat(prefixFrames.lastEventId().orElseThrow()).isNotBlank();
@@ -472,6 +490,17 @@ class DeerFlowSubtaskProjectionApiTest {
     }
 
     @Test void cancellingThreeActualChildrenClosesTwoWaitingRequestsWithoutInventingChildFrames() throws Exception {
+        cancellingThreeActualChildrenClosesTwoWaitingRequests(null);
+    }
+
+    /** Same real cancellation Run under the external-style directory watcher. */
+    @Test void cancellingThreeActualChildrenUnderMonitoredDataDirectory() throws Exception {
+        try (var monitor = DirectoryMonitor.open(data, Duration.ofMillis(40))) {
+            cancellingThreeActualChildrenClosesTwoWaitingRequests(monitor);
+        }
+    }
+
+    private void cancellingThreeActualChildrenClosesTwoWaitingRequests(DirectoryMonitor monitor) throws Exception {
         CountDownLatch running = new CountDownLatch(3), release = new CountDownLatch(1);
         AtomicInteger childModels = new AtomicInteger(), lead = new AtomicInteger();
         var model = new ControlledModel((request, call) -> {
@@ -503,6 +532,7 @@ class DeerFlowSubtaskProjectionApiTest {
             var response = http.client.send(request, HttpResponse.BodyHandlers.ofInputStream());
             try (var stream = response.body()) {
                 assertThat(response.statusCode()).isEqualTo(200);
+                if (monitor != null) monitor.arm();
                 String location = response.headers().firstValue("content-location").orElseThrow();
                 assertThat(running.await(10, TimeUnit.SECONDS)).as("Three actual Children reached their public model calls").isTrue();
                 JsonNode before = http.get(gateway.base, "/api/threads/cancel-queued/state", "cancel-before-state.json");
