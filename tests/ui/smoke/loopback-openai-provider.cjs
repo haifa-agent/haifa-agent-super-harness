@@ -143,7 +143,7 @@ function blockW05Live(response, record) {
 }
 
 function w05LiveMarker(body) {
-  return /w05-live-(01|02|03)-[A-Za-z0-9-]+/.exec(messagesText(body));
+  return /w05-live-(01|02|03|04)-[A-Za-z0-9-]+/.exec(messagesText(body));
 }
 
 // Returns true when the request belongs to this fixture and was fully handled.
@@ -161,9 +161,34 @@ async function handleW05LiveRendering(response, body) {
     stream: body.stream === true,
     toolResults: toolResultCount(body),
     offeredListUploads: toolNames(body).includes("list_uploaded_files"),
+    child: isW08Child(body),
+    objective: /W05-LIVE04-OBJECTIVE[^\s"\\]*/.exec(messagesText(body))?.[0] ?? null,
   };
   w05LiveCalls.push(record);
   console.log(JSON.stringify(record));
+  if (scenario === "04") {
+    // Parent asks the delegated Child to run; the Child's own model call blocks so
+    // the subtask card must already be visible in progress during the hold.
+    if (record.child) {
+      await blockW05Live(response, record);
+      completeW08Text(response, body, id, `W08-CHILD-RESULT:${record.objective ?? marker}`);
+      return true;
+    }
+    if (record.toolResults === 0) {
+      const taskCallId = `w05-live04-${Date.now()}`;
+      record.taskCallId = taskCallId;
+      finishWithTaskCalls(response, id, [
+        {
+          callId: taskCallId,
+          name: "task",
+          args: { agent: W08_CHILD_AGENT, objective: `W05-LIVE04-OBJECTIVE ${marker}` },
+        },
+      ]);
+      return true;
+    }
+    completeW08Text(response, body, id, `W05-LIVE04-DONE ${marker}`);
+    return true;
+  }
   if (scenario === "02" && body.stream === true) {
     // Stream a recognisable first half, then hold the open SSE response before
     // the second half so the page snapshot can be inspected mid-run.
@@ -599,7 +624,10 @@ const server = http.createServer((request, response) => {
     // W08 Child-delegation scenes: only this bounded marker family. Parent vs Child
     // is decided by the Child system-prompt marker and the declared `task` Tool, not
     // by arrival order; the request stream is otherwise untouched.
-    if (isW08Child(body) || messagesText(body).includes("W08-UI")) {
+    // W05 LIVE-04 reuses the controlled W08 Child, so its Child request also carries
+    // W08-CHILD-MARKER; route the whole scene to the live-rendering handler instead.
+    const w05Live04 = messagesText(body).includes("w05-live-04");
+    if (!w05Live04 && (isW08Child(body) || messagesText(body).includes("W08-UI"))) {
       handleW08Delegation(response, body, prompt, offeredTools);
       return;
     }

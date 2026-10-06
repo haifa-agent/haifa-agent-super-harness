@@ -12,8 +12,26 @@ const path = require("node:path");
 const { expect, test } = require("./fixtures.cjs");
 
 const RUN_STREAM = /\/api\/langgraph\/threads\/[^/]+\/runs\/stream$/;
+const RUN_STREAM_ROUTE = "**/api/langgraph/threads/*/runs/stream*";
 const W05_LIVE_FIRST = "W05-LIVE02-FIRST-HALF";
 const W05_LIVE_SECOND = "W05-LIVE02-SECOND-HALF";
+
+// LIVE-04 reuses the W08 controlled Child so the frozen Ultra path declares the
+// real `task` Tool. The spec shapes only the /runs/stream context; the SSE body
+// and the delegation rendering are real backend output.
+const CHILD_AGENT = "w08-child";
+const CHILD = {
+  name: CHILD_AGENT,
+  display_name: "W08 Child",
+  description: "Deterministic W05 live-rendering child",
+  system_prompt:
+    "W08-CHILD-MARKER Complete the assigned objective and return a short result.",
+  model: "inherit",
+  tools: [],
+  skills: null,
+  max_turns: 4,
+  timeout_seconds: 30,
+};
 
 function providerEntries(evidenceRoot) {
   const file = fs
@@ -77,6 +95,49 @@ async function submit(page, workspace, text) {
   const response = await responsePromise;
   expect(response.status(), await response.text()).toBe(200);
   return response;
+}
+
+// Reuse the W08 delegated Child catalog so the frozen Ultra request declares the
+// real `task` Tool; only the /runs/stream context is shaped, never the response.
+async function ensureChild(context, runtime, evidence) {
+  const existing = await context.request.get(`${runtime.app}/api/subagents`);
+  const catalog = await existing.text();
+  expect(existing.status(), catalog).toBe(200);
+  const entries = JSON.parse(catalog).subagents ?? [];
+  if (entries.some((entry) => entry.name === CHILD_AGENT)) return;
+  const created = await context.request.post(`${runtime.app}/api/subagents`, {
+    data: CHILD,
+  });
+  const body = await created.text();
+  await evidence.json("live04-seed-child", {
+    method: "POST",
+    path: "/api/subagents",
+    status: created.status(),
+    body,
+  });
+  expect(created.status(), body).toBe(201);
+}
+
+async function shapeUltra(page) {
+  const shaped = [];
+  await page.route(RUN_STREAM_ROUTE, async (route, request) => {
+    if (request.method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const body = request.postDataJSON();
+    body.context = {
+      ...(body.context ?? {}),
+      mode: "ultra",
+      subagent_enabled: true,
+      is_plan_mode: true,
+      thinking_enabled: false,
+    };
+    delete body.context.reasoning_effort;
+    shaped.push(body.context);
+    await route.continue({ postData: JSON.stringify(body) });
+  });
+  return shaped;
 }
 
 test.beforeEach(async ({ context, runtime }) => {
@@ -202,4 +263,68 @@ test("W05 LIVE-03 a Tool step is visible while the run waits after its result", 
     page.locator("#chat").getByText(`W05-LIVE03-DONE ${marker}`),
   ).toBeVisible({ timeout: 60_000 });
   await evidence.json("live03-tool-step", { marker, scenes });
+});
+
+test("W05 LIVE-04 a delegated subtask card renders in progress while the run is in flight", async ({
+  context,
+  page,
+  runtime,
+  workspace,
+  evidence,
+}) => {
+  const marker = `w05-live-04-${Date.now()}`;
+  const objective = `W05-LIVE04-OBJECTIVE ${marker}`;
+  await ensureChild(context, runtime, evidence);
+  const shaped = await shapeUltra(page);
+
+  const response = await submit(page, workspace, marker);
+  await expect.poll(() => shaped.length).toBeGreaterThan(0);
+
+  // The controlled Child blocks its own model call, so the parent Run is waiting
+  // on the `task` Tool result; the card must render while it is still running.
+  const scenes = await waitForScene(
+    context,
+    runtime,
+    marker,
+    (entry) => entry.child === true,
+  );
+  try {
+    await expect(page.getByTitle(objective, { exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
+    // Evidence of what the card shows while the Child is still blocked.
+    await evidence.screenshot(page, "live04-card-while-child-blocked");
+    await evidence.json("live04-card-while-child-blocked", {
+      chatText: await page.locator("#chat").innerText().catch(() => null),
+    });
+    await expect(
+      page.getByText("Running subtask", { exact: true }),
+    ).toBeVisible({ timeout: 15_000 });
+  } catch (error) {
+    // Do not change the assertion; preserve the client-visible evidence instead.
+    await evidence.json("live04-failure-scenes", { marker, objective, scenes });
+    await evidence.json("live04-failure-dom", {
+      chatText: await page.locator("#chat").innerText().catch(() => null),
+      cards: await page.getByTitle(objective, { exact: true }).count(),
+    });
+    const location = response.headers()["content-location"];
+    const threadMatch = location?.match(/\/api\/threads\/([^/]+)\/runs\//);
+    if (threadMatch) {
+      const state = await context.request.get(
+        `${runtime.app}/api/threads/${threadMatch[1]}/state`,
+      );
+      await evidence.json("live04-failure-state", {
+        status: state.status(),
+        body: await state.text().catch(() => null),
+      });
+    }
+    throw error;
+  }
+  await evidence.screenshot(page, "live04-running-subtask-card");
+  await evidence.json("live04-running-scenes", { marker, objective, scenes });
+
+  await release(context, runtime);
+  await expect(
+    page.locator("#chat").getByText(`W05-LIVE04-DONE ${marker}`),
+  ).toBeVisible({ timeout: 60_000 });
 });
