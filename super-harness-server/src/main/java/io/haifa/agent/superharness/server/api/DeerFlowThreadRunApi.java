@@ -1855,7 +1855,11 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             boolean reemitPendingCard)
             throws IOException {
         exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
-        exchange.getResponseHeaders().set("Cache-Control", "no-cache");
+        // The frozen frontend reaches the Gateway through the Next.js rewrite proxy, which gzips
+        // proxied responses and holds a compressed event stream back until the Run ends. Frozen
+        // DeerFlow keeps the stream uncompressed in nginx; no-transform tells the Next.js proxy
+        // the same thing.
+        exchange.getResponseHeaders().set("Cache-Control", "no-cache, no-transform");
         exchange.getResponseHeaders().set("Connection", "keep-alive");
         exchange.getResponseHeaders().set("X-Accel-Buffering", "no");
         // Every stream response is already bound to this authoritative RunRecord. Expose the
