@@ -157,7 +157,8 @@ pwsh -NoProfile -File scripts/test-targeted.ps1 -Slow -Test DeerFlowTaskDelegati
 ```
 
 Oracle16 的 `DeerFlowCreatedChildZeroExecutionHttpTest` 使用公开 SDK 的测试装配入口，确定性保留真实 Child
-执行任务，覆盖 Parent 取消/超时、零物理执行、HTTP/SSE 和同数据目录重启；生产保持默认虚拟线程执行器。
+执行任务，覆盖 Parent HTTP 取消及实际 SDK 墙钟到期、零物理执行、HTTP/SSE 和同数据目录重启；
+超时夹具仅在测试装配时声明 2 秒 Parent 墙钟限制，不提交模拟超时的取消指令，生产限制与虚拟线程执行器保持默认值。
 测试的任务释放与关闭使用有界等待，原始 HTTP/SSE 和安全的 Parent/Child/Task ID 摘要保存至夹具证据目录。
 
 SDK 版本规则见 `AGENTS.md`「范围与依赖」。工作包 worktree 消费带标识的 SDK 版本时，在该 worktree 写入不被

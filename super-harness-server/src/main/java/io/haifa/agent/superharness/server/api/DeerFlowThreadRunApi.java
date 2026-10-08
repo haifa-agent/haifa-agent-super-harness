@@ -180,6 +180,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private final PersistentThreadCatalog threadCatalog;
     private final DurableHaifaFoundation foundation;
     private final Supplier<? extends ExecutorService> executionExecutorFactory;
+    private final Long parentWallTimeMillisForTests;
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
     private final Map<String, RunRecord> runs = new ConcurrentHashMap<>();
     // A terminal Run can leave the hot cache while its bridge still owns SDK resources.
@@ -277,7 +278,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity) throws IOException {
         this(json, runModelResolver, projectExists, workspaceChanges, dataDirectory, continuationKey,
                 runToolsForThread, mcpProjections, skillProjections, uploadContext, agentPromptResolver,
-                instructionDiagnostics, delegationProjections, childRunCapacity, null);
+                instructionDiagnostics, delegationProjections, childRunCapacity, null, null);
     }
 
     /** Test-only host physical-execution seam; production always supplies no executor factory. */
@@ -291,8 +292,10 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             BiFunction<HaifaRunBridge, AgentRunId, Optional<FrozenInstructionDiagnostic>> instructionDiagnostics,
             DelegationProjectionProvider delegationProjections,
             io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
-            Supplier<? extends ExecutorService> executionExecutorFactory) throws IOException {
+            Supplier<? extends ExecutorService> executionExecutorFactory,
+            Long parentWallTimeMillisForTests) throws IOException {
         this.executionExecutorFactory = executionExecutorFactory;
+        this.parentWallTimeMillisForTests = parentWallTimeMillisForTests;
         this.childRunCapacity = java.util.Objects.requireNonNull(childRunCapacity, "childRunCapacity");
         this.json = json;
         this.runModelResolver = runModelResolver;
@@ -1553,7 +1556,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             boolean isPlanMode) {
         bridgeBuilds.incrementAndGet();
         return new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt), foundation, mcpProjection,
-                skillProjection, agentPrompt, delegation, childRunCapacity, isPlanMode, executionExecutorFactory);
+                skillProjection, agentPrompt, delegation, childRunCapacity, isPlanMode, executionExecutorFactory,
+                parentWallTimeMillisForTests);
     }
 
     /** Test-only: the exact bridge currently attached to a Thread, or null when none is. */

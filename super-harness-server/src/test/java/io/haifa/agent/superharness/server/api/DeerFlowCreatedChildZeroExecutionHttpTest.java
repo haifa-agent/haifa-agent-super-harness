@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.haifa.agent.core.run.AgentRunId;
 import io.haifa.agent.core.run.AgentRunStatus;
-import io.haifa.agent.runtime.api.RunCancellation;
 import io.haifa.agent.runtime.api.RunEventPayloads;
 import io.haifa.agent.superharness.server.run.HaifaRunBridge;
 import io.haifa.agent.superharness.server.config.LocalServerConfiguration;
@@ -89,7 +88,8 @@ class DeerFlowCreatedChildZeroExecutionHttpTest {
         String taskId;
         String terminalCursor;
         try (var gateway = new GatewayFixture(data, DeerFlowBootstrapApi.createForExecutorTests(
-                configuration, data, environment, ignored -> LocalProbeModelTestSupport.binding(model), factory), evidence);
+                configuration, data, environment, ignored -> LocalProbeModelTestSupport.binding(model), factory,
+                deadline ? 2_000L : null), evidence);
              AutoCloseable cleanup = () -> {
                  if (held.get() != null) held.get().drainHeld(Duration.ofSeconds(10));
              }) {
@@ -135,11 +135,9 @@ class DeerFlowCreatedChildZeroExecutionHttpTest {
                 assertThat(http.request(gateway.base, "GET", events("/api/threads/missing/runs/missing", taskId),
                         "", "held-child-missing-run.http").statusCode()).isEqualTo(404);
 
-                // Parent termination: real HTTP 202 cancel, or the public deadline reason through
-                // the narrow host bridge test accessor (never a fabricated HTTP response).
-                if (deadline) {
-                    assertThat(bridge.cancel(parent, RunCancellation.deadlineExceeded(Duration.ofSeconds(1)))).isTrue();
-                } else {
+                // Cancellation uses production HTTP. The timeout case sends no stop command:
+                // the actual SDK Parent wall limit expires while the real Child remains held.
+                if (!deadline) {
                     assertThat(http.request(gateway.base, "POST", location + "/cancel?action=interrupt&wait=0",
                             "", "held-child-cancel.http").statusCode()).isEqualTo(202);
                 }
@@ -149,6 +147,8 @@ class DeerFlowCreatedChildZeroExecutionHttpTest {
                 JsonNode run = http.get(gateway.base, location, "held-child-run.json");
                 assertThat(run.path("diagnostics").path("sdk_status").asText())
                         .isEqualTo(deadline ? "TIMEOUT" : "CANCELLED");
+                if (deadline) assertThat(bridge.snapshot(parent).terminationReason()
+                        .map(reason -> reason.code()).orElse("")).isEqualTo("WALL_TIME_EXCEEDED");
                 assertThat(customs(body))
                         .as("No invented task_started/task_running for a Child that never physically executed")
                         .noneMatch(event -> "task_started".equals(event.path("type").asText())
@@ -191,12 +191,15 @@ class DeerFlowCreatedChildZeroExecutionHttpTest {
         }
 
         try (var reopened = new GatewayFixture(data, DeerFlowBootstrapApi.createForExecutorTests(
-                configuration, data, environment, ignored -> LocalProbeModelTestSupport.binding(model), factory), evidence)) {
+                configuration, data, environment, ignored -> LocalProbeModelTestSupport.binding(model), factory,
+                deadline ? 2_000L : null), evidence)) {
             JsonNode replayed = http.get(reopened.base, location, "held-child-run-reopened.json");
             assertThat(replayed.path("diagnostics").path("sdk_status").asText())
                     .isEqualTo(deadline ? "TIMEOUT" : "CANCELLED");
             var reopenedBridge = api(reopened).currentBridge(THREAD);
             assertThat(reopenedBridge).isNotNull();
+            if (deadline) assertThat(reopenedBridge.snapshot(new AgentRunId(location.substring(location.lastIndexOf('/') + 1)))
+                    .terminationReason().map(reason -> reason.code()).orElse("")).isEqualTo("WALL_TIME_EXCEEDED");
             var reopenedChildren = reopenedBridge.children(new AgentRunId(location.substring(location.lastIndexOf('/') + 1)));
             assertThat(reopenedChildren).hasSize(1);
             assertThat(reopenedChildren.getFirst().parentRunId())

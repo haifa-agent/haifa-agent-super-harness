@@ -117,7 +117,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             SkillConfigStore testSkillStore,
             io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings delegationSettings) throws IOException {
         this(bindHost, bindPort, executor, dataDirectory, continuationKey, testRunModelResolver, testRunTools,
-                suggestionsSettings, testSkillStore, delegationSettings, null);
+                suggestionsSettings, testSkillStore, delegationSettings, null, null);
     }
 
     private DeerFlowBootstrapApi(String bindHost, int bindPort, ExecutorService executor, Path dataDirectory,
@@ -125,7 +125,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             List<? extends JavaTool<?, ?>> testRunTools, DeerFlowSuggestionsApi.Settings suggestionsSettings,
             SkillConfigStore testSkillStore,
             io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings delegationSettings,
-            Supplier<? extends ExecutorService> executionExecutorFactory) throws IOException {
+            Supplier<? extends ExecutorService> executionExecutorFactory,
+            Long parentWallTimeMillisForTests) throws IOException {
         this.bindHost = bindHost;
         this.bindPort = bindPort;
         this.executor = executor;
@@ -216,7 +217,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                             catalog, configurationApi.resolveAllowedSubagents(body),
                             parent, configurationApi::resolveChildModel, delegationSettings);
                 }, new io.haifa.agent.runtime.api.ChildRunCapacity(delegationSettings.runningCapacity()),
-                executionExecutorFactory);
+                executionExecutorFactory, parentWallTimeMillisForTests);
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
         this.skillsApi = new DeerFlowSkillsApi(objectMapper, skillStore, workspaceApi);
@@ -370,7 +371,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             DeerFlowSuggestionsApi.Settings suggestionsSettings,
             io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings delegationSettings) throws IOException {
         return createWithKey(configuration, dataDirectory, continuationKey, runModelResolver, suggestionsSettings,
-                delegationSettings, null);
+                delegationSettings, null, null);
     }
 
     private static DeerFlowBootstrapApi createWithKey(LocalServerConfiguration configuration,
@@ -378,7 +379,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
             DeerFlowSuggestionsApi.Settings suggestionsSettings,
             io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings delegationSettings,
-            Supplier<? extends ExecutorService> executionExecutorFactory) throws IOException {
+            Supplier<? extends ExecutorService> executionExecutorFactory,
+            Long parentWallTimeMillisForTests) throws IOException {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         return new DeerFlowBootstrapApi(
                 configuration.bindAddress().getHostAddress(),
@@ -391,20 +393,22 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 suggestionsSettings,
                 null,
                 delegationSettings,
-                executionExecutorFactory);
+                executionExecutorFactory, parentWallTimeMillisForTests);
     }
 
     /**
      * Test-only host bootstrap for the physical-execution seam: real environment-derived
      * continuation key (so the same data-root can be reopened) plus an optional SDK
-     * execution-executor factory. Production entry points never supply one.
+     * execution-executor factory and Parent wall-time declaration. Production entry
+     * points never supply these test overrides; timeout settlement stays in the SDK.
      */
     public static DeerFlowBootstrapApi createForExecutorTests(
             LocalServerConfiguration configuration,
             Path dataDirectory,
             Map<String, String> environment,
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
-            Supplier<? extends ExecutorService> executionExecutorFactory)
+            Supplier<? extends ExecutorService> executionExecutorFactory,
+            Long parentWallTimeMillisForTests)
             throws IOException {
         return createWithKey(
                 configuration,
@@ -413,7 +417,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 runModelResolver,
                 DeerFlowSuggestionsApi.Settings.fromEnvironment(environment),
                 io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings.fromEnvironment(environment),
-                executionExecutorFactory);
+                executionExecutorFactory, parentWallTimeMillisForTests);
     }
 
     public static DeerFlowBootstrapApi createForTests(
