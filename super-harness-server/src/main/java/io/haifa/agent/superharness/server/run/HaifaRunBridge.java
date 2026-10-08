@@ -21,6 +21,7 @@ import io.haifa.agent.runtime.api.FrozenInstructionDiagnostic;
 import io.haifa.agent.runtime.api.InteractionResponseReceipt;
 import io.haifa.agent.runtime.api.InteractionResponseSubmission;
 import io.haifa.agent.runtime.api.InteractionView;
+import io.haifa.agent.runtime.api.RunCancellation;
 import io.haifa.agent.runtime.api.RunEventCursor;
 import io.haifa.agent.runtime.api.RunEventPage;
 import io.haifa.agent.runtime.api.ToolCallView;
@@ -73,7 +74,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 /** Adapter that exposes only public Haifa Agent SDK types to the HTTP boundary. */
 public final class HaifaRunBridge implements AutoCloseable {
@@ -170,6 +173,16 @@ public final class HaifaRunBridge implements AutoCloseable {
             SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
             SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
             boolean isPlanMode) {
+        this(binding, tools, foundation, mcpProjection, skillProjection, agentContext, delegation,
+                childRunCapacity, isPlanMode, null);
+    }
+
+    /** Host physical-execution seam: an optional SDK execution executor factory, test-only. */
+    public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
+            boolean isPlanMode, Supplier<? extends ExecutorService> executionExecutorFactory) {
         java.util.Objects.requireNonNull(childRunCapacity, "childRunCapacity");
         this.agentContext = java.util.Objects.requireNonNull(agentContext, "agent context must not be null");
         this.isPlanMode = isPlanMode;
@@ -297,6 +310,11 @@ public final class HaifaRunBridge implements AutoCloseable {
                 // and release; SH only declares the projections. applyTo sets the builder's
                 // credentials contribution, so SH must not set another one.
                 platform.applyTo(builder);
+            }
+            // Optional host bootstrap: the default SDK virtual-thread executor stays in place
+            // when no factory is supplied; the SDK owns the fresh executor and its closing.
+            if (executionExecutorFactory != null) {
+                builder.executionExecutorFactoryForTests(executionExecutorFactory);
             }
             this.agent = builder.build();
         } catch (RuntimeException | Error failure) {
@@ -549,11 +567,19 @@ public final class HaifaRunBridge implements AutoCloseable {
     }
 
     public boolean cancel(AgentRunId runId) {
+        return cancel(runId, RunCancellation.userRequest());
+    }
+
+    /**
+     * Host reason pass-through (for example a Parent deadline). The SDK still owns terminal
+     * settlement; this only names why the caller is cancelling.
+     */
+    public boolean cancel(AgentRunId runId, RunCancellation cancellation) {
         AgentRunStatus before = snapshot(runId).status();
         if (before.isTerminal()) {
             return false;
         }
-        agent.runs().handle(runId).cancel();
+        agent.runs().handle(runId).cancel(cancellation);
         return true;
     }
 

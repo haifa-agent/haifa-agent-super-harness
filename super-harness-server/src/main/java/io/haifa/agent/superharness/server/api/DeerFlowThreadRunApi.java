@@ -81,6 +81,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -178,6 +179,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private final DeerFlowUploadContext uploadContext;
     private final PersistentThreadCatalog threadCatalog;
     private final DurableHaifaFoundation foundation;
+    private final Supplier<? extends ExecutorService> executionExecutorFactory;
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
     private final Map<String, RunRecord> runs = new ConcurrentHashMap<>();
     // A terminal Run can leave the hot cache while its bridge still owns SDK resources.
@@ -273,6 +275,24 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             BiFunction<HaifaRunBridge, AgentRunId, Optional<FrozenInstructionDiagnostic>> instructionDiagnostics,
             DelegationProjectionProvider delegationProjections,
             io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity) throws IOException {
+        this(json, runModelResolver, projectExists, workspaceChanges, dataDirectory, continuationKey,
+                runToolsForThread, mcpProjections, skillProjections, uploadContext, agentPromptResolver,
+                instructionDiagnostics, delegationProjections, childRunCapacity, null);
+    }
+
+    /** Test-only host physical-execution seam; production always supplies no executor factory. */
+    DeerFlowThreadRunApi(ObjectMapper json,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            Predicate<String> projectExists, PersistentProjectWorkspaceService workspaceChanges,
+            Path dataDirectory, SecretKey continuationKey,
+            Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread,
+            McpProjectionProvider mcpProjections, SkillProjectionProvider skillProjections,
+            DeerFlowUploadContext uploadContext, Function<JsonNode, AgentPromptContext> agentPromptResolver,
+            BiFunction<HaifaRunBridge, AgentRunId, Optional<FrozenInstructionDiagnostic>> instructionDiagnostics,
+            DelegationProjectionProvider delegationProjections,
+            io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
+            Supplier<? extends ExecutorService> executionExecutorFactory) throws IOException {
+        this.executionExecutorFactory = executionExecutorFactory;
         this.childRunCapacity = java.util.Objects.requireNonNull(childRunCapacity, "childRunCapacity");
         this.json = json;
         this.runModelResolver = runModelResolver;
@@ -1533,7 +1553,16 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             boolean isPlanMode) {
         bridgeBuilds.incrementAndGet();
         return new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt), foundation, mcpProjection,
-                skillProjection, agentPrompt, delegation, childRunCapacity, isPlanMode);
+                skillProjection, agentPrompt, delegation, childRunCapacity, isPlanMode, executionExecutorFactory);
+    }
+
+    /** Test-only: the exact bridge currently attached to a Thread, or null when none is. */
+    HaifaRunBridge currentBridge(String threadId) {
+        ThreadRecord thread = threads.get(threadId);
+        if (thread == null) return null;
+        synchronized (thread) {
+            return thread.bridge;
+        }
     }
 
     private List<? extends JavaTool<?, ?>> toolsForThread(ThreadRecord thread, AgentPromptContext agentPrompt) {
