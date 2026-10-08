@@ -493,6 +493,10 @@ class DeerFlowSubtaskProjectionApiTest {
         cancellingThreeActualChildrenClosesTwoWaitingRequests(null);
     }
 
+    @Test void cancelledNativeToolAssistantKeepsTextWithTaskCallsThroughPageRestart() throws Exception {
+        cancellingThreeActualChildrenClosesTwoWaitingRequests(null, "Parent is delegating now.");
+    }
+
     /** Same real cancellation Run under the external-style directory watcher. */
     @Test void cancellingThreeActualChildrenUnderMonitoredDataDirectory() throws Exception {
         try (var monitor = DirectoryMonitor.open(data)) {
@@ -501,6 +505,10 @@ class DeerFlowSubtaskProjectionApiTest {
     }
 
     private void cancellingThreeActualChildrenClosesTwoWaitingRequests(DirectoryMonitor monitor) throws Exception {
+        cancellingThreeActualChildrenClosesTwoWaitingRequests(monitor, "");
+    }
+
+    private void cancellingThreeActualChildrenClosesTwoWaitingRequests(DirectoryMonitor monitor, String nativeText) throws Exception {
         CountDownLatch running = new CountDownLatch(3), release = new CountDownLatch(1);
         AtomicInteger childModels = new AtomicInteger(), lead = new AtomicInteger();
         var model = new ControlledModel((request, call) -> {
@@ -520,7 +528,7 @@ class DeerFlowSubtaskProjectionApiTest {
             var calls = java.util.stream.IntStream.range(0, 5).mapToObj(index -> new ModelToolCall(
                     new ProviderToolCallCorrelationId("provider-cancel-" + index), "task",
                     Map.of("agent", "researcher", "objective", "cancel child " + index))).toList();
-            return ControlledModel.response(request, "parent-" + call, "", calls, ModelFinishReason.TOOL_CALLS, ModelUsage.unpriced(1, 1));
+            return ControlledModel.response(request, "parent-" + call, nativeText, calls, ModelFinishReason.TOOL_CALLS, ModelUsage.unpriced(1, 1));
         });
         List<String> tasks = null;
         List<String> starts = null;
@@ -578,6 +586,7 @@ class DeerFlowSubtaskProjectionApiTest {
                     assertThat(http.get(gateway.base, events(location, waiting), "waiting-" + tasks.indexOf(waiting) + ".json")).isEmpty();
                 }
                 firstPage = assertCancelledDelegationPage(gateway.base, tasks, "cancel-message-page");
+                if (!nativeText.isEmpty()) assertNativeToolText(firstPage, nativeText);
             } finally {
                 release.countDown();
             }
@@ -586,6 +595,7 @@ class DeerFlowSubtaskProjectionApiTest {
         // a real process restart where only durable facts remain and the in-memory Runs are gone.
         try (var restarted = new GatewayFixture(data, model, evidence.resolve("restart-page"))) {
             JsonNode restartedPage = assertCancelledDelegationPage(restarted.base, tasks, "restart-cancel-message-page");
+            if (!nativeText.isEmpty()) assertNativeToolText(restartedPage, nativeText);
             assertThat(restartedPage).as("durable page is byte-identical after restart").isEqualTo(firstPage);
             for (String waiting : tasks) {
                 if (starts.contains(waiting)) continue;
@@ -593,6 +603,16 @@ class DeerFlowSubtaskProjectionApiTest {
                         .as("a never-admitted Child still shows no steps after restart").isEmpty();
             }
         }
+    }
+
+    private static void assertNativeToolText(JsonNode rows, String nativeText) {
+        List<JsonNode> assistants = java.util.stream.StreamSupport.stream(rows.spliterator(), false)
+                .map(row -> row.path("content")).filter(message -> "ai".equals(message.path("type").asText())).toList();
+        assertThat(assistants.stream().filter(message -> !message.path("tool_calls").isEmpty()).toList())
+                .singleElement().satisfies(message -> assertThat(message.path("content").asText()).isEqualTo(nativeText));
+        assertThat(assistants.stream().filter(message -> nativeText.equals(message.path("content").asText())).toList())
+                .as("Ordinary native assistant text appears once, with its actual task calls before results")
+                .hasSize(1);
     }
 
     /**

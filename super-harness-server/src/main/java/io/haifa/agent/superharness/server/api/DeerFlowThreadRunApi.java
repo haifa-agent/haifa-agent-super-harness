@@ -758,9 +758,14 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 .filter(run -> run.threadId.equals(thread.threadId))
                 .forEach(run -> cached.put(run.runId.value(), run));
         Set<String> supportProjectedRuns = new HashSet<>();
+        Set<String> supportProjectedMessages = new HashSet<>();
+        Map<String, String> visibleAssistantTexts = new HashMap<>();
+        turns.stream().filter(turn -> turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT)
+                .forEach(turn -> visibleAssistantTexts.put(turn.messageId(), turn.text()));
         List<Map<String, Object>> rows = new ArrayList<>();
         long offset = 0;
         for (ConversationTurn turn : turns) {
+            if (supportProjectedMessages.contains(turn.messageId())) continue;
             long sequence = turn.sequence() + offset;
             Map<String, Object> row = messageRow(thread, turn, ordinals.getOrDefault(turn.sequence(), 0));
             row.put("seq", sequence);
@@ -776,10 +781,11 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 // settled Runs that already carry an assistant turn keep the previous page shape.
                 if (!supportProjectedRuns.contains(runId.value())
                         && isTerminalRun(thread, runId, cached.get(runId.value()))
-                        && !hasDurableFinalAssistant(thread, runId, cached.get(runId.value()), turns)) {
+                        && !hasDurableFinalAssistant(thread, runId, cached.get(runId.value()))) {
                     supportProjectedRuns.add(runId.value());
                     supportSlots = appendRunSupportRows(
-                            thread, runId, cached.get(runId.value()), sequence + 1, turn.createdAt(), rows);
+                            thread, runId, cached.get(runId.value()), sequence + 1, turn.createdAt(), rows,
+                            visibleAssistantTexts, supportProjectedMessages);
                 }
             }
             List<PersistentThreadCatalog.InteractionDisplay> cards = anchored.getOrDefault(turn.sequence(), List.of())
@@ -830,24 +836,21 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private boolean hasDurableFinalAssistant(
-            ThreadRecord thread, AgentRunId runId, RunRecord cached, List<ConversationTurn> turns) {
-        List<ConversationTurn> assistants = turns.stream()
-                .filter(turn -> turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT
-                        && turn.runId().filter(runId::equals).isPresent()).toList();
-        if (assistants.isEmpty()) return false;
+            ThreadRecord thread, AgentRunId runId, RunRecord cached) {
         HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
-        Set<Long> nativeToolTurns = new HashSet<>();
         RunMessageCursor cursor = RunMessageCursor.beforeFirst(runId);
         int pages = 0;
+        // Read after observing the terminal Run. The SDK commits final output and terminal
+        // state atomically, whereas the earlier ConversationTurn scan may predate completion.
+        // A native Tool assistant (including ordinary text) is not a final assistant answer.
         while (true) {
             RunMessagePage page = bridge.messages(runId, cursor, MESSAGE_ROUND_SCAN_PAGE_SIZE);
-            page.items().stream().filter(message -> !message.toolCalls().isEmpty())
-                    .forEach(message -> nativeToolTurns.add(message.sequence()));
-            if (!page.hasMore()) break;
+            if (page.items().stream().anyMatch(message -> "ASSISTANT".equals(message.role())
+                    && message.toolCalls().isEmpty())) return true;
+            if (!page.hasMore()) return false;
             requireAnotherScanPage(++pages);
             cursor = page.nextCursor();
         }
-        return assistants.stream().anyMatch(turn -> !nativeToolTurns.contains(turn.sequence()));
     }
 
     /**
@@ -858,11 +861,25 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
      */
     private long appendRunSupportRows(
             ThreadRecord thread, AgentRunId runId, RunRecord cached, long startSequence,
-            Instant createdAt, List<Map<String, Object>> rows) {
+            Instant createdAt, List<Map<String, Object>> rows,
+            Map<String, String> visibleAssistantTexts, Set<String> supportProjectedMessages) {
         HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
         List<ToolCallView> calls = DeerFlowToolTranscriptProjection.upToClarificationBoundary(
                 bridge.toolCalls(runId));
         List<List<ToolCallView>> rounds = toolCallRounds(bridge, runId, calls);
+        Map<String, String> nativeMessageIds = new HashMap<>();
+        RunMessageCursor cursor = RunMessageCursor.beforeFirst(runId);
+        int pages = 0;
+        while (true) {
+            RunMessagePage page = bridge.messages(runId, cursor, MESSAGE_ROUND_SCAN_PAGE_SIZE);
+            for (RunMessageView message : page.items()) {
+                if (!"ASSISTANT".equals(message.role())) continue;
+                for (ToolCallView call : message.toolCalls()) nativeMessageIds.put(call.id().value(), message.messageId());
+            }
+            if (!page.hasMore()) break;
+            requireAnotherScanPage(++pages);
+            cursor = page.nextCursor();
+        }
         Map<String, Integer> roundByCall = new HashMap<>();
         for (int index = 0; index < rounds.size(); index++) {
             for (ToolCallView call : rounds.get(index)) roundByCall.put(call.id().value(), index);
@@ -880,8 +897,15 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         for (int index = 0; index < rounds.size(); index++) {
             List<ToolCallView> round = rounds.get(index);
             if (!round.isEmpty()) {
-                rows.add(messageRow(runId.value(), startSequence + slot, createdAt,
-                        DeerFlowToolTranscriptProjection.requestMessage(round)));
+                Map<String, Object> request = DeerFlowToolTranscriptProjection.requestMessage(round);
+                String nativeMessageId = nativeMessageIds.get(round.getFirst().id().value());
+                // Carry only the user-visible conversation text owned by this exact native Tool
+                // message; its ordinary turn is then represented here once, before the results.
+                if (nativeMessageId != null && visibleAssistantTexts.containsKey(nativeMessageId)) {
+                    request.put("content", visibleAssistantTexts.get(nativeMessageId));
+                    supportProjectedMessages.add(nativeMessageId);
+                }
+                rows.add(messageRow(runId.value(), startSequence + slot, createdAt, request));
                 slot++;
             }
             slot += appendInteractionRows(thread, cardsByRound.getOrDefault(index, List.of()),
