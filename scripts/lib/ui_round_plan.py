@@ -42,6 +42,7 @@ PROFILE_SPECS = {
     "w05-active-reconnect": "w05-active-reconnect.spec.cjs",
     "w05-interaction": "w05-interaction.spec.cjs",
     "w05-demo-artifact": "w05-demo-artifact.spec.cjs",
+    "w05-live-rendering": "w05-live-rendering.spec.cjs",
     "w03-title-suggestions": "w03-title-suggestions.spec.cjs",
     "w03-input-polish-ui": "w03-input-polish.spec.cjs",
     "w03-v2-model-switch": "w03-v2-model-switch.spec.cjs",

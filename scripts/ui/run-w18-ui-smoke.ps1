@@ -19,6 +19,8 @@ param(
     [switch]$V2Diagnostics,
     [switch]$W08Catalog,
     [switch]$W08Delegation,
+    # W05 live-rendering: hold a controlled Run mid-flight and assert the page.
+    [switch]$LiveRendering,
     [switch]$LiveDeepSeek,
     # W15 representative managed Skill and evaluation-result chain using the real provider.
     [switch]$W15LiveSkill,
@@ -57,15 +59,15 @@ if ($AgentSlot -eq 5) { $expectedGatewayPort = 12618; $expectedFrontendPort = 17
 if ($GatewayPort -ne $expectedGatewayPort -or $FrontendPort -ne $expectedFrontendPort -or $ProviderPort -ne 0) {
     throw "W18 slot $AgentSlot requires Gateway=$expectedGatewayPort and Frontend=$expectedFrontendPort; controlled Provider must use OS-assigned port 0."
 }
-if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveDeepSeek, $W15PackageDifferential).Where({ $_ }).Count -gt 1) {
-    throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, V2 model-switch, V2 file-context, V2 Skill, V2 diagnostics, W08 catalog, W08 delegation, W15 package differential, and live DeepSeek profiles are mutually exclusive.'
+if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $LiveDeepSeek, $W15PackageDifferential).Where({ $_ }).Count -gt 1) {
+    throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, V2 model-switch, V2 file-context, V2 Skill, V2 diagnostics, W08 catalog, W08 delegation, live rendering, W15 package differential, and live DeepSeek profiles are mutually exclusive.'
 }
 if ($W15PackageDifferential) { $V2Skill = $true }
 if (@($UxV1DefaultTools, $UxV1AgentSoul, $W15LiveSkill).Where({ $_ }).Count -gt 1) {
     throw 'The UX-V1 default-tools and Agent SOUL profiles are mutually exclusive.'
 }
 if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill) {
-    if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveDeepSeek).Where({ $_ }).Count -gt 0) {
+    if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $LiveDeepSeek).Where({ $_ }).Count -gt 0) {
         throw 'The UX-V1 profiles are mutually exclusive with the other profiles.'
     }
     # Reuses the live DeepSeek managed model and skips the controlled loopback provider.
@@ -88,7 +90,8 @@ $tag = if ($W15PackageDifferential) { 'w15-package-differential' } elseif ($W15L
     elseif ($TitleSuggestions) { 'w03-title-suggestions' } elseif ($InputPolish) { 'w03-input-polish-ui' }
     elseif ($V2ModelSwitch) { 'w03-v2-model-switch' } elseif ($V2FileContext) { 'w04-v2-file-context' }
     elseif ($V2Skill) { 'w15-v2-skill' } elseif ($V2Diagnostics) { 'w21-diagnostics' }
-    elseif ($W08Catalog) { 'w08-catalog' } elseif ($W08Delegation) { 'w08-delegation' } else { 'w18-ui-smoke' }
+    elseif ($W08Catalog) { 'w08-catalog' } elseif ($W08Delegation) { 'w08-delegation' }
+    elseif ($LiveRendering) { 'w05-live-rendering' } else { 'w18-ui-smoke' }
 if ($Passes -gt 1) {
     # The planner owns the option rules (warm only; never with -CaseTitle/-PreflightOnly) so
     # the runner and its unit tests cannot drift.
@@ -177,11 +180,13 @@ $managedEnvironment = @{
         'w08-subagent-catalog.spec.cjs'
     } elseif ($W08Delegation) {
         'w08-delegation-chat.spec.cjs'
+    } elseif ($LiveRendering) {
+        'w05-live-rendering.spec.cjs'
     } else {
         'w18-ui-smoke.spec.cjs'
     })
-    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill) { '360000' } elseif ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation) { '120000' } else { '60000' })
-    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation) { 'on' } else { 'retain-on-failure' })
+    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill) { '360000' } elseif ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation -or $LiveRendering) { '120000' } else { '60000' })
+    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation -or $LiveRendering) { 'on' } else { 'retain-on-failure' })
     # Pass index handed to the spec; restored with the rest at the end.
     W18_PASS_INDEX = '1'
     # Kept disabled through the ordinary build/test gate. The runner enables it

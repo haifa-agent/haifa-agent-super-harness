@@ -154,8 +154,14 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     public static final String USER_INPUT_FRAMING_METADATA_KEY = "haifa_user_input_framing_from_sequence";
     static final String MCP_SELECTION_METADATA_KEY = "haifa_mcp_plugins";
     private static final String RUN_STREAM_MODES_METADATA_KEY = "haifa_run_stream_modes";
+    // The client id of the newest Run's user message, kept so a restarted Gateway projects the same
+    // in-flight identity. One entry per thread: a thread has one active Run at a time.
+    private static final String RUN_CLIENT_HUMAN_ID_METADATA_KEY = "haifa_run_client_human_id";
     // A digest-only admission index, never a second model snapshot. The SDK owns recovery parameters.
     static final String MODEL_CONFIGURATION_DIGEST_METADATA_KEY = "haifa_model_configuration_digest";
+    // Frozen DynamicContextMiddleware re-keys a submitted HumanMessage(id=X) to HumanMessage(id=X__user);
+    // the frozen UI folds that suffix back onto the optimistic X so one Turn stays one visible bubble.
+    private static final String INJECTED_USER_MESSAGE_ID_SUFFIX = "__user";
 
     private final ObjectMapper json;
     private final Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver;
@@ -466,6 +472,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         // Server-owned: only a Run may record the MCP projection used for restart recovery.
         metadata.remove(MCP_SELECTION_METADATA_KEY);
         metadata.remove(RUN_STREAM_MODES_METADATA_KEY);
+        metadata.remove(RUN_CLIENT_HUMAN_ID_METADATA_KEY);
         metadata.remove(SKILL_SELECTION_METADATA_KEY);
         metadata.remove(SKILL_VERSIONS_METADATA_KEY);
         metadata.remove(LEAD_SIGNATURE_METADATA_KEY);
@@ -820,6 +827,13 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             sendJson(exchange, 422, Map.of("detail", "input.messages requires a human message"));
             return;
         }
+        // Client-generated id of this Turn's user message; keys the in-flight pending projection
+        // only, never the settled transcript or replay. See RunRecord#clientHumanMessageId.
+        String clientHumanMessageId = extractHumanMessageId(body.path("input").path("messages")).orElse(null);
+        // Whether this Turn's user message is a visible chat bubble. The frozen UI must fold its
+        // optimistic copy onto the live echo to keep the Run's own steps ordered below it; a hidden
+        // Human-Input reply or a non-chat reply must never be projected as a new user bubble.
+        boolean liveHumanEcho = !hiddenHumanMessage(body.path("input").path("messages"));
         Optional<DeerFlowInteractionHttpProjection.FrozenResponse> interactionResponse;
         try {
             interactionResponse = DeerFlowInteractionHttpProjection.parseResponse(
@@ -1109,6 +1123,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     threadId,
                     text(body, "assistant_id").orElse(null),
                     message,
+                    clientHumanMessageId,
+                    liveHumanEcho,
                     selectedBridge,
                     Instant.now(),
                     humanSequence,
@@ -1117,6 +1133,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     titleCandidate);
             runs.put(run.runId.value(), run);
             thread.setRunStreamModes(run.runId, run.streamModes);
+            thread.setClientHumanMessageId(run.runId, clientHumanMessageId);
             if (clarificationAck != null) {
                 markClarificationAnswered(thread, clarificationAck, run);
             }
@@ -1848,7 +1865,11 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             boolean reemitPendingCard)
             throws IOException {
         exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
-        exchange.getResponseHeaders().set("Cache-Control", "no-cache");
+        // The frozen frontend reaches the Gateway through the Next.js rewrite proxy, which gzips
+        // proxied responses and holds a compressed event stream back until the Run ends. Frozen
+        // DeerFlow keeps the stream uncompressed in nginx; no-transform tells the Next.js proxy
+        // the same thing.
+        exchange.getResponseHeaders().set("Cache-Control", "no-cache, no-transform");
         exchange.getResponseHeaders().set("Connection", "keep-alive");
         exchange.getResponseHeaders().set("X-Accel-Buffering", "no");
         // Every stream response is already bound to this authoritative RunRecord. Expose the
@@ -1871,6 +1892,22 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                                 "metadata",
                                 Map.of("run_id", run.runId.value(), "thread_id", run.threadId),
                                 null);
+                        // Echo this Turn's visible user bubble as the first message frame, under the
+                        // same identity the frozen UI folds with its optimistic copy (client id plus
+                        // `__user`). Without it the live Run's first step can merge above the still
+                        // optimistic user bubble, so the frozen UI classifies the step as a settled
+                        // pre-submit step and renders the subtask card above the user and without
+                        // progress. The frame is display-only, carries no seq, and is deduped by
+                        // identity against the durable history echo.
+                        if (run.liveHumanEcho
+                                && run.streamModes.contains("messages-tuple")
+                                && !run.bridge.snapshot(run.runId).status().isTerminal()) {
+                            writeSse(
+                                    output,
+                                    "messages",
+                                    List.of(pendingHumanMessage(run), Map.of("langgraph_node", "agent")),
+                                    null);
+                        }
                     }
                     ProjectionCursor delivered = initialCursor;
                     long nextHeartbeat = System.nanoTime() + java.time.Duration.ofMillis(100).toNanos();
@@ -3145,6 +3182,23 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         return Optional.empty();
     }
 
+    /**
+     * Whether the last submitted human message is hidden from the UI (a Human-Input reply or another
+     * control turn). Such a Turn has no visible user bubble to echo, so the live projection must not
+     * invent one.
+     */
+    private boolean hiddenHumanMessage(JsonNode messages) {
+        if (!messages.isArray()) return false;
+        for (int index = messages.size() - 1; index >= 0; index--) {
+            JsonNode message = messages.get(index);
+            String type = message.path("type").asText(message.path("role").asText());
+            if (type.equals("human") || type.equals("user")) {
+                return message.path("additional_kwargs").path("hide_from_ui").asBoolean(false);
+            }
+        }
+        return false;
+    }
+
     private Map<String, Object> emptyThreadHistoryResponse(
             ThreadRecord thread, List<ConversationTurn> turns, Map<Long, Integer> ordinals,
             Optional<List<Map<String, Object>>> todos) {
@@ -3230,7 +3284,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("run_id", turn.runId().map(AgentRunId::value).orElse(null));
         row.put("seq", turn.sequence());
-        row.put("content", messageForTurn(thread, turn, ordinal));
+        // The frozen UI reads an active Run's user turn from messages/page too; apply the same
+        // in-flight client-id projection there. It is a no-op for every settled Run.
+        row.put("content", messageForTurn(thread, turn, ordinal, true));
         row.put("metadata", Map.of("caller", "lead_agent"));
         row.put("created_at", turn.createdAt().toString());
         return row;
@@ -3252,11 +3308,14 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         return row;
     }
 
-    private Map<String, Object> messageForTurn(ThreadRecord thread, ConversationTurn turn, int ordinal) {
+    private Map<String, Object> messageForTurn(
+            ThreadRecord thread, ConversationTurn turn, int ordinal, boolean liveOverlay) {
         boolean human = turn.role() == io.haifa.agent.core.message.MessageRole.USER;
         String type = human ? "human" : "ai";
         String id = turn.runId()
-                .map(runId -> wireMessageId(runId.value(), type, ordinal))
+                .map(runId -> human
+                        ? humanWireId(thread, runId, ordinal, liveOverlay)
+                        : wireMessageId(runId.value(), type, ordinal))
                 .orElseGet(turn::messageId);
         // The model-facing transcript persists the wrapped user text; the frozen UI must not show
         // the boundary markers, so the display projection strips them.
@@ -3267,6 +3326,27 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         turn.runId().ifPresent(runId -> projected.put("run_id", runId.value()));
         applyClarificationAnswer(thread, turn, projected);
         return projected;
+    }
+
+    /**
+     * Frozen DynamicContextMiddleware re-keys the submitted user message to {@code X__user}, and the
+     * frozen UI folds that suffix onto the optimistic {@code local-human-*} bubble. The SDK commits
+     * this Run's user turn before the model call, so it (not the transient overlay) is what the UI
+     * sees while the Run is active; project it with the captured client id for the live overlay
+     * only. Once the Run settles, the durable id stays synthetic, so the settled transcript and
+     * replay are unchanged. The client id is kept in thread metadata while its Run is the newest
+     * one, so a Run restored after a Gateway restart projects the same in-flight id.
+     */
+    private String humanWireId(ThreadRecord thread, AgentRunId runId, int ordinal, boolean liveOverlay) {
+        if (liveOverlay) {
+            RunRecord run = runs.get(runId.value());
+            if (run != null && run.threadId.equals(thread.threadId)
+                    && run.clientHumanMessageId != null && !run.clientHumanMessageId.isBlank()
+                    && !run.bridge.snapshot(runId).status().isTerminal()) {
+                return run.clientHumanMessageId + INJECTED_USER_MESSAGE_ID_SUFFIX;
+            }
+        }
+        return wireMessageId(runId.value(), "human", ordinal);
     }
 
     private String historyCursor(long sequence) {
@@ -3295,7 +3375,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         List<Map<String, Object>> messages = new ArrayList<>();
         for (ConversationTurn turn : turns) {
             int ordinal = ordinals.getOrDefault(turn.sequence(), 0);
-            messages.add(messageForTurn(thread, turn, ordinal));
+            messages.add(messageForTurn(thread, turn, ordinal, includeInFlight));
             if (turn.role() == io.haifa.agent.core.message.MessageRole.USER
                     && turn.runId().isPresent()
                     && supportProjectedRuns.add(turn.runId().orElseThrow().value())) {
@@ -3522,8 +3602,10 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private Map<String, Object> pendingHumanMessage(RunRecord run) {
-        Map<String, Object> message = message(
-                wireMessageId(run.runId.value(), "human", 0), "human", run.humanMessage);
+        String id = run.clientHumanMessageId == null || run.clientHumanMessageId.isBlank()
+                ? wireMessageId(run.runId.value(), "human", 0)
+                : run.clientHumanMessageId + INJECTED_USER_MESSAGE_ID_SUFFIX;
+        Map<String, Object> message = message(id, "human", run.humanMessage);
         message.put("run_id", run.runId.value());
         return message;
     }
@@ -3725,6 +3807,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 thread.threadId,
                 null,
                 turn.text(),
+                thread.clientHumanMessageId(requested),
+                false,
                 bridge,
                 turn.createdAt(),
                 turn.sequence(),
@@ -4616,7 +4700,24 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private Map<String, Object> publicMetadata() {
             Map<String, Object> result = new LinkedHashMap<>(metadata);
             result.remove(RUN_STREAM_MODES_METADATA_KEY);
+            result.remove(RUN_CLIENT_HUMAN_ID_METADATA_KEY);
             return Collections.unmodifiableMap(result);
+        }
+
+        private String clientHumanMessageId(AgentRunId runId) {
+            return metadata.get(RUN_CLIENT_HUMAN_ID_METADATA_KEY) instanceof Map<?, ?> stored
+                    && stored.get(runId.value()) instanceof String id && !id.isBlank() ? id : null;
+        }
+
+        /** Replaces the previous Run's entry; a Run without a client id clears it. */
+        private void setClientHumanMessageId(AgentRunId runId, String clientHumanMessageId) {
+            Map<String, Object> updated = new LinkedHashMap<>(metadata);
+            if (clientHumanMessageId == null || clientHumanMessageId.isBlank()) {
+                updated.remove(RUN_CLIENT_HUMAN_ID_METADATA_KEY);
+            } else {
+                updated.put(RUN_CLIENT_HUMAN_ID_METADATA_KEY, Map.of(runId.value(), clientHumanMessageId));
+            }
+            metadata = Collections.unmodifiableMap(updated);
         }
 
         private Set<String> runStreamModes(AgentRunId runId) {
@@ -4769,6 +4870,21 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private final String threadId;
         private final String assistantId;
         private final String humanMessage;
+        /**
+         * The client-generated id of this Turn's submitted user message, captured at admission
+         * only to key the in-flight projection: the frozen UI folds the server echo {@code X__user}
+         * onto the optimistic {@code X}, so the pending human must reuse it while the Run is
+         * active. It never becomes the settled message id or part of replay; thread metadata
+         * keeps it for the newest Run only, so a restored active Run projects the same id.
+         */
+        private final String clientHumanMessageId;
+        /**
+         * True when this Turn has a visible user bubble. The live stream echoes that bubble once
+         * before its steps so the frozen UI folds its optimistic copy ({@code X} vs the echo
+         * {@code X__user}) and orders the Run's steps below it. A hidden Human-Input reply stays
+         * false and is never projected as a user bubble.
+         */
+        private final boolean liveHumanEcho;
         private final HaifaRunBridge bridge;
         private final BoundedRunEventProjector projector;
         private final Instant createdAt;
@@ -4794,6 +4910,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 String threadId,
                 String assistantId,
                 String humanMessage,
+                String clientHumanMessageId,
+                boolean liveHumanEcho,
                 HaifaRunBridge bridge,
                 Instant createdAt,
                 long humanSequence,
@@ -4804,6 +4922,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             this.threadId = threadId;
             this.assistantId = assistantId;
             this.humanMessage = humanMessage;
+            this.clientHumanMessageId = clientHumanMessageId;
+            this.liveHumanEcho = liveHumanEcho;
             this.bridge = bridge;
             this.projector = new BoundedRunEventProjector(
                     runId,

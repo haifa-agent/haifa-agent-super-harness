@@ -262,12 +262,20 @@ class DeerFlowMessageIdentityActiveReconnectTest {
                 liveAssistantId, postCompletionAssistantId, historyAssistantId, pageAssistantId, assistantConversationSeq, liveSseSequences);
         System.out.println("==========================================");
 
-        // In-flight human wire identity MUST match post-completion durable wire identity
+        // While the Run is active the live overlay reuses the client's human id with the frozen
+        // __user suffix so the UI folds it onto the optimistic local-human-* bubble; the same
+        // message settles into the synthetic wire id, which stays stable across state, history and
+        // messages/page and never carries the client id (no persistence/replay change).
+        assertThat(inFlightHumanId)
+                .as("the in-flight human overlay reuses the client id with the frozen __user suffix")
+                .isEqualTo("client-human-1__user");
         assertThat(postCompletionHumanId)
-                .as("Human wire ID must be identical between in-flight overlay, state, history, and messages/page")
-                .isEqualTo(inFlightHumanId);
-        assertThat(historyHumanId).isEqualTo(inFlightHumanId);
-        assertThat(pageHumanId).isEqualTo(inFlightHumanId);
+                .as("the settled human wire id is the synthetic id, stable across state, history and messages/page")
+                .isEqualTo(runId + "-human-0")
+                .isNotEqualTo(inFlightHumanId);
+        assertThat(postCompletionHumanId).doesNotContain("client-human-1");
+        assertThat(historyHumanId).isEqualTo(postCompletionHumanId);
+        assertThat(pageHumanId).isEqualTo(postCompletionHumanId);
 
         // Live SSE assistant wire identity MUST match post-completion durable wire identity
         assertThat(postCompletionAssistantId)
