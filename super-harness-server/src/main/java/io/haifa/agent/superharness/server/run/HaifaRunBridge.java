@@ -73,7 +73,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 /** Adapter that exposes only public Haifa Agent SDK types to the HTTP boundary. */
 public final class HaifaRunBridge implements AutoCloseable {
@@ -170,6 +172,17 @@ public final class HaifaRunBridge implements AutoCloseable {
             SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
             SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
             boolean isPlanMode) {
+        this(binding, tools, foundation, mcpProjection, skillProjection, agentContext, delegation,
+                childRunCapacity, isPlanMode, null, null);
+    }
+
+    /** Host physical-execution seam: an optional SDK execution executor factory, test-only. */
+    public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
+            boolean isPlanMode, Supplier<? extends ExecutorService> executionExecutorFactory,
+            Long parentWallTimeMillisForTests) {
         java.util.Objects.requireNonNull(childRunCapacity, "childRunCapacity");
         this.agentContext = java.util.Objects.requireNonNull(agentContext, "agent context must not be null");
         this.isPlanMode = isPlanMode;
@@ -238,7 +251,8 @@ public final class HaifaRunBridge implements AutoCloseable {
             this.promptSignature = prompt.signature();
             HaifaAgentBuilder builder = HaifaAgents.builder(profile(
                             binding.snapshot(), prompt.instructions(), allowedTools,
-                            skillProjection == null ? Set.of() : skillProjection.allowedSkills(), delegation))
+                            skillProjection == null ? Set.of() : skillProjection.allowedSkills(), delegation,
+                            parentWallTimeMillisForTests))
                     .metadata(new AgentMetadata("Super Harness local compatibility agent"))
                     .callerProvider(SdkCallerProvider.defaultPublicUser())
                     .model(models)
@@ -297,6 +311,11 @@ public final class HaifaRunBridge implements AutoCloseable {
                 // and release; SH only declares the projections. applyTo sets the builder's
                 // credentials contribution, so SH must not set another one.
                 platform.applyTo(builder);
+            }
+            // Optional host bootstrap: the default SDK virtual-thread executor stays in place
+            // when no factory is supplied; the SDK owns the fresh executor and its closing.
+            if (executionExecutorFactory != null) {
+                builder.executionExecutorFactoryForTests(executionExecutorFactory);
             }
             this.agent = builder.build();
         } catch (RuntimeException | Error failure) {
@@ -572,8 +591,14 @@ public final class HaifaRunBridge implements AutoCloseable {
             Set<String> allowedTools,
             Set<String> allowedSkills,
             SubagentRunConfiguration delegation) {
-        long wall = 3_600_000;
-        if (delegation.enabled()) {
+        return profile(snapshot, instructions, allowedTools, allowedSkills, delegation, null);
+    }
+
+    private static ProductProfile profile(ResolvedModelSnapshot snapshot, String instructions,
+            Set<String> allowedTools, Set<String> allowedSkills, SubagentRunConfiguration delegation,
+            Long parentWallTimeMillisForTests) {
+        long wall = parentWallTimeMillisForTests == null ? 3_600_000 : parentWallTimeMillisForTests;
+        if (parentWallTimeMillisForTests == null && delegation.enabled()) {
             long childWall = delegation.children().stream().mapToLong(SubagentRunConfiguration.Child::timeoutMillis).max().orElseThrow();
             // Directory seconds are positive int values; total is clamped to 50. Reject any
             // unsupported declaration rather than silently overflow or create an unbounded limit.
