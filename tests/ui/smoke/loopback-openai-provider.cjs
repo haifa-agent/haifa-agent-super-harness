@@ -95,6 +95,42 @@ const W08_CHILD_MARK = "W08-CHILD-MARKER";
 const W08_CHILD_AGENT = "w08-child";
 const w08Calls = [];
 
+function blockW08Ui10Gate(response, objective, id) {
+  console.log(
+    JSON.stringify({
+      type: "w08_ui10_gate",
+      id,
+      objective,
+      state: "waiting",
+    }),
+  );
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = null;
+    const finish = (state) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (response) response.removeListener("close", onClose);
+      console.log(
+        JSON.stringify({
+          type: "w08_ui10_gate",
+          id,
+          objective,
+          state,
+        }),
+      );
+      resolve(state);
+    };
+    const onClose = () => finish("closed");
+    timer = setTimeout(() => finish("timeout"), 90_000);
+    if (response) {
+      response.once("close", onClose);
+    }
+  });
+}
+
+
 // ---- W05 live-rendering controlled fixture -----------------------------------
 // Three bounded scenes keep a Run deliberately in flight so the spec can assert
 // what the frozen UI renders *during* the run. Each scene blocks the model call
@@ -470,17 +506,30 @@ function completeW08Text(response, body, id, text) {
   });
 }
 
-function handleW08Delegation(response, body, prompt, offeredTools) {
+async function handleW08Delegation(response, body, prompt, offeredTools) {
   // Scenario markers live anywhere in the transcript. The child's first model
   // call can carry an injected RUNTIME_CONTROL_UPDATE as the last message, so
   // gating on the last user text alone would misclassify it.
   const text = messagesText(body);
   const child = text.includes(W08_CHILD_MARK);
-  const childObjective = /W08-UI09-OBJECTIVE-(?:ALPHA|BETA)|W08-UI0[68]-OBJECTIVE/.exec(text)?.[0] ?? null;
+  const childObjective = /W08-UI10-OBJECTIVE-(?:ALPHA|BETA)|W08-UI09-OBJECTIVE-(?:ALPHA|BETA)|W08-UI0[68]-OBJECTIVE/.exec(text)?.[0] ?? null;
   const record = { child, prompt, offeredTools, objective: childObjective };
   w08Calls.push(record);
+  if (!child && offeredTools.includes("task") && !hasToolResult(body) && text.includes("W08-UI10-PARENT")) {
+    record.calls = [
+      { callId: "w08-task-10-alpha", name: "task", objective: "W08-UI10-OBJECTIVE-ALPHA" },
+      { callId: "w08-task-10-beta", name: "task", objective: "W08-UI10-OBJECTIVE-BETA" },
+    ];
+  }
   console.log(JSON.stringify({ type: "w08_delegation", ...record }));
   const id = `w08-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  if (child && childObjective && /W08-UI10-OBJECTIVE-(?:ALPHA|BETA)/.test(childObjective)) {
+    const state = await blockW08Ui10Gate(response, childObjective, id);
+    if (state !== "closed") {
+      completeW08Text(response, body, id, `W08-CHILD-RESULT:${childObjective}`);
+    }
+    return;
+  }
   if (child) {
     completeW08Text(response, body, id, childObjective ? `W08-CHILD-RESULT:${childObjective}` : "W08-CHILD-RESULT:UNKNOWN");
     return;
@@ -491,6 +540,13 @@ function handleW08Delegation(response, body, prompt, offeredTools) {
   }
   if (hasToolResult(body)) {
     completeW08Text(response, body, id, `W08-PARENT-FINAL:${prompt}`);
+    return;
+  }
+  if (text.includes("W08-UI10-PARENT")) {
+    finishWithTaskCalls(response, id, [
+      { callId: "w08-task-10-alpha", name: "task", args: { agent: W08_CHILD_AGENT, objective: "W08-UI10-OBJECTIVE-ALPHA" } },
+      { callId: "w08-task-10-beta", name: "task", args: { agent: W08_CHILD_AGENT, objective: "W08-UI10-OBJECTIVE-BETA" } },
+    ]);
     return;
   }
   if (text.includes("W08-UI09-PARENT")) {
@@ -628,7 +684,7 @@ const server = http.createServer((request, response) => {
     // W08-CHILD-MARKER; route the whole scene to the live-rendering handler instead.
     const w05Live04 = messagesText(body).includes("w05-live-04");
     if (!w05Live04 && (isW08Child(body) || messagesText(body).includes("W08-UI"))) {
-      handleW08Delegation(response, body, prompt, offeredTools);
+      await handleW08Delegation(response, body, prompt, offeredTools);
       return;
     }
 
