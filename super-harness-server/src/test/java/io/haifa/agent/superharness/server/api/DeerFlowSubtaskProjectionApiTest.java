@@ -493,6 +493,10 @@ class DeerFlowSubtaskProjectionApiTest {
         cancellingThreeActualChildrenClosesTwoWaitingRequests(null);
     }
 
+    @Test void cancelledNativeToolAssistantKeepsTextWithTaskCallsThroughPageRestart() throws Exception {
+        cancellingThreeActualChildrenClosesTwoWaitingRequests(null, "Parent is delegating now.");
+    }
+
     /** Same real cancellation Run under the external-style directory watcher. */
     @Test void cancellingThreeActualChildrenUnderMonitoredDataDirectory() throws Exception {
         try (var monitor = DirectoryMonitor.open(data)) {
@@ -501,6 +505,10 @@ class DeerFlowSubtaskProjectionApiTest {
     }
 
     private void cancellingThreeActualChildrenClosesTwoWaitingRequests(DirectoryMonitor monitor) throws Exception {
+        cancellingThreeActualChildrenClosesTwoWaitingRequests(monitor, "");
+    }
+
+    private void cancellingThreeActualChildrenClosesTwoWaitingRequests(DirectoryMonitor monitor, String nativeText) throws Exception {
         CountDownLatch running = new CountDownLatch(3), release = new CountDownLatch(1);
         AtomicInteger childModels = new AtomicInteger(), lead = new AtomicInteger();
         var model = new ControlledModel((request, call) -> {
@@ -520,8 +528,12 @@ class DeerFlowSubtaskProjectionApiTest {
             var calls = java.util.stream.IntStream.range(0, 5).mapToObj(index -> new ModelToolCall(
                     new ProviderToolCallCorrelationId("provider-cancel-" + index), "task",
                     Map.of("agent", "researcher", "objective", "cancel child " + index))).toList();
-            return ControlledModel.response(request, "parent-" + call, "", calls, ModelFinishReason.TOOL_CALLS, ModelUsage.unpriced(1, 1));
+            return ControlledModel.response(request, "parent-" + call, nativeText, calls, ModelFinishReason.TOOL_CALLS, ModelUsage.unpriced(1, 1));
         });
+        List<String> tasks = null;
+        List<String> starts = null;
+        String location = null;
+        JsonNode firstPage = null;
         try (var gateway = new GatewayFixture(data, model, evidence)) {
             DelegationHttpFixture.configure(http, gateway.base, 1);
             DelegationHttpFixture.seed(http, gateway.base, "researcher", 30, 3, List.of("list_uploaded_files"));
@@ -533,10 +545,10 @@ class DeerFlowSubtaskProjectionApiTest {
             var response = http.client.send(request, HttpResponse.BodyHandlers.ofInputStream());
             try (var stream = response.body()) {
                 assertThat(response.statusCode()).isEqualTo(200);
-                String location = response.headers().firstValue("content-location").orElseThrow();
+                location = response.headers().firstValue("content-location").orElseThrow();
                 assertThat(running.await(10, TimeUnit.SECONDS)).as("Three actual Children reached their public model calls").isTrue();
                 JsonNode before = http.get(gateway.base, "/api/threads/cancel-queued/state", "cancel-before-state.json");
-                var tasks = DelegationHttpFixture.messages(before).stream().flatMap(message ->
+                tasks = DelegationHttpFixture.messages(before).stream().flatMap(message ->
                         java.util.stream.StreamSupport.stream(message.path("tool_calls").spliterator(), false))
                         .filter(tool -> "task".equals(tool.path("name").asText())).map(tool -> tool.path("id").asText()).toList();
                 assertThat(tasks).hasSize(5).doesNotHaveDuplicates();
@@ -548,31 +560,122 @@ class DeerFlowSubtaskProjectionApiTest {
                 Files.writeString(evidence.resolve("cancel-queued.sse"), body);
                 List<JsonNode> custom = cancelCustomOrCollectFailure(gateway.base, location, tasks, body,
                         cancelRequestedAt, releaseGateOpenedAt);
-                var starts = custom.stream().filter(event -> "task_started".equals(event.path("type").asText()))
+                starts = custom.stream().filter(event -> "task_started".equals(event.path("type").asText()))
                         .map(event -> event.path("task_id").asText()).toList();
                 var terminals = custom.stream().filter(event -> "task_cancelled".equals(event.path("type").asText()))
                         .map(event -> event.path("task_id").asText()).toList();
                 assertThat(starts).hasSize(3).doesNotHaveDuplicates();
                 assertThat(terminals).containsExactlyInAnyOrderElementsOf(starts);
-                assertThat(custom).allSatisfy(event -> {
+                for (JsonNode event : custom) {
                     assertThat(event.path("task_id").asText()).isIn(starts);
                     assertThat(event.has("usage")).as("Cancelled in-flight model use is unknown").isFalse();
-                });
+                }
                 assertThat(childModels).hasValue(3);
                 JsonNode run = http.get(gateway.base, location, "cancel-terminal-run.json");
                 assertThat(run.path("diagnostics").path("sdk_status").asText()).isEqualTo("CANCELLED");
                 JsonNode after = http.get(gateway.base, "/api/threads/cancel-queued/state", "cancel-refreshed-state.json");
-                var results = DelegationHttpFixture.messages(after).stream().filter(message -> tasks.contains(message.path("tool_call_id").asText())).toList();
+                List<JsonNode> results = new ArrayList<>();
+                for (JsonNode message : DelegationHttpFixture.messages(after)) {
+                    if (tasks.contains(message.path("tool_call_id").asText())) results.add(message);
+                }
                 assertThat(results).hasSize(5);
                 assertThat(results.stream().map(message -> message.path("tool_call_id").asText())).containsExactlyInAnyOrderElementsOf(tasks);
                 assertThat(results).allSatisfy(message -> assertThat(message.path("additional_kwargs").path("subagent_status").asText()).isEqualTo("cancelled"));
-                for (String waiting : tasks.stream().filter(task -> !starts.contains(task)).toList()) {
+                for (String waiting : tasks) {
+                    if (starts.contains(waiting)) continue;
                     assertThat(http.get(gateway.base, events(location, waiting), "waiting-" + tasks.indexOf(waiting) + ".json")).isEmpty();
                 }
+                firstPage = assertCancelledDelegationPage(gateway.base, tasks, "cancel-message-page");
+                if (!nativeText.isEmpty()) assertNativeToolText(firstPage, nativeText);
             } finally {
                 release.countDown();
             }
         }
+        // The frozen UI reloads through messages/page, so the cancelled Run's Tool round must survive
+        // a real process restart where only durable facts remain and the in-memory Runs are gone.
+        try (var restarted = new GatewayFixture(data, model, evidence.resolve("restart-page"))) {
+            JsonNode restartedPage = assertCancelledDelegationPage(restarted.base, tasks, "restart-cancel-message-page");
+            if (!nativeText.isEmpty()) assertNativeToolText(restartedPage, nativeText);
+            assertThat(restartedPage).as("durable page is byte-identical after restart").isEqualTo(firstPage);
+            for (String waiting : tasks) {
+                if (starts.contains(waiting)) continue;
+                assertThat(http.get(restarted.base, events(location, waiting), "restart-waiting-" + tasks.indexOf(waiting) + ".json"))
+                        .as("a never-admitted Child still shows no steps after restart").isEmpty();
+            }
+        }
+    }
+
+    private static void assertNativeToolText(JsonNode rows, String nativeText) {
+        List<JsonNode> assistants = java.util.stream.StreamSupport.stream(rows.spliterator(), false)
+                .map(row -> row.path("content")).filter(message -> "ai".equals(message.path("type").asText())).toList();
+        assertThat(assistants.stream().filter(message -> !message.path("tool_calls").isEmpty()).toList())
+                .singleElement().satisfies(message -> assertThat(message.path("content").asText()).isEqualTo(nativeText));
+        assertThat(assistants.stream().filter(message -> nativeText.equals(message.path("content").asText())).toList())
+                .as("Ordinary native assistant text appears once, with its actual task calls before results")
+                .hasSize(1);
+    }
+
+    /**
+     * Reads the cancelled Run's page through production HTTP and pins the frozen-UI contract: one AI
+     * message carrying the whole Tool call list, one cancelled result per actual task, stable
+     * ascending unique seq, and a backward cursor that loses or duplicates nothing.
+     */
+    private JsonNode assertCancelledDelegationPage(URI base, List<String> tasks, String evidenceName) throws Exception {
+        JsonNode page = GatewayFixture.JSON.readTree(
+                http.request(base, "GET", "/api/threads/cancel-queued/messages/page?limit=50", "", evidenceName + ".http").body());
+        JsonNode rows = page.path("data");
+        Files.writeString(evidence.resolve(evidenceName + ".json"), rows.toPrettyString());
+        List<JsonNode> requestRows = new ArrayList<>();
+        for (JsonNode row : rows) {
+            JsonNode content = row.path("content");
+            if (!"ai".equals(content.path("type").asText())) continue;
+            List<JsonNode> calls = new ArrayList<>();
+            content.path("tool_calls").forEach(calls::add);
+            if (calls.stream().anyMatch(call -> "task".equals(call.path("name").asText()))) requestRows.add(row);
+        }
+        assertThat(requestRows).as(evidenceName + ": one AI message carries the Run's Tool call list").hasSize(1);
+        assertThat(requestRows.getFirst().path("content").path("tool_calls")).hasSize(5);
+        assertThat(requestRows.getFirst().path("content").path("tool_calls").findValuesAsText("name"))
+                .as(evidenceName + ": the AI message keeps every projected task call").containsOnly("task");
+        List<JsonNode> resultRows = new ArrayList<>();
+        for (JsonNode row : rows) {
+            if (tasks.contains(row.path("content").path("tool_call_id").asText())) resultRows.add(row);
+        }
+        assertThat(resultRows).as(evidenceName + ": every actual task has a result row").hasSize(5);
+        assertThat(resultRows.stream().map(row -> row.path("content").path("tool_call_id").asText()).toList())
+                .containsExactlyInAnyOrderElementsOf(tasks);
+        assertThat(resultRows).allSatisfy(row -> assertThat(
+                        row.path("content").path("additional_kwargs").path("subagent_status").asText())
+                .isEqualTo("cancelled"));
+        List<Long> seqs = new ArrayList<>();
+        for (JsonNode row : rows) seqs.add(row.path("seq").asLong());
+        assertThat(seqs).as(evidenceName + ": seq is unique").doesNotHaveDuplicates();
+        List<Long> ascending = new ArrayList<>(seqs);
+        java.util.Collections.sort(ascending);
+        assertThat(seqs).as(evidenceName + ": seq is ascending").isEqualTo(ascending);
+        List<String> backwards = new ArrayList<>();
+        Long before = null;
+        for (int index = rows.size() - 1; index >= 0; index--) {
+            JsonNode singlePage = GatewayFixture.JSON.readTree(http.request(
+                    base,
+                    "GET",
+                    "/api/threads/cancel-queued/messages/page?limit=1"
+                            + (before == null ? "" : "&before_seq=" + before),
+                    "",
+                    evidenceName + "-cursor-" + index + ".http").body());
+            JsonNode single = singlePage.path("data");
+            assertThat(single).as(evidenceName + ": cursor page " + index).hasSize(1);
+            assertThat(single.get(0)).as(evidenceName + ": cursor row " + index).isEqualTo(rows.get(index));
+            assertThat(singlePage.path("has_more").asBoolean()).isEqualTo(index > 0);
+            before = single.get(0).path("seq").asLong();
+            backwards.add(single.get(0).path("content").path("id").asText());
+        }
+        java.util.Collections.reverse(backwards);
+        assertThat(backwards).containsExactlyElementsOf(java.util.stream.StreamSupport
+                .stream(rows.spliterator(), false)
+                .map(row -> row.path("content").path("id").asText())
+                .toList());
+        return rows;
     }
 
     @org.junit.jupiter.params.ParameterizedTest
