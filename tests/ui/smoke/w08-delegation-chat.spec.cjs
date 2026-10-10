@@ -139,12 +139,24 @@ async function setChildEnabled(context, runtime, evidence, name, enabled) {
 }
 
 async function releaseGate(context, runtime, evidence, name) {
+  // Count unmatched waits so a settled gate from an earlier warm pass cannot
+  // satisfy readiness. Registering the waiter precedes the wait log entry.
+  await expect.poll(
+    () => providerEntries(runtime.evidence).reduce((pending, entry) => {
+      if (entry.name !== name) return pending;
+      if (entry.type === "w08_gate_wait") return pending + 1;
+      if (entry.type === "w08_gate") return pending - 1;
+      return pending;
+    }, 0),
+    { timeout: 20_000, intervals: [100, 250, 500] },
+  ).toBeGreaterThan(0);
   const response = await context.request.get(
     `${runtime.provider}/__release?name=${encodeURIComponent(name)}`,
   );
   const body = await response.text();
   await evidence.json(`release-${name}`, { status: response.status(), body });
   expect(response.status(), body).toBe(200);
+  expect(JSON.parse(body).released).toBeGreaterThan(0);
 }
 
 async function getJson(context, runtime, pathname) {

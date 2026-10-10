@@ -240,6 +240,19 @@ function Set-ControlledDemoV2Baseline([object]$Snapshot) {
     }
 }
 
+function New-CapFixtureRows([object]$Base, [int]$Existing, [int]$Target) {
+    if ($Existing -gt $Target) { throw "cap fixture cannot shrink $Existing tasks to $Target" }
+    for ($index = 1; $index -le ($Target - $Existing); $index++) {
+        $row = $Base.PSObject.Copy()
+        $row.id = "W05-cap-fixture-$index"
+        $row.number = "cap-fixture-$index"
+        $row.state = 'pending'
+        $row.started_at = $null
+        $row.completed_at = $null
+        $row
+    }
+}
+
 try {
     # A stage/assignment without details_json yields an empty object; property lookup must not throw under StrictMode.
     Assert-True ($null -eq (Get-ShpmProp ([pscustomobject]@{}) 'proof')) "Get-ShpmProp must tolerate an empty details object"
@@ -409,15 +422,9 @@ try {
     $capSnap = Read-Snap $exactCap
     $capBase = Get-Row $capSnap 'task' 'W05-task-1'
     $capExisting = @($capSnap.tables.task | Where-Object work_package_id -eq 'W05').Count
-    $capExtras = @(1..(32 - $capExisting) | ForEach-Object {
-        $t = $capBase.PSObject.Copy()
-        $t.id = "W05-cap-fixture-$_"
-        $t.number = "cap-fixture-$_"
-        $t.state = 'pending'
-        $t.started_at = $null
-        $t.completed_at = $null
-        $t
-    })
+    Assert-True (@(New-CapFixtureRows $capBase 32 32).Count -eq 0) 'a cap fixture already at 32 must add no rows'
+    Assert-True (@(New-CapFixtureRows $capBase 31 32).Count -eq 1) 'a cap fixture at 31 must add exactly one row'
+    $capExtras = @(New-CapFixtureRows $capBase $capExisting 32)
     $capSnap.tables.task = @($capSnap.tables.task) + $capExtras
     Write-Snap $exactCap $capSnap
     $exactCapResult = Invoke-Generator $exactCap
