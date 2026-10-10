@@ -9,7 +9,8 @@ $script:ShpmTaskStates = @('pending', 'developing', 'ready_for_acceptance', 'blo
 $script:ShpmStageStatuses = @('pending', 'in_progress', 'blocked', 'finished')
 $script:ShpmStageResults = @('PASS', 'FAIL', 'NOT_RUN', 'BLOCKED_EXTERNAL', 'UPSTREAM_UNSUPPORTED')
 # Human scope decision 2026-10-01, superseding 2026-09-28's 8 (mirrors SHPM MAX_DELIVERY_TASKS).
-$script:ShpmMaxDeliveryTasks = 16
+# Human scope decision 2026-10-09 raised the cap from 16 to 32.
+$script:ShpmMaxDeliveryTasks = 32
 # AGENTS.md port table: slots 1-3 step by +10000; slot 4 is listed, not computed, to stay below the dynamic port range.
 $script:ShpmSlotPorts = @{ 1 = '20618/25618'; 2 = '30618/35618'; 3 = '40618/45618'; 4 = '11618/16618' }
 $script:ShpmRequiredTables = @('work_package', 'task', 'sprint', 'sprint_stage', 'relation', 'assignment', 'verification', 'issue', 'todo', 'event')
@@ -210,7 +211,10 @@ function Test-ShpmGovernance {
             Assert-ShpmCondition (-not [string]::IsNullOrWhiteSpace($prompt)) "$id left pending without a prompt_path"
         }
         if ($promptCheck -eq 'PASS' -and -not [string]::IsNullOrWhiteSpace($prompt)) {
-            Assert-ShpmCondition (Test-Path -LiteralPath (Join-Path $RepositoryRoot $prompt) -PathType Leaf) `
+            # Resolves absolute prompt_path as-is; only relative paths join the repository root.
+            $promptPath = if ([System.IO.Path]::IsPathFullyQualified($prompt)) { $prompt }
+                else { Join-Path $RepositoryRoot $prompt }
+            Assert-ShpmCondition (Test-Path -LiteralPath $promptPath -PathType Leaf) `
                 "$id prompt_path does not exist: $prompt"
         }
         $taskAssignments = @($assignments | Where-Object { $_.task_id -eq $id })

@@ -192,7 +192,7 @@
       "source_path": "backend/packages/harness/deerflow/agents/lead_agent/agent.py",
       "sha256": "241782497d229ab3e4e2e07ecc84403dcfac62a49b45fc319fc41932862238ad",
       "intended_local_path": "resources/upstream/deerflow/prompts/lead-agent-assembly.md",
-      "local_sha256": "6c928c343970ad9d8d6580f0b1881e74ef4205dc2b3daf571af46fdeb18fd40f",
+      "local_sha256": "e1960eb21811fb06f12f7185db942cf6e281f0fcf8c010873a7975973e782e7d",
       "authored": true,
       "import_status": "IMPORTED",
       "license_assessment": "Super Harness authored assembly ledger describing upstream variables, branches and injection points; no upstream text is copied. Not a legal review.",

@@ -294,6 +294,8 @@ $env:NO_PROXY='127.0.0.1,localhost'
 项目的任务状态、派工、checkpoint、验收证据和客户演示门禁由 SHPM（Super Harness Project Manager）维护，
 人工可在 http://127.0.0.1:8787/ 只读查看；只有主控通过 `shpm` 写入，子智能体不写 SHPM。提示词、roadmap、
 交付报告和原始证据正文仍在 `private-docs`、`contracts` 与各 worktree 的 `local-tmp`，SHPM 只保存路径。
+SHPM 的治理侧交付任务上限为 32（人工 2026-10-09 决策）；已登记的任务 `prompt_path` 接受仓库内相对路径（按仓库根解析）
+和绝对路径（按原路径解析），缺失路径严格失败。
 环境准备和完整操作流程见 [SHPM 使用手册](docs/shpm-manual.md)。
 
 ```powershell
