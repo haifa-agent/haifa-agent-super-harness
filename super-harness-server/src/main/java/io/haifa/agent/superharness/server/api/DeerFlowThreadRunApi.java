@@ -774,14 +774,17 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (turn.role() == io.haifa.agent.core.message.MessageRole.USER
                     && turn.runId().isPresent()) {
                 AgentRunId runId = turn.runId().orElseThrow();
-                // The SDK turn scan keeps only User/Assistant turns, so a Run that never committed a
-                // final assistant turn (a cancelled or otherwise terminal Run) loses its Tool round in
-                // the page feed. Project that round from the same public bridge facts the history
-                // overlay uses, once per Run and only when the Run is terminal without an answer, so
-                // settled Runs that already carry an assistant turn keep the previous page shape.
+                // The SDK turn scan keeps only User/Assistant turns: native Tool messages and pure
+                // Tool assistants produce no durable ConversationTurn at all, so a settled Run's
+                // task round vanishes from the page feed even when a final assistant answer exists.
+                // Keep the existing unanswered-terminal projection and include completed delegation
+                // Runs, using the same public bridge facts as history exactly once per Run.
+                // Native public message IDs own the identity; the visibleAssistantTexts /
+                // supportProjectedMessages dedup keeps ordinary Tool-assistant text on its round.
                 if (!supportProjectedRuns.contains(runId.value())
                         && isTerminalRun(thread, runId, cached.get(runId.value()))
-                        && !hasDurableFinalAssistant(thread, runId, cached.get(runId.value()))) {
+                        && (!hasDurableFinalAssistant(thread, runId, cached.get(runId.value()))
+                                || hasTaskRound(thread, runId, cached.get(runId.value())))) {
                     supportProjectedRuns.add(runId.value());
                     supportSlots = appendRunSupportRows(
                             thread, runId, cached.get(runId.value()), sequence + 1, turn.createdAt(), rows,
@@ -853,8 +856,13 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
     }
 
+    private boolean hasTaskRound(ThreadRecord thread, AgentRunId runId, RunRecord cached) {
+        HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
+        return bridge.toolCalls(runId).stream().anyMatch(call -> "task".equals(call.toolName()));
+    }
+
     /**
-     * Page rows for a terminal Run with no committed assistant turn. Mirrors the history overlay's
+     * Page rows for an unanswered terminal Run or completed delegation. Mirrors the history overlay's
      * one-AI-message-per-model-round projection (that round's whole Tool call list, then each call's
      * result), retaining each Interaction before that round's results and reserving both of its
      * display slots even when hidden. The ordinary turn loop does not emit these cards again.
