@@ -36,6 +36,8 @@ Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业�
   子任务步骤通过公开 `RunMessage*` API 投影。Child 明确关闭继承模型的 thinking，并通过公开 SDK Profile
   选择接受非空普通 `LENGTH` 输出；原输出 token 与时间限制不变。封顶结果保留真实 Usage、
   `TRUNCATED:LENGTH` 警告及 Parent Tool 结果元数据，Parent 自身仍采用严格截断策略。
+  同一 Run 的多个 SSE 观察者分别接收完整 Tool 请求与结果；连接内按消息身份去重，重连使用独立的投影游标。
+  游标已过期时返回 `stream_replay_gap`，按 `reload_durable_state` 恢复权威状态后再从可用游标读取。
 - **Run 预算与限制**：主对话 Run 的结构限制对齐冻结 DeerFlow 默认值（`config.example.yaml` 的
   `recursion_limit: 100`、`max_recursion_limit: 1000`、`token_budget.enabled: false`）：迭代 100 轮、
   模型调用 100 次、工具调用 1000 次、墙钟基数 3600000 毫秒（委托开启时按现有算法叠加「子 Run 总数 × 子 Run

@@ -1029,6 +1029,118 @@ public class DeerFlowSteerApiTest {
     }
 
     @Test
+    @org.junit.jupiter.api.Timeout(60)
+    void eachConcurrentObserverAndTerminalReplayReceivesTheNativeToolTupleOnce() throws Exception {
+        CountDownLatch modelEntered = new CountDownLatch(1);
+        CountDownLatch modelRelease = new CountDownLatch(1);
+        CountDownLatch toolEntered = new CountDownLatch(1);
+        CountDownLatch toolRelease = new CountDownLatch(1);
+        WeatherTool weather = new WeatherTool(toolEntered, toolRelease);
+        AtomicInteger invocations = new AtomicInteger();
+        AgentChatModel model = request -> {
+            if (invocations.incrementAndGet() == 1) {
+                modelEntered.countDown();
+                try {
+                    if (!modelRelease.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("Model not released");
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(interrupted);
+                }
+                return new AgentChatResponse(request.callId().value(), request.model().providerModelId(), "",
+                        List.of(new ModelToolCall(new ProviderToolCallCorrelationId("provider-w08-weather"),
+                                "search_weather", Map.of("location", "Tokyo"))),
+                        ModelFinishReason.TOOL_CALLS, ModelUsage.unpriced(1, 1), "", Map.of());
+            }
+            assertThat(request.messages().stream().anyMatch(message ->
+                    "Tokyo is sunny, 22C".equals(message.toolResultData().get("result")))).isTrue();
+            return new AgentChatResponse(request.callId().value(), request.model().providerModelId(), "WEATHER-DONE",
+                    List.of(), ModelFinishReason.STOP, ModelUsage.unpriced(1, 1), "", Map.of());
+        };
+        startServerWithModel(model, List.of(weather));
+        String threadId = "thread-native-tool-observers";
+        createThread(threadId);
+        List<InputStream> bodies = new ArrayList<>();
+        try {
+            HttpResponse<InputStream> creator = client.send(HttpRequest.newBuilder(baseUri.resolve(
+                            "/api/threads/" + threadId + "/runs/stream"))
+                    .timeout(Duration.ofSeconds(15)).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of(
+                            "input", Map.of("messages", List.of(Map.of("type", "human", "content", "Weather Tokyo"))),
+                            "stream_mode", List.of("messages-tuple"), "on_disconnect", "continue"))))
+                    .build(), HttpResponse.BodyHandlers.ofInputStream());
+            bodies.add(creator.body());
+            assertThat(creator.statusCode()).isEqualTo(200);
+            assertThat(modelEntered.await(10, TimeUnit.SECONDS)).isTrue();
+            String location = creator.headers().firstValue("Content-Location").orElseThrow();
+            HttpResponse<InputStream> observer = client.send(HttpRequest.newBuilder(baseUri.resolve(location + "/stream"))
+                    .timeout(Duration.ofSeconds(15)).header("Last-Event-ID", "-1").GET().build(),
+                    HttpResponse.BodyHandlers.ofInputStream());
+            bodies.add(observer.body());
+            assertThat(observer.statusCode()).isEqualTo(200);
+            modelRelease.countDown();
+            assertThat(toolEntered.await(10, TimeUnit.SECONDS)).isTrue();
+            assertThat(weather.receivedQueries).containsExactly(new WeatherQuery("Tokyo"));
+            toolRelease.countDown();
+            String creatorRaw = readSseBounded(creator.body());
+            String observerRaw = readSseBounded(observer.body());
+            JsonNode diagnostic = getJson(location);
+            JsonNode calls = diagnostic.path("diagnostics").path("tool_calls");
+            assertThat(calls.size()).isEqualTo(1);
+            String nativeId = calls.get(0).path("tool_call_id").asText();
+            assertThat(nativeId).isNotBlank().isNotEqualTo("provider-w08-weather");
+            assertThat(calls.get(0).path("status").asText()).isEqualTo("COMPLETED");
+            HttpResponse<InputStream> replay = client.send(HttpRequest.newBuilder(baseUri.resolve(location + "/stream"))
+                    .timeout(Duration.ofSeconds(15)).header("Last-Event-ID", "-1").GET().build(),
+                    HttpResponse.BodyHandlers.ofInputStream());
+            bodies.add(replay.body());
+            assertThat(replay.statusCode()).isEqualTo(200);
+            String gapRaw = readSseBounded(replay.body());
+            Files.writeString(GatewayFixture.evidenceDirectory().resolve("native-tool-replay-gap.sse"), gapRaw);
+            assertThat(gapRaw).contains("event: gap");
+            JsonNode gap = json.readTree(gapRaw.lines().filter(line -> line.startsWith("data: "))
+                    .findFirst().orElseThrow().substring(6));
+            assertThat(gap.path("code").asText()).isEqualTo("stream_replay_gap");
+            assertThat(gap.path("recovery").asText()).isEqualTo("reload_durable_state");
+            JsonNode recoveredMessages = getJson("/api/threads/" + threadId + "/state").path("values").path("messages");
+            assertThat(countToolRequests(recoveredMessages, "search_weather")).isEqualTo(1);
+            assertThat(countToolResults(recoveredMessages, "search_weather")).isEqualTo(1);
+            HttpResponse<InputStream> retainedReplay = client.send(HttpRequest.newBuilder(baseUri.resolve(location + "/stream"))
+                    .timeout(Duration.ofSeconds(15))
+                    .header("Last-Event-ID", gap.path("earliest_available_event_id").asText()).GET().build(),
+                    HttpResponse.BodyHandlers.ofInputStream());
+            bodies.add(retainedReplay.body());
+            assertThat(retainedReplay.statusCode()).isEqualTo(200);
+            List<String> captures = List.of(creatorRaw, observerRaw, readSseBounded(retainedReplay.body()));
+            for (int index = 0; index < captures.size(); index++) {
+                String raw = captures.get(index);
+                Files.writeString(GatewayFixture.evidenceDirectory().resolve("native-tool-observer-" + index + ".sse"), raw);
+                assertThat(raw).contains("event: end").doesNotContain("event: error");
+                List<JsonNode> messages = new ArrayList<>();
+                for (String line : raw.split("\\R")) {
+                    if (line.startsWith("data: [")) messages.add(json.readTree(line.substring(6)).get(0));
+                }
+                assertThat(countToolRequests(json.valueToTree(messages), "search_weather")).isEqualTo(1);
+                assertThat(countToolResults(json.valueToTree(messages), "search_weather")).isEqualTo(1);
+                JsonNode result = messages.stream().filter(message -> "tool".equals(message.path("type").asText()))
+                        .findFirst().orElseThrow();
+                assertThat(result.path("tool_call_id").asText()).isEqualTo(nativeId);
+                assertThat(result.path("additional_kwargs").path("haifa_tool_result").path("result").asText())
+                        .isEqualTo("Tokyo is sunny, 22C");
+                assertThat(messages.stream().flatMap(message -> {
+                    List<JsonNode> entries = new ArrayList<>(); message.path("tool_calls").forEach(entries::add);
+                    return entries.stream();
+                }).map(call -> call.path("id").asText()).toList()).containsExactly(nativeId);
+            }
+            Files.writeString(GatewayFixture.evidenceDirectory().resolve("native-tool-run.json"), diagnostic.toPrettyString());
+            assertThat(invocations.get()).isEqualTo(2);
+        } finally {
+            modelRelease.countDown();
+            toolRelease.countDown();
+            for (InputStream body : bodies) body.close();
+        }
+    }
+
+    @Test
     void steerWhileToolExecutingAppliesAtSafePoint() throws Exception {
         CountDownLatch toolEntered = new CountDownLatch(1);
         CountDownLatch toolRelease = new CountDownLatch(1);
