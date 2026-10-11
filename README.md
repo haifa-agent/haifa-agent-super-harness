@@ -141,6 +141,8 @@ pwsh -NoProfile -File scripts/verify-scripts.ps1
 
 ## 定向测试与 SDK 版本选择
 
+普通生产 HTTP 测试通过 `GatewayFixture.productionEnvironment` 使用显式 `env://GATEWAY_FIXTURE_CONTINUATION_KEY` 测试密钥，避免为临时目录向 Windows Credential Manager 累积凭据；显式传入的凭据引用原样保留。凭据首次配置、丢失与重启语义由 `ContinuationKeyConfigurationTest` 单独验证。
+
 开发内环使用 `scripts/test-targeted.ps1`，固定带 `-o -ntp -pl super-harness-server -am`（`-Module` 可换模块），
 Maven 输出写到 `local-tmp/test-targeted/`，stdout 只输出一份 JSON 汇总（命令、退出码、tests/failures/errors/
 skipped、耗时、日志路径）。匹配 0 个测试算失败；不接受 `clean`、`install`、`-DskipTests`、`-Dhaifa.version`

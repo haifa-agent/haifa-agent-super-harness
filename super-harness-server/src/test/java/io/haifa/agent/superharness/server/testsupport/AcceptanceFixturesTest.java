@@ -14,6 +14,18 @@ import org.junit.jupiter.api.Test;
 
 /** Guards against fixture false positives using the real SDK and owned loopback resources. */
 class AcceptanceFixturesTest {
+    @Test void ordinaryProductionEnvironmentPreservesExplicitCredentialFailures() {
+        Map<String, String> explicitMissing = Map.of(
+                "HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF", "env://MISSING_FIXTURE_KEY");
+        assertThat(GatewayFixture.productionEnvironment(explicitMissing)).isSameAs(explicitMissing);
+        assertThat(GatewayFixture.productionEnvironment(Map.of(
+                "HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF", "os://EXPLICIT_FIXTURE_KEY")))
+                .containsOnlyKeys("HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF");
+        assertThat(GatewayFixture.productionEnvironment(Map.of("fixture-setting", "preserved")))
+                .containsEntry("fixture-setting", "preserved")
+                .containsEntry("HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF", "env://GATEWAY_FIXTURE_CONTINUATION_KEY");
+    }
+
     @Test void typedModelRequiresUsageAndHasEquivalentInvocationPaths() throws Exception {
         var model = new ControlledModel();
         try (var gateway = new GatewayFixture(GatewayFixture.dataDirectory(), model)) {
