@@ -215,6 +215,22 @@ pwsh -NoProfile -File scripts/frontend/start-haifa-frontend.ps1 `
 pwsh -NoProfile -File tests/checks/frontend/verify-haifa-frontend-profile.ps1
 ```
 
+### W08 真实委托 UI profile
+
+`scripts/ui/run-w18-ui-smoke.ps1` 新增 `-W08LiveDelegation` 开关，运行 `tests/ui/smoke/w08-delegation-live.spec.cjs`
+的三个真实模型用例（UI-06 单 Child 完成+刷新、UI-09 两个物理并发 Child、UI-10 运行中停止+终态刷新）。
+该开关自动复用真实 DeepSeek 托管模型（等效 `-LiveDeepSeek`），会真实调用 `https://api.deepseek.com`，
+仅限已授权轮次、独立 data-root，且不与其他 profile 并用：
+
+```powershell
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 `
+  -AgentSlot 1 -GatewayPort 20618 -FrontendPort 25618 `
+  -W08LiveDelegation -SourceRepository <冻结 DeerFlow checkout 的绝对路径> `
+  -DataDirectory local-tmp/slot-1-w08-real-profile/data/<run>
+```
+
+每个 case 超时 120 秒，Child `timeout_seconds=90`；保持产品的 2048 tokens 输出预算，runner 不改写这些限制。
+
 ## 启动主工作树供人工验收
 
 主工作树固定使用本地回环端口：Gateway `18018`、冻结前端 `33018`。默认数据目录为被 Git 忽略的
