@@ -266,9 +266,21 @@ public final class GatewayFixture implements AutoCloseable {
         return response;
     }
 
+    /** Ordinary HTTP fixtures use an explicit test key; OS credential behavior has dedicated tests. */
+    public static Map<String, String> productionEnvironment(Map<String, String> environment) {
+        if (environment.containsKey("HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF")) {
+            return environment;
+        }
+        var configured = new java.util.LinkedHashMap<>(environment);
+        configured.put("HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF", "env://GATEWAY_FIXTURE_CONTINUATION_KEY");
+        configured.put("GATEWAY_FIXTURE_CONTINUATION_KEY", Base64.getEncoder().encodeToString(new byte[32]));
+        return Map.copyOf(configured);
+    }
+
     public static GatewayFixture production(Path data, int port, Map<String, String> environment, Path evidence) throws Exception {
         return new GatewayFixture(data, DeerFlowBootstrapApi.create(
-                new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), port), data, environment), evidence);
+                new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), port),
+                data, productionEnvironment(environment)), evidence);
     }
 
     public GatewayFixture(Path data, DeerFlowBootstrapApi api, Path evidence) throws Exception {

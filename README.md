@@ -33,7 +33,11 @@ Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业�
   等仍需审批。
 - **子智能体（Parent/Child）**：`GET/POST /api/subagents`、`PUT/DELETE /api/subagents/{name}` 管理目录定义；
   生产 Run 在 `context.subagent_enabled=true` 时声明 SDK Child 与 `task`。容量、超时、深度与终止由 SDK 拥有，
-  子任务步骤通过公开 `RunMessage*` API 投影。
+  子任务步骤通过公开 `RunMessage*` API 投影。Child 明确关闭继承模型的 thinking，并通过公开 SDK Profile
+  选择接受非空普通 `LENGTH` 输出；原输出 token 与时间限制不变。封顶结果保留真实 Usage、
+  `TRUNCATED:LENGTH` 警告及 Parent Tool 结果元数据，Parent 自身仍采用严格截断策略。
+  同一 Run 的多个 SSE 观察者分别接收完整 Tool 请求与结果；连接内按消息身份去重，重连使用独立的投影游标。
+  游标已过期时返回 `stream_replay_gap`，按 `reload_durable_state` 恢复权威状态后再从可用游标读取。
 - **Run 预算与限制**：主对话 Run 的结构限制对齐冻结 DeerFlow 默认值（`config.example.yaml` 的
   `recursion_limit: 100`、`max_recursion_limit: 1000`、`token_budget.enabled: false`）：迭代 100 轮、
   模型调用 100 次、工具调用 1000 次、墙钟基数 3600000 毫秒（委托开启时按现有算法叠加「子 Run 总数 × 子 Run
@@ -137,6 +141,8 @@ pwsh -NoProfile -File scripts/verify-scripts.ps1
 
 ## 定向测试与 SDK 版本选择
 
+普通生产 HTTP 测试通过 `GatewayFixture.productionEnvironment` 使用显式 `env://GATEWAY_FIXTURE_CONTINUATION_KEY` 测试密钥，避免为临时目录向 Windows Credential Manager 累积凭据；显式传入的凭据引用原样保留。凭据首次配置、丢失与重启语义由 `ContinuationKeyConfigurationTest` 单独验证。
+
 开发内环使用 `scripts/test-targeted.ps1`，固定带 `-o -ntp -pl super-harness-server -am`（`-Module` 可换模块），
 Maven 输出写到 `local-tmp/test-targeted/`，stdout 只输出一份 JSON 汇总（命令、退出码、tests/failures/errors/
 skipped、耗时、日志路径）。匹配 0 个测试算失败；不接受 `clean`、`install`、`-DskipTests`、`-Dhaifa.version`
@@ -212,6 +218,22 @@ pwsh -NoProfile -File scripts/frontend/start-haifa-frontend.ps1 `
   -DryRun -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow
 pwsh -NoProfile -File tests/checks/frontend/verify-haifa-frontend-profile.ps1
 ```
+
+### W08 真实委托 UI profile
+
+`scripts/ui/run-w18-ui-smoke.ps1` 新增 `-W08LiveDelegation` 开关，运行 `tests/ui/smoke/w08-delegation-live.spec.cjs`
+的三个真实模型用例（UI-06 单 Child 完成+刷新、UI-09 两个物理并发 Child、UI-10 运行中停止+终态刷新）。
+该开关自动复用真实 DeepSeek 托管模型（等效 `-LiveDeepSeek`），会真实调用 `https://api.deepseek.com`，
+仅限已授权轮次、独立 data-root，且不与其他 profile 并用：
+
+```powershell
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 `
+  -AgentSlot 1 -GatewayPort 20618 -FrontendPort 25618 `
+  -W08LiveDelegation -SourceRepository <冻结 DeerFlow checkout 的绝对路径> `
+  -DataDirectory local-tmp/slot-1-w08-real-profile/data/<run>
+```
+
+每个 case 超时 120 秒，Child `timeout_seconds=90`；保持产品的 2048 tokens 输出预算，runner 不改写这些限制。
 
 ## 启动主工作树供人工验收
 
@@ -289,3 +311,5 @@ pwsh -NoProfile -File scripts/governance/audit-work-package-delivery.ps1
 - [功能交付流程（纯产品与跨 SDK 协同）](docs/engineering/002-feature-delivery-workflows.md)：最终门禁前 rebase，按改动范围和 Oracle 验收；SDK 切回基线后重新构建并回归，再由主控合入与结算。
 - [验收交接模板](docs/acceptance-handoff-template.md)
 - [SDK 消费记录](docs/todo.md)
+
+同一模型轮次的并行 Tool 结果按原请求顺序向各 SSE 观察者投影，实时与重放使用同一规则；Child 生命周期事件仍独立推进。

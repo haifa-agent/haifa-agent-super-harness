@@ -1,5 +1,7 @@
 package io.haifa.agent.superharness.server.api;
 
+import java.util.Map;
+import io.haifa.agent.superharness.server.testsupport.GatewayFixture;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.haifa.agent.superharness.server.config.LocalServerConfiguration;
@@ -32,7 +34,8 @@ class UncaughtRequestLoggingHttpTest {
     @Test
     void anUnhandledFailureIsLoggedAsWarningAndKeptAsServerError() throws Exception {
         DeerFlowBootstrapApi api = DeerFlowBootstrapApi.create(
-                new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0), dataDirectory);
+                new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0), dataDirectory,
+                GatewayFixture.productionEnvironment(Map.of()));
         try {
             Field javalinField = DeerFlowBootstrapApi.class.getDeclaredField("javalin");
             javalinField.setAccessible(true);

@@ -2103,6 +2103,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                         }
                     }
                     ProjectionCursor delivered = initialCursor;
+                    // Tool tuple dedup belongs to this SSE connection, just like its cursor.
+                    Map<String, String> projectedToolMessages = new LinkedHashMap<>();
                     long nextHeartbeat = System.nanoTime() + java.time.Duration.ofMillis(100).toNanos();
                     long terminalWithoutEventSince = 0;
                     long childTerminalWaitSince = 0;
@@ -2127,7 +2129,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                                 }
                             }
                             delivered = event.cursor();
-                            if (writeProjectedEvent(output, thread, run, event)) {
+                            if (writeProjectedEvent(output, thread, run, event, projectedToolMessages)) {
                                 return;
                             }
                         }
@@ -2157,7 +2159,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                                         thread,
                                         run,
                                         pending.orElseThrow().requestId().value(),
-                                        sseCursor(delivered))) {
+                                        sseCursor(delivered), projectedToolMessages)) {
                                     return;
                                 }
                             }
@@ -2391,7 +2393,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private boolean writeProjectedEvent(
-            OutputStream output, ThreadRecord thread, RunRecord run, ProjectedRunEvent event)
+            OutputStream output, ThreadRecord thread, RunRecord run, ProjectedRunEvent event,
+            Map<String, String> projectedToolMessages)
             throws IOException {
         String cursor = sseCursor(event.cursor());
         if (event.interaction().isPresent()) {
@@ -2399,7 +2402,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (projected.state() != InteractionState.PENDING) {
                 return false;
             }
-            return writePendingInteractionCard(output, thread, run, projected.requestId(), cursor);
+            return writePendingInteractionCard(output, thread, run, projected.requestId(), cursor, projectedToolMessages);
         }
         if (event.source().payload() instanceof RunEventPayloads.RunInputLifecycle) {
             return false;
@@ -2432,7 +2435,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 || event.source().payload() instanceof RunEventPayloads.DeliveryLifecycle) {
             if (event.source().payload() instanceof RunEventPayloads.ToolLifecycle lifecycle
                     && run.bridge.hasTools()) {
-                writeToolLifecycle(output, run, lifecycle.toolCallId(), cursor);
+                writeToolLifecycle(output, run, lifecycle.toolCallId(), cursor, projectedToolMessages);
                 return false;
             }
             if (event.source().payload() instanceof RunEventPayloads.ResourceAvailable
@@ -2467,7 +2470,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
         AgentRunSnapshot terminalSnapshot = run.bridge.snapshot(run.runId);
         if (run.bridge.hasTools() && run.streamModes.contains("messages-tuple")) {
-            writeAllToolMessages(output, run);
+            writeAllToolMessages(output, run, projectedToolMessages);
             List<String> artifacts = DeerFlowToolTranscriptProjection.artifactPaths(
                     run.bridge.toolCalls(run.runId));
             if (!artifacts.isEmpty() && run.streamModes.contains("updates")) {
@@ -2516,7 +2519,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
      * this only re-projects it.
      */
     private boolean writePendingInteractionCard(
-            OutputStream output, ThreadRecord thread, RunRecord run, String projectedRequestId, String cursor)
+            OutputStream output, ThreadRecord thread, RunRecord run, String projectedRequestId, String cursor,
+            Map<String, String> projectedToolMessages)
             throws IOException {
         Map<String, Object> requestMessage;
         synchronized (thread) {
@@ -2563,7 +2567,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 requestMessage = run.interactionRequestMessage;
             }
         }
-        writeToolRequestIfAvailable(output, run, null);
+        writeToolRequestIfAvailable(output, run, null, projectedToolMessages);
         writeSse(
                 output,
                 "messages",
@@ -2576,7 +2580,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         return true;
     }
 
-    private void writeToolLifecycle(OutputStream output, RunRecord run, String toolCallId, String cursor)
+    private void writeToolLifecycle(OutputStream output, RunRecord run, String toolCallId, String cursor,
+            Map<String, String> projectedToolMessages)
             throws IOException {
         List<ToolCallView> calls = run.bridge.toolCalls(run.runId);
         int selectedIndex = -1;
@@ -2610,11 +2615,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         // and the same message id is rewritten with the fuller list, so a parallel round never opens
         // two frontend subagent groups.
         List<ToolCallView> round = liveRound(run.bridge, run.runId, calls, call.id().value());
-        writeToolMessage(output, run, DeerFlowToolTranscriptProjection.requestMessage(round), null);
-        Optional<Map<String, Object>> result = DeerFlowToolTranscriptProjection.resultMessage(call);
-        if (result.isPresent()) {
-            writeToolMessage(output, run, result.orElseThrow(), cursor);
-        }
+        writeToolMessage(output, run, DeerFlowToolTranscriptProjection.requestMessage(round), null, projectedToolMessages);
+        writeAvailableRoundResults(output, run, round, cursor, projectedToolMessages);
     }
 
     /**
@@ -2660,7 +2662,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
     }
 
-    private void writeToolRequestIfAvailable(OutputStream output, RunRecord run, String cursor) throws IOException {
+    private void writeToolRequestIfAvailable(OutputStream output, RunRecord run, String cursor,
+            Map<String, String> projectedToolMessages) throws IOException {
         List<ToolCallView> calls = run.bridge.toolCalls(run.runId);
         String targetReference = interactionTargetReference(run);
         Optional<ToolCallView> selected = calls.stream()
@@ -2673,7 +2676,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             ToolCallView call = selected.orElseThrow();
             List<ToolCallView> round = liveRound(run.bridge, run.runId, calls, call.id().value());
             writeToolMessage(
-                    output, run, DeerFlowToolTranscriptProjection.requestMessage(round), cursor);
+                    output, run, DeerFlowToolTranscriptProjection.requestMessage(round), cursor, projectedToolMessages);
         }
     }
 
@@ -2683,29 +2686,38 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 .orElse("");
     }
 
-    private void writeAllToolMessages(OutputStream output, RunRecord run) throws IOException {
+    private void writeAllToolMessages(OutputStream output, RunRecord run,
+            Map<String, String> projectedToolMessages) throws IOException {
         List<ToolCallView> calls = DeerFlowToolTranscriptProjection.upToClarificationBoundary(
                 run.bridge.toolCalls(run.runId));
         for (List<ToolCallView> round : toolCallRounds(run.bridge, run.runId, calls)) {
             if (round.isEmpty()) continue;
-            writeToolMessage(output, run, DeerFlowToolTranscriptProjection.requestMessage(round), null);
-            for (ToolCallView call : round) {
-                Optional<Map<String, Object>> result = DeerFlowToolTranscriptProjection.resultMessage(call);
-                if (result.isPresent()) {
-                    writeToolMessage(output, run, result.orElseThrow(), null);
-                }
-            }
+            writeToolMessage(output, run, DeerFlowToolTranscriptProjection.requestMessage(round), null, projectedToolMessages);
+            writeAvailableRoundResults(output, run, round, null, projectedToolMessages);
+        }
+    }
+
+    private void writeAvailableRoundResults(OutputStream output, RunRecord run, List<ToolCallView> round,
+            String cursor, Map<String, String> projectedToolMessages) throws IOException {
+        // Live and replay snapshots may observe parallel completions at different moments.
+        // Preserve the authoritative request order on both paths: a later result waits only
+        // for earlier calls in this round, while native Child status events remain independent.
+        for (ToolCallView call : round) {
+            Optional<Map<String, Object>> result = DeerFlowToolTranscriptProjection.resultMessage(call);
+            if (result.isEmpty()) return;
+            writeToolMessage(output, run, result.orElseThrow(), cursor, projectedToolMessages);
         }
     }
 
     private void writeToolMessage(
-            OutputStream output, RunRecord run, Map<String, Object> message, String cursor) throws IOException {
+            OutputStream output, RunRecord run, Map<String, Object> message, String cursor,
+            Map<String, String> projectedToolMessages) throws IOException {
         String messageId = (String) message.get("id");
         // A round request can grow as more calls of the same round become known, so the same message
         // id is written again only when its tool_calls list changes (the frozen SDK overwrites a
         // non-chunked AI message by id). Every other message is still written once.
         String signature = DeerFlowToolTranscriptProjection.messageSignature(message);
-        String previous = run.projectedToolMessages.put(messageId, signature);
+        String previous = projectedToolMessages.put(messageId, signature);
         if (signature.equals(previous)) return;
         writeSse(output, "messages", List.of(message, Map.of("langgraph_node", "tools")), cursor);
         if ("tool".equals(message.get("type")) && "write_todos".equals(message.get("name"))) {
@@ -5096,7 +5108,6 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private final Set<Long> deferredEventSequences = ConcurrentHashMap.newKeySet();
         /** Attached streams: last delivered projection sequence and when the stream last looped. */
         private final Map<Object, long[]> liveObservers = new ConcurrentHashMap<>();
-        private final Map<String, String> projectedToolMessages = new ConcurrentHashMap<>();
 
         private RunRecord(
                 AgentRunId runId,

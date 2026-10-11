@@ -11,7 +11,10 @@ import io.haifa.agent.core.run.AgentRunStatus;
 import io.haifa.agent.core.run.AgentRunType;
 import io.haifa.agent.core.session.AgentSessionId;
 import io.haifa.agent.model.api.AgentChatModel;
+import io.haifa.agent.model.api.EffectiveModelParameters;
 import io.haifa.agent.model.api.ModelAdapterCoordinate;
+import io.haifa.agent.model.api.ModelCapability;
+import io.haifa.agent.model.api.ModelReasoningPolicy;
 import io.haifa.agent.model.api.ResolvedModelSnapshot;
 import io.haifa.agent.policy.api.PolicyPresets;
 import io.haifa.agent.policy.core.DefaultPolicyDecisionService;
@@ -67,7 +70,11 @@ import io.haifa.agent.superharness.server.tool.web.ProductionImageSearchTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionWebFetchTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionWebSearchTool;
 import io.haifa.agent.tool.api.ToolName;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -265,11 +272,28 @@ public final class HaifaRunBridge implements AutoCloseable {
                 builder.childRunCapacity(childRunCapacity).nonInteractiveChildTools();
                 for (var child : delegation.children()) {
                     Set<String> childTools = child.allowedTools(allowedTools);
+                    Optional<EffectiveModelParameters> effectiveModelParameters = Optional.empty();
+                    if (isReasoningCapableOrEnabled(child.model().snapshot())) {
+                        ResolvedModelSnapshot snapshot = child.model().snapshot();
+                        String profileDigest = "sha256:" + sha256Hex(delegation.fingerprint() + "\n"
+                                + child.name() + "\n"
+                                + snapshot.configurationDigest() + "\n"
+                                + "e545c28ac301e6f9feae247c513d8ea8f83df294:thinking_enabled=False:reasoning_effort=None");
+                        effectiveModelParameters = Optional.of(new EffectiveModelParameters(
+                                snapshot.modelId(),
+                                snapshot.modelVersion(),
+                                profileDigest,
+                                ModelReasoningPolicy.disabled(),
+                                snapshot.maxOutputTokens(),
+                                snapshot.imageInput()));
+                    }
                     builder.runProfile(new ProductRunProfile(child.profileId(), "1.0.0", child.model().name(),
                             AgentRunType.CHAT, AgentRunBudget.disabled(),
                             new AgentRunLimits(child.turns(), 1, 1, child.timeoutMillis(),
                                     child.timeoutMillis(), child.turns(), Long.MAX_VALUE, 0),
-                            Map.of(), Optional.of(childTools)));
+                            Map.of(), effectiveModelParameters, Optional.of(childTools))
+                            .withTruncatedOutputPolicy(
+                                    io.haifa.agent.runtime.api.TruncatedOutputPolicy.ACCEPT_NONEMPTY_PLAIN_TEXT));
                     builder.childAgent(new ChildAgentSpec(child.name(), child.description(), child.instructions(),
                             Optional.of(new ProductRunProfileRef(child.profileId(), "1.0.0")), childTools));
                 }
@@ -423,6 +447,26 @@ public final class HaifaRunBridge implements AutoCloseable {
                 selected.capabilities(), selected.contextWindow(), selected.maxOutputTokens(),
                 selected.providerOptions(), request.invocationOptions());
         return normalized.configurationDigest().equals(request.configurationDigest());
+    }
+
+    static boolean isReasoningCapableOrEnabled(ResolvedModelSnapshot snapshot) {
+        if (snapshot.capabilities().contains(ModelCapability.REASONING)) {
+            return true;
+        }
+        Object thinking = snapshot.invocationOptions().get("thinking");
+        if (thinking != null && !"disabled".equalsIgnoreCase(String.valueOf(thinking))) {
+            return true;
+        }
+        return snapshot.invocationOptions().containsKey("reasoning_effort")
+                || snapshot.invocationOptions().containsKey("reasoning_token_budget");
+    }
+
+    private static String sha256Hex(String text) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException failure) {
+            throw new IllegalStateException("SHA-256 is required", failure);
+        }
     }
 
     public boolean hasTools() {

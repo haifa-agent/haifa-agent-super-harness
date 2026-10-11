@@ -1,5 +1,7 @@
 package io.haifa.agent.superharness.server.api;
 
+import java.util.Map;
+import io.haifa.agent.superharness.server.testsupport.GatewayFixture;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -34,7 +36,8 @@ class DeerFlowInputPolishProviderApiTest {
     void startServer() throws Exception {
         api = DeerFlowBootstrapApi.create(
                 new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
-                dataDirectory);
+                dataDirectory,
+                GatewayFixture.productionEnvironment(Map.of()));
         api.start();
         baseUri = URI.create("http://127.0.0.1:" + api.address().getPort());
     }

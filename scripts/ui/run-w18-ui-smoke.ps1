@@ -22,6 +22,8 @@ param(
     # W05 live-rendering: hold a controlled Run mid-flight and assert the page.
     [switch]$LiveRendering,
     [switch]$LiveDeepSeek,
+    # Real frozen Ultra delegation, using the same managed live provider.
+    [switch]$W08LiveDelegation,
     # W15 representative managed Skill and evaluation-result chain using the real provider.
     [switch]$W15LiveSkill,
     [switch]$W15PackageDifferential,
@@ -59,7 +61,7 @@ if ($AgentSlot -eq 5) { $expectedGatewayPort = 12618; $expectedFrontendPort = 17
 if ($GatewayPort -ne $expectedGatewayPort -or $FrontendPort -ne $expectedFrontendPort -or $ProviderPort -ne 0) {
     throw "W18 slot $AgentSlot requires Gateway=$expectedGatewayPort and Frontend=$expectedFrontendPort; controlled Provider must use OS-assigned port 0."
 }
-if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $LiveDeepSeek, $W15PackageDifferential).Where({ $_ }).Count -gt 1) {
+if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $LiveDeepSeek, $W08LiveDelegation, $W15PackageDifferential).Where({ $_ }).Count -gt 1) {
     throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, V2 model-switch, V2 file-context, V2 Skill, V2 diagnostics, W08 catalog, W08 delegation, live rendering, W15 package differential, and live DeepSeek profiles are mutually exclusive.'
 }
 if ($W15PackageDifferential) { $V2Skill = $true }
@@ -67,12 +69,13 @@ if (@($UxV1DefaultTools, $UxV1AgentSoul, $W15LiveSkill).Where({ $_ }).Count -gt 
     throw 'The UX-V1 default-tools and Agent SOUL profiles are mutually exclusive.'
 }
 if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill) {
-    if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $LiveDeepSeek).Where({ $_ }).Count -gt 0) {
+    if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $LiveDeepSeek, $W08LiveDelegation).Where({ $_ }).Count -gt 0) {
         throw 'The UX-V1 profiles are mutually exclusive with the other profiles.'
     }
     # Reuses the live DeepSeek managed model and skips the controlled loopback provider.
     $LiveDeepSeek = $true
 }
+if ($W08LiveDelegation) { $LiveDeepSeek = $true }
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 . (Join-Path $PSScriptRoot '../lib/sdk-selection.ps1')
@@ -85,6 +88,7 @@ $sdk = [pscustomobject]@{ Status = 'NOT_RUN'; HaifaVersion = $null }
 $internalGatewayBaseUrl = "http://127.0.0.1:$GatewayPort"
  . (Join-Path $PSScriptRoot '../lib/run-fixture.ps1')
 $tag = if ($W15PackageDifferential) { 'w15-package-differential' } elseif ($W15LiveSkill) { 'w15-live-skill' } elseif ($UxV1AgentSoul) { 'ux-v1-soul' } elseif ($UxV1DefaultTools) { 'ux-v1' }
+    elseif ($W08LiveDelegation) { 'w08-live-delegation' }
     elseif ($LiveDeepSeek) { 'w18-deepseek' } elseif ($ActiveReconnect) { 'w05-active-reconnect' }
     elseif ($Interaction) { 'w05-interaction' } elseif ($DemoArtifact) { 'w05-demo-artifact' }
     elseif ($TitleSuggestions) { 'w03-title-suggestions' } elseif ($InputPolish) { 'w03-input-polish-ui' }
@@ -156,6 +160,8 @@ $managedEnvironment = @{
         'ux-v1-agent-soul.spec.cjs'
     } elseif ($UxV1DefaultTools) {
         'ux-v1-default-tools-live.spec.cjs'
+    } elseif ($W08LiveDelegation) {
+        'w08-delegation-live.spec.cjs'
     } elseif ($LiveDeepSeek) {
         'w18-deepseek-live.spec.cjs'
     } elseif ($ActiveReconnect) {

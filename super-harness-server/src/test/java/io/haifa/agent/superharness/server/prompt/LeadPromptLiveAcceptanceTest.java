@@ -53,7 +53,8 @@ class LeadPromptLiveAcceptanceTest {
             long started = System.nanoTime();
             try {
                 try (var api = DeerFlowBootstrapApi.create(new LocalServerConfiguration(
-                        "local", InetAddress.getByName("127.0.0.1"), port), data, environment)) {
+                        "local", InetAddress.getByName("127.0.0.1"), port), data,
+                        GatewayFixture.productionEnvironment(environment))) {
                     api.start();
                     URI base = URI.create("http://127.0.0.1:" + api.address().getPort());
                     String managed = """
