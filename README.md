@@ -311,3 +311,5 @@ pwsh -NoProfile -File scripts/governance/audit-work-package-delivery.ps1
 - [功能交付流程（纯产品与跨 SDK 协同）](docs/engineering/002-feature-delivery-workflows.md)：最终门禁前 rebase，按改动范围和 Oracle 验收；SDK 切回基线后重新构建并回归，再由主控合入与结算。
 - [验收交接模板](docs/acceptance-handoff-template.md)
 - [SDK 消费记录](docs/todo.md)
+
+同一模型轮次的并行 Tool 结果按原请求顺序向各 SSE 观察者投影，实时与重放使用同一规则；Child 生命周期事件仍独立推进。

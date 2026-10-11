@@ -2616,10 +2616,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         // two frontend subagent groups.
         List<ToolCallView> round = liveRound(run.bridge, run.runId, calls, call.id().value());
         writeToolMessage(output, run, DeerFlowToolTranscriptProjection.requestMessage(round), null, projectedToolMessages);
-        Optional<Map<String, Object>> result = DeerFlowToolTranscriptProjection.resultMessage(call);
-        if (result.isPresent()) {
-            writeToolMessage(output, run, result.orElseThrow(), cursor, projectedToolMessages);
-        }
+        writeAvailableRoundResults(output, run, round, cursor, projectedToolMessages);
     }
 
     /**
@@ -2696,12 +2693,19 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         for (List<ToolCallView> round : toolCallRounds(run.bridge, run.runId, calls)) {
             if (round.isEmpty()) continue;
             writeToolMessage(output, run, DeerFlowToolTranscriptProjection.requestMessage(round), null, projectedToolMessages);
-            for (ToolCallView call : round) {
-                Optional<Map<String, Object>> result = DeerFlowToolTranscriptProjection.resultMessage(call);
-                if (result.isPresent()) {
-                    writeToolMessage(output, run, result.orElseThrow(), null, projectedToolMessages);
-                }
-            }
+            writeAvailableRoundResults(output, run, round, null, projectedToolMessages);
+        }
+    }
+
+    private void writeAvailableRoundResults(OutputStream output, RunRecord run, List<ToolCallView> round,
+            String cursor, Map<String, String> projectedToolMessages) throws IOException {
+        // Live and replay snapshots may observe parallel completions at different moments.
+        // Preserve the authoritative request order on both paths: a later result waits only
+        // for earlier calls in this round, while native Child status events remain independent.
+        for (ToolCallView call : round) {
+            Optional<Map<String, Object>> result = DeerFlowToolTranscriptProjection.resultMessage(call);
+            if (result.isEmpty()) return;
+            writeToolMessage(output, run, result.orElseThrow(), cursor, projectedToolMessages);
         }
     }
 
