@@ -762,6 +762,19 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         Map<String, String> visibleAssistantTexts = new HashMap<>();
         turns.stream().filter(turn -> turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT)
                 .forEach(turn -> visibleAssistantTexts.put(turn.messageId(), turn.text()));
+        // Native chronology of a settled Run's Tool rounds is partitioned per USER turn: the window
+        // opens after this USER turn's native sequence and closes before the next same-Run Steer
+        // USER turn's native sequence (exclusive), so a Steer keeps its own later rounds after it.
+        Map<Long, Long> runSteerCeilings = new HashMap<>();
+        {
+            Map<String, Long> lastUserSequenceByRun = new HashMap<>();
+            for (ConversationTurn scan : turns) {
+                if (scan.role() != io.haifa.agent.core.message.MessageRole.USER) continue;
+                Long previous = lastUserSequenceByRun.put(
+                        scan.runId().map(AgentRunId::value).orElse(""), scan.sequence());
+                if (previous != null) runSteerCeilings.put(previous, scan.sequence());
+            }
+        }
         List<Map<String, Object>> rows = new ArrayList<>();
         long offset = 0;
         for (ConversationTurn turn : turns) {
@@ -774,18 +787,23 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (turn.role() == io.haifa.agent.core.message.MessageRole.USER
                     && turn.runId().isPresent()) {
                 AgentRunId runId = turn.runId().orElseThrow();
-                // The SDK turn scan keeps only User/Assistant turns, so a Run that never committed a
-                // final assistant turn (a cancelled or otherwise terminal Run) loses its Tool round in
-                // the page feed. Project that round from the same public bridge facts the history
-                // overlay uses, once per Run and only when the Run is terminal without an answer, so
-                // settled Runs that already carry an assistant turn keep the previous page shape.
-                if (!supportProjectedRuns.contains(runId.value())
-                        && isTerminalRun(thread, runId, cached.get(runId.value()))
-                        && !hasDurableFinalAssistant(thread, runId, cached.get(runId.value()))) {
+                // The SDK turn scan keeps only User/Assistant turns: native Tool messages and pure
+                // Tool assistants produce no durable ConversationTurn at all, so a settled Run's
+                // task round vanishes from the page feed even when a final assistant answer exists.
+                // Keep the existing unanswered-terminal projection and include completed delegation
+                // Runs. Terminal eligibility is remembered once per Run, but a later same-Run Steer
+                // USER turn must still replay only its own Tool rounds, so this is never a skip.
+                // Native public message IDs own the identity; the visibleAssistantTexts /
+                // supportProjectedMessages dedup keeps ordinary Tool-assistant text on its round.
+                if (supportProjectedRuns.contains(runId.value())
+                        || (isTerminalRun(thread, runId, cached.get(runId.value()))
+                                && (!hasDurableFinalAssistant(thread, runId, cached.get(runId.value()))
+                                        || hasTaskRound(thread, runId, cached.get(runId.value()))))) {
                     supportProjectedRuns.add(runId.value());
                     supportSlots = appendRunSupportRows(
                             thread, runId, cached.get(runId.value()), sequence + 1, turn.createdAt(), rows,
-                            visibleAssistantTexts, supportProjectedMessages);
+                            visibleAssistantTexts, supportProjectedMessages,
+                            turn.sequence(), runSteerCeilings.get(turn.sequence()));
                 }
             }
             List<PersistentThreadCatalog.InteractionDisplay> cards = anchored.getOrDefault(turn.sequence(), List.of())
@@ -853,28 +871,39 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
     }
 
+    private boolean hasTaskRound(ThreadRecord thread, AgentRunId runId, RunRecord cached) {
+        HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
+        return bridge.toolCalls(runId).stream().anyMatch(call -> "task".equals(call.toolName()));
+    }
+
     /**
-     * Page rows for a terminal Run with no committed assistant turn. Mirrors the history overlay's
-     * one-AI-message-per-model-round projection (that round's whole Tool call list, then each call's
-     * result), retaining each Interaction before that round's results and reserving both of its
-     * display slots even when hidden. The ordinary turn loop does not emit these cards again.
+     * Page rows for an unanswered terminal Run or completed delegation, windowed per USER turn.
+     * Mirrors the history overlay's one-AI-message-per-model-round projection (that round's whole
+     * Tool call list, then each call's result), retaining each Interaction before that round's
+     * results and reserving both of its display slots even when hidden. Rounds are placed by the
+     * native ASSISTANT RunMessageView sequence of the message owning the round: strictly after the
+     * driving USER turn's native sequence and strictly before the next same-Run Steer USER turn's
+     * native sequence when one exists. The ordinary turn loop does not emit these rows again.
      */
     private long appendRunSupportRows(
             ThreadRecord thread, AgentRunId runId, RunRecord cached, long startSequence,
             Instant createdAt, List<Map<String, Object>> rows,
-            Map<String, String> visibleAssistantTexts, Set<String> supportProjectedMessages) {
+            Map<String, String> visibleAssistantTexts, Set<String> supportProjectedMessages,
+            long afterNativeSequence, Long beforeNativeSequence) {
         HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
         List<ToolCallView> calls = DeerFlowToolTranscriptProjection.upToClarificationBoundary(
                 bridge.toolCalls(runId));
         List<List<ToolCallView>> rounds = toolCallRounds(bridge, runId, calls);
-        Map<String, String> nativeMessageIds = new HashMap<>();
+        // Same temporary SDK map supplies the native identity and the durable position.
+        Map<String, RunMessageView> nativeAssistantMessages = new HashMap<>();
         RunMessageCursor cursor = RunMessageCursor.beforeFirst(runId);
         int pages = 0;
         while (true) {
             RunMessagePage page = bridge.messages(runId, cursor, MESSAGE_ROUND_SCAN_PAGE_SIZE);
             for (RunMessageView message : page.items()) {
                 if (!"ASSISTANT".equals(message.role())) continue;
-                for (ToolCallView call : message.toolCalls()) nativeMessageIds.put(call.id().value(), message.messageId());
+                for (ToolCallView call : message.toolCalls())
+                    nativeAssistantMessages.put(call.id().value(), message);
             }
             if (!page.hasMore()) break;
             requireAnotherScanPage(++pages);
@@ -896,18 +925,25 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         long slot = 0;
         for (int index = 0; index < rounds.size(); index++) {
             List<ToolCallView> round = rounds.get(index);
-            if (!round.isEmpty()) {
-                Map<String, Object> request = DeerFlowToolTranscriptProjection.requestMessage(round);
-                String nativeMessageId = nativeMessageIds.get(round.getFirst().id().value());
-                // Carry only the user-visible conversation text owned by this exact native Tool
-                // message; its ordinary turn is then represented here once, before the results.
-                if (nativeMessageId != null && visibleAssistantTexts.containsKey(nativeMessageId)) {
-                    request.put("content", visibleAssistantTexts.get(nativeMessageId));
-                    supportProjectedMessages.add(nativeMessageId);
-                }
-                rows.add(messageRow(runId.value(), startSequence + slot, createdAt, request));
-                slot++;
+            if (round.isEmpty()) continue;
+            RunMessageView roundMessage = nativeAssistantMessages.get(round.getFirst().id().value());
+            if (roundMessage == null) {
+                throw new IllegalStateException("Tool round native message position is unavailable");
             }
+            if (roundMessage.sequence() <= afterNativeSequence
+                    || (beforeNativeSequence != null
+                            && roundMessage.sequence() >= beforeNativeSequence)) {
+                continue;
+            }
+            Map<String, Object> request = DeerFlowToolTranscriptProjection.requestMessage(round);
+            // Carry only the user-visible conversation text owned by this exact native Tool
+            // message; its ordinary turn is then represented here once, before the results.
+            if (visibleAssistantTexts.containsKey(roundMessage.messageId())) {
+                request.put("content", visibleAssistantTexts.get(roundMessage.messageId()));
+                supportProjectedMessages.add(roundMessage.messageId());
+            }
+            rows.add(messageRow(runId.value(), startSequence + slot, createdAt, request));
+            slot++;
             slot += appendInteractionRows(thread, cardsByRound.getOrDefault(index, List.of()),
                     startSequence + slot - 1, rows);
             for (ToolCallView call : round) {
