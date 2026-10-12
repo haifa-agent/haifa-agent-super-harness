@@ -18,6 +18,12 @@ const outputRoot = process.env.W18_PLAYWRIGHT_OUTPUT_DIR
   ? path.resolve(process.env.W18_PLAYWRIGHT_OUTPUT_DIR)
   : evidenceRoot;
 
+const referenceIdentityEncoding =
+  process.env.W18_REFERENCE_IDENTITY_ENCODING === "1";
+if (referenceIdentityEncoding && process.env.W18_DIFFERENTIAL_BACKEND !== "reference") {
+  throw new Error("Identity encoding diagnosis is restricted to the reference backend");
+}
+
 module.exports = defineConfig({
   testDir: __dirname,
   testMatch: process.env.W18_PLAYWRIGHT_SPEC ?? "w18-ui-smoke.spec.cjs",
@@ -34,6 +40,9 @@ module.exports = defineConfig({
   use: {
     baseURL: process.env.E2E_APP_URL ?? `http://127.0.0.1:${frontendPort}`,
     ...devices["Desktop Chrome"],
+    ...(referenceIdentityEncoding
+      ? { extraHTTPHeaders: { "Accept-Encoding": "identity" } }
+      : {}),
     screenshot: "only-on-failure",
     trace: process.env.W18_PLAYWRIGHT_TRACE ?? "retain-on-failure",
   },

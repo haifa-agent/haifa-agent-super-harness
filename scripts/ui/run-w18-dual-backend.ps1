@@ -27,7 +27,10 @@ param(
     [string]$Grep,
     # Bounded diagnosis aid only: register model A without the V2-M1 model B to
     # A/B an existing-case timing question. Not a V2-M1 round configuration.
-    [switch]$DiagnosticSingleModel
+    [switch]$DiagnosticSingleModel,
+    # Explicit reference HTTP transport diagnosis; never rewrites SSE responses
+    # or Provider requests, and does not change the frozen frontend/backend.
+    [switch]$ReferenceIdentityEncoding
 )
 
 $ErrorActionPreference = 'Stop'
@@ -101,6 +104,9 @@ $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 # case mapping and fresh data root; $isW08 guards every profile-specific branch.
 $w08Profile = if ($W08Catalog) { 'w08-catalog' } elseif ($W08Delegation) { 'w08-delegation' } else { $null }
 $isW08 = $null -ne $w08Profile
+if ($ReferenceIdentityEncoding -and ($Backend -ne 'reference' -or -not $isW08)) {
+    throw '-ReferenceIdentityEncoding requires a reference W08 profile.'
+}
 # W08 has its own case mapping: no V2 Oracle deferral or stage-upgrade mapping.
 $oracleDeferrals = if ($isW08) { @{} } else {
     Get-W18OracleDeferrals -OraclePath (Join-Path $root 'contracts/customer-demo-v2/v2-case-oracle.json')
@@ -330,6 +336,7 @@ try {
         backend = $Backend
         round = $Round
         profile = $(if ($isW08) { $w08Profile } else { 'differential' })
+        referenceIdentityEncoding = [bool]$ReferenceIdentityEncoding
         playwrightConfig = $(if ($isW08) { 'tests/ui/smoke/playwright.config.cjs' } else { 'tests/ui/dual-backend/playwright.config.cjs' })
         referencePython = $(if ($Backend -eq 'reference') { [IO.Path]::GetFullPath($ReferencePython) } else { $null })
         sourceSha = (& git -C $source rev-parse HEAD).Trim()
@@ -381,6 +388,7 @@ try {
         $env:W18_PLAYWRIGHT_TRACE = 'on'
     }
     $env:W18_DIFFERENTIAL_BACKEND = $Backend
+    $env:W18_REFERENCE_IDENTITY_ENCODING = $(if ($ReferenceIdentityEncoding) { '1' } else { '0' })
     $env:W18_DIFFERENTIAL_EVIDENCE = $evidenceRoot
     $env:W18_DIFFERENTIAL_ROUND = [string]$Round
     $env:W18_DISABLED_MODEL = $disabledModelName

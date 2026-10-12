@@ -11,6 +11,7 @@
 // reference differential and real-model L3 are separately recorded by the controller.
 const fs = require("node:fs");
 const path = require("node:path");
+const { createHash } = require("node:crypto");
 
 const { expect, test } = require("./fixtures.cjs");
 
@@ -227,6 +228,39 @@ function cardRoot(page, text) {
 const NATIVE_CHILD_STEPS = (threadId, runId, taskId) =>
   `/api/threads/${encodeURIComponent(threadId)}/runs/${encodeURIComponent(runId)}/events` +
   `?event_types=subagent.step&task_id=${encodeURIComponent(taskId)}&limit=500`;
+
+// Observe the actual browser response with Chromium's read-only network stream
+// tap. No new Run, response rewrite, frontend patch or fabricated frame.
+async function observeCreatorSse(context, page) {
+  const session = await context.newCDPSession(page);
+  let stream = null;
+  let failure = null;
+  session.on("Network.dataReceived", (event) => {
+    if (stream?.requestId === event.requestId && event.data) {
+      stream.chunks.push(Buffer.from(event.data, "base64"));
+    }
+  });
+  session.on("Network.responseReceived", async (event) => {
+    if (stream || !RUN_STREAM.test(new URL(event.response.url).pathname)) return;
+    stream = { requestId: event.requestId, buffered: Buffer.alloc(0), chunks: [] };
+    try {
+      const result = await session.send("Network.streamResourceContent", { requestId: event.requestId });
+      stream.buffered = Buffer.from(result.bufferedData, "base64");
+    } catch (error) { failure = String(error); }
+  });
+  await session.send("Network.enable");
+  return {
+    frames() {
+      if (failure) throw new Error(failure);
+      const raw = stream ? Buffer.concat([stream.buffered, ...stream.chunks]).toString("utf8") : "";
+      return raw.split(/\r?\n\r?\n/).slice(0, -1).flatMap((block) => {
+        const data = block.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
+        return data ? [JSON.parse(data)] : [];
+      });
+    },
+    close: () => session.detach(),
+  };
+}
 
 async function subagentLifecycleEvents(context, runtime, identity, taskId = null) {
   let query = "event_types=subagent.start,subagent.step,subagent.end&limit=500";
@@ -593,6 +627,13 @@ function assertCancelledToolMessage(msg, mappedIds, label) {
     msg.additional_kwargs?.subagent_status,
     `${label} additional_kwargs.subagent_status must be cancelled`,
   ).toBe("cancelled");
+  if (IS_REFERENCE) {
+    // Approved UI10 reference SDK-diagnostics shape difference. The actual
+    // mapped ToolMessage's native cancelled status is still mandatory.
+    expect(msg.additional_kwargs).not.toHaveProperty("haifa_tool_status");
+    expect(msg.additional_kwargs).not.toHaveProperty("haifa_tool_result");
+    return;
+  }
   expect(
     msg.additional_kwargs?.haifa_tool_status,
     `${label} additional_kwargs.haifa_tool_status must be failed`,
@@ -657,6 +698,7 @@ test("W08 UI-10 stopping two running children cancels the parent without residua
   const prompt = "W08-UI10-PARENT";
   const alpha = "W08-UI10-OBJECTIVE-ALPHA";
   const beta = "W08-UI10-OBJECTIVE-BETA";
+  const creatorSse = IS_REFERENCE ? await observeCreatorSse(context, page) : null;
 
   // Scope Provider gate records to this case with an initial baseline
   const providerLogBaseline = providerEntries(runtime.evidence).length;
@@ -799,10 +841,20 @@ test("W08 UI-10 stopping two running children cancels the parent without residua
   const runningTaskCalls = diagToolCalls.filter(
     (tc) => tc.tool_call_id === alphaCallId || tc.tool_call_id === betaCallId,
   );
-  expect(runningTaskCalls).toHaveLength(2);
-  for (const tc of runningTaskCalls) {
-    expect(tc.status).toBe("RUNNING");
-    expect(tc.started_at).toBeTruthy();
+  let referenceRunningEvents = null;
+  if (IS_REFERENCE) {
+    expect(runBeforeCancel).not.toHaveProperty("diagnostics");
+    await expect.poll(() => {
+      referenceRunningEvents = creatorSse.frames().filter((frame) =>
+        ["task_started", "task_running"].includes(frame.type) && mappedTaskIds.includes(frame.task_id));
+      return new Set(referenceRunningEvents.map((frame) => frame.task_id)).size;
+    }, { timeout: 30_000, intervals: [100, 250, 500] }).toBe(2);
+  } else {
+    expect(runningTaskCalls).toHaveLength(2);
+    for (const tc of runningTaskCalls) {
+      expect(tc.status).toBe("RUNNING");
+      expect(tc.started_at).toBeTruthy();
+    }
   }
   await evidence.screenshot(page, "ui10-running-cards");
   await evidence.json("ui10-running-diagnostics", {
@@ -810,6 +862,7 @@ test("W08 UI-10 stopping two running children cancels the parent without residua
     runId,
     actualTaskMapping,
     diagnostics: runBeforeCancel.diagnostics,
+    referenceRunningEvents,
     provider: ui10ProviderEntries().filter(
       (entry) => entry.type === "w08_ui10_gate" || entry.type === "w08_delegation",
     ),
@@ -941,26 +994,33 @@ test("W08 UI-10 stopping two running children cancels the parent without residua
   );
   expect(settledRunRes.status()).toBe(200);
   const settledRun = await settledRunRes.json();
-  expect(settledRun.diagnostics?.sdk_status).toBe("CANCELLED");
-  expect(settledRun.diagnostics?.stop_reason).toBe("USER_CANCELLED");
+  if (IS_REFERENCE) {
+    expect(settledRun).not.toHaveProperty("diagnostics");
+    expect(settledRun.status).toBe("interrupted");
+  } else {
+    expect(settledRun.diagnostics?.sdk_status).toBe("CANCELLED");
+    expect(settledRun.diagnostics?.stop_reason).toBe("USER_CANCELLED");
+  }
 
   const settledDiagToolCalls = settledRun.diagnostics?.tool_calls ?? [];
   const settledMappedTaskCalls = settledDiagToolCalls.filter(
     (tc) => tc.tool_call_id === alphaCallId || tc.tool_call_id === betaCallId,
   );
-  expect(
-    settledMappedTaskCalls,
-    "settled diagnostics.tool_calls must contain both mapped task IDs",
-  ).toHaveLength(2);
-  for (const tc of settledMappedTaskCalls) {
+  if (!IS_REFERENCE) {
     expect(
-      tc.status,
-      "Task tool must be terminal FAILED with cancelled Child; no other status is allowed",
-    ).toBe("FAILED");
-  }
-  for (const tc of settledDiagToolCalls) {
-    expect(tc.status).not.toBe("RUNNING");
-    expect(tc.status).not.toBe("REQUESTED");
+      settledMappedTaskCalls,
+      "settled diagnostics.tool_calls must contain both mapped task IDs",
+    ).toHaveLength(2);
+    for (const tc of settledMappedTaskCalls) {
+      expect(
+        tc.status,
+        "Task tool must be terminal FAILED with cancelled Child; no other status is allowed",
+      ).toBe("FAILED");
+    }
+    for (const tc of settledDiagToolCalls) {
+      expect(tc.status).not.toBe("RUNNING");
+      expect(tc.status).not.toBe("REQUESTED");
+    }
   }
 
   // 10. Thread runs: must be Array, actual parent run_id present, no running/pending
@@ -1026,6 +1086,8 @@ test("W08 UI-10 stopping two running children cancels the parent without residua
     threadId,
     runId,
     sdkStatus: settledRun.diagnostics?.sdk_status,
+    nativeRun: IS_REFERENCE ? settledRun : null,
+    approvedDifference: IS_REFERENCE ? "W08-UI10-REFERENCE-DIAGNOSTICS-DIFF" : null,
     settledDiagToolCalls,
     stateToolMessages,
     allRuns,
@@ -1117,6 +1179,7 @@ test("W08 UI-10 stopping two running children cancels the parent without residua
     streamText,
     streamError,
   });
+  if (creatorSse) await creatorSse.close();
 });
 
 test("W08 UI-07 a running child expands to ordered assistant and tool steps that survive completion", async ({
@@ -1134,6 +1197,7 @@ test("W08 UI-07 a running child expands to ordered assistant and tool steps that
   const prompt = "W08-UI07-PARENT";
   const objective = "W08-UI07-OBJECTIVE";
   const stepText = "W08-UI07-CHILD-STEP";
+  const creatorSse = IS_REFERENCE ? await observeCreatorSse(context, page) : null;
   const response = await startRun(page, workspace, prompt);
   const identity = runFlow.identity(response);
   await expect.poll(() => shaped.length).toBeGreaterThan(0);
@@ -1194,11 +1258,29 @@ test("W08 UI-07 a running child expands to ordered assistant and tool steps that
   let runningSteps = null;
   await expect.poll(
     async () => {
-      runningSteps = await tryJson(
-        context,
-        runtime,
-        NATIVE_CHILD_STEPS(identity.threadId, identity.runId, taskId),
-      );
+      if (IS_REFERENCE) {
+        // Approved W08-UI07-REFERENCE-PERSISTENCE-DIFF: these live frames
+        // precede the frozen backend's terminal/25-event persistence flush.
+        const frames = creatorSse.frames().filter((frame) => frame.type === "task_running" && frame.task_id === taskId && frame.message);
+        const unique = new Map();
+        for (const frame of frames) {
+          const message = frame.message;
+          const kind = message.type === "tool" ? "tool" : "ai";
+          const content = {
+            task_id: frame.task_id, message_index: frame.message_index, kind,
+            text: typeof message.content === "string" ? message.content : "",
+            ...(kind === "tool" ? { tool_name: message.name } : { tool_calls: message.tool_calls ?? [] }),
+          };
+          unique.set(frame.message_index, { metadata: { task_id: frame.task_id }, content });
+        }
+        runningSteps = [...unique.values()];
+      } else {
+        runningSteps = await tryJson(
+          context,
+          runtime,
+          NATIVE_CHILD_STEPS(identity.threadId, identity.runId, taskId),
+        );
+      }
       return (runningSteps ?? []).some(
         (step) =>
           stepKind(step) === "tool" &&
@@ -1305,6 +1387,8 @@ test("W08 UI-07 a running child expands to ordered assistant and tool steps that
     assistantIndex,
     toolIndex,
     consoleErrors: errors,
+    approvedDifference: IS_REFERENCE ? "W08-UI07-REFERENCE-PERSISTENCE-DIFF" : null,
+    actualLiveFrames: creatorSse ? creatorSse.frames() : null,
   });
 
   await releaseGate(context, runtime, evidence, "w08-ui07-child");
@@ -1334,9 +1418,17 @@ test("W08 UI-07 a running child expands to ordered assistant and tool steps that
   const completedTuples = completedSteps.map(stepTuple);
   for (let i = 0; i < runningTuples.length; i++) {
     expect(
-      completedTuples[i],
+      IS_REFERENCE ? { ...completedTuples[i], seq: null } : completedTuples[i],
       `persisted step ${i} must be unchanged after completion`,
     ).toEqual(runningTuples[i]);
+  }
+  if (IS_REFERENCE) {
+    const seqs = completedSteps.map(stepSeq);
+    for (let i = 0; i < seqs.length; i++) {
+      expect(Number.isSafeInteger(seqs[i]) && seqs[i] > 0).toBe(true);
+      if (i > 0) expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
+    }
+    await creatorSse.close();
   }
   const completedAssistantIdx = completedSteps.findIndex(
     (step) => stepKind(step) === "ai" && stepTextValue(step).includes(stepText),
@@ -1470,7 +1562,13 @@ test("W08 UI-13 a failed child card shows the public error while the parent comp
   expect(typeof publicError).toBe("string");
   expect(publicError.length).toBeGreaterThan(0);
   await title.click();
-  await expect(page.getByText(publicError, { exact: false })).toBeVisible({
+  // Frozen SubtaskCard renders its public error in this red notice. The same
+  // text can also occur in a persisted step; assert the card notice itself.
+  const errorNotice = page.locator("#chat div.text-red-500").filter({
+    hasText: publicError,
+  });
+  await expect(errorNotice).toHaveCount(1);
+  await expect(errorNotice).toBeVisible({
     timeout: 20_000,
   });
 
@@ -1949,7 +2047,9 @@ test("W08 UI-14 a long objective titles the card as a single truncated line with
   });
 });
 
-test("W08 UI-15 a non-interactive child write is denied by policy without a side effect or pending approval", async ({
+test(IS_REFERENCE
+  ? "W08 UI-15 reference child write succeeds without approval under the human-approved policy difference"
+  : "W08 UI-15 a non-interactive child write is denied by policy without a side effect or pending approval", async ({
   context,
   page,
   runtime,
@@ -1986,12 +2086,18 @@ test("W08 UI-15 a non-interactive child write is denied by policy without a side
   expect(sse).not.toContain("human_input_request");
   expect(sse).not.toContain("WAITING_APPROVAL");
 
-  // The Child's follow-up model call observed the SDK denial Tool result.
+  // Human-approved known difference W08-UI15-REFERENCE-WRITE-DIFF applies
+  // only to the reference. Haifa must still observe the actual SDK denial.
   const denials = providerEntries(runtime.evidence).filter(
     (entry) => entry.type === "w08_child_write_denied",
   );
   expect(denials.length).toBeGreaterThan(0);
-  expect(denials.at(-1).denied).toBe(true);
+  if (IS_REFERENCE) {
+    expect(denials.at(-1).denied).toBe(false);
+    expect(denials.at(-1).toolResult).toBe("OK");
+  } else {
+    expect(denials.at(-1).denied).toBe(true);
+  }
 
   // Public child facts: the Parent task ToolMessage reports the Child completed,
   // and the Child's own persisted steps carry the exact denied write target.
@@ -2038,11 +2144,24 @@ test("W08 UI-15 a non-interactive child write is denied by policy without a side
     expect(pendingInteractions(runJson)).toEqual([]);
   }
 
-  // Real negative control: the exact path the denied write targeted does not exist.
+  // Inspect the exact real write target. Haifa keeps the original negative
+  // control; reference requires the approved actual byte-for-byte write.
   const artifact = await context.request.get(
     `${runtime.app}/api/threads/${encodeURIComponent(identity.threadId)}/artifacts${deniedPath}`,
   );
-  expect(artifact.status()).toBe(404);
+  let referenceArtifact = null;
+  if (IS_REFERENCE) {
+    expect(artifact.status()).toBe(200);
+    const bytes = await artifact.body();
+    const expectedBytes = Buffer.from(writeCalls.at(-1).args.content, "utf8");
+    expect(bytes).toEqual(expectedBytes);
+    expect(bytes.length).toBe(67);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    expect(sha256).toBe("fb656a09e661bbc8e41c046f85a4fbfc229201c4b42f99696e21f2ce0981e924");
+    referenceArtifact = { bytes: bytes.length, sha256 };
+  } else {
+    expect(artifact.status()).toBe(404);
+  }
 
   await evidence.screenshot(page, "ui15-denied-child");
   await evidence.json("ui15-noninteractive-denial", {
@@ -2057,6 +2176,8 @@ test("W08 UI-15 a non-interactive child write is denied by policy without a side
     pendingInteractions: pendingInteractions(runJson),
     referenceHasNoDiagnostics: IS_REFERENCE ? !("diagnostics" in runJson) : null,
     artifactStatus: artifact.status(),
+    referenceArtifact,
+    approvedDifference: IS_REFERENCE ? "W08-UI15-REFERENCE-WRITE-DIFF" : null,
     sseHasApproval:
       sse.includes("human_input_request") || sse.includes("WAITING_APPROVAL"),
     consoleErrors: errors,

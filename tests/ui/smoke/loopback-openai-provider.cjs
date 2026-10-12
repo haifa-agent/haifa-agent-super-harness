@@ -205,7 +205,8 @@ function w08Objective(body) {
 }
 
 function exposedSubagents(body) {
-  const text = messagesText(body);
+  // Parse real prompt text, not JSON-escaped newlines in serialized messages.
+  const text = (body.messages ?? []).map((message) => textOfContent(message.content)).join("\n");
   const block = /<available_subagents>([\s\S]*?)<\/available_subagents>/.exec(text)?.[1];
   if (block !== undefined) {
     return [...block.matchAll(/<name>([^<]*)<\/name>/g)].map((match) => match[1]);
