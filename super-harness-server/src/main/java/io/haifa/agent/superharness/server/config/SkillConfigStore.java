@@ -244,6 +244,34 @@ public final class SkillConfigStore {
         custom.screening(screen);
     }
 
+    /**
+     * Records a human authorization for an exact custom Skill package revision. The record only
+     * relaxes the per-file semantic review for that digest; the deterministic static gate still runs.
+     */
+    /** Identity of an uploaded archive, so an operator can authorize the exact revision before install. */
+    public synchronized java.util.Map<String, Object> previewArchive(byte[] archive) throws IOException {
+        return custom.preview(archive);
+    }
+
+    public synchronized ObjectNode authorizePackage(String name, String revision, String authorizedBy)
+            throws IOException {
+        var normalized = SkillPackageFiles.name(name);
+        if (revision == null || !revision.matches("[a-f0-9]{64}")) {
+            throw new IllegalArgumentException("Authorization revision must be the 64-hex package digest");
+        }
+        if (authorizedBy == null || authorizedBy.isBlank()) {
+            throw new IllegalArgumentException("authorized_by is required");
+        }
+        ObjectNode payload = readConfiguration();
+        ObjectNode entry = payload.withObject("authorized_packages").withObject(normalized);
+        entry.put("revision", revision);
+        entry.put("authorized_by", authorizedBy);
+        entry.put("authorized_at", java.time.Instant.now().toString());
+        entry.put("scope", "semantic-review");
+        publish(payload);
+        return payload.path("authorized_packages").path(normalized).deepCopy();
+    }
+
     public synchronized String install(byte[] archive, String threadId) throws IOException {
         ObjectNode config = readConfiguration();
         String name = custom.install(config, archive, "human", threadId);

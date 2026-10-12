@@ -43,6 +43,22 @@ public final class DeerFlowSkillsApi implements HttpHandler {
         String path = exchange.getRequestURI().getPath();
         String method = exchange.getRequestMethod();
         try {
+            if (path.equals("/api/skills/authorizations/preview") && method.equals("POST")) {
+                if (workspace == null) throw new IllegalStateException("Skill upload workspace is unavailable");
+                var previewFile = workspace.parseSkillArchive(exchange);
+                send(exchange, 200, store.previewArchive(previewFile.content()));
+                return;
+            }
+            if (path.startsWith("/api/skills/authorizations/")) {
+                if (!method.equals("PUT")) { methodNotAllowed(exchange, "PUT"); return; }
+                String name = java.net.URLDecoder.decode(
+                        path.substring("/api/skills/authorizations/".length()),
+                        java.nio.charset.StandardCharsets.UTF_8);
+                JsonNode body = body(exchange, MAX_BODY_BYTES);
+                send(exchange, 200, store.authorizePackage(name, requiredText(body, "revision"),
+                        requiredText(body, "authorized_by")));
+                return;
+            }
             if (path.equals("/api/skills/install/upload") && method.equals("POST")) {
                 if (workspace == null) throw new IllegalStateException("Skill upload workspace is unavailable");
                 if (!workspace.tryAcquireUploadSlot()) { send(exchange, 429, Map.of("detail", "Upload slot is busy")); return; }
