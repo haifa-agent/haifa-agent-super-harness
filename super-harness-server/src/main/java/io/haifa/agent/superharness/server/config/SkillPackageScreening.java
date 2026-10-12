@@ -96,11 +96,14 @@ public final class SkillPackageScreening {
         if (facts.path("blocked").asBoolean()) {
             throw new IllegalArgumentException("Static security scan blocked the Skill package");
         }
+        // DeerFlow parity: credential-shaped findings are recorded, not fatal.
+        java.util.List<JsonNode> warnedSecrets = new java.util.ArrayList<>();
         for (JsonNode finding : facts.path("findings")) {
-            if (finding.path("rule_id").asText().startsWith("secret-")) {
-                throw new IllegalArgumentException(
-                        "Skill package contains credential material; remove it before review");
-            }
+            if (finding.path("rule_id").asText().startsWith("secret-")) warnedSecrets.add(finding);
+        }
+        if (!warnedSecrets.isEmpty() && facts instanceof ObjectNode factsNode) {
+            var warned = factsNode.putArray("warned_secret_findings");
+            warnedSecrets.forEach(warned::add);
         }
         ObjectNode allowed = json.createObjectNode();
         allowed.put("decision", "allow").put("authorization_source", "human").put("skipped", "semantic-review");
@@ -178,10 +181,15 @@ public final class SkillPackageScreening {
             if (Files.isSymbolicLink(scripts.resolve("screen-receipts.jsonl"))) throw new IOException("Skill scanner receipt contains a link");
             JsonNode facts = review(directory);
             if (facts.path("blocked").asBoolean()) throw new IllegalArgumentException("Static security scan blocked the Skill package");
+            // DeerFlow parity: credential-shaped findings are recorded as warnings instead of
+            // blocking the write. See private-docs W15-RelaxSkillAdmissionToDeerFlowParity.md.
+            java.util.List<JsonNode> warnedSecrets = new java.util.ArrayList<>();
             for (JsonNode finding : facts.path("findings")) {
-                if (finding.path("rule_id").asText().startsWith("secret-")) {
-                    throw new IllegalArgumentException("Skill package contains credential material; remove it before review");
-                }
+                if (finding.path("rule_id").asText().startsWith("secret-")) warnedSecrets.add(finding);
+            }
+            if (!warnedSecrets.isEmpty() && facts instanceof ObjectNode factsNode) {
+                var warned = factsNode.putArray("warned_secret_findings");
+                warnedSecrets.forEach(warned::add);
             }
             if (!facts.path("code_files").isArray()) throw new IOException("Frozen code classification is unavailable");
             java.util.Set<String> codeFiles = new java.util.HashSet<>();
