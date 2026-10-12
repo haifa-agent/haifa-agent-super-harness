@@ -219,6 +219,50 @@ function Read-EvidenceManifest([string]$Root) {
         ConvertFrom-Json -Depth 40 -DateKind String
 }
 
+function Set-ControlledDemoV2Baseline([object]$Snapshot) {
+    # Fixtures test governance rules on an explicit controlled DEMO-V2 planning
+    # baseline instead of whatever live demo state the real export currently
+    # carries. Only the fixture copy is changed; the exported snapshot and live
+    # database stay untouched. DEMO-V0's real GO fixture is preserved.
+    $v2 = @($Snapshot.tables.sprint | Where-Object id -eq 'DEMO-V2')
+    if ($v2.Count -ne 1) { throw "fixture baseline needs exactly one DEMO-V2 sprint row; found $($v2.Count)" }
+    $v2[0].decision = 'NO_GO'
+    foreach ($stage in @($Snapshot.tables.sprint_stage | Where-Object sprint_id -eq 'DEMO-V2')) {
+        if ($stage.PSObject.Properties.Name -notcontains 'work_status' -or
+            $stage.PSObject.Properties.Name -notcontains 'result') {
+            throw "DEMO-V2 stage $([string]$stage.id) lacks the work_status/result schema; fixture baseline cannot be applied"
+        }
+        $stage.work_status = 'pending'
+        $stage.result = 'NOT_RUN'
+        foreach ($field in @('started_at', 'completed_at')) {
+            if ($stage.PSObject.Properties.Name -contains $field) { $stage.$field = $null }
+        }
+    }
+}
+
+function Set-ControlledExecutionBaseline([object]$Snapshot) {
+    # Positive fixtures own their execution lanes. The raw live export may include
+    # unrelated lost lanes; test those invariants with the explicit negative cases.
+    # Park only this in-memory fixture copy; never reconcile or write the real DB.
+    foreach ($task in @($Snapshot.tables.task | Where-Object state -eq 'developing')) {
+        $task.state = 'blocked'
+    }
+    $Snapshot.tables.assignment = @($Snapshot.tables.assignment | Where-Object state -ne 'running')
+}
+
+function New-CapFixtureRows([object]$Base, [int]$Existing, [int]$Target) {
+    if ($Existing -gt $Target) { throw "cap fixture cannot shrink $Existing tasks to $Target" }
+    for ($index = 1; $index -le ($Target - $Existing); $index++) {
+        $row = $Base.PSObject.Copy()
+        $row.id = "W05-cap-fixture-$index"
+        $row.number = "cap-fixture-$index"
+        $row.state = 'pending'
+        $row.started_at = $null
+        $row.completed_at = $null
+        $row
+    }
+}
+
 try {
     # A stage/assignment without details_json yields an empty object; property lookup must not throw under StrictMode.
     Assert-True ($null -eq (Get-ShpmProp ([pscustomobject]@{}) 'proof')) "Get-ShpmProp must tolerate an empty details object"
@@ -226,6 +270,16 @@ try {
     $null = New-Item -ItemType Directory -Force -Path $TempRoot
     # Fixtures mutate a copy of the live SHPM export; the live database is never written.
     $null = Export-ShpmSnapshot -Database $env:SHPM_DB -OutputPath $BaseSnapshot
+    # Preserve the untouched live export for evidence before the test-only baseline rewrite.
+    $RawSnapshot = Join-Path $TempRoot 'raw-shpm-snapshot.json'
+    Copy-Item -LiteralPath $BaseSnapshot -Destination $RawSnapshot
+    # Park DEMO-V2 on the controlled planning baseline inside the fixture copy only.
+    $controlledV2 = Get-Content -LiteralPath $BaseSnapshot -Raw -Encoding utf8 |
+        ConvertFrom-Json -Depth 64 -DateKind String
+    Set-ControlledDemoV2Baseline $controlledV2
+    Set-ControlledExecutionBaseline $controlledV2
+    [IO.File]::WriteAllText($BaseSnapshot,
+        ($controlledV2 | ConvertTo-Json -Depth 64), [Text.UTF8Encoding]::new($false))
 
     $valid = New-Fixture 'valid'
     $first = Invoke-Generator $valid 'target/evidence-one' -RequireSurefire
@@ -269,13 +323,48 @@ try {
     $snap = Read-Snap $withPrompts
     $paths = @(@($snap.tables.task | Where-Object { $_.prompt_path } | ForEach-Object { [string]$_.prompt_path }) +
         @($snap.tables.sprint | ForEach-Object { [string]$_.roadmap_path }))
-    foreach ($path in $paths | Sort-Object -Unique) { Copy-FixtureFile $withPrompts $path }
+    # Registered ledger prompts are mostly absolute in this worktree and must never
+    # be copied onto their real locations; only relative registered paths are
+    # copied into the fixture, plus one controlled relative prompt file it owns.
+    foreach ($path in $paths | Sort-Object -Unique) {
+        if (-not [System.IO.Path]::IsPathFullyQualified($path)) { Copy-FixtureFile $withPrompts $path }
+    }
+    $controlledRelative = 'private-docs/prompts/controlled-test-prompt.md'
+    $null = New-Item -ItemType Directory -Force -Path (Join-Path $withPrompts 'private-docs/prompts')
+    [IO.File]::WriteAllText((Join-Path $withPrompts $controlledRelative),
+        "# Controlled fixture prompt`n", [Text.UTF8Encoding]::new($false))
+    @($snap.tables.task | Where-Object { $_.prompt_path })[0].prompt_path = $controlledRelative
+    Write-Snap $withPrompts $snap
     $promptResult = Invoke-Generator $withPrompts
     Assert-True ($promptResult.ExitCode -eq 0) "registered prompt and roadmap paths must resolve: $($promptResult.Output)"
     Assert-True ((Read-EvidenceManifest $withPrompts).governance.promptPathCheck -eq 'PASS') "prompt path check must run when private-docs exists"
     @($snap.tables.task | Where-Object { $_.prompt_path })[0].prompt_path = 'private-docs/prompts/does-not-exist.md'
     Write-Snap $withPrompts $snap
     Assert-Fails $withPrompts 'prompt_path does not exist'
+
+    # Absolute prompt_path values resolve as-is (real registered ledger prompts may be
+    # absolute); relative values still join the repository root. Missing absolute
+    # paths must keep the failure strict. The absolute positive reuses the same
+    # controlled relative file resolved to its fixture-absolute location.
+    $absolutePrompt = New-Fixture 'absolute-prompt'
+    $absSnap = Read-Snap $absolutePrompt
+    $absPaths = @(@($absSnap.tables.task | Where-Object { $_.prompt_path } | ForEach-Object { [string]$_.prompt_path }) +
+        @($absSnap.tables.sprint | ForEach-Object { [string]$_.roadmap_path }))
+    foreach ($path in $absPaths | Sort-Object -Unique) {
+        if (-not [System.IO.Path]::IsPathFullyQualified($path)) { Copy-FixtureFile $absolutePrompt $path }
+    }
+    $absControlled = 'private-docs/prompts/controlled-test-prompt.md'
+    $null = New-Item -ItemType Directory -Force -Path (Join-Path $absolutePrompt 'private-docs/prompts')
+    [IO.File]::WriteAllText((Join-Path $absolutePrompt $absControlled),
+        "# Controlled fixture prompt`n", [Text.UTF8Encoding]::new($false))
+    $absExisting = @($absSnap.tables.task | Where-Object { $_.prompt_path })[0]
+    $absExisting.prompt_path = (Resolve-Path -LiteralPath (Join-Path $absolutePrompt $absControlled)).Path
+    Write-Snap $absolutePrompt $absSnap
+    $absoluteResult = Invoke-Generator $absolutePrompt
+    Assert-True ($absoluteResult.ExitCode -eq 0) "an absolute registered prompt_path must resolve as-is: $($absoluteResult.Output)"
+    $absExisting.prompt_path = Join-Path $absolutePrompt 'private-docs/prompts/missing-absolute.md'
+    Write-Snap $absolutePrompt $absSnap
+    Assert-Fails $absolutePrompt 'prompt_path does not exist'
 
     $missingDb = New-Fixture 'missing-db'
     $missingDbResult = @(& pwsh -NoProfile -File $Generator -RepositoryRoot $missingDb -OutputDirectory 'target/evidence' `
@@ -338,6 +427,21 @@ try {
     $finishedResult = Invoke-Generator $finishedPrerequisite
     Assert-True ($finishedResult.ExitCode -eq 0) "PASS stage may require an accepted finished task: $($finishedResult.Output)"
 
+    # Positive control for the 2026-10-09 delivery-cap raise: a real governance run
+    # with exactly 32 delivery tasks in one package must still PASS.
+    $exactCap = New-Fixture 'exact-cap-tasks'
+    $capSnap = Read-Snap $exactCap
+    $capBase = Get-Row $capSnap 'task' 'W05-task-1'
+    $capExisting = @($capSnap.tables.task | Where-Object work_package_id -eq 'W05').Count
+    Assert-True (@(New-CapFixtureRows $capBase 32 32).Count -eq 0) 'a cap fixture already at 32 must add no rows'
+    Assert-True (@(New-CapFixtureRows $capBase 31 32).Count -eq 1) 'a cap fixture at 31 must add exactly one row'
+    $capExtras = @(New-CapFixtureRows $capBase $capExisting 32)
+    $capSnap.tables.task = @($capSnap.tables.task) + $capExtras
+    Write-Snap $exactCap $capSnap
+    $exactCapResult = Invoke-Generator $exactCap
+    Assert-True ($exactCapResult.ExitCode -eq 0) "exactly 32 delivery tasks must stay under the cap: $($exactCapResult.Output)"
+    Assert-True ((Read-EvidenceManifest $exactCap).governance.status -eq 'PASS') 'exactly 32 delivery tasks must be governance PASS'
+
     # Each SHPM governance rule must fail closed on a single targeted mutation.
     $cases = [ordered]@{
         'bad-schema' = @({ param($s) $s.schema_version = 2 }, 'schema_version must be 1')
@@ -357,7 +461,7 @@ try {
         'requires-invalid-source' = @({ param($s) Add-Relation $s 'unknown' 'UX-V1/M3' 'task' 'W04-task-2' 'requires' 1 }, 'must link work packages or a sprint stage')
         'requires-task-source' = @({ param($s) Add-Relation $s 'task' 'W04-task-2' 'work_package' 'W01' 'requires' 1 }, 'must link work packages or a sprint stage')
         'package-requires-invalid-target' = @({ param($s) Add-Relation $s 'work_package' 'W00' 'task' 'W04-task-2' 'requires' 1 }, 'must link work packages or a sprint stage')
-        'too-many-tasks' = @({ param($s) $base = Get-Row $s 'task' 'W05-task-1'; $existing = @($s.tables.task | Where-Object work_package_id -eq 'W05').Count; $extras = @(1..(17 - $existing) | ForEach-Object { $t = $base.PSObject.Copy(); $t.id = "W05-cap-fixture-$_"; $t }); $s.tables.task = @($s.tables.task) + $extras }, 'must have at most 16 tasks')
+        'too-many-tasks' = @({ param($s) $base = Get-Row $s 'task' 'W05-task-1'; $existing = @($s.tables.task | Where-Object work_package_id -eq 'W05').Count; $extras = @(1..(33 - $existing) | ForEach-Object { $t = $base.PSObject.Copy(); $t.id = "W05-cap-fixture-$_"; $t }); $s.tables.task = @($s.tables.task) + $extras }, 'must have at most 32 tasks')
         'developing-without-assignment' = @({ param($s) $t = Get-Row $s 'task' 'W04-task-2'; $t.state = 'developing'; $t.prompt_path = 'private-docs/prompts/test.md' }, 'developing without exactly one running assignment')
         'started-without-prompt' = @({ param($s) $t = Get-Row $s 'task' 'W04-task-2'; $t.state = 'blocked'; $t.started_at = '2026-09-28T10:00:00+08:00' }, 'left pending without a prompt_path')
         'old-slot-ports' = @({ param($s) Set-DevelopingTask $s 'W04-task-2' 'asg-test-1' 2 '38018/53018' 'D:/workspace/test/a' }, 'slot and child port group do not match')
@@ -376,28 +480,45 @@ try {
             param($s)
             # Keep this negative independent of live W03 acceptance: its task-1
             # can legitimately move from developing to finished between runs.
-            $task = (Get-Row $s 'task' 'W03-task-1').PSObject.Copy()
-            $task.id = 'W03-task-8'
-            $task.number = 'task-8'
-            $task.state = 'pending'
-            $task.started_at = $null
-            $task.completed_at = $null
-            $s.tables.task = @($s.tables.task) + $task
-            Add-Relation $s 'sprint_stage' 'DEMO-V0/M0' 'task' $task.id 'delivers' 1
+            # W03-task-8 may already exist in the live export; reuse that row
+            # (parked pending) instead of appending a duplicate id.
+            $task = @($s.tables.task | Where-Object id -eq 'W03-task-8')
+            if ($task.Count -eq 0) {
+                $task = @((Get-Row $s 'task' 'W03-task-1').PSObject.Copy())
+                $task[0].id = 'W03-task-8'
+                $task[0].number = 'task-8'
+                $task[0].state = 'pending'
+                $task[0].started_at = $null
+                $task[0].completed_at = $null
+                $s.tables.task = @($s.tables.task) + $task[0]
+            }
+            else {
+                $task[0].state = 'pending'
+                $task[0].completed_at = $null
+            }
+            Add-Relation $s 'sprint_stage' 'DEMO-V0/M0' 'task' 'W03-task-8' 'delivers' 1
         }, 'DEMO-V0/M0 PASS requires task W03-task-8 finished')
         'stage-pass-required-unfinished-prerequisite' = @({
             param($s)
-            $task = (Get-Row $s 'task' 'W03-task-1').PSObject.Copy()
-            $task.id = 'W03-task-8'
-            $task.number = 'task-8'
-            $task.state = 'pending'
-            $task.started_at = $null
-            $task.completed_at = $null
-            $s.tables.task = @($s.tables.task) + $task
-            Add-Relation $s 'sprint_stage' 'DEMO-V0/M0' 'task' $task.id 'requires' 1
+            $task = @($s.tables.task | Where-Object id -eq 'W03-task-8')
+            if ($task.Count -eq 0) {
+                $task = @((Get-Row $s 'task' 'W03-task-1').PSObject.Copy())
+                $task[0].id = 'W03-task-8'
+                $task[0].number = 'task-8'
+                $task[0].state = 'pending'
+                $task[0].started_at = $null
+                $task[0].completed_at = $null
+                $s.tables.task = @($s.tables.task) + $task[0]
+            }
+            else {
+                $task[0].state = 'pending'
+                $task[0].completed_at = $null
+            }
+            Add-Relation $s 'sprint_stage' 'DEMO-V0/M0' 'task' 'W03-task-8' 'requires' 1
         }, 'DEMO-V0/M0 PASS requires task W03-task-8 finished')
         'self-certified-go' = @({ param($s) (Get-Row $s 'sprint' 'DEMO-V2').decision = 'GO' }, 'DEMO-V2 GO requires all stage gates PASS')
         'go-without-human' = @({ param($s) Set-Details (Get-Row $s 'sprint' 'DEMO-V0') { param($d) $d.humanAcceptance = $null } }, 'DEMO-V0 GO requires explicit human acceptance')
+        'go-without-mainsha' = @({ param($s) Set-Details (Get-Row $s 'sprint' 'DEMO-V0') { param($d) $d.mainSha = $null } }, 'DEMO-V0 GO requires a mainline Git SHA')
         'go-stale-stage-sha' = @({ param($s) Set-Details (Get-Row $s 'sprint_stage' 'DEMO-V0/M2') { param($d) $d.mainCommit = '1234567' } }, 'DEMO-V0 GO requires DEMO-V0/M2 to be revalidated')
         'missing-evidence' = @({ param($s) Set-Details (Get-Row $s 'work_package' 'W01') { param($d) $d.evidence = @() }; $s.tables.verification = @($s.tables.verification | Where-Object subject_id -ne 'W01') }, 'W01 is complete but has no evidence')
         'unverifiable-evidence' = @({ param($s) Set-Details (Get-Row $s 'work_package' 'W01') { param($d) $d.evidence = @('looks good') }; $s.tables.verification = @($s.tables.verification | Where-Object subject_id -ne 'W01') }, 'no machine-recognizable evidence reference')

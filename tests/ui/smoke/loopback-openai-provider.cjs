@@ -130,6 +130,108 @@ function blockW08Ui10Gate(response, objective, id) {
   });
 }
 
+const W08_TOOLS_CHILD_AGENT = "w08-child-tools";
+const W08_MISSING_CHILD_AGENT = "w08-missing-child";
+const W08_UI11_CHILD_AGENT = "w08-ui11-child";
+const W08_UI15_CHILD_AGENT = "w08-ui15-child";
+const W08_UI14_LONG_OBJECTIVE = `W08-UI14-OBJECTIVE-${"LONG".repeat(60)}`;
+
+const w08Gates = new Map();
+
+function waitForGate(name, response, timeoutMs = 90_000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (reason) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const waiters = w08Gates.get(name);
+      if (waiters) {
+        waiters.delete(settle);
+        if (waiters.size === 0) w08Gates.delete(name);
+      }
+      console.log(JSON.stringify({ type: "w08_gate", name, reason }));
+      resolve(reason);
+    };
+    const timer = setTimeout(() => settle("timeout"), timeoutMs);
+    if (!w08Gates.has(name)) w08Gates.set(name, new Set());
+    w08Gates.get(name).add(settle);
+    console.log(JSON.stringify({ type: "w08_gate_wait", name }));
+    if (response) response.on("close", () => settle("closed"));
+  });
+}
+
+function releaseW08Gate(name) {
+  const waiters = w08Gates.get(name);
+  if (!waiters || waiters.size === 0) return 0;
+  const released = waiters.size;
+  for (const settle of [...waiters]) settle("released");
+  return released;
+}
+
+function finishWithAssistantToolCall(response, id, text, callId, name, args) {
+  frame(response, {
+    id,
+    model: "w18-controlled-model",
+    choices: [{ index: 0, delta: { content: text } }],
+  });
+  frame(response, {
+    id,
+    model: "w18-controlled-model",
+    choices: [
+      {
+        index: 0,
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: callId,
+              type: "function",
+              function: { name, arguments: JSON.stringify(args) },
+            },
+          ],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+  });
+  frame(response, { id, model: "w18-controlled-model", choices: [], usage: { prompt_tokens: 5, completion_tokens: 3 } });
+  frame(response, "[DONE]");
+  response.end();
+}
+
+function w08Objective(body) {
+  return /W08-UI\d+[A-Z0-9-]*OBJECTIVE[A-Z0-9-]*/.exec(messagesText(body))?.[0] ?? null;
+}
+
+function exposedSubagents(body) {
+  // Parse real prompt text, not JSON-escaped newlines in serialized messages.
+  const text = (body.messages ?? []).map((message) => textOfContent(message.content)).join("\n");
+  const block = /<available_subagents>([\s\S]*?)<\/available_subagents>/.exec(text)?.[1];
+  if (block !== undefined) {
+    return [...block.matchAll(/<name>([^<]*)<\/name>/g)].map((match) => match[1]);
+  }
+  const referenceBlock = /<subagent_system>([\s\S]*?)<\/subagent_system>/.exec(text)?.[1] ?? "";
+  const available = /\*\*Available Subagents:\*\*\s*([\s\S]*?)\*\*Delegation workflow:\*\*/.exec(referenceBlock)?.[1] ?? "";
+  return [...available.matchAll(/^- \*\*([^*\r\n]+)\*\*:/gm)].map((match) => match[1]);
+}
+
+function taskArguments(body, agent, objective) {
+  if (!Array.isArray(body.tools)) return { agent, objective };
+  const task = body.tools.find((tool) => tool?.function?.name === "task");
+  const properties = task?.function?.parameters?.properties ?? null;
+  if (properties && "subagent_type" in properties && "prompt" in properties) {
+    return { subagent_type: agent, prompt: objective };
+  }
+  return { agent, objective };
+}
+
+function lastToolText(body) {
+  if (!Array.isArray(body.messages)) return "";
+  const tool = [...body.messages].reverse().find((message) => message?.role === "tool");
+  return tool ? v2ToolText(tool.content) : "";
+}
+
 
 // ---- W05 live-rendering controlled fixture -----------------------------------
 // Three bounded scenes keep a Run deliberately in flight so the spec can assert
@@ -512,8 +614,8 @@ async function handleW08Delegation(response, body, prompt, offeredTools) {
   // gating on the last user text alone would misclassify it.
   const text = messagesText(body);
   const child = text.includes(W08_CHILD_MARK);
-  const childObjective = /W08-UI10-OBJECTIVE-(?:ALPHA|BETA)|W08-UI09-OBJECTIVE-(?:ALPHA|BETA)|W08-UI0[68]-OBJECTIVE/.exec(text)?.[0] ?? null;
-  const record = { child, prompt, offeredTools, objective: childObjective };
+  const childObjective = w08Objective(body);
+  const record = { child, prompt, offeredTools, objective: childObjective, exposedSubagents: exposedSubagents(body) };
   w08Calls.push(record);
   if (!child && offeredTools.includes("task") && !hasToolResult(body) && text.includes("W08-UI10-PARENT")) {
     record.calls = [
@@ -531,9 +633,81 @@ async function handleW08Delegation(response, body, prompt, offeredTools) {
     return;
   }
   if (child) {
-    completeW08Text(response, body, id, childObjective ? `W08-CHILD-RESULT:${childObjective}` : "W08-CHILD-RESULT:UNKNOWN");
+    await handleW08Child(response, body, id, offeredTools, childObjective);
     return;
   }
+  handleW08Parent(response, body, prompt, offeredTools, id);
+}
+
+async function handleW08Child(response, body, id, offeredTools, objective) {
+  const text = messagesText(body);
+  const toolResults = toolResultCount(body);
+  // UI-07: one read-only production Tool, then a gate before the final answer so
+  // the assistant and tool steps are asserted while the Child is still running,
+  // and are still present once it completes.
+  if (text.includes("W08-UI07-OBJECTIVE")) {
+    if (toolResults === 0) {
+      console.log(JSON.stringify({ type: "w08_assistant_tool_call", objective, tool: "list_uploaded_files" }));
+      finishWithAssistantToolCall(
+        response,
+        id,
+        "W08-UI07-CHILD-STEP: reading the available uploads before answering.",
+        `w08-ui07-list-${Date.now()}`,
+        "list_uploaded_files",
+        {},
+      );
+      return;
+    }
+    const reason = await waitForGate("w08-ui07-child", response, 90_000);
+    if (reason !== "closed") {
+      completeW08Text(response, body, id, `W08-CHILD-RESULT:${objective}`);
+    }
+    return;
+  }
+  // UI-11: the Child is held open while the browser disables this managed
+  // definition. It must still complete, because its Run was admitted before the
+  // configuration change.
+  if (text.includes("W08-UI11-OBJECTIVE")) {
+    const reason = await waitForGate("w08-ui11-child", response, 90_000);
+    if (reason !== "closed") {
+      completeW08Text(response, body, id, `W08-CHILD-RESULT:${objective}`);
+    }
+    return;
+  }
+  // UI-13 variant A: fail the Child model call so the Parent receives a real
+  // failed task result and still finishes.
+  if (text.includes("W08-UI13-FAIL-OBJECTIVE")) {
+    console.log(JSON.stringify({ type: "w08_child_failure", objective, status: 500 }));
+    sendJson(response, 500, { error: { message: "W08_UI13_CONTROLLED_CHILD_FAILURE" } });
+    return;
+  }
+  // UI-15: the Child's first model call requests the approval-requiring
+  // production write_file; the SDK's non-interactive Child policy must deny it.
+  // The second call observes the real denial Tool result and continues.
+  if (text.includes("W08-UI15-OBJECTIVE")) {
+    if (toolResults === 0 && offeredTools.includes("write_file")) {
+      console.log(JSON.stringify({ type: "w08_child_write_call", objective, tool: "write_file" }));
+      finishWithToolCall(response, id, `w08-ui15-write-${Date.now()}`, "write_file", {
+        path: "/mnt/user-data/outputs/w08-ui15-denied.txt",
+        content: "W08 UI-15 non-interactive child write that must be denied by policy",
+      });
+      return;
+    }
+    const toolResult = lastToolText(body);
+    console.log(JSON.stringify({
+      type: "w08_child_write_denied",
+      objective,
+      denied: /denied by policy/i.test(toolResult),
+      toolResult: toolResult.slice(0, 400),
+    }));
+    completeW08Text(response, body, id, `W08-CHILD-RESULT:${objective}`);
+    return;
+  }
+  completeW08Text(response, body, id, objective ? `W08-CHILD-RESULT:${objective}` : "W08-CHILD-RESULT:UNKNOWN");
+}
+
+function handleW08Parent(response, body, prompt, offeredTools, id) {
+  const text = messagesText(body);
   if (!offeredTools.includes("task")) {
     completeW08Text(response, body, id, `Controlled provider: ${prompt}`);
     return;
@@ -544,21 +718,67 @@ async function handleW08Delegation(response, body, prompt, offeredTools) {
   }
   if (text.includes("W08-UI10-PARENT")) {
     finishWithTaskCalls(response, id, [
-      { callId: "w08-task-10-alpha", name: "task", args: { agent: W08_CHILD_AGENT, objective: "W08-UI10-OBJECTIVE-ALPHA" } },
-      { callId: "w08-task-10-beta", name: "task", args: { agent: W08_CHILD_AGENT, objective: "W08-UI10-OBJECTIVE-BETA" } },
+      { callId: "w08-task-10-alpha", name: "task", args: taskArguments(body, W08_CHILD_AGENT, "W08-UI10-OBJECTIVE-ALPHA") },
+      { callId: "w08-task-10-beta", name: "task", args: taskArguments(body, W08_CHILD_AGENT, "W08-UI10-OBJECTIVE-BETA") },
     ]);
     return;
   }
   if (text.includes("W08-UI09-PARENT")) {
     finishWithTaskCalls(response, id, [
-      { callId: "w08-task-alpha", name: "task", args: { agent: W08_CHILD_AGENT, objective: "W08-UI09-OBJECTIVE-ALPHA" } },
-      { callId: "w08-task-beta", name: "task", args: { agent: W08_CHILD_AGENT, objective: "W08-UI09-OBJECTIVE-BETA" } },
+      { callId: "w08-task-alpha", name: "task", args: taskArguments(body, W08_CHILD_AGENT, "W08-UI09-OBJECTIVE-ALPHA") },
+      { callId: "w08-task-beta", name: "task", args: taskArguments(body, W08_CHILD_AGENT, "W08-UI09-OBJECTIVE-BETA") },
+    ]);
+    return;
+  }
+  if (text.includes("W08-UI07-PARENT")) {
+    finishWithTaskCalls(response, id, [
+      { callId: `w08-task-${Date.now()}`, name: "task", args: taskArguments(body, W08_TOOLS_CHILD_AGENT, "W08-UI07-OBJECTIVE") },
+    ]);
+    return;
+  }
+  if (text.includes("W08-UI11-PARENT")) {
+    finishWithTaskCalls(response, id, [
+      { callId: `w08-task-${Date.now()}`, name: "task", args: taskArguments(body, W08_UI11_CHILD_AGENT, "W08-UI11-OBJECTIVE") },
+    ]);
+    return;
+  }
+  if (text.includes("W08-UI11R2-PARENT")) {
+    completeW08Text(response, body, id, `W08-PARENT-FINAL:${prompt}`);
+    return;
+  }
+  if (text.includes("W08-UI13-FAIL-PARENT")) {
+    finishWithTaskCalls(response, id, [
+      { callId: `w08-task-${Date.now()}`, name: "task", args: taskArguments(body, W08_CHILD_AGENT, "W08-UI13-FAIL-OBJECTIVE") },
+    ]);
+    return;
+  }
+  if (text.includes("W08-UI13-MISSING-PARENT")) {
+    if (hasToolResult(body) || text.includes(`"${W08_MISSING_CHILD_AGENT}"`)) {
+      completeW08Text(response, body, id, `W08-PARENT-FINAL:${prompt}`);
+      return;
+    }
+    finishWithTaskCalls(response, id, [
+      { callId: `w08-task-${Date.now()}`, name: "task", args: taskArguments(body, W08_MISSING_CHILD_AGENT, "W08-UI13-MISSING-OBJECTIVE") },
+    ]);
+    return;
+  }
+  if (text.includes("W08-UI14-PARENT")) {
+    const args = taskArguments(body, W08_CHILD_AGENT, W08_UI14_LONG_OBJECTIVE);
+    console.log(JSON.stringify({ type: "w08_task_call", objective: W08_UI14_LONG_OBJECTIVE, args }));
+    finishWithTaskCalls(response, id, [
+      { callId: `w08-task-${Date.now()}`, name: "task", args },
+    ]);
+    return;
+  }
+  if (text.includes("W08-UI15-PARENT")) {
+    finishWithTaskCalls(response, id, [
+      { callId: `w08-task-${Date.now()}`, name: "task", args: taskArguments(body, W08_UI15_CHILD_AGENT, "W08-UI15-OBJECTIVE") },
     ]);
     return;
   }
   const objective = text.includes("W08-UI08-PARENT") ? "W08-UI08-OBJECTIVE" : "W08-UI06-OBJECTIVE";
   finishWithTaskCalls(response, id, [
-    { callId: `w08-task-${Date.now()}`, name: "task", args: { agent: W08_CHILD_AGENT, objective } },
+    { callId: `w08-task-${Date.now()}`, name: "task", args: taskArguments(body, W08_CHILD_AGENT, objective) },
   ]);
 }
 
@@ -609,6 +829,13 @@ const server = http.createServer((request, response) => {
     // Explicit gate for the W05 live-rendering scenes; returns how many blocked
     // model calls this release actually unblocked.
     sendJson(response, 200, { released: releaseW05Live() });
+    return;
+  }
+  if (url.pathname === "/__release") {
+    // Browser-controlled gate release for the blocked W08 Child model calls.
+    const name = url.searchParams.get("name") || "";
+    const released = releaseW08Gate(name);
+    sendJson(response, released ? 200 : 404, { type: "w08_gate_release", released, name });
     return;
   }
   if (request.method !== "POST" || url.pathname !== "/v1/chat/completions") {

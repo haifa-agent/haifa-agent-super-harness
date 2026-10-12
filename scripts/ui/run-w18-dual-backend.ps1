@@ -11,18 +11,36 @@ param(
     [ValidateRange(1, 2)]
     [int]$Round = 1,
     [switch]$SkipBuild,
+    # Explicit reference interpreter. Default stays the frozen source-local venv;
+    # the controller may point W08 at its externally provisioned reference venv.
+    [string]$ReferencePython,
+    # W08 subagent-catalog profile over the smoke fixtures/spec. Uses its own
+    # case mapping (no V2 Oracle deferrals/stage upgrades) and is not a
+    # differential round, so the differential branch guard does not apply.
+    [switch]$W08Catalog,
+    # W08 delegation profile over the same smoke fixtures/spec, but the
+    # w08-delegation-chat spec. Shares the catalog profile's case mapping,
+    # fresh data root and smoke environment; mutually exclusive with -W08Catalog.
+    [switch]$W08Delegation,
     # Bounded diagnosis aid: run a subset of case titles by Playwright grep.
     # Never used to hide a failing case; a filtered run is not a round result.
     [string]$Grep,
     # Bounded diagnosis aid only: register model A without the V2-M1 model B to
     # A/B an existing-case timing question. Not a V2-M1 round configuration.
-    [switch]$DiagnosticSingleModel
+    [switch]$DiagnosticSingleModel,
+    # Explicit reference HTTP transport diagnosis; never rewrites SSE responses
+    # or Provider requests, and does not change the frozen frontend/backend.
+    [switch]$ReferenceIdentityEncoding
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot '../lib/w18-differential-results.ps1')
 . (Join-Path $PSScriptRoot '../lib/preflight.ps1')
+# Shared bounded cleanup helpers (Test-FixtureLoopbackBind / Wait-FixturePortsReleased).
+. (Join-Path $PSScriptRoot '../lib/run-fixture.ps1')
+. (Join-Path $PSScriptRoot '../lib/build-stamp.ps1')
+. (Join-Path $PSScriptRoot '../lib/sdk-selection.ps1')
 Use-SafeNoProxy
 
 function Wait-Endpoint([string]$Url, [string]$ExpectedStatus, [System.Diagnostics.Process]$Process, [int]$Seconds) {
@@ -77,19 +95,44 @@ function Set-W18ManagedModel([int]$Port, [string]$Name, [string]$Display, [strin
 }
 
 if ([string]::IsNullOrWhiteSpace($Backend)) { throw '-Backend reference|haifa is required.' }
+if ($W08Catalog -and $W08Delegation) { throw '-W08Catalog and -W08Delegation are mutually exclusive W08 profiles.' }
 if ($GatewayPort -ne 40618 -or $FrontendPort -ne 45618 -or $ProviderPort -ne 46618) {
     throw 'W18 slot 3 requires Gateway=40618, Frontend=45618 and the main-controller-assigned test-only Provider=46618.'
 }
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
-$oracleDeferrals = Get-W18OracleDeferrals -OraclePath (Join-Path $root 'contracts/customer-demo-v2/v2-case-oracle.json')
+# W08 has two profiles (catalog, delegation) that share the smoke fixtures,
+# case mapping and fresh data root; $isW08 guards every profile-specific branch.
+$w08Profile = if ($W08Catalog) { 'w08-catalog' } elseif ($W08Delegation) { 'w08-delegation' } else { $null }
+$isW08 = $null -ne $w08Profile
+if ($ReferenceIdentityEncoding -and ($Backend -ne 'reference' -or -not $isW08)) {
+    throw '-ReferenceIdentityEncoding requires a reference W08 profile.'
+}
+# W08 has its own case mapping: no V2 Oracle deferral or stage-upgrade mapping.
+$oracleDeferrals = if ($isW08) { @{} } else {
+    Get-W18OracleDeferrals -OraclePath (Join-Path $root 'contracts/customer-demo-v2/v2-case-oracle.json')
+}
 $source = (Resolve-Path -LiteralPath $SourceRepository).Path
 if ((& git -C $source rev-parse HEAD).Trim() -cne 'e545c28ac301e6f9feae247c513d8ea8f83df294') {
     throw 'Frozen DeerFlow source SHA drifted.'
 }
-$currentBranch = (& git -C $root branch --show-current).Trim()
-Assert-W18DifferentialBranch -Branch $currentBranch
+if ([string]::IsNullOrWhiteSpace($ReferencePython)) {
+    # Unchanged W18/V2 default: the frozen source checkout's own backend venv.
+    $ReferencePython = Join-Path $source 'backend/.venv/Scripts/python.exe'
+}
+if (-not $isW08) {
+    $currentBranch = (& git -C $root branch --show-current).Trim()
+    Assert-W18DifferentialBranch -Branch $currentBranch
+}
 if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
-    $DataDirectory = Join-Path $root 'local-tmp/slot-3-demo-l2-differential'
+    # W08 catalog/delegation persist managed subagents under DEER_FLOW_HOME, so
+    # each run gets its own fresh data root; the differential default is unchanged.
+    $DataDirectory = if ($W08Catalog) {
+        Join-Path $root ("local-tmp/slot-3-w08-catalog/data-" + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
+    } elseif ($W08Delegation) {
+        Join-Path $root ("local-tmp/slot-3-w08-delegation/data-" + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
+    } else {
+        Join-Path $root 'local-tmp/slot-3-demo-l2-differential'
+    }
 }
 $dataRoot = [IO.Path]::GetFullPath($DataDirectory).TrimEnd('\', '/')
 if (-not $dataRoot.StartsWith($root.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
@@ -126,6 +169,9 @@ $gatewayReadyAt = $null
 $frontendReadyAt = $null
 $testStartedAt = $null
 $testFinishedAt = $null
+$buildStartedAt = $null
+$buildFinishedAt = $null
+$runnerFailure = $null
 # V2-M1 "disabled B" negative: a configured-but-disabled profile name. Haifa's
 # managed catalog always supports it; the frozen reference uses the same
 # managed-models API, so the runner attempts it there too and records the
@@ -166,8 +212,10 @@ try {
             (Join-Path $source 'backend/packages/extension-api'),
             (Join-Path $source 'backend/packages/harness')
         ) -join [IO.Path]::PathSeparator
-        $python = Join-Path $source 'backend/.venv/Scripts/python.exe'
-        if (-not (Test-Path -LiteralPath $python)) { throw 'Frozen DeerFlow backend local Python 3.12 venv is absent.' }
+        $python = $ReferencePython
+        if (-not (Test-Path -LiteralPath $python)) {
+            throw "Reference backend interpreter is absent: $python. Pass -ReferencePython or provision the frozen source-local venv."
+        }
         $gatewayProcess = Start-Process -FilePath $python `
             -ArgumentList @('-m', 'uvicorn', 'app.gateway.app:app', '--host', '127.0.0.1', '--port', [string]$GatewayPort) `
             -WorkingDirectory (Join-Path $source 'backend') -PassThru -WindowStyle Hidden `
@@ -204,6 +252,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Frozen Haifa frontend profile gate failed.' }
         $jar = Join-Path $root 'super-harness-server/target/super-harness-server-0.1.0-SNAPSHOT-exec.jar'
         if (-not (Test-Path -LiteralPath $jar)) { throw 'Haifa executable JAR is missing; build this worktree after SDK snapshot publication.' }
+        $selectedSdk = Resolve-HaifaSdkSelection -RepositoryRoot $root
+        Assert-ServerBuildStamp -RepositoryRoot $root -HaifaVersion $selectedSdk.HaifaVersion
         $gatewayProcess = Start-Process -FilePath (Get-Command java.exe).Source `
             -ArgumentList @('-jar', $jar) -WorkingDirectory $root -PassThru -WindowStyle Hidden `
             -RedirectStandardOutput (Join-Path $evidenceRoot 'gateway.stdout.log') `
@@ -236,6 +286,11 @@ try {
     }
     $gatewayReadyAt = Get-Date
 
+    $buildStartedAt = Get-Date
+    $gatewayOrigin = "http://127.0.0.1:$GatewayPort"
+    if ($SkipBuild) {
+        Assert-FrontendBuildStamp -RepositoryRoot $root -InternalGatewayBaseUrl $gatewayOrigin
+    }
     if (-not $SkipBuild -or -not (Test-Path -LiteralPath (Join-Path $frontendRoot '.next/BUILD_ID'))) {
         Push-Location $frontendRoot
         try {
@@ -243,6 +298,7 @@ try {
             if ($LASTEXITCODE -ne 0) { throw "Frozen frontend build failed: $LASTEXITCODE" }
         }
         finally { Pop-Location }
+        Write-FrontendBuildStamp -RepositoryRoot $root -InternalGatewayBaseUrl $gatewayOrigin
     }
     # SSR/BFF guard: every built rewrite must target only this slot's gateway,
     # so neither combination can silently fall back to another backend.
@@ -256,6 +312,7 @@ try {
     if ($bffTargets.Count -eq 0 -or @($bffTargets | Where-Object { $_ -cne $gatewayOrigin }).Count -gt 0) {
         throw "Frozen frontend BFF rewrites target [$($bffTargets -join ', ')], expected only $gatewayOrigin; rebuild without -SkipBuild."
     }
+    $buildFinishedAt = Get-Date
     $frontendProcess = Start-Process -FilePath $node `
         -ArgumentList @((Join-Path $frontendRoot 'node_modules/next/dist/bin/next'), 'start', '--hostname', '127.0.0.1', '--port', [string]$FrontendPort) `
         -WorkingDirectory $frontendRoot -PassThru -WindowStyle Hidden `
@@ -278,6 +335,10 @@ try {
     [ordered]@{
         backend = $Backend
         round = $Round
+        profile = $(if ($isW08) { $w08Profile } else { 'differential' })
+        referenceIdentityEncoding = [bool]$ReferenceIdentityEncoding
+        playwrightConfig = $(if ($isW08) { 'tests/ui/smoke/playwright.config.cjs' } else { 'tests/ui/dual-backend/playwright.config.cjs' })
+        referencePython = $(if ($Backend -eq 'reference') { [IO.Path]::GetFullPath($ReferencePython) } else { $null })
         sourceSha = (& git -C $source rev-parse HEAD).Trim()
         harnessSha = (& git -C $root rev-parse HEAD).Trim()
         gatewayUrl = "http://127.0.0.1:$GatewayPort"
@@ -293,7 +354,13 @@ try {
         frontendRoutesSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $frontendRoot '.next/routes-manifest.json')).Hash.ToLowerInvariant()
         referenceConfigSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/ui/dual-backend/reference-config.yaml')).Hash.ToLowerInvariant()
         runnerSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $PSCommandPath).Hash.ToLowerInvariant()
-        specSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/ui/dual-backend/differential.spec.cjs')).Hash.ToLowerInvariant()
+        specSha256 = $(if ($W08Catalog) {
+            (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/ui/smoke/w08-subagent-catalog.spec.cjs')).Hash.ToLowerInvariant()
+        } elseif ($W08Delegation) {
+            (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/ui/smoke/w08-delegation-chat.spec.cjs')).Hash.ToLowerInvariant()
+        } else {
+            (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/ui/dual-backend/differential.spec.cjs')).Hash.ToLowerInvariant()
+        })
         v2m1SpecSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/ui/dual-backend/v2-m1-model-file.spec.cjs')).Hash.ToLowerInvariant()
         providerSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/ui/smoke/loopback-openai-provider.cjs')).Hash.ToLowerInvariant()
         disabledModelName = $disabledModelName
@@ -307,7 +374,21 @@ try {
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'topology.json') -Encoding utf8
 
     $env:E2E_APP_URL = "http://127.0.0.1:$FrontendPort"
+    if ($isW08) {
+        # Smoke fixtures/spec contract: evidence root, loopback provider and the
+        # bound gateway/frontend ports. The runner seeds nothing; the spec seeds
+        # the managed-subagent catalog through the supported REST API. Both W08
+        # profiles get the same env and a fresh per-run data root.
+        $env:W18_EVIDENCE_DIR = $evidenceRoot
+        $env:W18_PROVIDER_URL = "http://127.0.0.1:$ProviderPort"
+        $env:E2E_GATEWAY_PORT = [string]$GatewayPort
+        $env:E2E_FRONTEND_PORT = [string]$FrontendPort
+        $env:W18_PLAYWRIGHT_SPEC = $(if ($W08Catalog) { 'w08-subagent-catalog.spec.cjs' } else { 'w08-delegation-chat.spec.cjs' })
+        $env:W18_PLAYWRIGHT_TIMEOUT_MS = '120000'
+        $env:W18_PLAYWRIGHT_TRACE = 'on'
+    }
     $env:W18_DIFFERENTIAL_BACKEND = $Backend
+    $env:W18_REFERENCE_IDENTITY_ENCODING = $(if ($ReferenceIdentityEncoding) { '1' } else { '0' })
     $env:W18_DIFFERENTIAL_EVIDENCE = $evidenceRoot
     $env:W18_DIFFERENTIAL_ROUND = [string]$Round
     $env:W18_DISABLED_MODEL = $disabledModelName
@@ -316,10 +397,11 @@ try {
     $testStartedAt = Get-Date
     Push-Location $root
     try {
+        $playwrightConfig = if ($isW08) { 'tests/ui/smoke/playwright.config.cjs' } else { 'tests/ui/dual-backend/playwright.config.cjs' }
         $playwrightArgs = @(
             'frontend/node_modules/@playwright/test/cli.js',
             'test',
-            '--config', 'tests/ui/dual-backend/playwright.config.cjs'
+            '--config', $playwrightConfig
         )
         if (-not [string]::IsNullOrWhiteSpace($Grep)) { $playwrightArgs += @('--grep', $Grep) }
         & $node @playwrightArgs
@@ -328,11 +410,41 @@ try {
     finally { Pop-Location }
     $testFinishedAt = Get-Date
 }
+catch {
+    $runnerFailure = $_.Exception.Message
+    throw
+}
 finally {
+    # One original bounded stop budget: 10s per managed service, shared by exact
+    # owned-process termination and by the real default loopback bind that proves
+    # each port was released. Never extended, reused, or masked with SO_REUSEADDR.
+    $cleanupBudgetSec = [Math]::Max(1, @(@($frontendProcess, $gatewayProcess, $providerProcess) | Where-Object { $null -ne $_ }).Count) * 10
+    $cleanupStarted = [Diagnostics.Stopwatch]::GetTimestamp()
+    $cleanupError = $null
     Stop-OwnedTree $frontendProcess
     Stop-OwnedTree $gatewayProcess
     Stop-OwnedTree $providerProcess
-    $remaining = @(Get-NetTCPConnection -LocalPort $GatewayPort, $FrontendPort, $ProviderPort -State Listen -ErrorAction SilentlyContinue)
+    $portFacts = @()
+    try {
+        $portFacts = @(Wait-FixturePortsReleased `
+            -Ports @($GatewayPort, $FrontendPort, $ProviderPort) `
+            -Started $cleanupStarted -TimeoutSec $cleanupBudgetSec)
+    }
+    catch {
+        $cleanupError = $_.Exception.Message
+        $failedFacts = $_.Exception.Data['portFacts']
+        if ($null -ne $failedFacts) { $portFacts = @($failedFacts) }
+    }
+    $cleanup = [ordered]@{
+        budgetMs = $cleanupBudgetSec * 1000
+        elapsedMs = [math]::Round([Diagnostics.Stopwatch]::GetElapsedTime($cleanupStarted).TotalMilliseconds, 1)
+        ports = @($portFacts)
+        error = $cleanupError
+    }
+    $remaining = @($portFacts | Where-Object { -not $_['released'] } | ForEach-Object {
+        "port=$($_['port']) pid=$((@($_['firstTcpState']) | ForEach-Object { $_.OwningProcess }) -join ',')"
+    })
+    $archiveStartedAt = Get-Date
     $logHashes = @{}
     foreach ($name in @('provider.stdout.log', 'provider.stderr.log', 'gateway.stdout.log', 'gateway.stderr.log', 'frontend.stdout.log', 'frontend.stderr.log')) {
         $file = Join-Path $evidenceRoot $name
@@ -372,6 +484,7 @@ finally {
                         seconds = [math]::Round($last.duration / 1000, 1)
                         retry = $last.retry
                         classificationReason = $classification.reason
+                        firstError = $(if ($last.PSObject.Properties['errors']) { (@($last.errors | ForEach-Object { if ($_.PSObject.Properties['message']) { $_.message } }) -join ' ').Substring(0, [Math]::Min(2000, (@($last.errors | ForEach-Object { if ($_.PSObject.Properties['message']) { $_.message } }) -join ' ').Length)) } else { $null })
                     }
                 }
             }
@@ -382,12 +495,18 @@ finally {
       }
       catch { $casesError = $_.Exception.Message }
     }
+    $firstFailureCase = @($cases | Where-Object { $_['status'] -notin @('PASS', 'NOT_RUN') }) | Select-Object -First 1
+    $retryCount = $(if ($firstFailureCase) { [int]$firstFailureCase['retry'] } else { 0 })
+    $logPaths = @('provider.stdout.log', 'provider.stderr.log', 'gateway.stdout.log', 'gateway.stderr.log',
+        'frontend.stdout.log', 'frontend.stderr.log', 'results.json', 'artifacts')
     $summary = [ordered]@{
         backend = $Backend; testExitCode = $testExitCode
+        profile = $(if ($isW08) { $w08Profile } else { 'differential' })
         cases = $cases
         # Per Oracle case id: the case status for this backend/round. Legacy W18
         # differential cases without an Oracle id are omitted here (still in
-        # `cases`); this never promotes another backend's result.
+        # `cases`); this never promotes another backend's result. W08 has an
+        # empty deferral map, so every listed case is required for its stage.
         oracleCases = @($cases | Where-Object { $_['oracleCaseId'] } | ForEach-Object {
                 $deferralRef = $oracleDeferrals[[string]$_['oracleCaseId']]
                 [ordered]@{
@@ -409,11 +528,26 @@ finally {
             gateway = $(if ($gatewayReadyAt) { [math]::Round(($gatewayReadyAt - $started).TotalSeconds, 1) } else { $null })
             frontend = $(if ($frontendReadyAt) { [math]::Round(($frontendReadyAt - $started).TotalSeconds, 1) } else { $null })
         }
+        # Flow health: phase timings, first failure/retry and log locations.
+        health = [ordered]@{
+            prepSeconds = $(if ($buildStartedAt) { [math]::Round(($buildStartedAt - $started).TotalSeconds, 1) } else { $null })
+            buildSeconds = $(if ($buildStartedAt -and $buildFinishedAt) { [math]::Round(($buildFinishedAt - $buildStartedAt).TotalSeconds, 1) } else { $null })
+            readinessSeconds = $(if ($frontendReadyAt) { [math]::Round(($frontendReadyAt - $started).TotalSeconds, 1) } else { $null })
+            assertionSeconds = $(if ($testStartedAt -and $testFinishedAt) { [math]::Round(($testFinishedAt - $testStartedAt).TotalSeconds, 1) } else { $null })
+            archiveSeconds = [math]::Round(((Get-Date) - $archiveStartedAt).TotalSeconds, 1)
+            totalSeconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 1)
+            firstFailure = $(if ($firstFailureCase) { $firstFailureCase['title'] } else { $null })
+            firstFailureSignature = $(if ($firstFailureCase) { $firstFailureCase['firstError'] } elseif ($runnerFailure) { $runnerFailure } elseif ($cleanupError) { $cleanupError } else { $casesError })
+            retry = $retryCount
+            logPaths = $logPaths
+        }
+        cleanup = $cleanup
         evidenceRoot = $evidenceRoot
         logSha256 = $logHashes
-        remainingListeners = @($remaining | ForEach-Object { "port=$($_.LocalPort) pid=$($_.OwningProcess)" })
+        remainingListeners = @($remaining)
     }
-    $summary | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'summary.json') -Encoding utf8
-    $summary | ConvertTo-Json -Depth 4
+    $summary | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'summary.json') -Encoding utf8
+    $summary | ConvertTo-Json -Depth 6
 }
 if ($testExitCode -ne 0) { throw "W18 $Backend differential smoke failed (exit $testExitCode)." }
+if ($cleanupError) { throw "Managed cleanup failed for W18 ${Backend}: $cleanupError" }

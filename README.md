@@ -294,6 +294,9 @@ $env:NO_PROXY='127.0.0.1,localhost'
 项目的任务状态、派工、checkpoint、验收证据和客户演示门禁由 SHPM（Super Harness Project Manager）维护，
 人工可在 http://127.0.0.1:8787/ 只读查看；只有主控通过 `shpm` 写入，子智能体不写 SHPM。提示词、roadmap、
 交付报告和原始证据正文仍在 `private-docs`、`contracts` 与各 worktree 的 `local-tmp`，SHPM 只保存路径。
+SHPM 的治理侧交付任务上限为 32（人工 2026-10-09 决策）；已登记的任务 `prompt_path` 接受仓库内相对路径（按仓库根解析）
+和绝对路径（按原路径解析），缺失路径严格失败。
+证据聚合回归只在 SHPM 导出副本内建立受控演示和派工基线；原始导出与真实审计保留各自状态，不修改真实数据库。
 环境准备和完整操作流程见 [SHPM 使用手册](docs/shpm-manual.md)。
 
 ```powershell
@@ -313,3 +316,7 @@ pwsh -NoProfile -File scripts/governance/audit-work-package-delivery.ps1
 - [SDK 消费记录](docs/todo.md)
 
 同一模型轮次的并行 Tool 结果按原请求顺序向各 SSE 观察者投影，实时与重放使用同一规则；Child 生命周期事件仍独立推进。
+
+W08 参考差分使用 `scripts/ui/run-w18-dual-backend.ps1 -Backend reference -W08Catalog` 或 `-W08Delegation`，指定冻结 `-SourceRepository` 和已核验的 `-ReferencePython`；使用槽位 3 的 40618/45618/46618 全端口组和每轮新的 `-DataDirectory`，只作为参考验收，不替代 Haifa 后端。受控委派与真实模型 UI 门禁分开登记。
+
+参考 W08 进行中 SSE 可显式加 `-ReferenceIdentityEncoding`，通过请求 `Accept-Encoding: identity` 避免压缩缓冲；此参数只允许参考 W08 profile，不改冻结来源、响应或模型请求。已逐项人工批准的参考差异在 SHPM 登记：UI07 结束前验真实 SSE/卡片步骤，结束后仍验持久化、精确前缀和重载；UI15 验真实写入的字节及无审批；UI10 用原生事件/状态替代不存在的 Haifa 专属字段，其 Child HTTP 取消缺陷保留 `FAIL`、后续依赖断言保留 `NOT_RUN`，按人工裁决作为非阻断参考风险。Haifa 对应全部严格断言保留；其余参考失败不能据此豁免，脚本不自动提升阶段结果或 `GO`。
