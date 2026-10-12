@@ -11,6 +11,9 @@ const path = require("node:path");
 
 const { expect, test } = require("./fixtures.cjs");
 
+const W05_LIVE_FIRST = "W05-LIVE02-FIRST-HALF";
+const W05_LIVE_SECOND = "W05-LIVE02-SECOND-HALF";
+
 const RUN_STREAM = /\/api\/langgraph\/threads\/[^/]+\/runs\/stream$/;
 const RUN_STREAM_ROUTE = "**/api/langgraph/threads/*/runs/stream*";
 
@@ -212,6 +215,40 @@ test("W05 LIVE-01 the submitted user message renders exactly one bubble while th
     ),
   });
 });
+
+test("W05 LIVE-02 streamed answer text appears before the run finishes", async ({
+  context,
+  page,
+  runtime,
+  workspace,
+  evidence,
+}) => {
+  const marker = `w05-live-02-${Date.now()}`;
+  await submit(page, workspace, marker);
+  await waitForScene(context, runtime, marker);
+
+  // The Provider has streamed the first half and is holding the connection
+  // open before the second half; the page must already show the first half.
+  await expect(
+    page.locator("#chat").getByText(W05_LIVE_FIRST, { exact: false }),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(
+    page.locator("#chat").getByText(W05_LIVE_SECOND, { exact: false }),
+  ).toHaveCount(0);
+  await evidence.screenshot(page, "live02-running-first-half-visible");
+
+  await release(context, runtime);
+  await expect(
+    page
+      .locator("#chat")
+      .getByText(`${W05_LIVE_SECOND} ${marker}`, { exact: false }),
+  ).toBeVisible({ timeout: 60_000 });
+  await evidence.json("live02-streamed-halves", {
+    marker,
+    scenes: await providerScenes(context, runtime, marker),
+  });
+});
+
 
 test("W05 LIVE-03 a Tool step is visible while the run waits after its result", async ({
   context,

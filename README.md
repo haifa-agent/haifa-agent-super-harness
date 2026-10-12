@@ -154,6 +154,15 @@ pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'AgentSoulPromptTest,Updat
 pwsh -NoProfile -File scripts/test-targeted.ps1 -Test DeerFlowCreatedChildZeroExecutionHttpTest -LowMemory
 ```
 
+`W05LiveValuesStreamContractTest` 在 fixture 证据目录保存实际 HTTP/SSE 原件。将这些原件路径写成 JSON 数组后，
+可用冻结前端消费库核对终态消息、重载身份和任务卡片：
+
+```powershell
+python -B tests/checks/contracts/verify_w05_live_output_consumer.py --inputs <原件路径数组.json>
+```
+
+此回归只证明真实 wire 与冻结消费库的集成，浏览器验收继续使用 UI runner。
+
 固定耗时很长的用例标注 `@Tag("slow")`，默认门禁不运行。用 `-Slow` 只运行慢测试，可省略 `-Test` 运行全部，
 加 `-Test <类>` 只跑该类的慢测试：
 

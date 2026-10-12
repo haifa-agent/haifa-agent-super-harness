@@ -2450,6 +2450,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                         writeLiveValuesFrame(output, thread, run, connectionLiveValues, false);
                     }
                     writeMessageDelta(output, run, supersededOutput.orElseThrow(), cursor, ordinal);
+                    if (liveValuesActive) {
+                        writeLiveValuesFrame(output, thread, run, connectionLiveValues, false);
+                    }
                 }
             }
             return false;
@@ -2535,6 +2538,11 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (thread.title() != null) {
                 maybePublishTitle(output, thread, run);
             }
+        }
+        if (liveValuesActive) {
+            // Legacy tuples register their own frozen SDK indexes after a values snapshot.
+            // Restore the canonical rows after those tuples, before onFinish uses the state.
+            writeLiveValuesFrame(output, thread, run, null, true);
         }
         writeSse(output, "end", null, cursor);
         return true;
