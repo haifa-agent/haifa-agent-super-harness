@@ -2047,9 +2047,7 @@ test("W08 UI-14 a long objective titles the card as a single truncated line with
   });
 });
 
-test(IS_REFERENCE
-  ? "W08 UI-15 reference child write succeeds without approval under the human-approved policy difference"
-  : "W08 UI-15 a non-interactive child write is denied by policy without a side effect or pending approval", async ({
+test("W08 UI-15 child write follows the approved backend policy without a pending approval", async ({
   context,
   page,
   runtime,
