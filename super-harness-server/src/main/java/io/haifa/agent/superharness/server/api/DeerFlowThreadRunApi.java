@@ -2108,6 +2108,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     }
                     ProjectionCursor delivered = initialCursor;
                     boolean liveValuesActive = run.streamModes.contains("messages-tuple")
+                            && !run.bridge.snapshot(run.runId).status().isTerminal()
                             && connectionLiveValues.open(run.bridge);
                     List<Map<String, Object>> lastLiveValues = null;
                     // Every SSE connection owns its own Tool-message dedup state: two observers
@@ -3374,7 +3375,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     /** Retire only associations represented in the same captured durable projection. */
     private List<Map<String, Object>> liveValuesMessages(
             ThreadRecord thread, RunRecord run, LiveParentValuesProjector projector) {
-        List<Map<String, Object>> provisional = projector.liveRows();
+        List<Map<String, Object>> provisional = run.clarificationObserved
+                ? List.of() : projector.liveRows();
         long sequence = run.projector.head().sequence();
         long revision = projector.durableRevision();
         if (projector.needsDurableSnapshot(sequence, revision, System.nanoTime())) {
