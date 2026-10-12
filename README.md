@@ -315,3 +315,5 @@ pwsh -NoProfile -File scripts/governance/audit-work-package-delivery.ps1
 - [SDK 消费记录](docs/todo.md)
 
 同一模型轮次的并行 Tool 结果按原请求顺序向各 SSE 观察者投影，实时与重放使用同一规则；Child 生命周期事件仍独立推进。
+
+W08 参考差分使用 `scripts/ui/run-w18-dual-backend.ps1 -Backend reference -W08Catalog` 或 `-W08Delegation`，指定冻结 `-SourceRepository` 和已核验的 `-ReferencePython`；使用槽位 3 的 40618/45618/46618 全端口组和每轮新的 `-DataDirectory`，只作为参考验收，不替代 Haifa 后端。受控委派与真实模型 UI 门禁分开登记。
