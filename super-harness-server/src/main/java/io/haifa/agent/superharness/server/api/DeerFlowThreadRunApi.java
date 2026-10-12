@@ -3402,7 +3402,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
         List<ConversationTurn> turns = scanTurns(thread, 200);
         Map<Long, Integer> ordinals = computeTurnOrdinals(thread);
-        List<Map<String, Object>> messages = overlaidMessages(thread, turns, ordinals, false);
+        // Active values must use the same client human identity as the initial
+        // live echo and messages/page; settled Runs still project durable IDs.
+        List<Map<String, Object>> messages = overlaidMessages(thread, turns, ordinals, true);
         Set<String> wireIds = new HashSet<>();
         Set<String> visibleToolIds = new HashSet<>();
         for (Map<String, Object> message : messages) {
