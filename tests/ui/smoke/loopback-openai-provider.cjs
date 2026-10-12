@@ -717,15 +717,15 @@ function handleW08Parent(response, body, prompt, offeredTools, id) {
   }
   if (text.includes("W08-UI10-PARENT")) {
     finishWithTaskCalls(response, id, [
-      { callId: "w08-task-10-alpha", name: "task", args: { agent: W08_CHILD_AGENT, objective: "W08-UI10-OBJECTIVE-ALPHA" } },
-      { callId: "w08-task-10-beta", name: "task", args: { agent: W08_CHILD_AGENT, objective: "W08-UI10-OBJECTIVE-BETA" } },
+      { callId: "w08-task-10-alpha", name: "task", args: taskArguments(body, W08_CHILD_AGENT, "W08-UI10-OBJECTIVE-ALPHA") },
+      { callId: "w08-task-10-beta", name: "task", args: taskArguments(body, W08_CHILD_AGENT, "W08-UI10-OBJECTIVE-BETA") },
     ]);
     return;
   }
   if (text.includes("W08-UI09-PARENT")) {
     finishWithTaskCalls(response, id, [
-      { callId: "w08-task-alpha", name: "task", args: { agent: W08_CHILD_AGENT, objective: "W08-UI09-OBJECTIVE-ALPHA" } },
-      { callId: "w08-task-beta", name: "task", args: { agent: W08_CHILD_AGENT, objective: "W08-UI09-OBJECTIVE-BETA" } },
+      { callId: "w08-task-alpha", name: "task", args: taskArguments(body, W08_CHILD_AGENT, "W08-UI09-OBJECTIVE-ALPHA") },
+      { callId: "w08-task-beta", name: "task", args: taskArguments(body, W08_CHILD_AGENT, "W08-UI09-OBJECTIVE-BETA") },
     ]);
     return;
   }
@@ -777,7 +777,7 @@ function handleW08Parent(response, body, prompt, offeredTools, id) {
   }
   const objective = text.includes("W08-UI08-PARENT") ? "W08-UI08-OBJECTIVE" : "W08-UI06-OBJECTIVE";
   finishWithTaskCalls(response, id, [
-    { callId: `w08-task-${Date.now()}`, name: "task", args: { agent: W08_CHILD_AGENT, objective } },
+    { callId: `w08-task-${Date.now()}`, name: "task", args: taskArguments(body, W08_CHILD_AGENT, objective) },
   ]);
 }
 
