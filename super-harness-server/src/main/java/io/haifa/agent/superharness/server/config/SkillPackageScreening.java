@@ -2,6 +2,7 @@ package io.haifa.agent.superharness.server.config;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.haifa.agent.core.run.AgentRunId;
 import io.haifa.agent.model.api.AgentChatRequest;
 import io.haifa.agent.model.api.ModelCallId;
@@ -24,6 +25,10 @@ public final class SkillPackageScreening {
     @FunctionalInterface
     public interface WriteScreen {
         JsonNode screen(Path directory, Map<String, byte[]> files) throws IOException;
+        /** Static-only gate for a human-authorized exact package revision. */
+        default JsonNode staticScreen(Path directory) throws IOException {
+            throw new IOException("Static screening is unavailable");
+        }
         default JsonNode screenChanges(Path directory, Map<String, byte[]> files, java.util.Set<String> changed) throws IOException {
             return screen(directory, files);
         }
@@ -80,6 +85,27 @@ public final class SkillPackageScreening {
 
     public JsonNode review(Path directory) throws IOException {
         return invoke(directory, null);
+    }
+
+    /**
+     * Static gate only. Used when a human authorized this exact package revision: the deterministic
+     * scan still runs and still blocks, but the per-file model review is skipped.
+     */
+    public JsonNode staticScreen(Path directory) throws IOException {
+        JsonNode facts = review(directory);
+        if (facts.path("blocked").asBoolean()) {
+            throw new IllegalArgumentException("Static security scan blocked the Skill package");
+        }
+        for (JsonNode finding : facts.path("findings")) {
+            if (finding.path("rule_id").asText().startsWith("secret-")) {
+                throw new IllegalArgumentException(
+                        "Skill package contains credential material; remove it before review");
+            }
+        }
+        ObjectNode allowed = json.createObjectNode();
+        allowed.put("decision", "allow").put("authorization_source", "human").put("skipped", "semantic-review");
+        allowed.set("static_findings", facts.path("findings"));
+        return allowed;
     }
 
     public JsonNode inspect(Map<String, byte[]> files, String target, String profile, String includeContent,
@@ -140,6 +166,9 @@ public final class SkillPackageScreening {
             }
             @Override public JsonNode screenChanges(Path directory, Map<String, byte[]> files, java.util.Set<String> changed) throws IOException {
                 return screenWrite(resolver, directory, files, changed);
+            }
+            @Override public JsonNode staticScreen(Path directory) throws IOException {
+                return SkillPackageScreening.this.staticScreen(directory);
             }
         };
     }

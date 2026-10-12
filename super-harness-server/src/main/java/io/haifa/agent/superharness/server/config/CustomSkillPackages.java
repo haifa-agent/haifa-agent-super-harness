@@ -164,6 +164,28 @@ final class CustomSkillPackages {
         }
     }
 
+    /**
+     * True only when the operator authorized this exact package revision. The authorization is bound
+     * to the 64-hex package digest, so any byte change invalidates it.
+     */
+    private boolean humanAuthorized(ObjectNode config, String name, String revision) {
+        JsonNode entry = config.path("authorized_packages").path(name);
+        String recorded = entry.path("revision").asText("");
+        return recorded.matches("[a-f0-9]{64}") && recorded.equals(revision)
+                && !entry.path("authorized_by").asText("").isBlank();
+    }
+
+    /** Declared name plus the exact 64-hex package revision, computed without screening or publication. */
+    java.util.Map<String, Object> preview(byte[] archive) throws IOException {
+        var content = SkillPackageFiles.archivePackage(archive);
+        byte[] markdown = content.files().get("SKILL.md");
+        if (markdown == null) throw new IllegalArgumentException("Skill archive requires SKILL.md");
+        var match = DECLARED_NAME.matcher(new String(markdown, StandardCharsets.UTF_8));
+        if (!match.find()) throw new IllegalArgumentException("Skill archive requires a valid name in SKILL.md");
+        return java.util.Map.of("name", SkillPackageFiles.name(match.group(1)),
+                "revision", SkillPackageFiles.digest(content));
+    }
+
     String install(ObjectNode config, byte[] archive, String author, String thread) throws IOException {
         var content = SkillPackageFiles.archivePackage(archive);
         Map<String, byte[]> files = content.files();
@@ -310,7 +332,9 @@ final class CustomSkillPackages {
             java.util.Set<String> changed = new java.util.HashSet<>(files.keySet());
             if (reviewed != null) changed.removeIf(path -> java.util.Arrays.equals(files.get(path), reviewed.files().get(path))
                     && content.executableFiles().contains(path) == reviewed.executableFiles().contains(path));
-            JsonNode scan = reviewed == null ? screen.screen(packageDir, files) : screen.screenChanges(packageDir, files, changed);
+            boolean humanAuthorized = humanAuthorized(config, name, revision);
+            JsonNode scan = humanAuthorized ? screen.staticScreen(packageDir)
+                    : (reviewed == null ? screen.screen(packageDir, files) : screen.screenChanges(packageDir, files, changed));
             admission.run();
             if (reviewed != null && scan instanceof ObjectNode summary) {
                 summary.put("unchanged_reviewed_revision", config.path("custom").path(name).path("current").asText());
