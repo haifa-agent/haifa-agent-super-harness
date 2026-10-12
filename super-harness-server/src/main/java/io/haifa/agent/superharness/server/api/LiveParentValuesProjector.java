@@ -11,12 +11,27 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** One SSE connection's transient text buffer; accepted history remains SDK-owned. */
 final class LiveParentValuesProjector implements AgentRunOutputListener, AutoCloseable {
     private final AgentRunId runId;
     private final Map<String, StringBuilder> generations = new LinkedHashMap<>();
     private RunOutputSubscription subscription;
+    private long durableRevision;
+    private long cachedSourceSequence = -1;
+    private long cachedDurableRevision = -1;
+    private long refreshAfterNanos;
+    private DurableSnapshot cachedSnapshot;
+    static final long DURABLE_REFRESH_NANOS = java.time.Duration.ofSeconds(1).toNanos();
+
+    /** Cached transport projection, not a second accepted-message store. */
+    record DurableSnapshot(List<Map<String, Object>> messages, Set<String> visibleAcceptedCalls) {
+        DurableSnapshot {
+            messages = List.copyOf(messages);
+            visibleAcceptedCalls = Set.copyOf(visibleAcceptedCalls);
+        }
+    }
 
     LiveParentValuesProjector(String runId) {
         this.runId = new AgentRunId(runId);
@@ -37,6 +52,7 @@ final class LiveParentValuesProjector implements AgentRunOutputListener, AutoClo
         if (!runId.equals(event.runId())) return;
         String id = event.modelCallId();
         if (id == null || id.isBlank()) return;
+        if (event.type() != AgentRunOutputEventType.ASSISTANT_TEXT_DELTA) durableRevision++;
         if (event.type() == AgentRunOutputEventType.RUN_OUTPUT_STARTED) {
             generations.put(id, new StringBuilder());
         } else if (event.type() == AgentRunOutputEventType.ASSISTANT_TEXT_DELTA) {
@@ -72,9 +88,33 @@ final class LiveParentValuesProjector implements AgentRunOutputListener, AutoClo
         generations.remove(acceptedModelCallId);
     }
 
+    synchronized long durableRevision() { return durableRevision; }
+
+    synchronized boolean needsDurableSnapshot(long sequence, long revision, long nowNanos) {
+        return cachedSnapshot == null || sequence != cachedSourceSequence
+                || revision != cachedDurableRevision || nowNanos >= refreshAfterNanos;
+    }
+
+    synchronized void cacheDurableSnapshot(DurableSnapshot snapshot, long sequence,
+            long revisionBeforeRead, long nowNanos) {
+        cachedSnapshot = snapshot;
+        cachedSourceSequence = sequence;
+        // A commit during the SDK read must remain dirty on the next iteration.
+        cachedDurableRevision = revisionBeforeRead;
+        refreshAfterNanos = nowNanos + DURABLE_REFRESH_NANOS;
+    }
+
+    synchronized DurableSnapshot durableSnapshot() { return cachedSnapshot; }
+
+    static boolean acceptedMessageIsVisible(String nativeMessageId, List<String> nativeToolIds,
+            Set<String> visibleNativeMessages, Set<String> visibleToolIds) {
+        return visibleNativeMessages.contains(nativeMessageId)
+                || (!nativeToolIds.isEmpty() && visibleToolIds.containsAll(nativeToolIds));
+    }
+
     @Override
     public void close() {
         if (subscription != null) subscription.close();
-        synchronized (this) { generations.clear(); }
+        synchronized (this) { generations.clear(); cachedSnapshot = null; }
     }
 }

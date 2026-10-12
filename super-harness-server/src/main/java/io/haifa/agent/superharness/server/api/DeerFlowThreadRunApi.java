@@ -3371,16 +3371,19 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         writeSse(output, "values", Map.of("messages", messages), null);
     }
 
-    /**
-     * Snapshot provisional text first, then durable rows, then accepted IDs. An accepted row
-     * already present in the durable snapshot cannot be duplicated by its provisional copy,
-     * including a commit racing the reads. All IDs come from the public accepted-message view.
-     */
+    /** Retire only associations represented in the same captured durable projection. */
     private List<Map<String, Object>> liveValuesMessages(
             ThreadRecord thread, RunRecord run, LiveParentValuesProjector projector) {
         List<Map<String, Object>> provisional = projector.liveRows();
-        List<Map<String, Object>> messages = new ArrayList<>(buildLiveValuesDurableRows(thread, run));
-        Set<String> accepted = acceptedModelCallIds(run);
+        long sequence = run.projector.head().sequence();
+        long revision = projector.durableRevision();
+        if (projector.needsDurableSnapshot(sequence, revision, System.nanoTime())) {
+            var snapshot = buildLiveValuesSnapshot(thread, run);
+            projector.cacheDurableSnapshot(snapshot, sequence, revision, System.nanoTime());
+        }
+        var snapshot = projector.durableSnapshot();
+        List<Map<String, Object>> messages = new ArrayList<>(snapshot.messages());
+        Set<String> accepted = snapshot.visibleAcceptedCalls();
         for (String id : accepted) projector.retire(id);
         for (Map<String, Object> row : provisional) {
             if (!accepted.contains(row.get("id"))) messages.add(row);
@@ -3389,24 +3392,56 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     private List<Map<String, Object>> buildLiveValuesDurableRows(ThreadRecord thread, RunRecord run) {
-        if (thread.persistedSessionId == null) return List.of(pendingHumanMessage(run));
-        List<ConversationTurn> turns = scanTurns(thread, 200);
-        List<Map<String, Object>> messages = overlaidMessages(thread, turns, computeTurnOrdinals(thread), false);
-        return messages.isEmpty() ? List.of(pendingHumanMessage(run)) : List.copyOf(messages);
+        return buildLiveValuesSnapshot(thread, run).messages();
     }
 
-    private Set<String> acceptedModelCallIds(RunRecord run) {
-        Set<String> accepted = new HashSet<>();
-        io.haifa.agent.runtime.api.RunMessageCursor cursor =
-                io.haifa.agent.runtime.api.RunMessageCursor.beforeFirst(run.runId);
-        while (true) {
-            var page = run.bridge.messages(run.runId, cursor, 256);
-            for (io.haifa.agent.runtime.api.RunMessageView message : page.items()) {
-                message.modelCallId().ifPresent(accepted::add);
+    private LiveParentValuesProjector.DurableSnapshot buildLiveValuesSnapshot(
+            ThreadRecord thread, RunRecord run) {
+        if (thread.persistedSessionId == null) {
+            return new LiveParentValuesProjector.DurableSnapshot(List.of(pendingHumanMessage(run)), Set.of());
+        }
+        List<ConversationTurn> turns = scanTurns(thread, 200);
+        Map<Long, Integer> ordinals = computeTurnOrdinals(thread);
+        List<Map<String, Object>> messages = overlaidMessages(thread, turns, ordinals, false);
+        Set<String> wireIds = new HashSet<>();
+        Set<String> visibleToolIds = new HashSet<>();
+        for (Map<String, Object> message : messages) {
+            Object id = message.get("id");
+            if (id instanceof String value) wireIds.add(value);
+            Object calls = message.get("tool_calls");
+            if (calls instanceof List<?> list) {
+                for (Object item : list) {
+                    if (item instanceof Map<?, ?> call && call.get("id") instanceof String value) {
+                        visibleToolIds.add(value);
+                    }
+                }
             }
-            if (!page.hasMore()) return accepted;
+        }
+        Set<String> visibleNativeMessages = new HashSet<>();
+        for (ConversationTurn turn : turns) {
+            if (turn.role() != io.haifa.agent.core.message.MessageRole.ASSISTANT) continue;
+            String id = (String) messageForTurn(thread, turn, ordinals.getOrDefault(turn.sequence(), 0), true).get("id");
+            if (wireIds.contains(id)) visibleNativeMessages.add(turn.messageId());
+        }
+        Set<String> accepted = new HashSet<>();
+        RunMessageCursor cursor = RunMessageCursor.beforeFirst(run.runId);
+        int pages = 0;
+        while (true) {
+            RunMessagePage page = run.bridge.messages(run.runId, cursor, MESSAGE_ROUND_SCAN_PAGE_SIZE);
+            for (RunMessageView message : page.items()) {
+                if (!"ASSISTANT".equals(message.role())) continue;
+                List<String> toolIds = message.toolCalls().stream().map(call -> call.id().value()).toList();
+                if (LiveParentValuesProjector.acceptedMessageIsVisible(
+                        message.messageId(), toolIds, visibleNativeMessages, visibleToolIds)) {
+                    message.modelCallId().ifPresent(accepted::add);
+                }
+            }
+            if (!page.hasMore()) break;
+            requireAnotherScanPage(++pages);
             cursor = page.nextCursor();
         }
+        return new LiveParentValuesProjector.DurableSnapshot(
+                messages.isEmpty() ? List.of(pendingHumanMessage(run)) : messages, accepted);
     }
 
     private Map<Long, Integer> computeTurnOrdinals(ThreadRecord thread) {
