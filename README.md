@@ -296,6 +296,7 @@ $env:NO_PROXY='127.0.0.1,localhost'
 交付报告和原始证据正文仍在 `private-docs`、`contracts` 与各 worktree 的 `local-tmp`，SHPM 只保存路径。
 SHPM 的治理侧交付任务上限为 32（人工 2026-10-09 决策）；已登记的任务 `prompt_path` 接受仓库内相对路径（按仓库根解析）
 和绝对路径（按原路径解析），缺失路径严格失败。
+证据聚合回归只在 SHPM 导出副本内建立受控演示和派工基线；原始导出与真实审计保留各自状态，不修改真实数据库。
 环境准备和完整操作流程见 [SHPM 使用手册](docs/shpm-manual.md)。
 
 ```powershell

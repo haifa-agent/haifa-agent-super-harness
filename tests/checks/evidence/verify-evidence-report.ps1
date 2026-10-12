@@ -240,6 +240,16 @@ function Set-ControlledDemoV2Baseline([object]$Snapshot) {
     }
 }
 
+function Set-ControlledExecutionBaseline([object]$Snapshot) {
+    # Positive fixtures own their execution lanes. The raw live export may include
+    # unrelated lost lanes; test those invariants with the explicit negative cases.
+    # Park only this in-memory fixture copy; never reconcile or write the real DB.
+    foreach ($task in @($Snapshot.tables.task | Where-Object state -eq 'developing')) {
+        $task.state = 'blocked'
+    }
+    $Snapshot.tables.assignment = @($Snapshot.tables.assignment | Where-Object state -ne 'running')
+}
+
 function New-CapFixtureRows([object]$Base, [int]$Existing, [int]$Target) {
     if ($Existing -gt $Target) { throw "cap fixture cannot shrink $Existing tasks to $Target" }
     for ($index = 1; $index -le ($Target - $Existing); $index++) {
@@ -267,6 +277,7 @@ try {
     $controlledV2 = Get-Content -LiteralPath $BaseSnapshot -Raw -Encoding utf8 |
         ConvertFrom-Json -Depth 64 -DateKind String
     Set-ControlledDemoV2Baseline $controlledV2
+    Set-ControlledExecutionBaseline $controlledV2
     [IO.File]::WriteAllText($BaseSnapshot,
         ($controlledV2 | ConvertTo-Json -Depth 64), [Text.UTF8Encoding]::new($false))
 
