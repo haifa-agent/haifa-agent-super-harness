@@ -2075,6 +2075,10 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         exchange.sendResponseHeaders(200, 0);
 
         Object observer = new Object();
+        // Each SSE connection owns its own transient live-values producer buffer and output
+        // subscription; reconnects replay from BEFORE_FIRST on a fresh buffer, independently of
+        // every other observer, and the connection closes its subscription on stream end.
+        LiveParentValuesProjector connectionLiveValues = new LiveParentValuesProjector(run.runId.value());
         try (OutputStream output = exchange.getResponseBody()) {
             writeCommittedSse(output, () -> {
                 try (DeerFlowSubtaskStream subtasks = run.streamModes.contains("custom")
@@ -2103,7 +2107,12 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                         }
                     }
                     ProjectionCursor delivered = initialCursor;
-                    // Tool tuple dedup belongs to this SSE connection, just like its cursor.
+                    boolean liveValuesActive = run.streamModes.contains("messages-tuple")
+                            && connectionLiveValues.open(run.bridge);
+                    List<Map<String, Object>> lastLiveValues = null;
+                    // Every SSE connection owns its own Tool-message dedup state: two observers
+                    // of the same Run are two separate consumers, each reading its own frames
+                    // (connection-local map, not Run state).
                     Map<String, String> projectedToolMessages = new LinkedHashMap<>();
                     long nextHeartbeat = System.nanoTime() + java.time.Duration.ofMillis(100).toNanos();
                     long terminalWithoutEventSince = 0;
@@ -2129,7 +2138,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                                 }
                             }
                             delivered = event.cursor();
-                            if (writeProjectedEvent(output, thread, run, event, projectedToolMessages)) {
+                            if (writeProjectedEvent(output, thread, run, event, liveValuesActive,
+                                    connectionLiveValues, projectedToolMessages)) {
                                 return;
                             }
                         }
@@ -2143,6 +2153,13 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                             AppendResult.Gap gap = sourceGap.orElseThrow();
                             writeReplayGap(output, run, gap.gap(), gap.authoritativeView(), delivered);
                             return;
+                        }
+                        if (liveValuesActive) {
+                            List<Map<String, Object>> frame = liveValuesMessages(thread, run, connectionLiveValues);
+                            if (!frame.equals(lastLiveValues)) {
+                                writeSse(output, "values", Map.of("messages", frame), null);
+                                lastLiveValues = frame;
+                            }
                         }
                         if (reemitPendingCard && run.projector.head().equals(delivered)) {
                             // A reconnect can catch up past the durable interaction event (or the
@@ -2230,6 +2247,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
         } finally {
             run.observerLeft(observer);
+            connectionLiveValues.close();
             observeClarificationBoundary(thread, run);
             synchronized (thread) {
                 boolean terminal = isKnownTerminal(() -> Optional.of(run.bridge.snapshot(run.runId)));
@@ -2394,6 +2412,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private boolean writeProjectedEvent(
             OutputStream output, ThreadRecord thread, RunRecord run, ProjectedRunEvent event,
+            boolean liveValuesActive, LiveParentValuesProjector connectionLiveValues,
             Map<String, String> projectedToolMessages)
             throws IOException {
         String cursor = sseCursor(event.cursor());
@@ -2425,6 +2444,11 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     return true;
                 }
                 if (!supersededOutput.orElseThrow().isEmpty()) {
+                    // Retire the committed provisional row before its stable legacy tuple;
+                    // retained/reconnected messages-mode consumers still receive the turn.
+                    if (liveValuesActive) {
+                        writeLiveValuesFrame(output, thread, run, connectionLiveValues, false);
+                    }
                     writeMessageDelta(output, run, supersededOutput.orElseThrow(), cursor, ordinal);
                 }
             }
@@ -2469,6 +2493,11 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return false;
         }
         AgentRunSnapshot terminalSnapshot = run.bridge.snapshot(run.runId);
+        if (liveValuesActive) {
+            // Replace provisional rows before publishing terminal legacy tuples, whose stable
+            // IDs match the durable values snapshot consumed by the frozen stream reducer.
+            writeLiveValuesFrame(output, thread, run, null, true);
+        }
         if (run.bridge.hasTools() && run.streamModes.contains("messages-tuple")) {
             writeAllToolMessages(output, run, projectedToolMessages);
             List<String> artifacts = DeerFlowToolTranscriptProjection.artifactPaths(
@@ -3323,6 +3352,53 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     static String wireMessageId(String runId, String type, int ordinal) {
         return runId + "-" + type + "-" + ordinal;
+    }
+
+    private void writeLiveValuesFrame(
+            OutputStream output, ThreadRecord thread, RunRecord run,
+            LiveParentValuesProjector projector, boolean finalFlush) throws IOException {
+        List<Map<String, Object>> messages = finalFlush
+                ? buildLiveValuesDurableRows(thread, run)
+                : liveValuesMessages(thread, run, projector);
+        writeSse(output, "values", Map.of("messages", messages), null);
+    }
+
+    /**
+     * Snapshot provisional text first, then durable rows, then accepted IDs. An accepted row
+     * already present in the durable snapshot cannot be duplicated by its provisional copy,
+     * including a commit racing the reads. All IDs come from the public accepted-message view.
+     */
+    private List<Map<String, Object>> liveValuesMessages(
+            ThreadRecord thread, RunRecord run, LiveParentValuesProjector projector) {
+        List<Map<String, Object>> provisional = projector.liveRows();
+        List<Map<String, Object>> messages = new ArrayList<>(buildLiveValuesDurableRows(thread, run));
+        Set<String> accepted = acceptedModelCallIds(run);
+        for (String id : accepted) projector.retire(id);
+        for (Map<String, Object> row : provisional) {
+            if (!accepted.contains(row.get("id"))) messages.add(row);
+        }
+        return List.copyOf(messages);
+    }
+
+    private List<Map<String, Object>> buildLiveValuesDurableRows(ThreadRecord thread, RunRecord run) {
+        if (thread.persistedSessionId == null) return List.of(pendingHumanMessage(run));
+        List<ConversationTurn> turns = scanTurns(thread, 200);
+        List<Map<String, Object>> messages = overlaidMessages(thread, turns, computeTurnOrdinals(thread), false);
+        return messages.isEmpty() ? List.of(pendingHumanMessage(run)) : List.copyOf(messages);
+    }
+
+    private Set<String> acceptedModelCallIds(RunRecord run) {
+        Set<String> accepted = new HashSet<>();
+        io.haifa.agent.runtime.api.RunMessageCursor cursor =
+                io.haifa.agent.runtime.api.RunMessageCursor.beforeFirst(run.runId);
+        while (true) {
+            var page = run.bridge.messages(run.runId, cursor, 256);
+            for (io.haifa.agent.runtime.api.RunMessageView message : page.items()) {
+                message.modelCallId().ifPresent(accepted::add);
+            }
+            if (!page.hasMore()) return accepted;
+            cursor = page.nextCursor();
+        }
     }
 
     private Map<Long, Integer> computeTurnOrdinals(ThreadRecord thread) {
