@@ -1088,6 +1088,28 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         RunRecord run = null;
         RunRecord steerRun = null;
         ProjectionCursor steerCursor = null;
+        RunRecord synchronizedInputRun = null;
+        if (runInput != null) {
+            synchronized (thread) {
+                restoreDurableAdmission(thread);
+                if (thread.activeRunId != null) {
+                    synchronizedInputRun = runs.get(thread.activeRunId);
+                    if (synchronizedInputRun == null) {
+                        synchronizedInputRun = findOrRestoreRun(thread, thread.activeRunId).orElse(null);
+                    }
+                }
+            }
+            if (synchronizedInputRun != null) {
+                try {
+                    // Catch-up lets live writers read this Thread's transcript. Holding its
+                    // monitor here prevents that progress and can expire their bounded lease.
+                    synchronizeAllAvailable(synchronizedInputRun);
+                } catch (IllegalArgumentException | EventProjectionException invalid) {
+                    sendJson(exchange, 409, Map.of("detail", invalid.getMessage()));
+                    return;
+                }
+            }
+        }
         synchronized (thread) {
             restoreDurableAdmission(thread);
             if (thread.activeRunId != null) {
@@ -1098,6 +1120,10 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 if (active != null && !active.bridge.snapshot(active.runId).status().isTerminal()) {
                     if (runInput == null) {
                         sendJson(exchange, 409, Map.of("detail", "Thread already has an active run"));
+                        return;
+                    }
+                    if (active != synchronizedInputRun) {
+                        sendJson(exchange, 409, Map.of("detail", "Thread active run changed before Steer admission"));
                         return;
                     }
                     // Steer continues an existing declaration; terminal history may admit a fresh
@@ -1121,7 +1147,6 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     try {
                         requestedCursor = parseSseCursor(
                                 active.runId.value(), exchange.getRequestHeaders().getFirst("Last-Event-ID"));
-                        synchronizeAllAvailable(active);
                         active.projector.replayAfter(requestedCursor);
                     } catch (IllegalArgumentException | EventProjectionException invalid) {
                         sendJson(exchange, 409, Map.of("detail", invalid.getMessage()));
@@ -1398,22 +1423,26 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 sendJson(exchange, 409, Map.of("detail", "Pending Run model is unavailable"));
                 return;
             }
+        }
+        // Restore pre-response durable events before accepting the reply, without holding the
+        // Thread monitor needed by attached stream writers. Admission is revalidated below.
+        try {
+            synchronizeAllAvailable(run);
+        } catch (EventProjectionException terminalRace) {
+            sendJson(exchange, 409, Map.of("detail", "Run is no longer accepting an Interaction response"));
+            return;
+        }
+        synchronized (thread) {
+            if (!pendingPromptAvailable(thread, run)) {
+                sendJson(exchange, 409, Map.of("detail", "Pending Run prompt or agent identity is unavailable"));
+                return;
+            }
+            if (thread.modelBindingIdentity != null
+                    && !thread.modelBindingIdentity.equals(run.bridge.bindingIdentity())) {
+                sendJson(exchange, 409, Map.of("detail", "Pending Run model is unavailable"));
+                return;
+            }
             synchronized (run) {
-                // A restored Run starts with an empty in-memory projector. Consume its
-                // pre-response durable events before accepting the reply, otherwise the
-                // old pending card is replayed and prematurely ends the reply stream.
-                try {
-                    synchronizeAllAvailable(run);
-                } catch (EventProjectionException terminalRace) {
-                    // The Run reached a terminal state (for example a cancel) while this
-                    // response was in flight; the reply can no longer apply and the tool must
-                    // not be replayed.
-                    sendJson(
-                            exchange,
-                            409,
-                            Map.of("detail", "Run is no longer accepting an Interaction response"));
-                    return;
-                }
                 responseCursor = run.projector.head();
                 if (run.acceptedInteractionResponse != null) {
                     if (!run.acceptedInteractionResponse.response().equals(response)) {
