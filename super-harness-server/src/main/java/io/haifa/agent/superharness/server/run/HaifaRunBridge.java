@@ -586,6 +586,12 @@ public final class HaifaRunBridge implements AutoCloseable {
         return agent.runs().subscribe(runId, cursor, listener);
     }
 
+    public io.haifa.agent.runtime.api.RunOutputSubscription subscribeOutput(AgentRunId runId,
+            io.haifa.agent.runtime.api.RunOutputCursor cursor,
+            io.haifa.agent.runtime.api.AgentRunOutputListener listener) {
+        return agent.runs().subscribeOutput(runId, cursor, listener);
+    }
+
     public Optional<InteractionView> pendingInteraction(AgentRunId runId) {
         return agent.runs().pendingInteraction(runId);
     }

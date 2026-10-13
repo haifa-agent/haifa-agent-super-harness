@@ -1088,6 +1088,28 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         RunRecord run = null;
         RunRecord steerRun = null;
         ProjectionCursor steerCursor = null;
+        RunRecord synchronizedInputRun = null;
+        if (runInput != null) {
+            synchronized (thread) {
+                restoreDurableAdmission(thread);
+                if (thread.activeRunId != null) {
+                    synchronizedInputRun = runs.get(thread.activeRunId);
+                    if (synchronizedInputRun == null) {
+                        synchronizedInputRun = findOrRestoreRun(thread, thread.activeRunId).orElse(null);
+                    }
+                }
+            }
+            if (synchronizedInputRun != null) {
+                try {
+                    // Catch-up lets live writers read this Thread's transcript. Holding its
+                    // monitor here prevents that progress and can expire their bounded lease.
+                    synchronizeAllAvailable(synchronizedInputRun);
+                } catch (IllegalArgumentException | EventProjectionException invalid) {
+                    sendJson(exchange, 409, Map.of("detail", invalid.getMessage()));
+                    return;
+                }
+            }
+        }
         synchronized (thread) {
             restoreDurableAdmission(thread);
             if (thread.activeRunId != null) {
@@ -1098,6 +1120,10 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 if (active != null && !active.bridge.snapshot(active.runId).status().isTerminal()) {
                     if (runInput == null) {
                         sendJson(exchange, 409, Map.of("detail", "Thread already has an active run"));
+                        return;
+                    }
+                    if (active != synchronizedInputRun) {
+                        sendJson(exchange, 409, Map.of("detail", "Thread active run changed before Steer admission"));
                         return;
                     }
                     // Steer continues an existing declaration; terminal history may admit a fresh
@@ -1121,7 +1147,6 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     try {
                         requestedCursor = parseSseCursor(
                                 active.runId.value(), exchange.getRequestHeaders().getFirst("Last-Event-ID"));
-                        synchronizeAllAvailable(active);
                         active.projector.replayAfter(requestedCursor);
                     } catch (IllegalArgumentException | EventProjectionException invalid) {
                         sendJson(exchange, 409, Map.of("detail", invalid.getMessage()));
@@ -1398,22 +1423,26 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 sendJson(exchange, 409, Map.of("detail", "Pending Run model is unavailable"));
                 return;
             }
+        }
+        // Restore pre-response durable events before accepting the reply, without holding the
+        // Thread monitor needed by attached stream writers. Admission is revalidated below.
+        try {
+            synchronizeAllAvailable(run);
+        } catch (EventProjectionException terminalRace) {
+            sendJson(exchange, 409, Map.of("detail", "Run is no longer accepting an Interaction response"));
+            return;
+        }
+        synchronized (thread) {
+            if (!pendingPromptAvailable(thread, run)) {
+                sendJson(exchange, 409, Map.of("detail", "Pending Run prompt or agent identity is unavailable"));
+                return;
+            }
+            if (thread.modelBindingIdentity != null
+                    && !thread.modelBindingIdentity.equals(run.bridge.bindingIdentity())) {
+                sendJson(exchange, 409, Map.of("detail", "Pending Run model is unavailable"));
+                return;
+            }
             synchronized (run) {
-                // A restored Run starts with an empty in-memory projector. Consume its
-                // pre-response durable events before accepting the reply, otherwise the
-                // old pending card is replayed and prematurely ends the reply stream.
-                try {
-                    synchronizeAllAvailable(run);
-                } catch (EventProjectionException terminalRace) {
-                    // The Run reached a terminal state (for example a cancel) while this
-                    // response was in flight; the reply can no longer apply and the tool must
-                    // not be replayed.
-                    sendJson(
-                            exchange,
-                            409,
-                            Map.of("detail", "Run is no longer accepting an Interaction response"));
-                    return;
-                }
                 responseCursor = run.projector.head();
                 if (run.acceptedInteractionResponse != null) {
                     if (!run.acceptedInteractionResponse.response().equals(response)) {
@@ -2075,6 +2104,10 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         exchange.sendResponseHeaders(200, 0);
 
         Object observer = new Object();
+        // Each SSE connection owns its own transient live-values producer buffer and output
+        // subscription; reconnects replay from BEFORE_FIRST on a fresh buffer, independently of
+        // every other observer, and the connection closes its subscription on stream end.
+        LiveParentValuesProjector connectionLiveValues = new LiveParentValuesProjector(run.runId.value());
         try (OutputStream output = exchange.getResponseBody()) {
             writeCommittedSse(output, () -> {
                 try (DeerFlowSubtaskStream subtasks = run.streamModes.contains("custom")
@@ -2103,7 +2136,13 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                         }
                     }
                     ProjectionCursor delivered = initialCursor;
-                    // Tool tuple dedup belongs to this SSE connection, just like its cursor.
+                    boolean liveValuesActive = run.streamModes.contains("messages-tuple")
+                            && !run.bridge.snapshot(run.runId).status().isTerminal()
+                            && connectionLiveValues.open(run.bridge);
+                    List<Map<String, Object>> lastLiveValues = null;
+                    // Every SSE connection owns its own Tool-message dedup state: two observers
+                    // of the same Run are two separate consumers, each reading its own frames
+                    // (connection-local map, not Run state).
                     Map<String, String> projectedToolMessages = new LinkedHashMap<>();
                     long nextHeartbeat = System.nanoTime() + java.time.Duration.ofMillis(100).toNanos();
                     long terminalWithoutEventSince = 0;
@@ -2129,7 +2168,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                                 }
                             }
                             delivered = event.cursor();
-                            if (writeProjectedEvent(output, thread, run, event, projectedToolMessages)) {
+                            if (writeProjectedEvent(output, thread, run, event, liveValuesActive,
+                                    connectionLiveValues, projectedToolMessages)) {
                                 return;
                             }
                         }
@@ -2143,6 +2183,13 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                             AppendResult.Gap gap = sourceGap.orElseThrow();
                             writeReplayGap(output, run, gap.gap(), gap.authoritativeView(), delivered);
                             return;
+                        }
+                        if (liveValuesActive) {
+                            List<Map<String, Object>> frame = liveValuesMessages(thread, run, connectionLiveValues);
+                            if (!frame.equals(lastLiveValues)) {
+                                writeSse(output, "values", Map.of("messages", frame), null);
+                                lastLiveValues = frame;
+                            }
                         }
                         if (reemitPendingCard && run.projector.head().equals(delivered)) {
                             // A reconnect can catch up past the durable interaction event (or the
@@ -2230,6 +2277,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
         } finally {
             run.observerLeft(observer);
+            connectionLiveValues.close();
             observeClarificationBoundary(thread, run);
             synchronized (thread) {
                 boolean terminal = isKnownTerminal(() -> Optional.of(run.bridge.snapshot(run.runId)));
@@ -2394,6 +2442,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private boolean writeProjectedEvent(
             OutputStream output, ThreadRecord thread, RunRecord run, ProjectedRunEvent event,
+            boolean liveValuesActive, LiveParentValuesProjector connectionLiveValues,
             Map<String, String> projectedToolMessages)
             throws IOException {
         String cursor = sseCursor(event.cursor());
@@ -2425,7 +2474,15 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     return true;
                 }
                 if (!supersededOutput.orElseThrow().isEmpty()) {
+                    // Retire the committed provisional row before its stable legacy tuple;
+                    // retained/reconnected messages-mode consumers still receive the turn.
+                    if (liveValuesActive) {
+                        writeLiveValuesFrame(output, thread, run, connectionLiveValues, false);
+                    }
                     writeMessageDelta(output, run, supersededOutput.orElseThrow(), cursor, ordinal);
+                    if (liveValuesActive) {
+                        writeLiveValuesFrame(output, thread, run, connectionLiveValues, false);
+                    }
                 }
             }
             return false;
@@ -2469,6 +2526,11 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return false;
         }
         AgentRunSnapshot terminalSnapshot = run.bridge.snapshot(run.runId);
+        if (liveValuesActive) {
+            // Replace provisional rows before publishing terminal legacy tuples, whose stable
+            // IDs match the durable values snapshot consumed by the frozen stream reducer.
+            writeLiveValuesFrame(output, thread, run, null, true);
+        }
         if (run.bridge.hasTools() && run.streamModes.contains("messages-tuple")) {
             writeAllToolMessages(output, run, projectedToolMessages);
             List<String> artifacts = DeerFlowToolTranscriptProjection.artifactPaths(
@@ -2506,6 +2568,11 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (thread.title() != null) {
                 maybePublishTitle(output, thread, run);
             }
+        }
+        if (liveValuesActive) {
+            // Legacy tuples register their own frozen SDK indexes after a values snapshot.
+            // Restore the canonical rows after those tuples, before onFinish uses the state.
+            writeLiveValuesFrame(output, thread, run, null, true);
         }
         writeSse(output, "end", null, cursor);
         return true;
@@ -3325,6 +3392,106 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         return runId + "-" + type + "-" + ordinal;
     }
 
+    private void writeLiveValuesFrame(
+            OutputStream output, ThreadRecord thread, RunRecord run,
+            LiveParentValuesProjector projector, boolean finalFlush) throws IOException {
+        List<Map<String, Object>> messages = finalFlush
+                ? buildLiveValuesDurableRows(thread, run)
+                : liveValuesMessages(thread, run, projector);
+        writeSse(output, "values", Map.of("messages", messages), null);
+    }
+
+    /** Retire only associations represented in the same captured durable projection. */
+    private List<Map<String, Object>> liveValuesMessages(
+            ThreadRecord thread, RunRecord run, LiveParentValuesProjector projector) {
+        List<Map<String, Object>> provisional = run.clarificationObserved
+                ? List.of() : projector.liveRows();
+        long sequence = run.projector.head().sequence();
+        long revision = projector.durableRevision();
+        if (projector.needsDurableSnapshot(sequence, revision, System.nanoTime())) {
+            var snapshot = buildLiveValuesSnapshot(thread, run);
+            projector.cacheDurableSnapshot(snapshot, sequence, revision, System.nanoTime());
+        }
+        var snapshot = projector.durableSnapshot();
+        List<Map<String, Object>> messages = new ArrayList<>(snapshot.messages());
+        Set<String> accepted = snapshot.visibleAcceptedCalls();
+        for (String id : accepted) projector.retire(id);
+        for (Map<String, Object> row : provisional) {
+            if (!accepted.contains(row.get("id"))) messages.add(row);
+        }
+        return List.copyOf(messages);
+    }
+
+    private List<Map<String, Object>> buildLiveValuesDurableRows(ThreadRecord thread, RunRecord run) {
+        return buildLiveValuesSnapshot(thread, run).messages();
+    }
+
+    private LiveParentValuesProjector.DurableSnapshot buildLiveValuesSnapshot(
+            ThreadRecord thread, RunRecord run) {
+        if (thread.persistedSessionId == null) {
+            return new LiveParentValuesProjector.DurableSnapshot(List.of(pendingHumanMessage(run)), Set.of());
+        }
+        List<ConversationTurn> turns = scanTurns(thread, 200);
+        Map<Long, Integer> ordinals = computeTurnOrdinals(thread);
+        // Active values must use the same client human identity as the initial
+        // live echo and messages/page; settled Runs still project durable IDs.
+        List<Map<String, Object>> messages = overlaidMessages(thread, turns, ordinals, true);
+        // This connection began while the Run was active. Its final canonical values must retain
+        // the echoed optimistic human identity even after the SDK becomes terminal; switching to
+        // the durable history id before `end` leaves two bubbles in the frozen values reducer.
+        // Only the submitted human turn of this connection is re-keyed. History, terminal rejoin,
+        // and any other Run's rows keep their normal identities.
+        if (run.clientHumanMessageId != null && !run.clientHumanMessageId.isBlank()) {
+            String durableHumanId = wireMessageId(run.runId.value(), "human", 0);
+            String liveHumanId = run.clientHumanMessageId + INJECTED_USER_MESSAGE_ID_SUFFIX;
+            messages = messages.stream().map(row -> {
+                if (!"human".equals(row.get("type")) || !durableHumanId.equals(row.get("id"))) return row;
+                Map<String, Object> liveRow = new LinkedHashMap<>(row);
+                liveRow.put("id", liveHumanId);
+                return liveRow;
+            }).toList();
+        }
+        Set<String> wireIds = new HashSet<>();
+        Set<String> visibleToolIds = new HashSet<>();
+        for (Map<String, Object> message : messages) {
+            Object id = message.get("id");
+            if (id instanceof String value) wireIds.add(value);
+            Object calls = message.get("tool_calls");
+            if (calls instanceof List<?> list) {
+                for (Object item : list) {
+                    if (item instanceof Map<?, ?> call && call.get("id") instanceof String value) {
+                        visibleToolIds.add(value);
+                    }
+                }
+            }
+        }
+        Set<String> visibleNativeMessages = new HashSet<>();
+        for (ConversationTurn turn : turns) {
+            if (turn.role() != io.haifa.agent.core.message.MessageRole.ASSISTANT) continue;
+            String id = (String) messageForTurn(thread, turn, ordinals.getOrDefault(turn.sequence(), 0), true).get("id");
+            if (wireIds.contains(id)) visibleNativeMessages.add(turn.messageId());
+        }
+        Set<String> accepted = new HashSet<>();
+        RunMessageCursor cursor = RunMessageCursor.beforeFirst(run.runId);
+        int pages = 0;
+        while (true) {
+            RunMessagePage page = run.bridge.messages(run.runId, cursor, MESSAGE_ROUND_SCAN_PAGE_SIZE);
+            for (RunMessageView message : page.items()) {
+                if (!"ASSISTANT".equals(message.role())) continue;
+                List<String> toolIds = message.toolCalls().stream().map(call -> call.id().value()).toList();
+                if (LiveParentValuesProjector.acceptedMessageIsVisible(
+                        message.messageId(), toolIds, visibleNativeMessages, visibleToolIds)) {
+                    message.modelCallId().ifPresent(accepted::add);
+                }
+            }
+            if (!page.hasMore()) break;
+            requireAnotherScanPage(++pages);
+            cursor = page.nextCursor();
+        }
+        return new LiveParentValuesProjector.DurableSnapshot(
+                messages.isEmpty() ? List.of(pendingHumanMessage(run)) : messages, accepted);
+    }
+
     private Map<Long, Integer> computeTurnOrdinals(ThreadRecord thread) {
         if (thread.persistedSessionId == null) return Map.of();
         HaifaRunBridge bridge = bridgeForPersistedThread(thread);
@@ -3543,7 +3710,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
      * one, so a Run restored after a Gateway restart projects the same in-flight id.
      */
     private String humanWireId(ThreadRecord thread, AgentRunId runId, int ordinal, boolean liveOverlay) {
-        if (liveOverlay) {
+        if (liveOverlay && ordinal == 0) {
             RunRecord run = runs.get(runId.value());
             if (run != null && run.threadId.equals(thread.threadId)
                     && run.clientHumanMessageId != null && !run.clientHumanMessageId.isBlank()
