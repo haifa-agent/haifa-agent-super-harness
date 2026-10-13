@@ -151,6 +151,49 @@ class W05LiveValuesStreamContractTest {
     }
 
     @Test
+    void activeConnectionsKeepSubmittedHumanIdentityThroughTerminalValuesButHistoryKeepsDurableId()
+            throws Exception {
+        String threadId = "thread-live-values-terminal-human";
+        createThread(threadId);
+        Recorded creator = openCreator(threadId);
+        assertThat(model.entered.await(15, TimeUnit.SECONDS)).isTrue();
+        creator.awaitFirst(System.nanoTime() + TimeUnit.SECONDS.toNanos(15));
+        Recorded observer = open(creator.location(), null);
+        observer.awaitFirst(System.nanoTime() + TimeUnit.SECONDS.toNanos(15));
+        model.release.countDown();
+        for (Recorded stream : List.of(creator, observer)) {
+            stream.awaitTerminal();
+            var values = stream.frames().stream().filter(frame -> "values".equals(frame.event()))
+                    .map(Recorded.Frame::dataNode).toList();
+            assertThat(values).isNotEmpty();
+            for (JsonNode frame : values) {
+                assertThat(rows(frame.path("messages")).stream()
+                        .filter(row -> "human".equals(row.path("type").asText()))
+                        .map(row -> row.path("id").asText()).toList())
+                        .as("active connection identity stays stable including final accepted values")
+                        .containsExactly("human-1__user");
+            }
+            assertStoredExactlyOnce(stream, threadId, LIVE_HEAD + LIVE_TAIL);
+        }
+        String runId = creator.location().substring(creator.location().lastIndexOf('/') + 1);
+        HttpResponse<String> history = client.send(HttpRequest.newBuilder(
+                        baseUri.resolve("/api/threads/" + threadId + "/state"))
+                .timeout(Duration.ofSeconds(15)).GET().build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(history.statusCode()).isEqualTo(200);
+        assertThat(rows(new ObjectMapper().readTree(history.body()).path("values").path("messages"))
+                .stream().filter(row -> "human".equals(row.path("type").asText()))
+                .map(row -> row.path("id").asText()).toList())
+                .containsExactly(runId + "-human-0");
+        assertThat(creator.lastEventId).as("resume uses the real acknowledged terminal cursor").isNotBlank();
+        Recorded terminalReplay = open(creator.location(), creator.lastEventId);
+        terminalReplay.awaitTerminal();
+        assertThat(terminalReplay.frames().stream().filter(frame -> "values".equals(frame.event())))
+                .as("terminal rejoin keeps the original durable tuple protocol")
+                .isEmpty();
+        writeEvidence(threadId);
+    }
+
+    @Test
     void eachConcurrentObserverAndEachReconnectSeeTextBeforeTheModelReturns() throws Exception {
         String threadId = "thread-live-values-observers";
         createThread(threadId);
@@ -760,6 +803,7 @@ class W05LiveValuesStreamContractTest {
         private final AtomicReference<Throwable> failure = new AtomicReference<>();
         private volatile long firstFrameNanos;
         private volatile boolean end;
+        private volatile String lastEventId;
 
         Recorded(HttpResponse<java.io.InputStream> response, String expectedFirst) {
             body = response.body();
@@ -772,6 +816,7 @@ class W05LiveValuesStreamContractTest {
                     while ((line = lines.readLine()) != null) {
                         if (line.startsWith("event: ")) event = line.substring(7).trim();
                         else if (line.startsWith("data: ")) data.append(line.substring(6));
+                        else if (line.startsWith("id: ")) lastEventId = line.substring(4).trim();
                         else if (line.isEmpty()) {
                             if (event != null) {
                                 Frame frame = new Frame(event, data.toString());

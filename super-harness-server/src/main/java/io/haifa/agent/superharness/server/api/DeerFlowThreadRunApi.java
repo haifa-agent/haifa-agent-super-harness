@@ -3407,6 +3407,21 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         // Active values must use the same client human identity as the initial
         // live echo and messages/page; settled Runs still project durable IDs.
         List<Map<String, Object>> messages = overlaidMessages(thread, turns, ordinals, true);
+        // This connection began while the Run was active. Its final canonical values must retain
+        // the echoed optimistic human identity even after the SDK becomes terminal; switching to
+        // the durable history id before `end` leaves two bubbles in the frozen values reducer.
+        // Only the submitted human turn of this connection is re-keyed. History, terminal rejoin,
+        // and any other Run's rows keep their normal identities.
+        if (run.clientHumanMessageId != null && !run.clientHumanMessageId.isBlank()) {
+            String durableHumanId = wireMessageId(run.runId.value(), "human", 0);
+            String liveHumanId = run.clientHumanMessageId + INJECTED_USER_MESSAGE_ID_SUFFIX;
+            messages = messages.stream().map(row -> {
+                if (!"human".equals(row.get("type")) || !durableHumanId.equals(row.get("id"))) return row;
+                Map<String, Object> liveRow = new LinkedHashMap<>(row);
+                liveRow.put("id", liveHumanId);
+                return liveRow;
+            }).toList();
+        }
         Set<String> wireIds = new HashSet<>();
         Set<String> visibleToolIds = new HashSet<>();
         for (Map<String, Object> message : messages) {

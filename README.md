@@ -162,6 +162,8 @@ python -B tests/checks/contracts/verify_w05_live_output_consumer.py --inputs <�
 ```
 
 此回归只证明真实 wire 与冻结消费库的集成，浏览器验收继续使用 UI runner。
+`-LiveDeepSeek` 还包含真实长回答用例：在 Run 仍运行且尚无已提交助手消息时观察两次文本增长，
+并核对结束与重载后的单条用户消息和完整回答；使用已托管凭据，不修改 Provider 响应。
 
 固定耗时很长的用例标注 `@Tag("slow")`，默认门禁不运行。用 `-Slow` 只运行慢测试，可省略 `-Test` 运行全部，
 加 `-Test <类>` 只跑该类的慢测试：
