@@ -19,7 +19,7 @@
     {
       "path": "skillscan/orchestrator.py",
       "source": "backend/packages/harness/deerflow/skills/skillscan/orchestrator.py",
-      "sha256": "d7b084ceff7ed413e6c7c086b5b9e66330d46c7ba69d69a0f138f61b5b9002b9"
+      "sha256": "b95c75862c267110757f92c022b78fb36795a7189ec339f418f4b52e65ff924e"
     },
     {
       "path": "frontmatter.py",

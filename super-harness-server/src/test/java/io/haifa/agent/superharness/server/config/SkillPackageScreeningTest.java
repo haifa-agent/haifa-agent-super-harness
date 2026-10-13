@@ -16,6 +16,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 /** A subprocess is required to prove that the real frozen Python diagnostics run without importing target code. */
 class SkillPackageScreeningTest {
+    static { System.setProperty("haifa.superharness.skill.semantic-review", "on"); }
     @TempDir Path temporary;
     private final ObjectMapper json = new ObjectMapper();
 
@@ -84,7 +85,7 @@ class SkillPackageScreeningTest {
         assertThat(receipt.path("retry").asBoolean()).isFalse();
     }
 
-    @Test void writeScreenRejectsOrdinaryCredentialAssignmentsBeforeAnyModelRequest() throws Exception {
+    @Test void writeScreenWarnsOnOrdinaryCredentialAssignmentsBeforeAnyModelRequest() throws Exception {
         var scanner = new SkillPackageScreening(json, temporary.resolve("data"));
         Path directory = temporary.resolve("package"); Files.createDirectory(directory);
         String synthetic = "ordinarySyntheticPasswordValue4971";
@@ -93,8 +94,15 @@ class SkillPackageScreeningTest {
         for (var file : files.entrySet()) { var target = directory.resolve(file.getKey()); Files.createDirectories(target.getParent()); Files.write(target, file.getValue()); }
         var model = new ControlledModel((request, count) -> ControlledModel.response(request, "screen", "{\"decision\":\"allow\"}",
                 List.of(), ModelFinishReason.STOP, ModelUsage.unpriced(10, 2)));
-        assertThatThrownBy(() -> scanner.writes(ignored -> LocalProbeModelTestSupport.binding(model)).screen(directory, files))
-                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("credential material");
+        System.setProperty("haifa.superharness.skill.semantic-review", "off");
+        com.fasterxml.jackson.databind.JsonNode screened;
+        try {
+            screened = scanner.writes(ignored -> LocalProbeModelTestSupport.binding(model)).screen(directory, files);
+        } finally {
+            System.setProperty("haifa.superharness.skill.semantic-review", "on");
+        }
+        assertThat(screened.path("warned_secret_findings").isArray()).isTrue();
+        assertThat(screened.path("warned_secret_findings").size()).isGreaterThanOrEqualTo(1);
         assertThat(model.requests).isEmpty();
         assertThat(Files.readString(directory.resolve("references/settings.txt"))).contains(synthetic);
         assertThat(Files.exists(temporary.resolve("data/skills/scanner/screen-receipts.jsonl"))).isFalse();
