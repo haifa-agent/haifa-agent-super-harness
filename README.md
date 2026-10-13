@@ -155,13 +155,14 @@ pwsh -NoProfile -File scripts/test-targeted.ps1 -Test DeerFlowCreatedChildZeroEx
 ```
 
 `W05LiveValuesStreamContractTest` 在 fixture 证据目录保存实际 HTTP/SSE 原件。将这些原件路径写成 JSON 数组后，
-可用冻结前端消费库核对终态消息、重载身份和任务卡片：
+可用冻结前端消费库核对直播与终态消息身份、Steer 输入、重载和任务卡片：
 
 ```powershell
 python -B tests/checks/contracts/verify_w05_live_output_consumer.py --inputs <原件路径数组.json>
 ```
 
 此回归只证明真实 wire 与冻结消费库的集成，浏览器验收继续使用 UI runner。
+输入需覆盖普通输出、Tool/Child 和 Steer 的实际直播记录；仅含 `end` 的已确认终态重连由 HTTP 回归单独核对。
 `-LiveDeepSeek` 还包含真实长回答用例：在 Run 仍运行且尚无已提交助手消息时观察两次文本增长，
 并核对结束与重载后的单条用户消息和完整回答；使用已托管凭据，不修改 Provider 响应。
 

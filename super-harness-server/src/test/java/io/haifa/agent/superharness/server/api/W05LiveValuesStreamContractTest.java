@@ -333,6 +333,11 @@ class W05LiveValuesStreamContractTest {
         List<JsonNode> values = creator.frames().stream().filter(frame -> "values".equals(frame.event()))
                 .map(Recorded.Frame::dataNode).toList();
         for (JsonNode frame : values) {
+            assertThat(rows(frame.path("messages")).stream()
+                    .filter(row -> "human".equals(row.path("type").asText()))
+                    .map(row -> row.path("id").asText()).toList())
+                    .as("original submitted human and accepted Steer keep distinct live identities")
+                    .doesNotHaveDuplicates();
             for (String text : List.of("W05-STEER-OLD", "W05-STEER-NEW")) {
                 assertThat(rows(frame.path("messages")).stream()
                         .filter(row -> "ai".equals(row.path("type").asText())

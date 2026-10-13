@@ -3710,7 +3710,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
      * one, so a Run restored after a Gateway restart projects the same in-flight id.
      */
     private String humanWireId(ThreadRecord thread, AgentRunId runId, int ordinal, boolean liveOverlay) {
-        if (liveOverlay) {
+        if (liveOverlay && ordinal == 0) {
             RunRecord run = runs.get(runId.value());
             if (run != null && run.threadId.equals(thread.threadId)
                     && run.clientHumanMessageId != null && !run.clientHumanMessageId.isBlank()

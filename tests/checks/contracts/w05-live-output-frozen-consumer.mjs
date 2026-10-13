@@ -13,7 +13,7 @@ async function fold(frames){
   await stream.enqueue(async()=> (async function*(){for(const frame of frames)yield frame;})(),{callbacks:{},initialValues:{messages:[]},getMessages:v=>v.messages??[],setMessages:(v,messages)=>({...v,messages})});
   return stream;
 }
-let streams=0,tasks=0,errors=0;
+let streams=0,tasks=0,errors=0,humanBoundaries=0;
 for(const file of files){
   const record=JSON.parse(await readFile(file,'utf8'));
   // @AfterEach raw recordings serialize the stream list directly; the named
@@ -23,6 +23,18 @@ for(const file of files){
   for(const wire of recordedStreams){
     assert.equal(wire.terminal_end,true,`actual stream did not reach end: ${file}`);
     const frames=wire.frames.map(f=>({event:f.event,data:f.data?JSON.parse(f.data):null}));
+    for(const frame of frames.filter(f=>f.event==='values')){
+      assert.equal(new Set(frame.data.messages.map(r=>r.id)).size,frame.data.messages.length,
+        `duplicate message identities in actual intermediate values: ${file}`);
+    }
+    const humanBoundary=frames.findIndex(f=>f.event==='values'
+      && f.data.messages.filter(r=>r.type==='human').length>1);
+    if(humanBoundary>=0){
+      const inFlight=await fold(frames.slice(0,humanBoundary+1));
+      assert.deepEqual(normalize(inFlight.values.messages),normalize(frames[humanBoundary].data.messages),
+        `frozen consumer changed the actual original/Steer human boundary: ${file}`);
+      humanBoundaries++;
+    }
     const durable=frames.filter(f=>f.event==='values').at(-1);
     assert.ok(durable&&Array.isArray(durable.data.messages),`actual terminal values missing: ${file}`);
     const stream=await fold(frames);
@@ -46,5 +58,5 @@ for(const file of files){
     streams++;
   }
 }
-assert.ok(streams>=7&&tasks>=1,'actual ordinary/retention/Child/Steer wire coverage missing');
-console.log(JSON.stringify({result:'PASS',actualStreams:streams,actualTaskCards:tasks,expectedFailureStreams:errors,files:files.length,scope:'Source-bound actual HTTP/SSE producer recordings folded by installed frozen StreamManager; no browser UI or package GO'}));
+assert.ok(streams>=7&&tasks>=1&&humanBoundaries>=1,'actual ordinary/retention/Child/Steer wire coverage missing');
+console.log(JSON.stringify({result:'PASS',actualStreams:streams,actualTaskCards:tasks,actualHumanBoundaryStreams:humanBoundaries,expectedFailureStreams:errors,files:files.length,scope:'Source-bound actual HTTP/SSE producer recordings folded by installed frozen StreamManager, including intermediate original/Steer human boundary; no browser UI or package GO'}));
