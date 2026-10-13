@@ -887,7 +887,7 @@ def _walk_client_scope(node: ast.AST, scope: _ClientScope, inherited: _ClientSco
     if isinstance(node, ast.NamedExpr):
         _drop_client_bindings(scope, set(_client_assignment_target_names(node.target)))
         return
-    if isinstance(node, ast.TypeAlias):
+    if (hasattr(ast, "TypeAlias") and isinstance(node, ast.TypeAlias)):
         # PEP 695: the value of `type X = ...` is evaluated lazily -- never on import, only on a
         # later access to `X.__value__`. Walking it for sinks reports egress that cannot happen and
         # hard-blocks a benign file, the same reason annotations are not walked (see

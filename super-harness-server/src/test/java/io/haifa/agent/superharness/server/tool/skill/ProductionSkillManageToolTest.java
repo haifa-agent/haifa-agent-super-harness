@@ -50,6 +50,9 @@ class ProductionSkillManageToolTest {
             return ControlledModel.response(request, "screen", "{\"decision\":\"allow\"}",
                     List.of(), ModelFinishReason.STOP, ModelUsage.unpriced(10, 2));
         });
+        // This case exercises cancellation DURING the model screen, so the per-file semantic
+        // review must be enabled explicitly now that it is opt-in (DeerFlow parity).
+        System.setProperty("haifa.superharness.skill.semantic-review", "on");
         store.configureWriteScreening(new SkillPackageScreening(json, data).writes(
                 ignored -> LocalProbeModelTestSupport.binding(model)));
         var cancelled = new AtomicBoolean();

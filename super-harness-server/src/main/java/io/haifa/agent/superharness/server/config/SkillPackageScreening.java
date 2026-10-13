@@ -76,6 +76,26 @@ public final class SkillPackageScreening {
         }
     }
 
+    /** System property first so tests can pin it, then the deployment environment variable. */
+    private static boolean semanticReviewEnabled() {
+        String value = System.getProperty("haifa.superharness.skill.semantic-review");
+        if (value == null) value = System.getenv("HAIFA_SUPER_HARNESS_SKILL_SEMANTIC_REVIEW");
+        if (value == null) return false; // DeerFlow parity: semantic review is opt-in
+        String normalized = value.strip().toLowerCase(java.util.Locale.ROOT);
+        return !(normalized.equals("off") || normalized.equals("false") || normalized.equals("disabled"));
+    }
+
+    private static String diagnostic(Path error) {
+        try {
+            String text = Files.readString(error, StandardCharsets.UTF_8).strip();
+            if (text.isEmpty()) return "(no stderr)";
+            String single = text.replaceAll("\\s+", " ");
+            return single.length() > 3000 ? single.substring(0, 3000) + "..." : single;
+        } catch (IOException missing) {
+            return "(stderr unavailable)";
+        }
+    }
+
     private static byte[] resource(String name) throws IOException {
         try (var stream = SkillPackageScreening.class.getClassLoader().getResourceAsStream(ROOT + name)) {
             if (stream == null) throw new IOException("Skill scanner resource is unavailable");
@@ -96,11 +116,14 @@ public final class SkillPackageScreening {
         if (facts.path("blocked").asBoolean()) {
             throw new IllegalArgumentException("Static security scan blocked the Skill package");
         }
+        // DeerFlow parity: credential-shaped findings are recorded, not fatal.
+        java.util.List<JsonNode> warnedSecrets = new java.util.ArrayList<>();
         for (JsonNode finding : facts.path("findings")) {
-            if (finding.path("rule_id").asText().startsWith("secret-")) {
-                throw new IllegalArgumentException(
-                        "Skill package contains credential material; remove it before review");
-            }
+            if (finding.path("rule_id").asText().startsWith("secret-")) warnedSecrets.add(finding);
+        }
+        if (!warnedSecrets.isEmpty() && facts instanceof ObjectNode factsNode) {
+            var warned = factsNode.putArray("warned_secret_findings");
+            warnedSecrets.forEach(warned::add);
         }
         ObjectNode allowed = json.createObjectNode();
         allowed.put("decision", "allow").put("authorization_source", "human").put("skipped", "semantic-review");
@@ -142,7 +165,12 @@ public final class SkillPackageScreening {
             if (options != null) command.add(options.toString());
             process = new ProcessBuilder(command).redirectOutput(output.toFile()).redirectError(error.toFile()).start();
             if (!process.waitFor(15, TimeUnit.SECONDS)) throw new IOException("Skill static scanner timed out");
-            if (process.exitValue() != 0 || Files.size(output) > 1024 * 1024) throw new IOException("Skill static scanner failed");
+            if (process.exitValue() != 0 || Files.size(output) > 1024 * 1024) {
+                // Surface the child's stderr: without it the failure is undiagnosable on hosts where
+                // the interpreter cannot run the frozen scanner (see issue #46).
+                throw new IOException("Skill static scanner failed (exit=" + process.exitValue() + "): "
+                        + diagnostic(error));
+            }
             JsonNode result = json.readTree(output.toFile());
             if (result == null || options == null && (!result.path("findings").isArray() || !result.path("scanner_errors").isArray()
                     || !result.path("scanner_errors").isEmpty()) || options != null && !result.path("facts").isObject()) {
@@ -178,14 +206,26 @@ public final class SkillPackageScreening {
             if (Files.isSymbolicLink(scripts.resolve("screen-receipts.jsonl"))) throw new IOException("Skill scanner receipt contains a link");
             JsonNode facts = review(directory);
             if (facts.path("blocked").asBoolean()) throw new IllegalArgumentException("Static security scan blocked the Skill package");
+            // DeerFlow parity: credential-shaped findings are recorded as warnings instead of
+            // blocking the write. See private-docs W15-RelaxSkillAdmissionToDeerFlowParity.md.
+            java.util.List<JsonNode> warnedSecrets = new java.util.ArrayList<>();
             for (JsonNode finding : facts.path("findings")) {
-                if (finding.path("rule_id").asText().startsWith("secret-")) {
-                    throw new IllegalArgumentException("Skill package contains credential material; remove it before review");
-                }
+                if (finding.path("rule_id").asText().startsWith("secret-")) warnedSecrets.add(finding);
+            }
+            if (!warnedSecrets.isEmpty() && facts instanceof ObjectNode factsNode) {
+                var warned = factsNode.putArray("warned_secret_findings");
+                warnedSecrets.forEach(warned::add);
             }
             if (!facts.path("code_files").isArray()) throw new IOException("Frozen code classification is unavailable");
             java.util.Set<String> codeFiles = new java.util.HashSet<>();
             facts.path("code_files").forEach(file -> codeFiles.add(file.asText()));
+            if (!semanticReviewEnabled()) {
+                // DeerFlow parity / configurable: the per-file model review can be turned off, in
+                // which case only the deterministic static result is recorded. See
+                // private-docs W15-RelaxSkillAdmissionToDeerFlowParity.md.
+                if (facts instanceof ObjectNode skipped) skipped.put("semantic_review", "skipped");
+                return facts;
+            }
             var body = json.createObjectNode();
             body.putObject("context").put("mode", "flash").put("thinking_enabled", false);
             var binding = resolver.apply(body);
