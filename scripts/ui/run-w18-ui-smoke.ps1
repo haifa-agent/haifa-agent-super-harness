@@ -83,8 +83,9 @@ if ($W04ImageGen) {
     if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $W08LiveDelegation, $W15PackageDifferential).Where({ $_ }).Count -gt 0) {
         throw 'The W04 imagegen profile is mutually exclusive with the other profiles.'
     }
-    # Reuses the live DeepSeek managed model and skips the controlled loopback provider. The
-    # deferred A1-A8 assertions stay NOT_RUN until upstream 038-32 lands; A0 alone runs today.
+    # Reuses the live DeepSeek managed model and skips the controlled loopback provider. With the
+    # declared bun runtime A1-A8 all assert real behaviour; without it only A0/A8 run and the rest
+    # stay in the AllowedNotRun list sourced from w04-imagegen-deferred.json.
     $LiveDeepSeek = $true
 }
 
@@ -158,27 +159,42 @@ if ($W04ImageGen) {
     $w04BunCandidate = [Environment]::GetEnvironmentVariable('W04_BUN_HOME', 'Process')
     if ($w04BunCandidate) {
         # The controller supplies an already-provisioned bun directory; the runner never installs,
-        # fetches or substitutes one and only passes it through to the Gateway PATH.
+        # fetches or substitutes one and only passes it through to the Gateway (its PATH prefix,
+        # plus the declared HAIFA_SUPER_HARNESS_BUN_PATH executable below).
         $candidate = [IO.Path]::GetFullPath($w04BunCandidate).TrimEnd('\', '/')
         if (Test-Path -LiteralPath (Join-Path $candidate 'bun.exe') -PathType Leaf) { $w04BunHome = $candidate }
     }
-    $w04RuntimeReady = [Environment]::GetEnvironmentVariable('W04_SKILL_RUNTIME_READY', 'Process')
+    $w04BunPath = if ($w04BunHome) { (Join-Path $w04BunHome 'bun.exe') } else { $null }
+    # The W04 profile starts a brand-new data root every round. The per-data-root Credential
+    # Manager provisioning can be unavailable on a host whose Credential Manager is full, so this
+    # profile injects the Runtime continuation key as an external process-environment reference:
+    # one random 256-bit key per round, referenced through HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF
+    # and carried only in the Gateway's process environment. The value is never logged, printed,
+    # recorded in evidence or written to disk by this script.
+    $w04KeyBytes = New-Object byte[] 32
+    [Security.Cryptography.RandomNumberGenerator]::Fill($w04KeyBytes)
     $w04 = [ordered]@{
         hostShell = 'on'
+        runtime = $(if ($w04BunPath) { 'declared' } else { 'undeclared' })
+        toolName = 'baoyu_image_gen'
         skillsDirectory = $w04SkillsDirectory
         seedPackage = $w04SeedPackage
         extendPath = (Join-Path $w04ExtendDirectory 'baoyu-image-gen/EXTEND.md')
         manifest = $w04SeedManifest
         bunHome = $w04BunHome
+        bunPath = $w04BunPath
         bunHomeCandidate = $w04BunCandidate
-        runtimeReady = $(if ($w04RuntimeReady -eq '1') { '1' } else { '0' })
+        workspaceStorageRoot = (Join-Path $dataRoot 'workspace')
     }
     $w04 | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'w04-profile.json') -Encoding utf8
     $w04SeedStatus = & python -B (Join-Path $root 'tests/ui/fixtures/w04/baoyu_imagegen_seed.py') `
         --package $w04SeedPackage --extend $w04ExtendDirectory --manifest $w04SeedManifest --verify 2>&1
     if ($LASTEXITCODE -ne 0) { throw "W04 imagegen seed verification failed: $w04SeedStatus" }
-    $w04Deferred = @((Get-Content -Raw -LiteralPath (Join-Path $root 'tests/ui/smoke/w04-imagegen-deferred.json') |
-        ConvertFrom-Json).cases)
+    $w04DeferredManifest = Get-Content -Raw -LiteralPath (Join-Path $root 'tests/ui/smoke/w04-imagegen-deferred.json') |
+        ConvertFrom-Json
+    # Declared rounds may not defer anything; the undeclared-runtime round defers exactly the
+    # execution cases while A8 alone proves the fail-closed surface.
+    $w04Deferred = if ($w04BunPath) { @() } else { @($w04DeferredManifest.undeclaredRuntimeCases) }
 }
 $serverOut = Join-Path $evidenceRoot "server-$stamp.stdout.log"
 $serverErr = Join-Path $evidenceRoot "server-$stamp.stderr.log"
@@ -212,11 +228,16 @@ $managedEnvironment = @{
     W18_PROVIDER_URL = $null
     UXV1_DEFER_WEB = $(if ($DeferUxV1Web) { '1' } else { $null })
     W15_DIFFERENTIAL_BACKEND = $(if ($W15PackageDifferential) { 'haifa' } else { $null })
-    # W04 imagegen profile: host shell Tool on plus the isolated Skill directory. The recorded
-    # bun directory joins the Gateway PATH below, never through this shared table.
+    # W04 imagegen profile: host shell Tool on plus the isolated Skill directory. The recorded bun
+    # directory joins the Gateway PATH below and the declared HAIFA_SUPER_HARNESS_BUN_PATH carries
+    # the exact executable into the product configuration; neither goes through this shared table.
     HAIFA_SUPER_HARNESS_HOST_SHELL = $(if ($W04ImageGen) { 'on' } else { $null })
     HAIFA_SUPER_HARNESS_SKILLS_DIR = $(if ($W04ImageGen) { $w04.skillsDirectory } else { $null })
-    W04_SKILL_RUNTIME_READY = $(if ($W04ImageGen) { $w04.runtimeReady } else { $null })
+    HAIFA_SUPER_HARNESS_BUN_PATH = $(if ($W04ImageGen) { $w04.bunPath } else { $null })
+    # W04 profile continuation key: external env reference (see the seed block above). The value
+    # table is never persisted; the key itself is only tracked in the process environment.
+    HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF = $(if ($W04ImageGen) { 'env://W04_IMAGEGEN_CONTINUATION_KEY' } else { $null })
+    W04_IMAGEGEN_CONTINUATION_KEY = $(if ($W04ImageGen) { [Convert]::ToBase64String($w04KeyBytes) } else { $null })
     W18_MODEL_NAME = $(if ($LiveDeepSeek) { 'w18-deepseek-live' } else { 'w18-controlled' })
     W18_PLAYWRIGHT_SPEC = $(if ($W15PackageDifferential) {
         'w15-package-differential.spec.cjs'

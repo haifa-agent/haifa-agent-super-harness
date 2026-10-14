@@ -1,5 +1,6 @@
 package io.haifa.agent.superharness.server.prompt;
 
+import io.haifa.agent.superharness.server.config.SkillScriptToolConfig;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -28,6 +29,10 @@ public final class LeadPromptComposer {
      * The exact set is the union required by the task prompt: inventory sections 3, 4 and 7 plus
      * the SH current tools. Matching is whole-word across the entire rendered text so plain-text
      * references (the deleted {@code <citations>} block, code blocks) cannot slip through.
+     */
+    /* Discipline: check(...) and prompt-with-registered-tools validation both treat these names as
+     * first-class. The composed prompt discloses the trusted skill script Tool under its product
+     * name, so the render path must validate it like any other tool name in the frozen template.
      */
     static final Set<String> KNOWN_TOOL_NAMES = Set.of(
             "present_files",
@@ -70,7 +75,8 @@ public final class LeadPromptComposer {
             "setup_agent",
             "update_agent",
             "skill_load",
-            "skill_resource_read");
+            "skill_resource_read",
+            SkillScriptToolConfig.TOOL_NAME);
 
     private static final Pattern TOOL_NAME_PATTERN = Pattern.compile(
             "(?<![A-Za-z0-9_])(?:" + String.join("|", KNOWN_TOOL_NAMES) + ")(?![A-Za-z0-9_])");
@@ -111,7 +117,8 @@ public final class LeadPromptComposer {
                 : "");
         values.put("subagent_reminder", delegation
                 ? "- Execute directly by default. Delegate only bounded, independent work with clear benefit; wait for the returned result and verify it." : "");
-        values.put("skill_first_reminder", LEGACY_SKILL_FIRST_REMINDER);
+        values.put("skill_first_reminder", skillFirstReminder(
+                registeredToolNames.contains(SkillScriptToolConfig.TOOL_NAME)));
 
         String instructions = format(template.adaptedTemplate(), values);
         String trimmed = instructions.trim();
@@ -171,6 +178,21 @@ public final class LeadPromptComposer {
             result.add(matcher.group());
         }
         return result;
+    }
+
+    /** Additional Skill First guidance. Byte-identical without the trusted Skill script Tool; when
+     * the Tool is registered it discloses its product alias as the only way to execute a Skill's
+     * scripts entry, so the template checker validates it like a frozen tool reference.
+     */
+    private static String skillFirstReminder(boolean skillScriptTool) {
+        if (!skillScriptTool) {
+            return LEGACY_SKILL_FIRST_REMINDER;
+        }
+        return LEGACY_SKILL_FIRST_REMINDER
+                + "- Scripted skills: follow the loaded Skill's script instructions and run its "
+                + "`scripts/` entry through the `" + SkillScriptToolConfig.TOOL_NAME
+                + "` tool. The runtime, script, working directory and outputs/ location are fixed; "
+                + "approval is always required.\n";
     }
 
     private static String renderSoul(String soul) {

@@ -384,19 +384,44 @@ public final class SkillConfigStore {
     private SkillRunTools.Projection currentReviewLoader(SkillRunTools.Projection projection) {
         // Publication is a product concern; validity remains the public SDK grant's matches() contract.
         // Consult current authority even when this loader belongs to an older frozen Run.
-        io.haifa.agent.skill.api.SkillContentLoader loader = (binding, visibility) -> {
-            binding.packageReviewGrantId().ifPresent(id -> {
-                var subject = new io.haifa.agent.skill.api.SkillTrustSubject(visibility.tenant(), visibility.principal(),
-                        SkillReviewApprovals.PRODUCT, visibility.project().map(io.haifa.agent.core.reference.ProjectRef::projectId));
-                if (state.trust().packageReviewGrants().stream().noneMatch(grant -> grant.id().equals(id)
-                        && grant.matches(binding, subject, java.time.Instant.now()))) {
-                    throw new SecurityException("Skill package review authorization is unavailable or revoked");
-                }
-            });
-            return projection.loader().load(binding, visibility);
+        // The wrapper must implement BOTH seams the trusted Skill script chain reads through:
+        // load(...) for the activation content and loadResourceBytes(...) for the raw package
+        // bytes the platform materializes the frozen entry execution directory from. The
+        // interface default byte view is derived from the readable activation content, not the
+        // frozen package bytes, so relying on it would break the entry-file execution path.
+        io.haifa.agent.skill.api.SkillContentLoader loader = new io.haifa.agent.skill.api.SkillContentLoader() {
+            @Override
+            public io.haifa.agent.skill.api.SkillContent load(
+                    io.haifa.agent.skill.api.FrozenSkillBinding binding,
+                    io.haifa.agent.skill.api.SkillVisibilityContext visibility) {
+                requireReviewAuthority(binding, visibility);
+                return projection.loader().load(binding, visibility);
+            }
+
+            @Override
+            public java.util.Optional<byte[]> loadResourceBytes(
+                    io.haifa.agent.skill.api.FrozenSkillBinding binding,
+                    io.haifa.agent.skill.api.SkillVisibilityContext visibility,
+                    String resource) {
+                requireReviewAuthority(binding, visibility);
+                return projection.loader().loadResourceBytes(binding, visibility, resource);
+            }
         };
         return new SkillRunTools.Projection(projection.catalog(), loader, projection.allowedSkills(), projection.fingerprint(),
                 projection.selectedPackages(), projection.recovery(), projection.trust());
+    }
+
+    private void requireReviewAuthority(
+            io.haifa.agent.skill.api.FrozenSkillBinding binding,
+            io.haifa.agent.skill.api.SkillVisibilityContext visibility) {
+        binding.packageReviewGrantId().ifPresent(id -> {
+            var subject = new io.haifa.agent.skill.api.SkillTrustSubject(visibility.tenant(), visibility.principal(),
+                    SkillReviewApprovals.PRODUCT, visibility.project().map(io.haifa.agent.core.reference.ProjectRef::projectId));
+            if (state.trust().packageReviewGrants().stream().noneMatch(grant -> grant.id().equals(id)
+                    && grant.matches(binding, subject, java.time.Instant.now()))) {
+                throw new SecurityException("Skill package review authorization is unavailable or revoked");
+            }
+        });
     }
 
     public SkillRunTools.Projection recoveryProjection(SkillRunTools.Selection selection) {

@@ -47,6 +47,7 @@ import io.haifa.agent.superharness.events.ReplayResult;
 import io.haifa.agent.superharness.events.RunTerminalKind;
 import io.haifa.agent.superharness.server.config.McpRunTools;
 import io.haifa.agent.superharness.server.config.HostShellToolConfig;
+import io.haifa.agent.superharness.server.config.SkillScriptToolConfig;
 import io.haifa.agent.superharness.server.config.SkillRunTools;
 import io.haifa.agent.superharness.server.prompt.AgentPromptContext;
 import io.haifa.agent.superharness.server.prompt.InputTrustBoundary;
@@ -1251,10 +1252,14 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                         skillProjection == null ? "" : skillProjection.fingerprint());
                 // The prompt detects SOUL changes; identity also governs the retained Tool callbacks
                 // and must rebuild independently when bootstrap/default prompts have identical text.
+                // The declared Skill script Tool names are environment-and-catalog facts, computed
+                // fresh so a later enable/disable or bun change rebuilds the disclosure consistently.
+                Set<String> platformToolNames = new java.util.LinkedHashSet<>(selectedBridge.mcpToolNames());
+                platformToolNames.addAll(SkillScriptToolConfig.toolNames(System.getenv(), skillProjection));
                 switchingPrompt = !selectedBridge.matchesAgentIdentity(agentPrompt)
                         || !selectedBridge.promptSignature().equals(
                                 HaifaRunBridge.promptSignatureFor(toolsForThread(thread, agentPrompt), skillProjection, agentPrompt, delegation,
-                                        selectedBridge.mcpToolNames()));
+                                        platformToolNames));
                 switchingDelegation = !selectedBridge.delegationSignature().equals(
                         delegation.signature(toolsForThread(thread, agentPrompt), mcpProjection.fingerprint(),
                                 skillProjection == null ? "" : skillProjection.fingerprint(), selectedBridge.mcpToolNames()));
@@ -1770,6 +1775,31 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 .orElse(null);
     }
 
+    /**
+     * The trusted Skill script declaration is a host shell chain: it additionally requires the
+     * bounded bun runtime and the admitted Skill binding, and its workspace root is this Thread's
+     * own user-data tree (bound here, idempotent) so the executed package writes {@code outputs/}
+     * exactly where the Artifact chain serves. Any missing or conflicting fact keeps the Tool off.
+     */
+    private SkillScriptToolConfig skillScriptConfig(ThreadRecord thread, SkillRunTools.Projection skillProjection) {
+        if (dataDirectoryRoot == null) return null;
+        if (SkillScriptToolConfig.declaredBinding(skillProjection).isEmpty()) return null;
+        if (SkillScriptToolConfig.bunExecutable(
+                System.getenv().get(SkillScriptToolConfig.BUN_ENVIRONMENT_KEY)) == null) {
+            return null;
+        }
+        try {
+            return SkillScriptToolConfig.fromEnvironment(
+                    System.getenv(),
+                    workspaceChanges.bindThreadWorkspaceDataRoot(thread.ownerId, thread.threadId),
+                    dataDirectoryRoot,
+                    skillProjection).orElse(null);
+        } catch (RuntimeException unavailable) {
+            // A missing or conflicting Thread workspace must never widen the Tool surface.
+            return null;
+        }
+    }
+
     private HaifaRunBridge newBridge(HaifaRunBridge.ModelBinding binding, ThreadRecord thread,
             McpRunTools.Projection mcpProjection, SkillRunTools.Projection skillProjection,
             AgentPromptContext agentPrompt,
@@ -1778,7 +1808,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         bridgeBuilds.incrementAndGet();
         return AccessOwner.call(thread.ownerId, () -> new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt),
                 foundation, mcpProjection, skillProjection, agentPrompt, delegation, childRunCapacity, isPlanMode,
-                executionExecutorFactory, hostShellConfig(), parentWallTimeMillisForTests));
+                executionExecutorFactory, hostShellConfig(), skillScriptConfig(thread, skillProjection),
+                parentWallTimeMillisForTests));
     }
 
     /** Test-only: the exact bridge currently attached to a Thread, or null when none is. */

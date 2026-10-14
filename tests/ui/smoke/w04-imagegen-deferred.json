@@ -1,24 +1,34 @@
 {
-  "blockedBy": "upstream-038-32",
-  "reason": "The skill-script Tool entry (TrustedSkillScriptToolProvider) is not on the consumed SDK baseline yet, so the SH runtime only exposes the generic execution_run tool and the skill script tool name / materialization semantics are undeclared. Rerun this profile after 038-32 merges and the baseline re-publishes; the runner AllowedNotRun list, the spec gate and the SHPM dependency posture all read this single manifest.",
+  "blockedBy": "undeclared-runtime-round",
+  "reason": "This deferral applies only to a dedicated profile round whose process variables declare no bun runtime: the trusted Skill script Tool stays unregistered (fail closed), so the execution cases A1-A7 cannot run in that round while A8 alone proves the fail-closed surface. In a declared round no case in this list may stay NOT_RUN; both sides read this single manifest so a skipped case never widens into a PASS.",
   "assertions": {
     "A1": "审批拒绝不启进程：技能脚本 Tool 为 ALWAYS 审批；拒绝后既无该 Tool 的执行结果，也无任何进程启动。",
-    "A2": "依赖摘要漂移拒绝：冻结技能包物化前的逐文件摘要校验，任一依赖文件漂移即在执行入口拒绝（上游 038-32 §3.1 反例）。",
+    "A2": "声明包身份的一次性物化：Run 工作空间内恰好一个已准备版本目录，入口字节与冻结种子一致，SDK prepared 标记存在，无临时目录残留（负例漂移拒绝由上游 038-32 SDK 用例覆盖基线）。",
     "A3": "多文件包相对导入解析成立，入口文件身份（脚本以文件路径而非 stdin 执行）成立（§3.1 正例）。",
     "A4": "超时/取消终结整个进程树，无孤儿进程（含 Windows 子树）。",
-    "A5": "输出越界路径（outputs/ 之外）被拒绝，且不发布 Artifact。",
+    "A5": "输出越界路径（outputs/ 之外）被拒绝，且不发布 Artifact；磁盘上不出现越界路径。",
     "A6": "产物落当前 Run 的 outputs/，Artifact ID/provenance 可信，下载字节 SHA-256 与落盘文件一致。",
     "A7": "跨 Run/跨 Thread 隔离：Run A 的产物不出现在 Run B。",
-    "A8": "运行时未声明或预检失败 fail closed，使用稳定错误码。"
+    "A8": "运行时未声明或预检失败 fail closed，使用稳定错误码；声明轮内运行时/脚本/工作目录对模型不可选（schema 注入拒绝）。"
   },
   "cases": [
+    "A0 isolated baoyu-image-gen execution seed with the host shell profile",
     "A1 approval denial starts no skill script process",
-    "A2 dependency digest drift rejects skill package materialization",
+    "A2 verified package identity prepares the frozen execution directory once",
     "A3 multi-file package resolves relative imports and entry-file identity",
     "A4 timeout and cancellation terminate the whole process tree",
     "A5 output outside outputs is rejected and publishes no artifact",
     "A6 run artifact lands in outputs with verifiable download SHA-256",
     "A7 cross-Run isolation keeps artifacts thread-scoped",
     "A8 undeclared runtime fails closed with a stable error code"
+  ],
+  "undeclaredRuntimeCases": [
+    "A1 approval denial starts no skill script process",
+    "A2 verified package identity prepares the frozen execution directory once",
+    "A3 multi-file package resolves relative imports and entry-file identity",
+    "A4 timeout and cancellation terminate the whole process tree",
+    "A5 output outside outputs is rejected and publishes no artifact",
+    "A6 run artifact lands in outputs with verifiable download SHA-256",
+    "A7 cross-Run isolation keeps artifacts thread-scoped"
   ]
 }

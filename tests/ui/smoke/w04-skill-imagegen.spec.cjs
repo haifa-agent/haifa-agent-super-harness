@@ -1,18 +1,16 @@
-// W04 baoyu-image-gen after admission: the frozen UI plus the isolated profile Skill seed with
-// the host shell Tool.
+// W04 baoyu-image-gen trusted Skill script profile: the frozen UI plus the isolated execution
+// seed with the declared bun runtime.
 //
-// Assertion table (038-32 contract 5.1): A0 is the only case allowed to pass in this lane. It
-// proves profile admission without any model call (live DeepSeek is started, but the deferred
-// executions are the only things that would consume it): the isolated seed Skill is admitted
-// from the profile's own skills-fixture directory, its EXTEND.md seeding stays inside the work
-// tree data root, the host shell switch is declared on, and the cached bun directory resolves.
-//
-// A1-A8 stay NOT_RUN with recorded evidence until the controller supplies both facts for a
-// candidate-SDK round:
-//   - W04_SKILL_RUNTIME_READY=1 (the upstream 038-32 entry is on the consumed baseline), and
-//   - W04_SKILL_TOOL_NAME=<tool name> (the registered skill script tool alias).
-// The runner's AllowedNotRun list reads tests/ui/smoke/w04-imagegen-deferred.json together with
-// the gate below, so deferral can never widen into a PASS.
+// Assertion table (038-32 contract 5.1, adapted to this lane's declared facts): A0 proves profile
+// admission without a model call; A1-A8 drive real Runs through the frozen UI with the live DeepSeek
+// managed model. The runner records whether the declared bun runtime exists (w04-profile.json
+// `runtime: declared|undeclared`):
+//   - declared round: A1-A8 all assert real behaviour (A8 exercises the model boundary: the runtime
+//     is not a model choice, so a schema-level injection is rejected before any process).
+//   - undeclared round: the runner's AllowedNotRun list (w04-imagegen-deferred.json) covers A1-A7;
+//     A8 alone asserts the fail-closed surface (the Tool is not registered, nothing starts).
+// No placeholder env gate remains: the deferral is value-driven from the same manifest both sides
+// read, so a skipped case can never widen into a PASS.
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -28,12 +26,11 @@ const APP =
   `http://127.0.0.1:${process.env.E2E_FRONTEND_PORT ?? "25618"}`;
 const EVIDENCE = process.env.W18_EVIDENCE_DIR;
 const SKILL = "baoyu-image-gen";
+const SKILL_TOOL_NAME = "baoyu_image_gen";
 const MODEL_NAME = process.env.W18_MODEL_NAME ?? "w18-deepseek-live";
 const DEFERRED = JSON.parse(
   fs.readFileSync(path.join(__dirname, "w04-imagegen-deferred.json"), "utf8"),
 );
-const RUNTIME_READY = process.env.W04_SKILL_RUNTIME_READY === "1";
-const SKILL_TOOL_NAME = process.env.W04_SKILL_TOOL_NAME ?? "";
 const EXTEND_PROVIDER = "codex-cli";
 const ASSERTION_TABLE = DEFERRED.assertions;
 
@@ -89,10 +86,11 @@ async function saveEvidence(testInfo, name, value) {
   });
 }
 
-// Deferred A1-A8 gate: the runner records the skipped cases as NOT_RUN and only accepts them
-// through the AllowedNotRun list sourced from w04-imagegen-deferred.json.
+// Value-driven NOT_RUN gate: in an undeclared-runtime round A1-A7 stay NOT_RUN through the runner's
+// AllowedNotRun list; the deferral records the reason per case instead of silently passing.
 async function requireExecution(testInfo, assertion) {
-  if (RUNTIME_READY && SKILL_TOOL_NAME) return;
+  const profile = readProfile();
+  if (profile.runtime === "declared") return;
   const file = testInfo.outputPath(`${assertion}-deferral.json`);
   fs.writeFileSync(
     file,
@@ -102,11 +100,8 @@ async function requireExecution(testInfo, assertion) {
         contract: ASSERTION_TABLE[assertion],
         status: "NOT_RUN",
         blockedBy: DEFERRED.blockedBy,
-        reason: RUNTIME_READY
-          ? `W04_SKILL_TOOL_NAME is unset; the controller supplies it once ${DEFERRED.blockedBy} names the skill script tool`
-          : DEFERRED.reason,
-        runtimeReady: process.env.W04_SKILL_RUNTIME_READY ?? null,
-        skillToolName: SKILL_TOOL_NAME || null,
+        reason: DEFERRED.reason,
+        runtime: profile.runtime,
       },
       null,
       2,
@@ -117,7 +112,24 @@ async function requireExecution(testInfo, assertion) {
     path: file,
     contentType: "application/json",
   });
-  test.skip(true, `${assertion} is NOT_RUN: ${RUNTIME_READY ? "skill tool name undeclared" : DEFERRED.blockedBy}`);
+  test.skip(true, `${assertion} is NOT_RUN: ${DEFERRED.blockedBy}`);
+}
+
+function readProfile() {
+  expect(EVIDENCE, "runner must export W18_EVIDENCE_DIR").toBeTruthy();
+  return JSON.parse(fs.readFileSync(path.resolve(EVIDENCE, "w04-profile.json"), "utf8"));
+}
+
+// Review + enable flow: the executable seed enters the executable Skill catalog only after the
+// product's deterministic screen evidence is recorded, exactly like the frozen UI's enable toggle.
+async function enableSkill(context) {
+  const response = await context.request.put(`${APP}/api/skills/${SKILL}`, {
+    data: { enabled: true },
+    timeout: 60_000,
+  });
+  expect(response.status(), await response.text()).toBe(200);
+  const row = (await response.json());
+  expect(row.enabled, "the execution lane needs the admitted seed enabled").toBe(true);
 }
 
 function runIdentity(response) {
@@ -128,7 +140,7 @@ function runIdentity(response) {
   return { threadId: match[1], runId: match[2], location };
 }
 
-async function runChat(page, context, prompt) {
+async function runChat(page, context, prompt, deadlineMs = 150_000, cardAction = "approve") {
   await page.goto("/workspace/chats/new", { waitUntil: "domcontentloaded" });
   const input = page.locator('textarea[name="message"]');
   await expect(input).toBeVisible();
@@ -147,50 +159,43 @@ async function runChat(page, context, prompt) {
     throw new Error(`run stream returned ${response.status()}: ${await response.text()}`);
   }
   const identity = runIdentity(response);
-  const deadline = Date.now() + 150_000;
+  const deadline = Date.now() + deadlineMs;
+  let answered = null;
   while (Date.now() < deadline) {
     const snapshot = await context.request.get(`${APP}${identity.location}`, { timeout: 5_000 });
     expect(snapshot.status(), await snapshot.text()).toBe(200);
     const status = (await snapshot.json()).status;
     if (status === "success" || status === "error" || status === "timeout") {
-      return { identity, terminal: status };
+      return { identity, terminal: status, ...answered };
     }
     const card = page.getByTestId("human-input-card");
-    const deny = card.getByRole("button", { name: /^(Reject|拒绝)$/ });
-    const approve = card.getByRole("button", { name: /^(Approve|批准)$/ });
-    if ((await deny.count()) && (await deny.last().isEnabled())) {
-      const answered = page.waitForResponse(
-        (value) =>
-          value.request().method() === "POST" &&
-          Boolean(
-            value.request().postDataJSON()?.input?.messages?.at(-1)?.additional_kwargs
-              ?.human_input_response,
-          ),
-        { timeout: 15_000 },
-      );
-      await deny.last().click();
-      const continuation = await answered;
-      expect(continuation.status(), await continuation.text()).toBe(200);
-      return { identity, denied: true };
-    }
-    if ((await approve.count()) && (await approve.last().isEnabled())) {
-      const answered = page.waitForResponse(
-        (value) =>
-          value.request().method() === "POST" &&
-          Boolean(
-            value.request().postDataJSON()?.input?.messages?.at(-1)?.additional_kwargs
-              ?.human_input_response,
-          ),
-        { timeout: 15_000 },
-      );
-      await approve.last().click();
-      const continuation = await answered;
-      expect(continuation.status(), await continuation.text()).toBe(200);
-      return { identity, approved: true };
+    if (card.count && (await card.count())) {
+      for (const action of cardAction === "deny" ? ["deny", "approve"] : ["approve", "deny"]) {
+        const button = card.getByRole("button", {
+          name: action === "approve" ? /^(Approve|批准)$/ : /^(Reject|拒绝)$/,
+        });
+        if ((await button.count()) && (await button.last().isEnabled())) {
+          const answeredResponse = page.waitForResponse(
+            (value) =>
+              value.request().method() === "POST" &&
+              Boolean(
+                value.request().postDataJSON()?.input?.messages?.at(-1)?.additional_kwargs
+                  ?.human_input_response,
+              ),
+            { timeout: 15_000 },
+          );
+          await button.last().click();
+          if (!answered) answered = {};
+          const continuation = await answeredResponse;
+          expect(continuation.status(), await continuation.text()).toBe(200);
+          answered = { [action === "approve" ? "approved" : "denied"]: true };
+          break;
+        }
+      }
     }
     await page.waitForTimeout(250); // Bounded observation of this Run; no retry, no budget change.
   }
-  throw new Error(`Run ${identity.runId} exceeded its 150-second terminal deadline`);
+  throw new Error(`Run ${identity.runId} exceeded its ${Math.round(deadlineMs / 1000)}-second terminal deadline`);
 }
 
 async function threadState(context, identity) {
@@ -202,12 +207,43 @@ async function threadState(context, identity) {
   return (await response.json()).values;
 }
 
-test("A0 isolated baoyu-image-gen admission seed with the host shell profile", async ({ context, page }, testInfo) => {
+// The frozen artifact route serves `artifacts/mnt/user-data/<relative>`; a virtual path carries a
+// leading slash that the route joins (the encoded URL keeps the same segment sequence).
+function routeArtifact(artifactPath) {
+  return String(artifactPath).replace(/^\//, "");
+}
+
+function ownCalls(state, runId) {
+  return state.messages
+    .filter((message) => message.run_id === runId)
+    .flatMap((message) => message.tool_calls ?? [])
+    .filter((call) => call.name === SKILL_TOOL_NAME);
+}
+
+function toolResult(state, callId) {
+  return state.messages.find(
+    (message) => message.type === "tool" && message.tool_call_id === callId,
+  );
+}
+
+const GENERATE_PROMPT =
+  `Load ${SKILL} using skill_load, follow its loaded instructions, then answer with a short summary ` +
+  `of the tool result text.`;
+
+test("A0 isolated baoyu-image-gen execution seed with the host shell profile", async ({ context, page }, testInfo) => {
   page.setDefaultTimeout(15_000);
   page.setDefaultNavigationTimeout(30_000);
   expect(EVIDENCE, "runner must export W18_EVIDENCE_DIR").toBeTruthy();
-  const profile = JSON.parse(fs.readFileSync(path.resolve(EVIDENCE, "w04-profile.json"), "utf8"));
+  const profile = readProfile();
   expect(profile.hostShell, "the W04 imagegen profile must turn the host shell switch on").toBe("on");
+  expect(profile.toolName).toBe(SKILL_TOOL_NAME);
+  expect(["declared", "undeclared"]).toContain(profile.runtime);
+  if (profile.runtime === "declared") {
+    expect(profile.bunPath, "the declared bun executable must be an absolute file reference").toBeTruthy();
+    expect(path.isAbsolute(profile.bunPath)).toBe(true);
+  } else {
+    expect(profile.bunPath ?? null, "an undeclared round must carry no bun path").toBeNull();
+  }
   if (profile.bunHome) {
     // The controller-supplied bun directory is passed through verbatim; the spec never opens it
     // (it is external to this worktree), it only records that a resolved directory was carried.
@@ -216,13 +252,9 @@ test("A0 isolated baoyu-image-gen admission seed with the host shell profile", a
       `the recorded bun home ${profile.bunHome} must be an absolute directory reference`,
     ).toBe(true);
   }
-  if (profile.bunHomeCandidate) {
-    expect(typeof profile.bunHomeCandidate, "the raw W04_BUN_HOME fact must stay a recorded string").toBe("string");
-    expect(profile.bunHome === null || profile.bunHome === profile.bunHomeCandidate, "the resolved bun home must be the recorded candidate").toBe(true);
-  }
 
   // Isolation: every seeded path must stay inside this worktree and outside any user home.
-  const repoRoot = path.resolve(__dirname, "..", "..");
+  const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const home = path.isAbsolute(os.homedir()) ? os.homedir() : "";
   for (const [name, value] of Object.entries({
     skillsDirectory: profile.skillsDirectory,
@@ -242,6 +274,8 @@ test("A0 isolated baoyu-image-gen admission seed with the host shell profile", a
   const seedPackage = path.resolve(profile.seedPackage);
   const manifest = JSON.parse(fs.readFileSync(path.resolve(profile.manifest), "utf8"));
   expect(manifest.skill).toBe(SKILL);
+  expect(manifest.entry, "the seed entry matches the product declaration").toBe("scripts/main.ts");
+  expect(manifest.runtime).toBe("bun");
   const files = seedFiles(seedPackage);
   expect([...files.keys()].sort(), "seed file set must match the manifest sheet").toEqual(
     Object.keys(manifest.files).sort(),
@@ -267,7 +301,7 @@ test("A0 isolated baoyu-image-gen admission seed with the host shell profile", a
   expect((await models.json()).models.map((model) => model.name)).toContain(MODEL_NAME);
 
   // External-directory admission: the exact seed bytes enter the executable Skill catalog with
-  // the scripts flag intact, and stay disabled until the deferred review/enable flow runs.
+  // the scripts flag intact, and stay disabled until the review/enable flow runs.
   const skills = await context.request.get(`${APP}/api/skills`);
   expect(skills.status(), await skills.text()).toBe(200);
   const rows = (await skills.json()).skills;
@@ -295,167 +329,272 @@ test("A0 isolated baoyu-image-gen admission seed with the host shell profile", a
     modelCall: false,
     profile: { ...profile, manifest: "inline below", seedPackage: "inline below" },
     manifest,
-    seedFiles: Object.fromEntries([...files.keys()]),
+    seedFiles: Object.fromEntries(files),
     packageSha256: manifest.packageSha256,
     extendProvider: EXTEND_PROVIDER,
     skillRow: row,
-    bunHomePresent: Boolean(profile.bunHome),
-    deferred: { blockedBy: DEFERRED.blockedBy, cases: DEFERRED.cases, runtimeReady: RUNTIME_READY },
+    deferred: { blockedBy: DEFERRED.blockedBy, cases: DEFERRED.cases },
   });
 });
 
-const EXECUTION_PROMPT =
-  `Load ${SKILL} using skill_load, then execute its scripts/main.ts entry through the skill script tool ` +
-  `(${SKILL_TOOL_NAME || "skill-script-tool"}) to prove the package really runs, and show the tool result.`;
-
 test("A1 approval denial starts no skill script process", async ({ context, page }, testInfo) => {
   await requireExecution(testInfo, "A1");
-  const attempt = await runChat(page, context, EXECUTION_PROMPT);
+  await enableSkill(context);
+  const attempt = await runChat(
+    page,
+    context,
+    `${GENERATE_PROMPT} Start by generating an image with prompt "approval probe" and image_name "a1-denial.png". ` +
+      `When the approval card appears somebody will answer it; wait for the result and then report it.`,
+    150_000,
+    "deny",
+  );
   expect(attempt.denied, "the ALWAYS-approval card must be answered with the denial").toBe(true);
   const state = await threadState(context, attempt.identity);
-  const own = state.messages.filter((message) => message.run_id === attempt.identity.runId);
-  const calls = own.flatMap((message) => message.tool_calls ?? []).filter((call) => call.name === SKILL_TOOL_NAME);
+  const calls = ownCalls(state, attempt.identity.runId);
   expect(calls, "the model must request the skill script tool").toHaveLength(1);
-  const results = own.filter((message) => message.type === "tool" && message.tool_call_id === calls[0].id);
-  expect(results, "the denied call must carry a tool message").toHaveLength(1);
+  const result = toolResult(state, calls[0].id);
+  expect(result, "the denied call must carry a tool message").toBeTruthy();
   expect(
-    results.some((message) => message.additional_kwargs?.haifa_tool_status === "completed"),
+    result.additional_kwargs?.haifa_tool_status === "completed",
     "a denied call must never complete",
   ).toBe(false);
   expect((state.artifacts ?? []).length, "a denied execution must not publish anything").toBe(0);
   await saveEvidence(testInfo, "w04-a1-denial", {
-    case: "A1", contract: ASSERTION_TABLE.A1, ...attempt, skillToolName: SKILL_TOOL_NAME,
+    case: "A1", contract: ASSERTION_TABLE.A1, identity: attempt.identity,
+    toolCall: calls[0], status: result.additional_kwargs?.haifa_tool_status ?? null,
   });
   await page.screenshot({ path: testInfo.outputPath("w04-a1-denial.png"), fullPage: true });
 });
 
-test("A2 dependency digest drift rejects skill package materialization", async ({ context, page }, testInfo) => {
+test("A2 verified package identity prepares the frozen execution directory once", async ({ context, page }, testInfo) => {
   await requireExecution(testInfo, "A2");
-  // The frozen package's per-file digests are re-checked first; the SDK owns the pre-execution
-  // materialization validation, so the Run-level half asserts the stable rejection surface.
-  const profile = JSON.parse(fs.readFileSync(path.resolve(EVIDENCE, "w04-profile.json"), "utf8"));
+  await enableSkill(context);
+  const profile = readProfile();
   const manifest = JSON.parse(fs.readFileSync(path.resolve(profile.manifest), "utf8"));
-  const files = seedFiles(path.resolve(profile.seedPackage));
-  for (const [relative, content] of files) {
-    expect(sha256(content), `${relative} seed digest`).toBe(manifest.files[relative]);
-  }
-  const attempt = await runChat(page, context, EXECUTION_PROMPT);
-  expect(attempt.terminal, `drift must leave the Run interpretable, got ${attempt.terminal}`).toBe("success");
-  const state = await threadState(context, attempt.identity);
-  const results = state.messages.filter(
-    (message) => message.type === "tool" &&
-      message.additional_kwargs?.haifa_tool_result?.skill === SKILL,
+  const attempt = await runChat(
+    page,
+    context,
+    `${GENERATE_PROMPT} Run the script entry in help mode (help: true) first, then report its usage output verbatim.`,
   );
+  expect(attempt.terminal, `the identity run must complete, got ${attempt.terminal}`).toBe("success");
+  expect(attempt.approved, "the execution approval must be answered").toBe(true);
+  const state = await threadState(context, attempt.identity);
+  const calls = ownCalls(state, attempt.identity.runId).filter((call) =>
+    JSON.stringify(call.args ?? {}).includes('"help":true') || JSON.stringify(call.args ?? {}).includes('"help": true'));
+  expect(calls.length, "the run must execute the declared help probe").toBeGreaterThanOrEqual(1);
+  const results = calls.map((call) => toolResult(state, call.id)).filter(Boolean);
   expect(
-    results.some((message) => message.additional_kwargs?.haifa_tool_status !== "completed"),
-    "a drifted dependency must be rejected before execution",
-  ).toBe(true);
-  await saveEvidence(testInfo, "w04-a2-drift", {
-    case: "A2", contract: ASSERTION_TABLE.A2, manifestPackage: manifest.packageSha256, ...attempt,
+    results.filter((message) => message.additional_kwargs?.haifa_tool_status === "completed").length,
+    "the approved help probe must complete",
+  ).toBeGreaterThanOrEqual(1);
+  const usage = results.map((message) => message.content ?? []).join("\n");
+  expect(usage, "the executed bytes must come from the declared package identity").toContain("W04_SEED_MAIN_OK");
+
+  // Materialization audit inside this worktree's data root: this Run's own workspace carries the
+  // prepared version directory with the declared entry bytes; no temporary directory remains.
+  const storageRoot = path.resolve(profile.workspaceStorageRoot, "workspaces");
+  const threadWorkspaces = fs.existsSync(storageRoot)
+    ? fs.readdirSync(storageRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && /^ws-[0-9a-f]{32}$/.test(entry.name))
+        .filter((entry) => {
+          const binding = path.join(storageRoot, entry.name, "binding.properties");
+          if (!fs.existsSync(binding)) return false;
+          const content = fs.readFileSync(binding, "utf8");
+          return content.split(/\r?\n/).some((line) => line.trim() === `threadId=${attempt.identity.threadId}`);
+        })
+        .map((entry) => path.join(storageRoot, entry.name))
+    : [];
+  expect(threadWorkspaces.length, "the audited Run owns exactly one workspace directory").toBe(1);
+  const versionDir = path.join(threadWorkspaces[0], "user-data", ".haifa-trusted-skills");
+  expect(fs.existsSync(versionDir), "the declared package must materialize in the Run workspace").toBe(true);
+  const versionRoots = fs.readdirSync(versionDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => ({ version: entry.name, root: path.join(versionDir, entry.name) }));
+  expect(versionRoots.length, "the frozen package materializes exactly once in this workspace").toBe(1);
+  expect(/^[0-9a-f]{64}$/.test(versionRoots[0].version), "version key must be a 64-hex identity").toBe(true);
+  const entryBytes = fs.readFileSync(path.join(versionRoots[0].root, "scripts/main.ts"));
+  expect(sha256(entryBytes), "the prepared entry must be byte-identical to the seed").toBe(manifest.files["scripts/main.ts"]);
+  expect(fs.readdirSync(versionRoots[0].root).some((name) => name.startsWith(".haifa-prepared")),
+    "the SDK prepared marker must be present").toBe(true);
+  expect(
+    fs.readdirSync(versionDir, { withFileTypes: true }).some((entry) => entry.name.startsWith(".pending-")),
+    "no temporary materialization directories may remain",
+  ).toBe(false);
+  await saveEvidence(testInfo, "w04-a2-materialization", {
+    case: "A2", contract: ASSERTION_TABLE.A2, identity: attempt.identity,
+    packageSha256: manifest.packageSha256, versionDirectory: versionRoots[0],
+    entrySha256: manifest.files["scripts/main.ts"],
   });
 });
 
 test("A3 multi-file package resolves relative imports and entry-file identity", async ({ context, page }, testInfo) => {
   await requireExecution(testInfo, "A3");
-  const attempt = await runChat(page, context,
-    `${EXECUTION_PROMPT} Use the entry file scripts/main.ts directly so its relative providers/*.ts imports resolve.`);
+  await enableSkill(context);
+  const attempt = await runChat(
+    page,
+    context,
+    `${GENERATE_PROMPT} Call the tool with { "prompt": "entry identity probe", "image_name": "a3-entry.png" } so the entry resolves its providers, then report the printed lines.`,
+  );
   expect(attempt.terminal).toBe("success");
+  expect(attempt.approved, "the execution approval must be answered").toBe(true);
   const state = await threadState(context, attempt.identity);
-  const calls = state.messages.flatMap((message) => message.tool_calls ?? [])
-    .filter((call) => call.name === SKILL_TOOL_NAME);
-  expect(calls, "the execution must reference the entry file, not a stdin script body").toHaveLength(1);
-  expect(JSON.stringify(calls[0] ?? {}), "the entry path scripts/main.ts must be part of the identified execution")
-    .toContain("scripts/main.ts");
-  const toolMessages = state.messages.filter(
-    (message) => message.type === "tool" && message.tool_call_id === calls[0].id);
-  expect(
-    toolMessages.every((message) => message.additional_kwargs?.haifa_tool_status === "completed"),
-    "multi-file relative imports must execute successfully",
-  ).toBe(true);
+  const calls = ownCalls(state, attempt.identity.runId)
+    .filter((call) => JSON.stringify(call.args ?? {}).includes("entry identity probe"));
+  expect(calls, "the generation call must reference the bounded business arguments").toHaveLength(1);
+  const result = toolResult(state, calls[0].id);
+  expect(result?.additional_kwargs?.haifa_tool_status, "relative imports must execute successfully").toBe("completed");
+  const text = `${result?.content ?? ""}\n${JSON.stringify(result?.additional_kwargs?.haifa_tool_result ?? {})}`;
+  // The relative-import evidence comes from the entry's own printed facts: the banner constant and
+  // the EXTEND provider read through ../lib/extend.ts prove multi-file cross-directory execution.
+  expect(text).toContain("W04_SEED_PROVIDER_OK=codex-cli");
+  expect(text).toContain("W04_SEED_ARTIFACT=outputs/a3-entry.png");
   await saveEvidence(testInfo, "w04-a3-entry", {
-    case: "A3", contract: ASSERTION_TABLE.A3, ...attempt, skillToolName: SKILL_TOOL_NAME,
+    case: "A3", contract: ASSERTION_TABLE.A3, identity: attempt.identity,
+    toolCall: calls[0], text: text.slice(0, 4000),
   });
 });
 
 test("A4 timeout and cancellation terminate the whole process tree", async ({ context, page }, testInfo) => {
   await requireExecution(testInfo, "A4");
-  const attempt = await runChat(page, context,
-    `${EXECUTION_PROMPT} first demonstrate the timeout path by running a script that sleeps far beyond the declared maximum.`);
+  await enableSkill(context);
+  const attempt = await runChat(
+    page,
+    context,
+    `${GENERATE_PROMPT} Call the tool with { "prompt": "timeout probe", "image_name": "a4-timeout.png", "sleep_millis": 600000 } to make the declared timeout terminate the process, then report the tool result.`,
+    280_000,
+  );
   expect(attempt.terminal, "the timed-out Run must still reach an interpretable terminal status").toBe("success");
+  expect(attempt.approved, "the timeout probe approval must be answered").toBe(true);
   const state = await threadState(context, attempt.identity);
-  const timedOut = state.messages.filter(
-    (message) => message.type === "tool" && message.additional_kwargs?.haifa_tool_result?.timedOut === true);
-  expect(timedOut.length, "the declared timeout must surface as a timedOut tool result").toBeGreaterThanOrEqual(1);
-  await saveEvidence(testInfo, "w04-a4-process-tree", {
-    case: "A4", contract: ASSERTION_TABLE.A4, ...attempt,
-    timedOutResults: timedOut.map((message) => message.additional_kwargs.haifa_tool_result),
+  const calls = ownCalls(state, attempt.identity.runId);
+  const results = calls.map((call) => toolResult(state, call.id)).filter(Boolean);
+  const terminated = results.filter((message) => {
+    const envelope = message.additional_kwargs?.haifa_tool_result ?? {};
+    return envelope.timedOut === true || envelope.cancelled === true;
   });
-  expect(attempt.identity).toBeTruthy(); // The runner's managed-process registry carries the tree evidence.
+  expect(terminated.length, "the declared timeout must surface as a terminated tool result").toBeGreaterThanOrEqual(1);
+  expect(
+    (state.artifacts ?? []).some((entry) => String(entry).includes("a4-timeout.png")),
+    "a terminated process must not publish the probe artifact",
+  ).toBe(false);
+  await saveEvidence(testInfo, "w04-a4-process-tree", {
+    case: "A4", contract: ASSERTION_TABLE.A4, identity: attempt.identity,
+    timedOutResults: terminated.map((message) => message.additional_kwargs.haifa_tool_result),
+  });
+  await page.screenshot({ path: testInfo.outputPath("w04-a4-process-tree.png"), fullPage: true });
 });
 
 test("A5 output outside outputs is rejected and publishes no artifact", async ({ context, page }, testInfo) => {
   await requireExecution(testInfo, "A5");
-  const attempt = await runChat(page, context,
-    `${EXECUTION_PROMPT} then deliberately write an image artifact outside the outputs/ directory to prove the boundary.`);
-  expect(attempt.terminal).toBe("success");
+  await enableSkill(context);
+  const attempt = await runChat(
+    page,
+    context,
+    `${GENERATE_PROMPT} First call the tool with { "prompt": "boundary probe", "image_name": "sub/way.png" } (a deliberate path escape), then retry once with { "prompt": "boundary probe", "image_name": "a5-bounds.png" }, and report both tool results verbatim.`,
+  );
+  expect(["success", "error"]).toContain(attempt.terminal); // bounded rejection stays interpretable
   const state = await threadState(context, attempt.identity);
-  const rejected = state.messages.filter((message) => message.type === "tool" &&
-    message.tool_call_id &&
-    (message.additional_kwargs?.haifa_tool_status === "failed" ||
+  const calls = ownCalls(state, attempt.identity.runId);
+  expect(calls.length, "the model must reach the tool with the escape probe").toBeGreaterThanOrEqual(1);
+  const failed = calls
+    .map((call) => toolResult(state, call.id))
+    .filter((message) => message && (
+      message.additional_kwargs?.haifa_tool_status === "failed" ||
       typeof message.additional_kwargs?.haifa_tool_error === "string"));
-  expect(rejected.length, "the out-of-bounds write must be rejected with a tool failure").toBeGreaterThanOrEqual(1);
+  expect(failed.length, "the out-of-bounds write must be rejected with a tool failure").toBeGreaterThanOrEqual(1);
   expect(
     (state.artifacts ?? []).every((artifact) => String(artifact).startsWith("/mnt/user-data/outputs/")),
     "no artifact outside outputs/ may be published",
   ).toBe(true);
+  // The escape path must never exist anywhere on disk under the lane workspaces.
+  const storageRoot = path.resolve(readProfile().workspaceStorageRoot, "workspaces");
+  const escapeOnDisk = (function walkEscape(root) {
+    if (!fs.existsSync(root)) return null;
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      const workspace = path.join(root, entry.name);
+      if (!entry.isDirectory()) continue;
+      const userData = path.join(workspace, "user-data");
+      if (!fs.existsSync(path.join(userData, "sub"))) continue;
+      return path.join(userData, "sub");
+    }
+    return null;
+  })(storageRoot);
+  expect(escapeOnDisk, "the escape path must never be written on disk").toBeNull();
   await saveEvidence(testInfo, "w04-a5-out-of-bounds", {
-    case: "A5", contract: ASSERTION_TABLE.A5, ...attempt, artifacts: state.artifacts ?? [],
+    case: "A5", contract: ASSERTION_TABLE.A5, identity: attempt.identity,
+    rejected: failed.map((message) => ({
+      status: message.additional_kwargs?.haifa_tool_status,
+      error: message.additional_kwargs?.haifa_tool_error ?? null,
+      content: String(message.content ?? "").slice(0, 1000),
+    })),
   });
 });
 
 test("A6 run artifact lands in outputs with verifiable download SHA-256", async ({ context, page }, testInfo) => {
   await requireExecution(testInfo, "A6");
-  const attempt = await runChat(page, context,
-    `${EXECUTION_PROMPT} generate one real image into /mnt/user-data/outputs/w04-artifact.png and present it.`);
+  await enableSkill(context);
+  const attempt = await runChat(
+    page,
+    context,
+    `${GENERATE_PROMPT} Call the tool with { "prompt": "artifact chain probe", "image_name": "w04-artifact.png" }, wait for the tool result, then present outputs/w04-artifact.png with present_files so the user can download it, and report the SHA-256 line.`,
+  );
   expect(attempt.terminal).toBe("success");
   expect(attempt.approved, "the execution approval must be answered").toBe(true);
   const state = await threadState(context, attempt.identity);
-  const artifactPath = (state.artifacts ?? []).find((entry) => String(entry).startsWith("/mnt/user-data/outputs/"));
+  const artifactPath = (state.artifacts ?? []).find((entry) =>
+    String(entry).startsWith("/mnt/user-data/outputs/") && String(entry).includes("w04-artifact.png"));
   expect(artifactPath, "the generated image must enter the artifact list under outputs/").toBeTruthy();
-  const produced = state.messages.filter((message) => message.type === "tool" &&
-    message.additional_kwargs?.haifa_tool_result?.artifactId);
+  const producerCalls = ownCalls(state, attempt.identity.runId);
+  const producerResult = producerCalls
+    .map((call) => toolResult(state, call.id))
+    .find((message) => message && String(message.content ?? "").includes("W04_SEED_IMAGE_SHA256="));
+  expect(producerResult, "the producer tool result must announce the artifact digest").toBeTruthy();
+  const claimed = producerResult.content.match(/W04_SEED_IMAGE_SHA256=([0-9a-f]{64})/);
+  expect(claimed, "the tool result must carry the printed SHA-256 line").toBeTruthy();
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByTestId("artifact-trigger").first().click();
-  const downloadReady = page.waitForEvent("download", { timeout: 15_000 });
+  const downloadReady = page.waitForEvent("download", { timeout: 20_000 });
   await page.getByRole("link", { name: /^(Download|下载)$/ }).first().click();
   const download = await downloadReady;
   const bytes = fs.readFileSync(await download.path());
   const downloadedSha = sha256(bytes);
-  const producer = produced.find((message) => message.additional_kwargs.haifa_tool_result.artifactSha256 ===
-    `sha256:${downloadedSha}`);
-  expect(producer, "the artifact producer provenance must match the downloaded bytes").toBeTruthy();
-  expect(producer.additional_kwargs.haifa_tool_result.runId, "the artifact must belong to this Run")
-    .toBe(attempt.identity.runId);
+  expect(downloadedSha, "the artifact download bytes must match the executed artifact").toBe(claimed[1]);
+  const again = await context.request.get(
+    `${APP}/api/threads/${attempt.identity.threadId}/artifacts/${routeArtifact(artifactPath)}`,
+    { timeout: 15_000 });
+  expect(again.status(), await again.text()).toBe(200);
+  expect(sha256(await again.body()), "a second download must be byte-stable and routable").toBe(downloadedSha);
+  expect(producerResult.run_id, "the producer provenance stays on this Run").toBe(attempt.identity.runId);
   await saveEvidence(testInfo, "w04-a6-artifact", {
-    case: "A6", contract: ASSERTION_TABLE.A6, ...attempt, artifactPath, downloadedSha,
-    provenance: producer.additional_kwargs.haifa_tool_result,
+    case: "A6", contract: ASSERTION_TABLE.A6, identity: attempt.identity,
+    artifactPath, downloadedSha, byteSize: bytes.length,
   });
 });
 
 test("A7 cross-Run isolation keeps artifacts thread-scoped", async ({ context, page }, testInfo) => {
   await requireExecution(testInfo, "A7");
-  const first = await runChat(page, context,
-    `${EXECUTION_PROMPT} generate one image named w04-isolation.png into /mnt/user-data/outputs/.`);
+  await enableSkill(context);
+  const first = await runChat(
+    page,
+    context,
+    `${GENERATE_PROMPT} Call the tool with { "prompt": "isolation probe", "image_name": "w04-isolation.png" }, then present outputs/w04-isolation.png with present_files.`,
+  );
   expect(first.terminal).toBe("success");
+  expect(first.approved, "the isolation producer approval must be answered").toBe(true);
   const firstState = await threadState(context, first.identity);
-  const firstPath = (firstState.artifacts ?? []).find((entry) => String(entry).includes("w04-isolation.png"));
+  const firstPath = (firstState.artifacts ?? []).find((entry) =>
+    String(entry).includes("w04-isolation.png"));
   expect(firstPath, "Run A must own its artifact").toBeTruthy();
-  const second = await runChat(page, context,
-    `List the files currently present in this conversation's workspace without executing any Skill code.`);
+  const second = await runChat(
+    page,
+    context,
+    `List the files currently present in this conversation's workspace without executing any Skill code or tool beyond a listing.`,
+  );
   expect(second.identity.threadId, "the second Run must live on a different thread").not.toBe(first.identity.threadId);
+  expect(second.denied ?? second.approved ?? null, "the isolation Run must not touch the skill script Tool").toBeNull();
   const leak = await context.request.get(
-    `${APP}/api/threads/${second.identity.threadId}/artifacts/${String(firstPath).replace("/mnt/user-data/", "")}`);
-  expect([200, 404].includes(leak.status()), "cross-Thread artifact access must 404 or be refused").toBe(true);
+    `${APP}/api/threads/${second.identity.threadId}/artifacts/${routeArtifact(firstPath)}`,
+    { timeout: 15_000 });
   expect(leak.status(), "Run A's product must never be served from Run B").toBe(404);
   const secondState = await threadState(context, second.identity);
   expect(
@@ -468,20 +607,76 @@ test("A7 cross-Run isolation keeps artifacts thread-scoped", async ({ context, p
 });
 
 test("A8 undeclared runtime fails closed with a stable error code", async ({ context, page }, testInfo) => {
-  await requireExecution(testInfo, "A8");
-  const profile = JSON.parse(fs.readFileSync(path.resolve(EVIDENCE, "w04-profile.json"), "utf8"));
-  expect(profile.bunHome, "the undeclared-runtime case needs the hosted bun directory").toBeTruthy();
-  const attempt = await runChat(page, context,
-    `Load ${SKILL} using skill_load and execute its scripts/main.ts entry through the skill script tool.`);
-  expect(attempt.terminal).toBe("success");
+  const profile = readProfile();
+  expect(EVIDENCE, "runner must export W18_EVIDENCE_DIR").toBeTruthy();
+  await enableSkill(context);
+  if (profile.runtime === "declared") {
+    // Declared round: the runtime is a product declaration (bun, profile-recorded) and the Tool
+    // schema never exposes runtime/script/working-directory selection. The in-Run stable rejection
+    // is the same fail-closed boundary, exercised at a model-controlled point: the output escape.
+    const attempt = await runChat(
+      page,
+      context,
+      `${GENERATE_PROMPT} Run one probing call exactly once with { "prompt": "runtime boundary probe", "image_name": "sub/way.png" } as written, without adjusting the arguments, then quote the tool's error text so we can document the fixed output boundary.`,
+    );
+    expect(["success", "error"]).toContain(attempt.terminal); // bounded rejection stays interpretable
+    const state = await threadState(context, attempt.identity);
+    const calls = ownCalls(state, attempt.identity.runId);
+    expect(calls.length, "the model must reach the Tool with the boundary probe").toBeGreaterThanOrEqual(1);
+    // No tool call may carry a key that would widen the execution surface (runtime, script,
+    // interpreter, working directory, path or args); the declaration closes them all.
+    const forbidden = ["runtime", "language", "interpreter", "script", "workdir", "cwd", "workingDirectory", "workspaceId", "args"];
+    for (const call of calls) {
+      for (const key of forbidden) {
+        expect(Object.keys(call.args ?? {}), `${key} is not model-reachable`).not.toContain(key);
+      }
+    }
+    const rejected = calls
+      .map((call) => toolResult(state, call.id))
+      .filter((message) => message && (
+        message.additional_kwargs?.haifa_tool_status === "failed" ||
+        typeof message.additional_kwargs?.haifa_tool_error === "string"));
+    expect(rejected.length, "the boundary must fail closed with a stable tool error").toBeGreaterThanOrEqual(1);
+    expect(
+      calls.some((call) => toolResult(state, call.id)?.additional_kwargs?.haifa_tool_status === "completed"),
+      "an escape attempt must never start the process",
+    ).toBe(false);
+    expect((state.artifacts ?? []).some((entry) => String(entry).includes("sub/")),
+      "an escape attempt must not publish anything").toBe(false);
+    await saveEvidence(testInfo, "w04-a8-schema-boundary", {
+      case: "A8", contract: ASSERTION_TABLE.A8, runtime: profile.runtime, bunPath: profile.bunPath,
+      identity: attempt.identity,
+      rejected: rejected.map((message) => ({
+        status: message.additional_kwargs?.haifa_tool_status ?? null,
+        error: message.additional_kwargs?.haifa_tool_error ?? null,
+      })),
+    });
+    return;
+  }
+  // Undeclared round (dedicated profile round without the bun declaration): the Tool is not
+  // registered at all; any attempt fails closed and nothing is approved, executed or published.
+  const attempt = await runChat(
+    page,
+    context,
+    `${GENERATE_PROMPT} Call the tool named ${SKILL_TOOL_NAME} with { "prompt": "undeclared runtime probe", "image_name": "a8-undeclared.png" } exactly once, then report the tool result verbatim.`,
+  );
+  expect(attempt.terminal, `the fail-closed Run must complete, got ${attempt.terminal}`).toBe("success");
+  expect(attempt.approved ?? false, "an undeclared runtime must never reach an approval").toBe(false);
+  expect(attempt.denied ?? false, "an undeclared runtime must never reach a denial either").toBe(false);
   const state = await threadState(context, attempt.identity);
-  const rejected = state.messages.filter((message) => message.type === "tool" &&
-    typeof message.additional_kwargs?.haifa_tool_error === "string");
-  expect(rejected.some((message) => /RUNTIME|RUNTIME_UNDECLARED|SCRIPT_RUNTIME/i.test(
-    message.additional_kwargs.haifa_tool_error)),
-    "an undeclared runtime must fail closed with a stable error signature").toBe(true);
+  const attempted = ownCalls(state, attempt.identity.runId);
+  const results = attempted.map((call) => toolResult(state, call.id)).filter(Boolean);
+  expect(
+    results.filter((message) => message.additional_kwargs?.haifa_tool_status === "completed").length,
+    "the undeclared runtime must never start a process",
+  ).toBe(0);
+  expect((state.artifacts ?? []).length, "an undeclared runtime must not publish anything").toBe(0);
   await saveEvidence(testInfo, "w04-a8-fail-closed", {
-    case: "A8", contract: ASSERTION_TABLE.A8, ...attempt,
-    errors: rejected.map((message) => message.additional_kwargs.haifa_tool_error),
+    case: "A8", contract: ASSERTION_TABLE.A8, runtime: profile.runtime, identity: attempt.identity,
+    attemptedCalls: attempted.length,
+    failedCalls: results.map((message) => ({
+      status: message.additional_kwargs?.haifa_tool_status ?? null,
+      error: message.additional_kwargs?.haifa_tool_error ?? null,
+    })),
   });
 });

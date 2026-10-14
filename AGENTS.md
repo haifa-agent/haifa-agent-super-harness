@@ -138,6 +138,14 @@ $env:no_proxy=$env:NO_PROXY
 - 只读 Tool 也要审批：只读 MCP Tool（`McpServerSpec.readOnly()`）仍会命中 `PolicyPresets.standardApproval()` 的 `NETWORK_ACCESS` 规则并进入 APPROVAL。症状：Run 首次请求工具后停在 `WAITING_APPROVAL`，不会自动执行。检查：SSE 里出现 `artifact.human_input.request_id` 卡片。集成测试须以冻结隐藏回复（`additional_kwargs.human_input_response`，`option_id=approve`）批准后 join 同一 Run 的 stream，才能拿到真实 Tool 结果。
 - `hasTools()`：仅由 MCP 提供 Tool 的 `HaifaRunBridge` 必须让 `hasTools()` 为真，否则 SDK 的 `tool.call.requested` 在冻结 transcript 投影里无法映射，SSE 直接报 `unsupported_event_projection` 并提前结束。最小修复：`hasTools = !tools.isEmpty() || !mcpSpecs.isEmpty()`。
 
+### 受信技能脚本链（SDK 0.1.2，sdkCommit 52cac0db）
+
+- Product schema 子集限制：SDK `ToolDefinitionValidator` 校验输入 schema 使用「有界 schema 子集」；`pattern` 等关键词被拒（`inputSchema pattern is outside the bounded schema subset`，在 ToolAssembly.register 时抛出）。检查：装配即报错。最小修复：产品 input schema 只使用 type/minLength/maxLength/minimum/maximum/description/enum/required/additionalProperties，格式校验移到 argumentMapper（fail closed 同款）。
+- 技能脚本启用链：`PUT /api/skills/{name}` 对含 `scripts/` 的外部技能在启用时自动跑冻结静态 screen 并记 `bundled_reviews` 证据；语义 review 默认关闭（W15 parity）。此前 `SkillReviewApprovals.evidence` 假定 screen 结果带 `decision` 字段，静态-only 模式下返回的冻结 facts 没有 `decision`，`PUT` 直接 422 `Skill review did not permit publication`。最小修复：evidence() 在缺 `decision` 时接受未 blocked 的冻结 facts（decision=allow、authorization_source=configured-skill-screen）。
+- Loader 双接缝：技能脚本平台经 `SkillContentLoader.loadResourceBytes` 读取冻结包字节做物化；SH 的 store 级 wrapper（`currentReviewLoader`）此前只实现 `load(...)`，`(binding, visibility) -> ...` lambda 使字节读取落到接口 default（派生自可读 activation content），执行入口报 `TOOL_INVOCATION_FAILED` 技术细节外无 stack、无法定位。最小修复：wrapper 实现 load 与 loadResourceBytes 两条接缝，各自先做 grant 权限校验再委托 Composite loader；诊断时优先用公开入口的直接 JVM 探针（平台 + 真实 runtime + provider.invoke）复现，投资该接缝能让失败带完整 stack。
+- Shade 签名文件：0.1.2 基线升级后部分依赖 JAR 带 META-INF 签名文件；maven-shade uber JAR 必须排除 `META-INF/*.SF|*.DSA|*.RSA|SIG-*`，否则 exec JAR 启动即 `SecurityException: Invalid signature file digest for Manifest main attributes`。
+- Credential Manager 饱和：本机 Credential Manager 已存在大量 `haifa:os:HAIFA_SUPER_HARNESS_*` 凭据（实测 869 条）；新建 data-root 首次启动的 continuation key 写入报 `CredWrite failed with error 8 (STORE_FAILURE)`，Extensions 现象与条数未做阈值验证。规避：该 lane 用 `HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF=env://NAME` + 进程环境注入 256-bit Base64 key（每 profile 每轮一个新 data-root + 新 key，不打印、不落盘）。该引用在 Windows 也被产品代码支持；存量凭据的清理与阈值裁决由主控处置（删除会影响对应 data-root 的重启）。
+
 ### 真实模型诊断
 
 - 静态 review 的 Python：W15 静态 review 使用 `python -I -B`，隔离模式不加载用户 site-packages。系统 Python 普通导入 `yaml` 成功，不能证明隔离子进程可用；检查：`<python> -I -B -c 'import yaml; print(yaml.__version__)'`。缺 PyYAML 时 review 拒绝，不能去掉 `-I` 或在线安装目标依赖绕过。以进程变量 `HAIFA_SUPER_HARNESS_SKILL_PYTHON` 指向已经具备该依赖的解释器；本机冻结 reference 的 `backend/.venv/Scripts/python.exe` 带 PyYAML 6.0.3，仅用于运行纯静态审查模块，不启用其后端或目标脚本。
