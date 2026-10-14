@@ -44,7 +44,9 @@ import java.util.regex.Pattern;
  * selects the owner and supplies the authoritative thread predicate.
  */
 final class DeerFlowWorkspaceApi {
-    private static final String OWNER_ID = DeerFlowBootstrapApi.DEFAULT_USER_ID;
+    private static String ownerId() {
+        return io.haifa.agent.superharness.server.auth.AccessOwner.current();
+    }
     private static final int MAX_FILES = 10;
     private static final long MAX_TOTAL_BYTES = 25L * 1024 * 1024;
     private static final long MAX_MULTIPART_OVERHEAD = 256L * 1024;
@@ -130,7 +132,7 @@ final class DeerFlowWorkspaceApi {
             return true;
         }
         try {
-            route.handle(exchange, workspace.bind(OWNER_ID, threadId));
+            route.handle(exchange, workspace.bind(ownerId(), threadId));
         } catch (HttpFailure failure) {
             if (failure.contentRange != null) {
                 exchange.getResponseHeaders().set("Accept-Ranges", "bytes");
@@ -162,7 +164,7 @@ final class DeerFlowWorkspaceApi {
             try {
                 for (MultipartFile file : files) {
                     receipts.add(workspace.upload(
-                            OWNER_ID, binding.workspaceId(), file.filename, file.content, file.mediaType));
+                            ownerId(), binding.workspaceId(), file.filename, file.content, file.mediaType));
                 }
             } catch (RuntimeException failure) {
                 rollbackNewUploads(binding, receipts, failure);
@@ -190,7 +192,7 @@ final class DeerFlowWorkspaceApi {
                 continue;
             }
             try {
-                workspace.rollbackNewUpload(OWNER_ID, binding.workspaceId(), receipt);
+                workspace.rollbackNewUpload(ownerId(), binding.workspaceId(), receipt);
             } catch (RuntimeException failure) {
                 if (rollbackFailure == null) {
                     rollbackFailure = failure;
@@ -206,7 +208,7 @@ final class DeerFlowWorkspaceApi {
     }
 
     private void listUploads(HttpExchange exchange, WorkspaceBinding binding) throws IOException {
-        WorkspaceFileService files = workspace.workspaceFiles(OWNER_ID, binding.workspaceId());
+        WorkspaceFileService files = workspace.workspaceFiles(ownerId(), binding.workspaceId());
         WorkspacePath directory = new WorkspacePath(binding.workspaceId(), ProjectPath.of("uploads"));
         List<Map<String, Object>> result = new ArrayList<>();
         int offset = 0;
@@ -235,7 +237,7 @@ final class DeerFlowWorkspaceApi {
 
     private void readArtifact(HttpExchange exchange, WorkspaceBinding binding, String logicalPath) throws IOException {
         String relativePath = logicalPath.substring("/mnt/user-data/".length());
-        byte[] all = workspace.readVerifiedBytes(OWNER_ID, binding.workspaceId(), logicalPath);
+        byte[] all = workspace.readVerifiedBytes(ownerId(), binding.workspaceId(), logicalPath);
         long total = all.length;
         String expectedHash = sha256(all);
         ByteSelection selection = parseRange(exchange.getRequestHeaders().getFirst("Range"), total);
@@ -288,20 +290,21 @@ final class DeerFlowWorkspaceApi {
         if (path == null || !path.startsWith("/mnt/user-data/") || !path.toLowerCase(Locale.ROOT).endsWith(".skill")) {
             throw new IllegalArgumentException("Skill archive requires a thread user-data .skill path");
         }
-        WorkspaceBinding binding = workspace.bind(OWNER_ID, threadId);
-        return workspace.readVerifiedBytes(OWNER_ID, binding.workspaceId(), path);
+        WorkspaceBinding binding = workspace.bind(ownerId(), threadId);
+        return workspace.readVerifiedBytes(ownerId(), binding.workspaceId(), path);
     }
 
     static Map<String, byte[]> readSkillReviewTarget(
             io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService projects,
             RestrictedWorkspaceService workspace, String threadId, String requested) throws IOException {
         if (requested == null || !requested.startsWith("/mnt/user-data/")) throw new IllegalArgumentException("Review target must belong to the current Thread");
-        var binding = projects.requireThreadWorkspace(OWNER_ID, threadId);
+        String owner = io.haifa.agent.superharness.server.auth.ThreadOwners.of(threadId);
+        var binding = projects.requireThreadWorkspace(owner, threadId);
         if (requested.endsWith(".skill")) return io.haifa.agent.superharness.server.config.SkillPackageFiles.archive(
-                workspace.readVerifiedBytes(OWNER_ID, binding.workspaceId(), requested));
+                workspace.readVerifiedBytes(owner, binding.workspaceId(), requested));
         String relative = RestrictedWorkspaceService.normalizeLogicalPath(requested);
         WorkspacePath root = new WorkspacePath(binding.workspaceId(), ProjectPath.of(relative));
-        WorkspaceFileService files = workspace.workspaceFiles(OWNER_ID, binding.workspaceId());
+        WorkspaceFileService files = workspace.workspaceFiles(owner, binding.workspaceId());
         if (files.stat(root, false).type() != FileType.DIRECTORY) throw new IllegalArgumentException("Review requires a package directory or .skill archive");
         var queue = new java.util.ArrayDeque<WorkspacePath>(); queue.add(root);
         Map<String, byte[]> result = new java.util.TreeMap<>();
@@ -322,7 +325,7 @@ final class DeerFlowWorkspaceApi {
                         if (entry.metadata().size() > 64L * 1024 * 1024 || (bytes += entry.metadata().size()) > 100L * 1024 * 1024) {
                             throw new IOException("Review target exceeds size limits");
                         }
-                        result.put(member, workspace.readVerifiedBytes(OWNER_ID, binding.workspaceId(), "/mnt/user-data/" + path));
+                        result.put(member, workspace.readVerifiedBytes(owner, binding.workspaceId(), "/mnt/user-data/" + path));
                     } else throw new IOException("Linked or special review target is unavailable");
                 }
                 if (!page.truncated()) break;
@@ -347,8 +350,8 @@ final class DeerFlowWorkspaceApi {
         if (!threadExists.test(threadId)) {
             throw new IllegalArgumentException("Thread not found");
         }
-        WorkspaceBinding binding = workspace.bind(OWNER_ID, threadId);
-        UploadReceipt receipt = workspace.upload(OWNER_ID, binding.workspaceId(), filename, content, mediaType);
+        WorkspaceBinding binding = workspace.bind(ownerId(), threadId);
+        UploadReceipt receipt = workspace.upload(ownerId(), binding.workspaceId(), filename, content, mediaType);
         Map<String, Object> uploaded = uploadInfo(binding.threadId(), receipt, Optional.empty());
         return orderedMap(
                 "filename", uploaded.get("filename"),

@@ -293,6 +293,21 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -GatewayOnly
   在 `frontend/` 执行 `corepack pnpm build` 并用 `scripts/lib/build-stamp.ps1` 写入前端构建戳，再用
   `start-main-super-harness.ps1 -ProductionFrontend` 启动；预检不符即拒绝启动。
 
+## 本地登录 profile
+
+默认启动保持免登录：Gateway 与前端都设置 `DEER_FLOW_AUTH_DISABLED=1`，`/api/v1/auth/me` 仍返回合成管理员。
+本地登录是另一条 profile，必须显式传入独立于 `local-tmp/main-service-data` 的 `-DataDirectory`，并使用独立端口，不占用主工作树的 `18018`/`33018`。已有免登录 Runtime 或 `owners/default`、且还没有 `auth/users.json` 的目录会被拒绝：
+
+```powershell
+pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -LocalAuth -AllowSlot `
+  -GatewayPort 40618 -FrontendPort 45618 `
+  -DataDirectory local-tmp/slot3/local-auth-data
+```
+
+该 profile 设置 `HAIFA_SUPER_HARNESS_LOCAL_AUTH=1`，清掉 `DEER_FLOW_AUTH_DISABLED`，并把
+`HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS` 设为该槽位的前端 Origin。浏览器 Origin 只和这个允许列表比较。
+空 data-root 会打开初始化页。账号、口令和会话写在该 data-root 的 `auth/` 下，不写进 Runtime SQLite。
+
 ## 默认 Web 工具的环境代理
 
 在启动 Gateway 的同一 PowerShell 会话配置进程级变量，然后启动或重启 Gateway，优先使用产品键：
