@@ -62,7 +62,7 @@ final class DeerFlowUploadContext {
             String path = UPLOADS + filename;
             try {
                 if (binding == null) {
-                    binding = workspace.bind(DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId);
+                    binding = workspace.bind(io.haifa.agent.superharness.server.auth.ThreadOwners.of(threadId), threadId);
                 }
                 UploadFileFacts facts = UploadFileFacts.of(
                         workspace.readVerifiedBytes(binding.ownerId(), binding.workspaceId(), path));

@@ -3,7 +3,7 @@ package io.haifa.agent.superharness.server.tool.file;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
-import io.haifa.agent.superharness.server.api.DeerFlowBootstrapApi;
+import io.haifa.agent.superharness.server.auth.ThreadOwners;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
 import io.haifa.agent.superharness.workspace.RestrictedWorkspaceService;
@@ -84,7 +84,7 @@ public final class ProductionReadFileTool
         byte[] bytes;
         try {
             WorkspaceBinding binding =
-                    bindings.requireThreadWorkspace(DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId);
+                    bindings.requireThreadWorkspace(ThreadOwners.of(threadId), threadId);
             bytes = workspace.readVerifiedBytes(binding.ownerId(), binding.workspaceId(), path);
         } catch (WorkspaceException failure) {
             return switch (failure.error()) {

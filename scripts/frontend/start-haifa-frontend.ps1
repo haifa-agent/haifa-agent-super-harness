@@ -6,7 +6,8 @@ param(
     [string]$DataDirectory,
     [string]$SourceRepository,
     [switch]$Production,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$LocalAuth
 )
 
 $ErrorActionPreference = 'Stop'
@@ -87,7 +88,15 @@ $env:SUPER_HARNESS_PORT = [string]$gatewayUri.Port
 $env:SUPER_HARNESS_DATA_ROOT = $dataRoot
 $env:SUPER_HARNESS_ENVIRONMENT = 'development'
 $env:DEER_FLOW_INTERNAL_GATEWAY_BASE_URL = $GatewayBaseUrl.TrimEnd('/')
-$env:DEER_FLOW_AUTH_DISABLED = '1'
+if ($LocalAuth) {
+    Remove-Item Env:DEER_FLOW_AUTH_DISABLED -ErrorAction SilentlyContinue
+    $env:HAIFA_SUPER_HARNESS_LOCAL_AUTH = '1'
+    $env:HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS = "http://127.0.0.1:$FrontendPort"
+} else {
+    Remove-Item Env:HAIFA_SUPER_HARNESS_LOCAL_AUTH -ErrorAction SilentlyContinue
+    Remove-Item Env:HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS -ErrorAction SilentlyContinue
+    $env:DEER_FLOW_AUTH_DISABLED = '1'
+}
 $env:DEER_FLOW_ENV = 'development'
 $env:ENVIRONMENT = 'development'
 $env:DEER_FLOW_TRUSTED_ORIGINS = "http://127.0.0.1:$FrontendPort"
@@ -171,10 +180,20 @@ try {
     if ($health.status -cne 'ok') {
         throw 'Haifa gateway health response did not contain status=ok.'
     }
-    $me = Invoke-RestMethod -Uri ($GatewayBaseUrl.TrimEnd('/') + '/api/v1/auth/me') -TimeoutSec 3
-    if ($me.id -cne 'default' -or $me.email -cne 'default@test.local' -or
-        $me.system_role -cne 'admin' -or $me.needs_setup -ne $false) {
-        throw 'Haifa gateway auth-disabled principal does not match the frozen frontend contract.'
+    if ($LocalAuth) {
+        try {
+            Invoke-WebRequest -Uri ($GatewayBaseUrl.TrimEnd('/') + '/api/v1/auth/me') -TimeoutSec 3 | Out-Null
+            throw 'Local auth profile must reject /api/v1/auth/me without a session.'
+        } catch {
+            $status = $_.Exception.Response.StatusCode.value__
+            if ($status -ne 401) { throw }
+        }
+    } else {
+        $me = Invoke-RestMethod -Uri ($GatewayBaseUrl.TrimEnd('/') + '/api/v1/auth/me') -TimeoutSec 3
+        if ($me.id -cne 'default' -or $me.email -cne 'default@test.local' -or
+            $me.system_role -cne 'admin' -or $me.needs_setup -ne $false) {
+            throw 'Haifa gateway auth-disabled principal does not match the frozen frontend contract.'
+        }
     }
 }
 catch {

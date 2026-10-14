@@ -11,7 +11,8 @@ param(
     [switch]$GatewayOnly,
     [switch]$ProductionFrontend,
     [switch]$Build,
-    [switch]$AllowSlot
+    [switch]$AllowSlot,
+    [switch]$LocalAuth
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,14 +22,35 @@ $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 if ([string]::IsNullOrWhiteSpace($SourceRepository)) {
     $SourceRepository = Join-Path $root 'deer-flow'
 }
+$mainDataRoot = [IO.Path]::GetFullPath((Join-Path $root 'local-tmp/main-service-data'))
+if ($LocalAuth -and -not $PSBoundParameters.ContainsKey('DataDirectory')) {
+    throw 'Local auth profile requires -DataDirectory for a fresh data root, separate from local-tmp/main-service-data.'
+}
 if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
     $DataDirectory = Join-Path $root 'local-tmp/main-service-data'
 }
 $dataRoot = [IO.Path]::GetFullPath($DataDirectory)
+if ($LocalAuth) {
+    if ($dataRoot -eq $mainDataRoot) {
+        throw 'Local auth profile must not use the main service data directory.'
+    }
+    $legacyRuntime = Test-Path -LiteralPath (Join-Path $dataRoot 'runtime/haifa-agent.sqlite')
+    $legacyOwner = Test-Path -LiteralPath (Join-Path $dataRoot 'owners/default')
+    $authUsers = Test-Path -LiteralPath (Join-Path $dataRoot 'auth/users.json')
+    if (($legacyRuntime -or $legacyOwner) -and -not $authUsers) {
+        throw 'Local auth profile refuses a data root that already contains an auth-disabled runtime or owners/default. Use a fresh directory, or one that already has auth/users.json.'
+    }
+}
 $sourceRoot = (Resolve-Path -LiteralPath $SourceRepository).Path
 $gatewayUrl = "http://127.0.0.1:$GatewayPort"
 $frontendUrl = "http://127.0.0.1:$FrontendPort"
 
+if ($LocalAuth -and -not $AllowSlot) {
+    throw 'Local auth profile requires -AllowSlot, its own ports, and a fresh data directory.'
+}
+if ($LocalAuth -and ($GatewayPort -eq 18018 -or $FrontendPort -eq 33018)) {
+    throw 'Local auth profile must not use the main ports 18018/33018.'
+}
 if (-not $AllowSlot -and ($GatewayPort -ne 18018 -or $FrontendPort -ne 33018)) {
     throw 'The main worktree must use its fixed Gateway 18018 / Frontend 33018 ports. Use -AllowSlot only for a slot rehearsal.'
 }
@@ -85,7 +107,8 @@ if (-not (Test-Path -LiteralPath (Join-Path $frontendRepo 'frontend/node_modules
 # Perform the frozen source, pinned toolchain, loopback and same-origin gates before starting either process.
 $null = & $shell.Source -NoProfile -File $launcher -DryRun `
     -RepositoryRoot $frontendRepo -SourceRepository $sourceRoot -DataDirectory $dataRoot `
-    -GatewayBaseUrl $gatewayUrl -FrontendPort $FrontendPort -Production:$ProductionFrontend
+    -GatewayBaseUrl $gatewayUrl -FrontendPort $FrontendPort -Production:$ProductionFrontend `
+    -LocalAuth:$LocalAuth
 if ($LASTEXITCODE -ne 0) { throw 'Frozen frontend dry-run gate failed.' }
 
 $logRoot = Join-Path $dataRoot 'logs'
@@ -103,7 +126,15 @@ $env:SUPER_HARNESS_PORT = [string]$GatewayPort
 $env:SUPER_HARNESS_DATA_ROOT = $dataRoot
 $env:SUPER_HARNESS_DATA_DIR = $dataRoot
 $env:SUPER_HARNESS_ENVIRONMENT = 'development'
-$env:DEER_FLOW_AUTH_DISABLED = '1'
+if ($LocalAuth) {
+    Remove-Item Env:DEER_FLOW_AUTH_DISABLED -ErrorAction SilentlyContinue
+    $env:HAIFA_SUPER_HARNESS_LOCAL_AUTH = '1'
+    $env:HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS = $frontendUrl
+} else {
+    Remove-Item Env:HAIFA_SUPER_HARNESS_LOCAL_AUTH -ErrorAction SilentlyContinue
+    Remove-Item Env:HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS -ErrorAction SilentlyContinue
+    $env:DEER_FLOW_AUTH_DISABLED = '1'
+}
 $env:DEER_FLOW_ENV = 'development'
 $env:ENVIRONMENT = 'development'
 $env:DEER_FLOW_TRUSTED_ORIGINS = $frontendUrl
@@ -120,10 +151,19 @@ while ((Get-Date) -lt $deadline) {
     if ($gatewayProcess.HasExited) { break }
     try {
         $health = Invoke-RestMethod -Uri "$gatewayUrl/health" -TimeoutSec 3
-        $me = Invoke-RestMethod -Uri "$gatewayUrl/api/v1/auth/me" -TimeoutSec 3
-        if ($health.status -ceq 'ok' -and $me.id -ceq 'default' -and
-            $me.email -ceq 'default@test.local' -and $me.system_role -ceq 'admin' -and
-            $me.needs_setup -eq $false) {
+        $authReady = $false
+        if ($LocalAuth) {
+            try {
+                Invoke-WebRequest -Uri "$gatewayUrl/api/v1/auth/me" -TimeoutSec 3 | Out-Null
+            } catch {
+                $authReady = $_.Exception.Response.StatusCode.value__ -eq 401
+            }
+        } else {
+            $me = Invoke-RestMethod -Uri "$gatewayUrl/api/v1/auth/me" -TimeoutSec 3
+            $authReady = $me.id -ceq 'default' -and $me.email -ceq 'default@test.local' -and
+                $me.system_role -ceq 'admin' -and $me.needs_setup -eq $false
+        }
+        if ($health.status -ceq 'ok' -and $authReady) {
             $gatewayReady = $true
             break
         }
@@ -156,6 +196,7 @@ $frontendArgs = @(
     '-FrontendPort', [string]$FrontendPort
 )
 if ($ProductionFrontend) { $frontendArgs += '-Production' }
+if ($LocalAuth) { $frontendArgs += '-LocalAuth' }
 $frontendProcess = Start-Process -FilePath $shell.Source -ArgumentList $frontendArgs `
     -WorkingDirectory $root -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput $frontendOut -RedirectStandardError $frontendErr

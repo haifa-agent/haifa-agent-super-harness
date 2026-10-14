@@ -12,6 +12,8 @@ import io.haifa.agent.project.changeset.FileChangeType;
 import io.haifa.agent.project.changeset.FileVersion;
 import io.haifa.agent.runtime.api.AgentPlanView;
 import io.haifa.agent.runtime.api.AgentRunEvent;
+import io.haifa.agent.superharness.server.auth.AccessOwner;
+import io.haifa.agent.superharness.server.auth.ThreadOwners;
 import io.haifa.agent.superharness.server.plan.PlanAuthoringResources;
 import io.haifa.agent.runtime.api.AgentRunSnapshot;
 import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
@@ -315,6 +317,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         this.dataDirectoryRoot = dataDirectory.toAbsolutePath().normalize();
         this.foundation = new DurableHaifaFoundation(dataDirectory, continuationKey);
         for (PersistentThreadCatalog.Entry entry : threadCatalog.list()) {
+            ThreadOwners.remember(entry.threadId(), entry.ownerId());
             threads.put(entry.threadId(), new ThreadRecord(entry));
         }
     }
@@ -391,6 +394,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 return;
             }
             String path = exchange.getRequestURI().getPath();
+            Matcher owned = java.util.regex.Pattern.compile("^/api/threads/([^/]+)(?:/.*)?$").matcher(path);
+            boolean searchPost = "/api/threads/search".equals(path) && "POST".equals(exchange.getRequestMethod());
+            if (owned.matches() && !searchPost && !visible(exchange, owned.group(1))) return;
             if (path.equals("/api/threads") && exchange.getRequestMethod().equals("POST")) {
                 createThread(exchange);
                 return;
@@ -519,10 +525,23 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
             metadata.put("deerflow_project_id", projectId);
         }
+        String owner = AccessOwner.current();
+        ThreadRecord existing = threads.get(threadId);
+        if (existing != null && !owner.equals(existing.ownerId)) {
+            sendJson(exchange, 404, Map.of("detail", "Thread not found"));
+            return;
+        }
         ThreadRecord record = threads.computeIfAbsent(
-                threadId, ignored -> new ThreadRecord(threadId, metadata, Instant.now()));
+                threadId, ignored -> new ThreadRecord(threadId, metadata, Instant.now(), owner));
         persistThread(record);
         sendJson(exchange, 200, threadResponse(record));
+    }
+
+    private boolean visible(HttpExchange exchange, String threadId) throws IOException {
+        ThreadRecord record = threads.get(threadId);
+        if (record == null || AccessOwner.current().equals(record.ownerId)) return true;
+        sendJson(exchange, 404, Map.of("detail", "Thread not found"));
+        return false;
     }
 
     private void getThread(HttpExchange exchange, String threadId) throws IOException {
@@ -974,6 +993,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         boolean archivedFilterPresent = body.has("archived") && !body.get("archived").isNull();
         boolean archived = body.path("archived").asBoolean(false);
         List<Map<String, Object>> matches = threads.values().stream()
+                .filter(record -> AccessOwner.current().equals(record.ownerId))
                 .filter(record -> !archivedFilterPresent
                         || Boolean.TRUE.equals(record.metadata.get("deerflow_archived")) == archived)
                 .filter(record -> metadataFilter.entrySet().stream()
@@ -1258,9 +1278,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             StagedRunChanges staged = null;
             try {
                 WorkspaceBinding workspace = workspaceChanges.bindThreadWorkspace(
-                        DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId);
+                        ThreadOwners.of(threadId), threadId);
                 staged = workspaceChanges.stageRunChanges(
-                        DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId, workspace.workspaceId());
+                        ThreadOwners.of(threadId), threadId, workspace.workspaceId());
             } catch (RuntimeException ignored) {
                 // DeerFlow treats workspace capture as diagnostic evidence: it cannot block the Run.
             }
@@ -1756,9 +1776,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             io.haifa.agent.superharness.server.config.SubagentRunConfiguration delegation,
             boolean isPlanMode) {
         bridgeBuilds.incrementAndGet();
-        return new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt), foundation, mcpProjection,
-                skillProjection, agentPrompt, delegation, childRunCapacity, isPlanMode, executionExecutorFactory,
-                hostShellConfig(), parentWallTimeMillisForTests);
+        return AccessOwner.call(thread.ownerId, () -> new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt),
+                foundation, mcpProjection, skillProjection, agentPrompt, delegation, childRunCapacity, isPlanMode,
+                executionExecutorFactory, hostShellConfig(), parentWallTimeMillisForTests));
     }
 
     /** Test-only: the exact bridge currently attached to a Thread, or null when none is. */
@@ -1879,7 +1899,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     Optional.ofNullable(thread.persistedSessionId),
                     Optional.ofNullable(thread.modelBindingIdentity),
                     thread.interactionDisplays,
-                    thread.clarificationDisplays));
+                    thread.clarificationDisplays,
+                    thread.ownerId));
         }
     }
 
@@ -4293,7 +4314,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
         WorkspaceBinding binding;
         try {
-            binding = workspaceChanges.requireThreadWorkspace(DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId);
+            binding = workspaceChanges.requireThreadWorkspace(ThreadOwners.of(threadId), threadId);
         } catch (WorkspaceException missing) {
             sendJson(exchange, 404, Map.of("detail", "Run " + runId + " not found"));
             return;
@@ -4301,7 +4322,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         WorkspaceChanges changes;
         try {
             changes = workspaceChanges.readRunChanges(
-                    DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId, binding.workspaceId(), runId);
+                    ThreadOwners.of(threadId), threadId, binding.workspaceId(), runId);
         } catch (WorkspaceException failure) {
             if ((failure.error() == WorkspaceError.RUN_BASELINE_NOT_FOUND
                     || failure.error() == WorkspaceError.RUN_CHANGES_NOT_COMPLETED) && liveRunVisible) {
@@ -4656,9 +4677,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             if (!run.bridge.snapshot(run.runId).status().isTerminal()) return false;
             if (!run.workspaceRecordingEnabled) return true;
             WorkspaceBinding binding = workspaceChanges.requireThreadWorkspace(
-                    DeerFlowBootstrapApi.DEFAULT_USER_ID, run.threadId);
+                    ThreadOwners.of(run.threadId), run.threadId);
             workspaceChanges.completeRunChanges(
-                    DeerFlowBootstrapApi.DEFAULT_USER_ID, run.threadId, binding.workspaceId(), run.runId.value());
+                    ThreadOwners.of(run.threadId), run.threadId, binding.workspaceId(), run.runId.value());
             return true;
         } catch (RuntimeException failure) {
             // Recording is best-effort; keep the Run outcome while exposing a bounded diagnostic.
@@ -5039,6 +5060,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private static final class ThreadRecord {
         private final String threadId;
+        private final String ownerId;
         private volatile Map<String, Object> metadata;
         private final Instant createdAt;
         private volatile Instant updatedAt;
@@ -5058,15 +5080,22 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         private long nextMessageSequence = 1;
 
         private ThreadRecord(String threadId, Map<String, Object> metadata, Instant now) {
+            this(threadId, metadata, now, AccessOwner.DEFAULT);
+        }
+
+        private ThreadRecord(String threadId, Map<String, Object> metadata, Instant now, String ownerId) {
             this.threadId = threadId;
+            this.ownerId = ownerId == null || ownerId.isBlank() ? AccessOwner.DEFAULT : ownerId;
             this.metadata = Collections.unmodifiableMap(new LinkedHashMap<>(metadata));
             this.createdAt = now;
             this.updatedAt = now;
             this.admissionRecovered = true;
+            ThreadOwners.remember(threadId, this.ownerId);
         }
 
         private ThreadRecord(PersistentThreadCatalog.Entry entry) {
             this.threadId = entry.threadId();
+            this.ownerId = entry.ownerId();
             this.metadata = entry.metadata();
             this.createdAt = entry.createdAt();
             this.updatedAt = entry.updatedAt();

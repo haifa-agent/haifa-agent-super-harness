@@ -3,6 +3,7 @@ package io.haifa.agent.superharness.server.run;
 import io.haifa.agent.core.agent.AgentDefinitionId;
 import io.haifa.agent.core.agent.AgentDefinitionVersion;
 import io.haifa.agent.core.reference.PrincipalRef;
+import io.haifa.agent.superharness.server.auth.AccessOwner;
 import io.haifa.agent.core.reference.TenantRef;
 import io.haifa.agent.core.run.AgentRunBudget;
 import io.haifa.agent.core.run.AgentRunId;
@@ -223,7 +224,7 @@ public final class HaifaRunBridge implements AutoCloseable {
         HostExecutionPlatforms.HostExecutionPlatform hostExecution = null;
         McpToolPlatforms.McpToolPlatform platform = mcpSpecs.isEmpty() ? null : McpToolPlatforms.connect(
                 mcpSpecs, new TenantRef(McpRunTools.TENANT_ID),
-                new PrincipalRef(McpRunTools.PRINCIPAL_ID, McpRunTools.PRINCIPAL_TYPE));
+                new PrincipalRef(AccessOwner.current(), McpRunTools.PRINCIPAL_TYPE));
         try {
             this.mcpToolNames = platform == null ? Set.of() : Set.copyOf(platform.toolNames());
             this.delegationSignature = delegation.signature(tools, this.mcpSignature, this.skillSignature, this.mcpToolNames);

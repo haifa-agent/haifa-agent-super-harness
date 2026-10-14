@@ -67,7 +67,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     public static final String DEFAULT_USER_ID = "default";
     static final String DEFAULT_SYSTEM_ROLE = "admin";
     static final String DEFAULT_USER_EMAIL = "default@test.local";
-    static final List<String> DEFAULT_PERMISSIONS =
+    public static final List<String> DEFAULT_PERMISSIONS =
             List.of(
                     "threads:read",
                     "threads:write",
@@ -80,6 +80,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                     "projects:delete");
 
     private final io.javalin.Javalin javalin;
+    private final io.haifa.agent.superharness.server.auth.LocalAuthService localAuth;
     private final String bindHost;
     private final int bindPort;
     private final ExecutorService executor;
@@ -127,6 +128,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings delegationSettings,
             Supplier<? extends ExecutorService> executionExecutorFactory,
             Long parentWallTimeMillisForTests) throws IOException {
+        this.localAuth = io.haifa.agent.superharness.server.auth.LocalAuthService.takePending();
         this.bindHost = bindHost;
         this.bindPort = bindPort;
         this.executor = executor;
@@ -158,11 +160,12 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.threadRunApi = new DeerFlowThreadRunApi(
                 objectMapper,
                 modelResolver,
-                projectId -> projects.projectExists(DEFAULT_USER_ID, projectId),
+                projectId -> projects.projectExists(
+                        io.haifa.agent.superharness.server.auth.AccessOwner.current(), projectId),
                 projects,
                 dataDirectory,
                 continuationKey,
-                scope -> promptReadyTools(testRunTools, projects, toolWorkspace, scope, configurationApi, skillStore, skillScreening),
+                scope -> promptReadyTools(testRunTools, projects, toolWorkspace, scope, configurationApi, skillStore, skillScreening, localAuth),
                 new DeerFlowThreadRunApi.McpProjectionProvider() {
                     @Override
                     public McpRunTools.Projection forRun(JsonNode body) {
@@ -240,7 +243,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             DeerFlowThreadRunApi.ThreadToolScope scope,
             DeerFlowConfigurationApi configuration,
             SkillConfigStore skills,
-            io.haifa.agent.superharness.server.config.SkillPackageScreening skillScreening) {
+            io.haifa.agent.superharness.server.config.SkillPackageScreening skillScreening,
+            io.haifa.agent.superharness.server.auth.LocalAuthService localAuth) {
         List<JavaTool<?, ?>> tools = new java.util.ArrayList<>(configured);
         for (JavaTool<?, ?> tool : fileTools(scope, projects, toolWorkspace)) {
             if (tools.stream().noneMatch(existing -> existing.spec().name().equals(tool.spec().name()))) {
@@ -260,24 +264,28 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             // Pure M2 composition checks the complete registered catalog and SDK instruction limit
             // before the existing ConfigurationStore performs its single atomic replacement.
             HaifaRunBridge.promptSignatureFor(
-                    promptReadyTools(configured, projects, toolWorkspace, nextScope, configuration, skills, skillScreening),
+                    promptReadyTools(configured, projects, toolWorkspace, nextScope, configuration, skills, skillScreening, localAuth),
                     skills.projection(selectedSkills), nextAgent);
         };
+        java.util.function.BooleanSupplier configAdmin = () -> localAuth == null
+                || localAuth.allowsGlobalConfigMutation(
+                        io.haifa.agent.superharness.server.auth.ThreadOwners.of(scope.threadId()));
         if (agent.bootstrap()) {
             tools.add(new ProductionSetupAgentTool(agent.agentName(), input -> {
                 configuration.setupAgentForTool(agent.agentName(), input, validateCandidate);
                 return new ProductionSetupAgentTool.Output(true,
                         "Agent '" + agent.agentName() + "' created successfully!");
-            }));
+            }, configAdmin));
         } else if (agent.agentName() != null) {
             tools.add(new ProductionUpdateAgentTool(agent.agentName(), input -> {
                 configuration.updateAgentForTool(agent.agentName(), input, validateCandidate);
                 return new ProductionUpdateAgentTool.Output(true,
                         "Agent '" + agent.agentName() + "' updated successfully!");
-            }));
+            }, configAdmin));
         }
         if (tools.stream().noneMatch(tool -> tool.spec().name().equals("skill_manage"))) {
-            tools.add(new io.haifa.agent.superharness.server.tool.skill.ProductionSkillManageTool(skills, scope.threadId()));
+            tools.add(new io.haifa.agent.superharness.server.tool.skill.ProductionSkillManageTool(
+                    skills, scope.threadId(), configAdmin));
         }
         if (tools.stream().noneMatch(tool -> tool.spec().name().equals("review_skill_package"))) {
             tools.add(new io.haifa.agent.superharness.server.tool.skill.ProductionReviewSkillPackageTool(skills, skillScreening, path -> {
@@ -345,13 +353,18 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Path dataDirectory,
             Map<String, String> environment)
             throws IOException {
-        return createWithKey(
-                configuration,
-                dataDirectory,
-                continuationKey(environment, dataDirectory),
-                null,
-                DeerFlowSuggestionsApi.Settings.fromEnvironment(environment),
-                io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings.fromEnvironment(environment));
+        io.haifa.agent.superharness.server.auth.LocalAuthService.prepare(dataDirectory, environment);
+        try {
+            return createWithKey(
+                    configuration,
+                    dataDirectory,
+                    continuationKey(environment, dataDirectory),
+                    null,
+                    DeerFlowSuggestionsApi.Settings.fromEnvironment(environment),
+                    io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings.fromEnvironment(environment));
+        } finally {
+            io.haifa.agent.superharness.server.auth.LocalAuthService.discardPending();
+        }
     }
 
     private static DeerFlowBootstrapApi createWithKey(
@@ -688,32 +701,36 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         });
 
         registerExactGet("/health", new HealthResponse("ok"));
-        registerExactGet(
-                "/api/v1/auth/setup-status",
-                new SetupStatusResponse(false, false));
-        registerExactGet(
-                "/api/v1/auth/me",
-                new AuthMeResponse(
-                        DEFAULT_USER_ID,
-                        DEFAULT_USER_EMAIL,
-                        DEFAULT_SYSTEM_ROLE,
-                        false,
-                        null,
-                        DEFAULT_PERMISSIONS));
+        if (localAuth == null) {
+            registerExactGet(
+                    "/api/v1/auth/setup-status",
+                    new SetupStatusResponse(false, false));
+            registerExactGet(
+                    "/api/v1/auth/me",
+                    new AuthMeResponse(
+                            DEFAULT_USER_ID,
+                            DEFAULT_USER_EMAIL,
+                            DEFAULT_SYSTEM_ROLE,
+                            false,
+                            null,
+                            DEFAULT_PERMISSIONS));
+        } else {
+            localAuth.install(javalin);
+        }
         registerExactGet("/api/features", FeaturesResponse.defaults());
 
         bindPrefix("/api/models", configurationApi);
-        bindPrefix("/api/managed-models", configurationApi);
-        bindPrefix("/api/agents", configurationApi);
+        bindPrefix("/api/managed-models", configurationApi, true);
+        bindPrefix("/api/agents", configurationApi, true);
         bindPrefix(
                 "/api/subagents",
                 new DeerFlowSubagentCatalogApi(
                         objectMapper,
                         subagentCatalog,
                         configurationApi::isConfiguredModel,
-                        ignored -> DEFAULT_SYSTEM_ROLE.equals("admin")));
-        bindPrefix("/api/mcp", mcpApi);
-        bindPrefix("/api/skills", skillsApi);
+                        ignored -> io.haifa.agent.superharness.server.auth.AccessOwner.admin()));
+        bindPrefix("/api/mcp", mcpApi, true);
+        bindPrefix("/api/skills", skillsApi, true);
         bindPrefix(DeerFlowInputPolishApi.PATH, inputPolishApi);
         bindPrefix("/api/suggestions", suggestionsApi);
         bindPrefix("/api/projects", projectApi);
@@ -804,13 +821,26 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     }
 
     private void bindPrefix(String prefix, HttpHandler handler) {
+        bindPrefix(prefix, handler, false);
+    }
+
+    private void bindPrefix(String prefix, HttpHandler handler, boolean adminMutations) {
         for (io.javalin.http.HandlerType type : HTTP_METHODS) {
-            javalin.addHttpHandler(type, prefix, ctx -> dispatch(ctx, handler));
-            javalin.addHttpHandler(type, prefix + "/<*subpath>", ctx -> dispatch(ctx, handler));
+            javalin.addHttpHandler(type, prefix, ctx -> dispatch(ctx, handler, adminMutations));
+            javalin.addHttpHandler(type, prefix + "/<*subpath>", ctx -> dispatch(ctx, handler, adminMutations));
         }
     }
 
-    private void dispatch(io.javalin.http.Context ctx, HttpHandler handler) throws IOException {
+    private void dispatch(io.javalin.http.Context ctx, HttpHandler handler, boolean adminMutations) throws IOException {
+        if (adminMutations && localAuth != null && ctx.method() != io.javalin.http.HandlerType.GET
+                && !io.haifa.agent.superharness.server.auth.AccessOwner.admin()) {
+            ctx.status(403)
+                    .contentType("application/json")
+                    .header("Cache-Control", "no-store")
+                    .header("X-Content-Type-Options", "nosniff")
+                    .result(objectMapper.writeValueAsBytes(Map.of("detail", "Admin privileges are required.")));
+            return;
+        }
         try (JavalinHttpExchange exchange = new JavalinHttpExchange(ctx)) {
             handler.handle(exchange);
         }

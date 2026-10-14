@@ -32,7 +32,9 @@ import java.util.regex.Pattern;
 
 /** Frozen DeerFlow Project transport backed by the persistent Project shelf authority. */
 final class DeerFlowProjectApi implements HttpHandler {
-    private static final String OWNER_ID = DeerFlowBootstrapApi.DEFAULT_USER_ID;
+    private static String ownerId() {
+        return io.haifa.agent.superharness.server.auth.AccessOwner.current();
+    }
     private static final int MAX_JSON_BYTES = 32 * 1024;
     private static final Pattern PROJECT = Pattern.compile("^/api/projects/([^/]+)$");
     private static final Pattern PROJECT_ARCHIVE = Pattern.compile("^/api/projects/([^/]+)/archive$");
@@ -93,7 +95,7 @@ final class DeerFlowProjectApi implements HttpHandler {
                 if (!requireMethod(exchange, "POST")) {
                     return;
                 }
-                sendJson(exchange, 200, response(projects.archiveProject(OWNER_ID, match.group(1))));
+                sendJson(exchange, 200, response(projects.archiveProject(ownerId(), match.group(1))));
                 return;
             }
             match = PROJECT_RESTORE.matcher(path);
@@ -101,7 +103,7 @@ final class DeerFlowProjectApi implements HttpHandler {
                 if (!requireMethod(exchange, "POST")) {
                     return;
                 }
-                sendJson(exchange, 200, response(projects.restoreProject(OWNER_ID, match.group(1))));
+                sendJson(exchange, 200, response(projects.restoreProject(ownerId(), match.group(1))));
                 return;
             }
             match = THREADS.matcher(path);
@@ -133,7 +135,7 @@ final class DeerFlowProjectApi implements HttpHandler {
                 if (!requireMethod(exchange, "DELETE")) {
                     return;
                 }
-                projects.trashProjectDocument(OWNER_ID, match.group(1), match.group(2));
+                projects.trashProjectDocument(ownerId(), match.group(1), match.group(2));
                 sendNoContent(exchange);
                 return;
             }
@@ -151,7 +153,7 @@ final class DeerFlowProjectApi implements HttpHandler {
             match = PROJECT.matcher(path);
             if (match.matches()) {
                 if (exchange.getRequestMethod().equals("GET")) {
-                    sendJson(exchange, 200, response(projects.getProject(OWNER_ID, match.group(1))));
+                    sendJson(exchange, 200, response(projects.getProject(ownerId(), match.group(1))));
                 } else if (exchange.getRequestMethod().equals("PATCH")) {
                     patch(exchange, match.group(1));
                 } else if (exchange.getRequestMethod().equals("DELETE")) {
@@ -192,7 +194,7 @@ final class DeerFlowProjectApi implements HttpHandler {
     }
 
     private void deleteProject(HttpExchange exchange, String projectId) throws IOException {
-        projects.deleteProject(OWNER_ID, projectId, () -> threads.unbindProject(projectId));
+        projects.deleteProject(ownerId(), projectId, () -> threads.unbindProject(projectId));
         sendNoContent(exchange);
     }
 
@@ -208,7 +210,7 @@ final class DeerFlowProjectApi implements HttpHandler {
                 && !status.orElseThrow().equals("archived")) {
             throw new HttpFailure(422, "status must be active or archived");
         }
-        List<ProjectResponse> values = projects.listProjects(OWNER_ID, status).stream()
+        List<ProjectResponse> values = projects.listProjects(ownerId(), status).stream()
                 .map(this::response)
                 .toList();
         sendJson(exchange, 200, Map.of("projects", values));
@@ -221,7 +223,7 @@ final class DeerFlowProjectApi implements HttpHandler {
         Map<String, String> presentation = body.has("presentation")
                 ? presentation(body.get("presentation"), true)
                 : Map.of();
-        ProjectProfile created = projects.createProject(OWNER_ID, name, instructions, presentation);
+        ProjectProfile created = projects.createProject(ownerId(), name, instructions, presentation);
         sendJson(exchange, 201, response(created));
     }
 
@@ -232,12 +234,12 @@ final class DeerFlowProjectApi implements HttpHandler {
         Optional<Map<String, String>> presentation = body.has("presentation") && !body.get("presentation").isNull()
                 ? Optional.of(presentation(body.get("presentation"), true))
                 : Optional.empty();
-        ProjectProfile updated = projects.patchProject(OWNER_ID, projectId, name, instructions, presentation);
+        ProjectProfile updated = projects.patchProject(ownerId(), projectId, name, instructions, presentation);
         sendJson(exchange, 200, response(updated));
     }
 
     private void listThreads(HttpExchange exchange, String projectId) throws IOException {
-        projects.getProject(OWNER_ID, projectId);
+        projects.getProject(ownerId(), projectId);
         int limit = queryInt(exchange, "limit", 100, 1, 1000);
         int offset = queryInt(exchange, "offset", 0, 0, Integer.MAX_VALUE);
         sendJson(exchange, 200, threads.listProjectThreads(projectId, limit, offset));
@@ -246,7 +248,7 @@ final class DeerFlowProjectApi implements HttpHandler {
     private void listDocuments(HttpExchange exchange, String projectId) throws IOException {
         int limit = queryInt(exchange, "limit", 100, 1, 1000);
         int offset = queryInt(exchange, "offset", 0, 0, Integer.MAX_VALUE);
-        List<ProjectDocument> all = projects.listProjectDocuments(OWNER_ID, projectId);
+        List<ProjectDocument> all = projects.listProjectDocuments(ownerId(), projectId);
         int from = Math.min(offset, all.size());
         int to = Math.min(all.size(), Math.addExact(from, Math.min(limit, all.size() - from)));
         sendJson(exchange, 200, new ProjectDocumentsResponse(
@@ -257,7 +259,7 @@ final class DeerFlowProjectApi implements HttpHandler {
     }
 
     private void uploadDocument(HttpExchange exchange, String projectId) throws IOException {
-        projects.getProject(OWNER_ID, projectId);
+        projects.getProject(ownerId(), projectId);
         if (!workspace.tryAcquireUploadSlot()) {
             throw new HttpFailure(429, "Another upload request is already using the bounded local slot");
         }
@@ -265,7 +267,7 @@ final class DeerFlowProjectApi implements HttpHandler {
             DeerFlowWorkspaceApi.MultipartFile file = workspace.parseSingleFile(exchange, "file");
             ProjectDocumentReceipt receipt;
             try {
-                receipt = projects.uploadProjectDocument(OWNER_ID, projectId, file.filename(), file.content());
+                receipt = projects.uploadProjectDocument(ownerId(), projectId, file.filename(), file.content());
             } catch (WorkspaceException failure) {
                 // Frozen shelf rejects an unusable upload/display name with 400 at the HTTP boundary.
                 // Every other Workspace failure keeps its existing status and authority mapping.
@@ -293,7 +295,7 @@ final class DeerFlowProjectApi implements HttpHandler {
         ProjectDocument document = requireDocument(projectId, documentId);
         ByteSelection selection = selectRange(exchange.getRequestHeaders().getFirst("Range"), document.sizeBytes());
         ProjectDocumentContent content = projects.readProjectDocument(
-                OWNER_ID, projectId, documentId, selection.start(), Math.max(1, selection.length()));
+                ownerId(), projectId, documentId, selection.start(), Math.max(1, selection.length()));
         byte[] bytes = selection.length() == 0 ? new byte[0] : content.bytes();
         String mediaType = mediaType(document.name(), bytes);
         boolean download = queryValue(exchange, "download").map("true"::equalsIgnoreCase).orElse(false);
@@ -330,13 +332,13 @@ final class DeerFlowProjectApi implements HttpHandler {
         }
         ProjectDocument document = requireDocument(projectId, documentId);
         ProjectDocumentContent content = projects.readProjectDocument(
-                OWNER_ID, projectId, documentId, 0, Math.max(1, Math.toIntExact(document.sizeBytes())));
+                ownerId(), projectId, documentId, 0, Math.max(1, Math.toIntExact(document.sizeBytes())));
         sendJson(exchange, 200, workspace.attachProjectDocument(
                 threadId, document.name(), content.bytes(), mediaType(document.name(), content.bytes())));
     }
 
     private ProjectDocument requireDocument(String projectId, String documentId) {
-        return projects.listProjectDocuments(OWNER_ID, projectId).stream()
+        return projects.listProjectDocuments(ownerId(), projectId).stream()
                 .filter(document -> document.id().equals(documentId))
                 .findFirst()
                 .orElseThrow(() -> new HttpFailure(404, "Document not found"));
