@@ -27,6 +27,9 @@ param(
     # W15 representative managed Skill and evaluation-result chain using the real provider.
     [switch]$W15LiveSkill,
     [switch]$W15PackageDifferential,
+    # W04 skill admission seed: host shell Tool on, isolated baoyu-image-gen seed directory,
+    # the deferred 038-32 assertion table, and the live DeepSeek managed model.
+    [switch]$W04ImageGen,
     # UX-V1 joint acceptance: the live DeepSeek model with the DeerFlow default tool chains.
     [switch]$UxV1DefaultTools,
     # UX-V1 M3: the frozen new-agent conversation/save flow with the live managed model.
@@ -61,12 +64,12 @@ if ($AgentSlot -eq 5) { $expectedGatewayPort = 12618; $expectedFrontendPort = 17
 if ($GatewayPort -ne $expectedGatewayPort -or $FrontendPort -ne $expectedFrontendPort -or $ProviderPort -ne 0) {
     throw "W18 slot $AgentSlot requires Gateway=$expectedGatewayPort and Frontend=$expectedFrontendPort; controlled Provider must use OS-assigned port 0."
 }
-if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $LiveDeepSeek, $W08LiveDelegation, $W15PackageDifferential).Where({ $_ }).Count -gt 1) {
-    throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, V2 model-switch, V2 file-context, V2 Skill, V2 diagnostics, W08 catalog, W08 delegation, live rendering, W15 package differential, and live DeepSeek profiles are mutually exclusive.'
+if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $LiveDeepSeek, $W08LiveDelegation, $W15PackageDifferential, $W04ImageGen).Where({ $_ }).Count -gt 1) {
+    throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, V2 model-switch, V2 file-context, V2 Skill, V2 diagnostics, W08 catalog, W08 delegation, live rendering, W15 package differential, the W04 imagegen profile, and live DeepSeek are mutually exclusive.'
 }
 if ($W15PackageDifferential) { $V2Skill = $true }
-if (@($UxV1DefaultTools, $UxV1AgentSoul, $W15LiveSkill).Where({ $_ }).Count -gt 1) {
-    throw 'The UX-V1 default-tools and Agent SOUL profiles are mutually exclusive.'
+if (@($UxV1DefaultTools, $UxV1AgentSoul, $W15LiveSkill, $W04ImageGen).Where({ $_ }).Count -gt 1) {
+    throw 'The UX-V1, W15 live-skill and W04 imagegen profiles are mutually exclusive.'
 }
 if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill) {
     if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $LiveDeepSeek, $W08LiveDelegation).Where({ $_ }).Count -gt 0) {
@@ -76,6 +79,14 @@ if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill) {
     $LiveDeepSeek = $true
 }
 if ($W08LiveDelegation) { $LiveDeepSeek = $true }
+if ($W04ImageGen) {
+    if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $W08LiveDelegation, $W15PackageDifferential).Where({ $_ }).Count -gt 0) {
+        throw 'The W04 imagegen profile is mutually exclusive with the other profiles.'
+    }
+    # Reuses the live DeepSeek managed model and skips the controlled loopback provider. The
+    # deferred A1-A8 assertions stay NOT_RUN until upstream 038-32 lands; A0 alone runs today.
+    $LiveDeepSeek = $true
+}
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 . (Join-Path $PSScriptRoot '../lib/sdk-selection.ps1')
@@ -88,6 +99,7 @@ $sdk = [pscustomobject]@{ Status = 'NOT_RUN'; HaifaVersion = $null }
 $internalGatewayBaseUrl = "http://127.0.0.1:$GatewayPort"
  . (Join-Path $PSScriptRoot '../lib/run-fixture.ps1')
 $tag = if ($W15PackageDifferential) { 'w15-package-differential' } elseif ($W15LiveSkill) { 'w15-live-skill' } elseif ($UxV1AgentSoul) { 'ux-v1-soul' } elseif ($UxV1DefaultTools) { 'ux-v1' }
+    elseif ($W04ImageGen) { 'w04-imagegen' }
     elseif ($W08LiveDelegation) { 'w08-live-delegation' }
     elseif ($LiveDeepSeek) { 'w18-deepseek' } elseif ($ActiveReconnect) { 'w05-active-reconnect' }
     elseif ($Interaction) { 'w05-interaction' } elseif ($DemoArtifact) { 'w05-demo-artifact' }
@@ -118,6 +130,55 @@ $dataRoot = [IO.Path]::GetFullPath($DataDirectory).TrimEnd('\', '/')
 $rootPrefix = $root.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
 if (-not $dataRoot.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'W18 data directory must remain inside this worktree.'
+}
+
+# W04 imagegen setup, before any service or build: materialize the bounded baoyu-image-gen
+# admission seed inside this profile's isolated data root (never the user home), record the
+# cached bun directory for the Gateway PATH, and snapshot the profile facts for the spec. The
+# deferred A1-A8 gate and the runner AllowedNotRun list read tests/ui/smoke/w04-imagegen-deferred.json.
+$w04 = $null
+$w04Deferred = @()
+if ($W04ImageGen) {
+    $w04SkillsDirectory = Join-Path $dataRoot 'skills-fixture'
+    $w04SeedPackage = Join-Path $w04SkillsDirectory 'baoyu-image-gen'
+    $w04SeedManifest = Join-Path $dataRoot 'skill-seed-manifest.json'
+    $w04ExtendDirectory = Join-Path $dataRoot '.baoyu-skills'
+    Push-Location $root
+    try {
+        & python -B (Join-Path $root 'tests/ui/fixtures/w04/baoyu_imagegen_seed.py') `
+            --package $w04SeedPackage --extend $w04ExtendDirectory --manifest $w04SeedManifest 2>&1 |
+            Tee-Object -FilePath (Join-Path $evidenceRoot 'w04-seed.raw.log')
+        if ($LASTEXITCODE -ne 0) { throw 'W04 imagegen seed materialization failed; inspect w04-seed.raw.log.' }
+    }
+    finally { Pop-Location }
+    if (-not (Test-Path -LiteralPath (Join-Path $w04SeedPackage 'SKILL.md') -PathType Leaf)) {
+        throw 'W04 imagegen seed is incomplete: SKILL.md is missing after materialization.'
+    }
+    $w04BunHome = $null
+    $w04BunCandidate = [Environment]::GetEnvironmentVariable('W04_BUN_HOME', 'Process')
+    if ($w04BunCandidate) {
+        # The controller supplies an already-provisioned bun directory; the runner never installs,
+        # fetches or substitutes one and only passes it through to the Gateway PATH.
+        $candidate = [IO.Path]::GetFullPath($w04BunCandidate).TrimEnd('\', '/')
+        if (Test-Path -LiteralPath (Join-Path $candidate 'bun.exe') -PathType Leaf) { $w04BunHome = $candidate }
+    }
+    $w04RuntimeReady = [Environment]::GetEnvironmentVariable('W04_SKILL_RUNTIME_READY', 'Process')
+    $w04 = [ordered]@{
+        hostShell = 'on'
+        skillsDirectory = $w04SkillsDirectory
+        seedPackage = $w04SeedPackage
+        extendPath = (Join-Path $w04ExtendDirectory 'baoyu-image-gen/EXTEND.md')
+        manifest = $w04SeedManifest
+        bunHome = $w04BunHome
+        bunHomeCandidate = $w04BunCandidate
+        runtimeReady = $(if ($w04RuntimeReady -eq '1') { '1' } else { '0' })
+    }
+    $w04 | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'w04-profile.json') -Encoding utf8
+    $w04SeedStatus = & python -B (Join-Path $root 'tests/ui/fixtures/w04/baoyu_imagegen_seed.py') `
+        --package $w04SeedPackage --extend $w04ExtendDirectory --manifest $w04SeedManifest --verify 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "W04 imagegen seed verification failed: $w04SeedStatus" }
+    $w04Deferred = @((Get-Content -Raw -LiteralPath (Join-Path $root 'tests/ui/smoke/w04-imagegen-deferred.json') |
+        ConvertFrom-Json).cases)
 }
 $serverOut = Join-Path $evidenceRoot "server-$stamp.stdout.log"
 $serverErr = Join-Path $evidenceRoot "server-$stamp.stderr.log"
@@ -151,6 +212,11 @@ $managedEnvironment = @{
     W18_PROVIDER_URL = $null
     UXV1_DEFER_WEB = $(if ($DeferUxV1Web) { '1' } else { $null })
     W15_DIFFERENTIAL_BACKEND = $(if ($W15PackageDifferential) { 'haifa' } else { $null })
+    # W04 imagegen profile: host shell Tool on plus the isolated Skill directory. The recorded
+    # bun directory joins the Gateway PATH below, never through this shared table.
+    HAIFA_SUPER_HARNESS_HOST_SHELL = $(if ($W04ImageGen) { 'on' } else { $null })
+    HAIFA_SUPER_HARNESS_SKILLS_DIR = $(if ($W04ImageGen) { $w04.skillsDirectory } else { $null })
+    W04_SKILL_RUNTIME_READY = $(if ($W04ImageGen) { $w04.runtimeReady } else { $null })
     W18_MODEL_NAME = $(if ($LiveDeepSeek) { 'w18-deepseek-live' } else { 'w18-controlled' })
     W18_PLAYWRIGHT_SPEC = $(if ($W15PackageDifferential) {
         'w15-package-differential.spec.cjs'
@@ -160,6 +226,8 @@ $managedEnvironment = @{
         'ux-v1-agent-soul.spec.cjs'
     } elseif ($UxV1DefaultTools) {
         'ux-v1-default-tools-live.spec.cjs'
+    } elseif ($W04ImageGen) {
+        'w04-skill-imagegen.spec.cjs'
     } elseif ($W08LiveDelegation) {
         'w08-delegation-live.spec.cjs'
     } elseif ($LiveDeepSeek) {
@@ -191,7 +259,7 @@ $managedEnvironment = @{
     } else {
         'w18-ui-smoke.spec.cjs'
     })
-    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill) { '360000' } elseif ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation -or $LiveRendering) { '120000' } else { '60000' })
+    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill -or $W04ImageGen) { '360000' } elseif ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation -or $LiveRendering) { '120000' } else { '60000' })
     W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation -or $LiveRendering) { 'on' } else { 'retain-on-failure' })
     # Pass index handed to the spec; restored with the rest at the end.
     W18_PASS_INDEX = '1'
@@ -223,6 +291,11 @@ try {
         $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
         [Environment]::SetEnvironmentVariable($name, $managedEnvironment[$name], 'Process')
     }
+    if ($W04ImageGen -and $w04.bunHome) {
+        # Only ever a PATH prefix for this round; the save/restore loop below restores it.
+        $savedEnvironment['PATH'] = [Environment]::GetEnvironmentVariable('PATH', 'Process')
+        [Environment]::SetEnvironmentVariable('PATH', "$($w04.bunHome);$($savedEnvironment['PATH'])", 'Process')
+    }
     $profile = & (Join-Path $root 'scripts/frontend/verify-haifa-frontend-profile.ps1') `
         -RepositoryRoot $root `
         -SourceRepository $SourceRepository
@@ -242,6 +315,7 @@ try {
     $preflight.sdkSelection = $sdk.Status
     $preflight.haifaVersion = $sdk.HaifaVersion
     $preflight.selectedCases = $selectedCases
+    $preflight.w04 = $(if ($W04ImageGen) { $w04 } else { $null })
     if ($PreflightOnly) {
         $preflight | ConvertTo-Json -Depth 5 | Write-Output
         return
@@ -264,7 +338,7 @@ try {
             }
         }
         if (-not $SkipServerBuild -and -not $serverReusable) {
-        $serverBuild = 'BUILT'
+            $serverBuild = 'BUILT'
         Remove-BuildStamp (Get-ServerBuildStampPath $root)
         Push-Location $root
         try {
@@ -277,7 +351,7 @@ try {
         finally {
             Pop-Location
         }
-        Write-ServerBuildStamp -RepositoryRoot $root -HaifaVersion $sdk.HaifaVersion
+            Write-ServerBuildStamp -RepositoryRoot $root -HaifaVersion $sdk.HaifaVersion
         }
 
         # The frozen frontend almost never changes: reuse this worktree's build when its stamp still
@@ -499,7 +573,7 @@ try {
         # One service start, several independent Playwright processes. A failing pass does not
         # stop the later ones unless the service itself is no longer healthy (a pass that cannot
         # launch still only fails itself; readiness was already asserted before the loop).
-        $allowedNotRun = @($(if ($DeferUxV1Web) { 'C web: web_search -> web_fetch without approval' }))
+        $allowedNotRun = @($(if ($DeferUxV1Web) { 'C web: web_search -> web_fetch without approval' }) + $w04Deferred)
         for ($passIndex = 1; $passIndex -le $Passes; $passIndex++) {
             $passDir = Join-Path $evidenceRoot "pass-$passIndex"
             $null = New-Item -ItemType Directory -Force -Path $passDir
@@ -570,7 +644,7 @@ try {
             if ($testExitCode -ne 0) { throw "W18 UI smoke failed with exit code $testExitCode." }
             Write-FixtureCaseResults -EvidenceDirectory $evidenceRoot -ExpectedCases $expectedCases
             $actualCases = @(Get-Content -Raw (Join-Path $evidenceRoot 'case-results.json') | ConvertFrom-Json)
-            $allowedNotRun = @($(if ($DeferUxV1Web) { 'C web: web_search -> web_fetch without approval' }))
+            $allowedNotRun = @($(if ($DeferUxV1Web) { 'C web: web_search -> web_fetch without approval' }) + $w04Deferred)
             Assert-SmokeCaseResults -Rows $actualCases -SelectedCases $selectedCases -AllowedNotRun $allowedNotRun
             [ordered]@{ selected = $selectedCases.Count; passed = @($actualCases | Where-Object result -eq 'PASS').Count
                 notRun = @($actualCases | Where-Object result -eq 'NOT_RUN').Count; exitCode = $testExitCode
