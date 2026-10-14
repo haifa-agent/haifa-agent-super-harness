@@ -44,10 +44,15 @@ public final class LocalAuthService {
     private static final Duration LOCKOUT = Duration.ofSeconds(300);
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final ThreadLocal<LocalAuthService> PENDING = new ThreadLocal<>();
+    /** Frozen {@code _COMMON_PASSWORDS}: lowercased entries of length 8 or more. */
     private static final Set<String> COMMON_PASSWORDS = Set.of(
-            "password", "password1", "12345678", "123456789", "1234567890", "qwerty123",
-            "qwertyui", "11111111", "00000000", "abc12345", "iloveyou", "admin123",
-            "letmein1", "welcome1", "monkey12", "dragon12", "master12", "login123");
+            "password", "password1", "password12", "password123", "password1234",
+            "12345678", "123456789", "1234567890", "qwerty12", "qwertyui", "qwerty123",
+            "abc12345", "abcd1234", "iloveyou", "letmein1", "welcome1", "welcome123",
+            "admin123", "administrator", "passw0rd", "p@ssw0rd", "monkey12", "trustno1",
+            "sunshine", "princess", "football", "baseball", "superman", "batman123",
+            "starwars", "dragon123", "master123", "shadow12", "michael1", "jennifer",
+            "computer");
 
     private final ObjectMapper json;
     private final Path dataDirectory;
@@ -146,7 +151,10 @@ public final class LocalAuthService {
             return;
         }
         attempts.remove(address);
-        issue(ctx, user, remember, 200);
+        issueCookies(ctx, user, remember);
+        ctx.status(200).json(Map.of(
+                "expires_in", TOKEN_TTL.toSeconds(),
+                "needs_setup", user.needsSetup));
     }
 
     private void logout(Context ctx) {
@@ -291,6 +299,11 @@ public final class LocalAuthService {
     }
 
     private void issue(Context ctx, User user, boolean remember, int status) {
+        issueCookies(ctx, user, remember);
+        ctx.status(status).json(response(user));
+    }
+
+    private void issueCookies(Context ctx, User user, boolean remember) {
         Instant expires = Instant.now().plus(TOKEN_TTL);
         String token = sign(user.id, user.tokenVersion, expires);
         String csrf = randomToken();
@@ -298,7 +311,23 @@ public final class LocalAuthService {
         setCookie(ctx, "access_token", token, true, "Lax", maxAge);
         setCookie(ctx, "csrf_token", csrf, false, "Strict", maxAge);
         setCookie(ctx, "deerflow_session_persistent", remember ? "1" : "0", true, "Lax", maxAge);
-        ctx.status(status).json(response(user));
+    }
+
+    /**
+     * Global agent and skill writes follow the HTTP admin gate. Unbound callers are not
+     * administrators once this profile is installed; the saved user id is the authority.
+     */
+    public boolean allowsGlobalConfigMutation(String ownerId) {
+        if (!AccessOwner.admin()) return false;
+        if (ownerId == null || ownerId.isBlank() || AccessOwner.DEFAULT.equals(ownerId)) return false;
+        try {
+            for (User user : loadUsers()) {
+                if (user.id.equals(ownerId)) return "admin".equals(user.systemRole);
+            }
+        } catch (IOException failure) {
+            return false;
+        }
+        return false;
     }
 
     private AuthMeResponse response(User user) {
@@ -516,7 +545,9 @@ public final class LocalAuthService {
 
     private static String passwordPolicy(String password) {
         if (password == null || password.length() < 8) return "Password must be at least 8 characters";
-        if (COMMON_PASSWORDS.contains(password.toLowerCase(Locale.ROOT))) return "Password is too common";
+        if (COMMON_PASSWORDS.contains(password.toLowerCase(Locale.ROOT))) {
+            return "Password is too common; choose a stronger password.";
+        }
         return null;
     }
 

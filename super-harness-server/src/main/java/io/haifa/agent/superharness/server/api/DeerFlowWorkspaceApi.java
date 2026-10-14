@@ -298,12 +298,13 @@ final class DeerFlowWorkspaceApi {
             io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService projects,
             RestrictedWorkspaceService workspace, String threadId, String requested) throws IOException {
         if (requested == null || !requested.startsWith("/mnt/user-data/")) throw new IllegalArgumentException("Review target must belong to the current Thread");
-        var binding = projects.requireThreadWorkspace(ownerId(), threadId);
+        String owner = io.haifa.agent.superharness.server.auth.ThreadOwners.of(threadId);
+        var binding = projects.requireThreadWorkspace(owner, threadId);
         if (requested.endsWith(".skill")) return io.haifa.agent.superharness.server.config.SkillPackageFiles.archive(
-                workspace.readVerifiedBytes(ownerId(), binding.workspaceId(), requested));
+                workspace.readVerifiedBytes(owner, binding.workspaceId(), requested));
         String relative = RestrictedWorkspaceService.normalizeLogicalPath(requested);
         WorkspacePath root = new WorkspacePath(binding.workspaceId(), ProjectPath.of(relative));
-        WorkspaceFileService files = workspace.workspaceFiles(ownerId(), binding.workspaceId());
+        WorkspaceFileService files = workspace.workspaceFiles(owner, binding.workspaceId());
         if (files.stat(root, false).type() != FileType.DIRECTORY) throw new IllegalArgumentException("Review requires a package directory or .skill archive");
         var queue = new java.util.ArrayDeque<WorkspacePath>(); queue.add(root);
         Map<String, byte[]> result = new java.util.TreeMap<>();
@@ -324,7 +325,7 @@ final class DeerFlowWorkspaceApi {
                         if (entry.metadata().size() > 64L * 1024 * 1024 || (bytes += entry.metadata().size()) > 100L * 1024 * 1024) {
                             throw new IOException("Review target exceeds size limits");
                         }
-                        result.put(member, workspace.readVerifiedBytes(ownerId(), binding.workspaceId(), "/mnt/user-data/" + path));
+                        result.put(member, workspace.readVerifiedBytes(owner, binding.workspaceId(), "/mnt/user-data/" + path));
                     } else throw new IOException("Linked or special review target is unavailable");
                 }
                 if (!page.truncated()) break;

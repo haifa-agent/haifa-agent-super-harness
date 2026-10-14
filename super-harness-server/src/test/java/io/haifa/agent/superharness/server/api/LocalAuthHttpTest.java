@@ -5,9 +5,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.haifa.agent.core.reference.PrincipalRef;
+import io.haifa.agent.core.reference.TenantRef;
+import io.haifa.agent.core.run.AgentRunId;
+import io.haifa.agent.core.session.AgentSessionId;
+import io.haifa.agent.core.tool.ToolCallId;
+import io.haifa.agent.sdk.tool.JavaToolContext;
+import io.haifa.agent.superharness.server.auth.AccessOwner;
 import io.haifa.agent.superharness.server.auth.LocalAuthService;
 import io.haifa.agent.superharness.server.config.LocalServerConfiguration;
 import io.haifa.agent.superharness.server.testsupport.GatewayFixture;
+import io.haifa.agent.superharness.server.tool.agent.ProductionSetupAgentTool;
+import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
+import io.haifa.agent.superharness.workspace.RestrictedWorkspaceService;
+import io.haifa.agent.superharness.workspace.WorkspaceChangeLimits;
+import io.haifa.agent.superharness.workspace.WorkspaceLimits;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.URI;
@@ -16,8 +28,11 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.Executors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -91,7 +106,10 @@ class LocalAuthHttpTest {
                     "username=admin@example.com&password=" + PHRASE + "&remember_me=true",
                     Map.of("Content-Type", "application/x-www-form-urlencoded", "Origin", ORIGIN));
             assertThat(login.statusCode()).isEqualTo(200);
-            assertThat(json.readTree(login.body()).get("email").asText()).isEqualTo("admin@example.com");
+            JsonNode loginBody = json.readTree(login.body());
+            assertThat(loginBody.get("expires_in").asLong()).isEqualTo(7L * 24 * 3600);
+            assertThat(loginBody.get("needs_setup").asBoolean()).isFalse();
+            assertThat(loginBody.has("email")).isFalse();
 
             HttpResponse<String> logoutDenied = send(base, "POST", "/api/v1/auth/logout", "",
                     Map.of("Origin", "http://evil.example", "Cookie", session.cookieHeader()));
@@ -229,6 +247,91 @@ class LocalAuthHttpTest {
             JsonNode saved = json.readTree(send(base, "GET", "/api/v1/auth/preferences", null, preferences).body());
             assertThat(saved.get("mode").asText()).isEqualTo("flash");
             assertThat(saved.get("model_name").asText()).isEqualTo("demo");
+        } finally {
+            api.close();
+        }
+    }
+
+    @Test
+    void reviewGapsStayClosedForSearchOwnerToolsPasswordsAndLogin() throws Exception {
+        DeerFlowBootstrapApi api = start(dataDirectory, ORIGIN);
+        try {
+            URI base = base(api);
+            HttpResponse<String> common = send(base, "POST", "/api/v1/auth/initialize",
+                    "{\"email\":\"admin@example.com\",\"password\":\"welcome123\"}",
+                    Map.of("Content-Type", "application/json", "Origin", ORIGIN));
+            assertThat(common.statusCode()).isEqualTo(400);
+            assertThat(common.body()).contains("Password is too common");
+
+            Session admin = Session.from(send(base, "POST", "/api/v1/auth/initialize",
+                    "{\"email\":\"admin@example.com\",\"password\":\"" + PHRASE + "\",\"remember_me\":true}",
+                    Map.of("Content-Type", "application/json", "Origin", ORIGIN)));
+            Session user = Session.from(send(base, "POST", "/api/v1/auth/register",
+                    "{\"email\":\"user@example.com\",\"password\":\"" + PHRASE + "\"}",
+                    Map.of("Content-Type", "application/json", "Origin", ORIGIN)));
+            HttpResponse<String> created = send(base, "POST", "/api/threads",
+                    "{\"thread_id\":\"search\",\"metadata\":{\"title\":\"owner-only-marker\"}}", admin.jsonHeaders());
+            assertThat(created.statusCode()).isEqualTo(200);
+            HttpResponse<String> foreign = send(base, "GET", "/api/threads/search", null, user.headers());
+            assertThat(foreign.statusCode()).isEqualTo(404);
+            assertThat(foreign.body()).doesNotContain("owner-only-marker");
+            assertThat(send(base, "GET", "/api/threads/search/state", null, user.headers()).statusCode()).isEqualTo(404);
+            assertThat(send(base, "GET", "/api/threads/search", null, admin.headers()).statusCode()).isEqualTo(200);
+            HttpResponse<String> search = send(base, "POST", "/api/threads/search", "{}", user.jsonHeaders());
+            assertThat(search.statusCode()).isEqualTo(200);
+            assertThat(search.body()).doesNotContain("owner-only-marker");
+
+            var field = DeerFlowBootstrapApi.class.getDeclaredField("configurationApi");
+            field.setAccessible(true);
+            var configuration = (DeerFlowConfigurationApi) field.get(api);
+            var mutations = new java.util.concurrent.atomic.AtomicInteger();
+            var tool = new ProductionSetupAgentTool("probe-agent", input -> {
+                mutations.incrementAndGet();
+                configuration.setupAgentForTool("probe-agent", input, candidate -> {});
+                return new ProductionSetupAgentTool.Output(true, "created");
+            });
+            var context = new JavaToolContext(
+                    new AgentRunId("probe-run"), Optional.of(new AgentSessionId("probe-session")),
+                    new ToolCallId("probe-tool"), new TenantRef("public"),
+                    new PrincipalRef("default-public-user", "user"), Instant.now().plusSeconds(15),
+                    Optional.empty(), () -> false, Map.of());
+            AccessOwner.bind(user.userId, "user");
+            try {
+                var result = tool.invoke(
+                        new ProductionSetupAgentTool.Input("Safe component probe soul", "", Optional.empty()), context);
+                assertThat(result.success()).isFalse();
+                assertThat(mutations).hasValue(0);
+            } finally {
+                AccessOwner.clear();
+            }
+            assertThat(send(base, "GET", "/api/agents/probe-agent", null, admin.headers()).statusCode()).isEqualTo(404);
+
+            var authField = DeerFlowBootstrapApi.class.getDeclaredField("localAuth");
+            authField.setAccessible(true);
+            var auth = (LocalAuthService) authField.get(api);
+            assertThat(auth.allowsGlobalConfigMutation(user.userId)).isFalse();
+            assertThat(auth.allowsGlobalConfigMutation(admin.userId)).isTrue();
+
+            var projects = new PersistentProjectWorkspaceService(
+                    dataDirectory.resolve("review-workspace"), WorkspaceLimits.defaults(), WorkspaceChangeLimits.defaults());
+            var workspace = new RestrictedWorkspaceService(
+                    dataDirectory.resolve("review-workspace"), WorkspaceLimits.defaults());
+            var binding = projects.bindThreadWorkspace(admin.userId, "search");
+            workspace.upload(admin.userId, binding.workspaceId(), "probe.skill", new byte[] {1, 2, 3},
+                    "application/octet-stream");
+            String failure;
+            try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+                failure = executor.submit(() -> {
+                    try {
+                        DeerFlowWorkspaceApi.readSkillReviewTarget(
+                                projects, workspace, "search", "/mnt/user-data/uploads/probe.skill");
+                        return "NONE";
+                    } catch (Exception ex) {
+                        return ex.getClass().getSimpleName() + ":" + ex.getMessage();
+                    }
+                }).get();
+            }
+            assertThat(failure).doesNotContain("binding does not exist");
         } finally {
             api.close();
         }

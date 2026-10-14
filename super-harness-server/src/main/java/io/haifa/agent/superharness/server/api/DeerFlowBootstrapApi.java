@@ -165,7 +165,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 projects,
                 dataDirectory,
                 continuationKey,
-                scope -> promptReadyTools(testRunTools, projects, toolWorkspace, scope, configurationApi, skillStore, skillScreening),
+                scope -> promptReadyTools(testRunTools, projects, toolWorkspace, scope, configurationApi, skillStore, skillScreening, localAuth),
                 new DeerFlowThreadRunApi.McpProjectionProvider() {
                     @Override
                     public McpRunTools.Projection forRun(JsonNode body) {
@@ -243,7 +243,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             DeerFlowThreadRunApi.ThreadToolScope scope,
             DeerFlowConfigurationApi configuration,
             SkillConfigStore skills,
-            io.haifa.agent.superharness.server.config.SkillPackageScreening skillScreening) {
+            io.haifa.agent.superharness.server.config.SkillPackageScreening skillScreening,
+            io.haifa.agent.superharness.server.auth.LocalAuthService localAuth) {
         List<JavaTool<?, ?>> tools = new java.util.ArrayList<>(configured);
         for (JavaTool<?, ?> tool : fileTools(scope, projects, toolWorkspace)) {
             if (tools.stream().noneMatch(existing -> existing.spec().name().equals(tool.spec().name()))) {
@@ -263,24 +264,28 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             // Pure M2 composition checks the complete registered catalog and SDK instruction limit
             // before the existing ConfigurationStore performs its single atomic replacement.
             HaifaRunBridge.promptSignatureFor(
-                    promptReadyTools(configured, projects, toolWorkspace, nextScope, configuration, skills, skillScreening),
+                    promptReadyTools(configured, projects, toolWorkspace, nextScope, configuration, skills, skillScreening, localAuth),
                     skills.projection(selectedSkills), nextAgent);
         };
+        java.util.function.BooleanSupplier configAdmin = () -> localAuth == null
+                || localAuth.allowsGlobalConfigMutation(
+                        io.haifa.agent.superharness.server.auth.ThreadOwners.of(scope.threadId()));
         if (agent.bootstrap()) {
             tools.add(new ProductionSetupAgentTool(agent.agentName(), input -> {
                 configuration.setupAgentForTool(agent.agentName(), input, validateCandidate);
                 return new ProductionSetupAgentTool.Output(true,
                         "Agent '" + agent.agentName() + "' created successfully!");
-            }));
+            }, configAdmin));
         } else if (agent.agentName() != null) {
             tools.add(new ProductionUpdateAgentTool(agent.agentName(), input -> {
                 configuration.updateAgentForTool(agent.agentName(), input, validateCandidate);
                 return new ProductionUpdateAgentTool.Output(true,
                         "Agent '" + agent.agentName() + "' updated successfully!");
-            }));
+            }, configAdmin));
         }
         if (tools.stream().noneMatch(tool -> tool.spec().name().equals("skill_manage"))) {
-            tools.add(new io.haifa.agent.superharness.server.tool.skill.ProductionSkillManageTool(skills, scope.threadId()));
+            tools.add(new io.haifa.agent.superharness.server.tool.skill.ProductionSkillManageTool(
+                    skills, scope.threadId(), configAdmin));
         }
         if (tools.stream().noneMatch(tool -> tool.spec().name().equals("review_skill_package"))) {
             tools.add(new io.haifa.agent.superharness.server.tool.skill.ProductionReviewSkillPackageTool(skills, skillScreening, path -> {

@@ -7,6 +7,7 @@ import io.haifa.agent.superharness.server.tool.clarification.ClarificationBounda
 import io.haifa.agent.tool.api.ToolSideEffect;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 
 /** Frozen user-package operations; the SDK owns execution and Approval. */
 public final class ProductionSkillManageTool implements JavaTool<ProductionSkillManageTool.Input, ProductionSkillManageTool.Output> {
@@ -15,7 +16,15 @@ public final class ProductionSkillManageTool implements JavaTool<ProductionSkill
             .sideEffects(ToolSideEffect.FILE_WRITE).build();
     private final SkillConfigStore store;
     private final String threadId;
-    public ProductionSkillManageTool(SkillConfigStore store, String threadId) { this.store = store; this.threadId = threadId; }
+    private final BooleanSupplier configAdmin;
+    public ProductionSkillManageTool(SkillConfigStore store, String threadId) {
+        this(store, threadId, io.haifa.agent.superharness.server.auth.AccessOwner::admin);
+    }
+    public ProductionSkillManageTool(SkillConfigStore store, String threadId, BooleanSupplier configAdmin) {
+        this.store = store;
+        this.threadId = threadId;
+        this.configAdmin = configAdmin == null ? io.haifa.agent.superharness.server.auth.AccessOwner::admin : configAdmin;
+    }
     @Override public JavaToolSpec<Input, Output> spec() { return SPEC; }
 
     static void requireOwner(JavaToolContext context) {
@@ -27,6 +36,7 @@ public final class ProductionSkillManageTool implements JavaTool<ProductionSkill
 
     @Override public Output invoke(Input input, JavaToolContext context) {
         requireOwner(context);
+        if (!configAdmin.getAsBoolean()) return new Output(false, "Error: Admin privileges are required.");
         if (ClarificationBoundaryRegistry.active(context.runId().value())) return new Output(false, ClarificationBoundaryRegistry.DISCARD_MESSAGE);
         try {
             Runnable admission = () -> {

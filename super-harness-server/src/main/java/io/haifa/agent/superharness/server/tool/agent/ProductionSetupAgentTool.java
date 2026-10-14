@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
 /** The frozen bootstrap handshake, scoped to the declaration's validated agent identity. */
@@ -22,10 +23,16 @@ public final class ProductionSetupAgentTool
             .build();
     private final String agentName;
     private final Function<Input, Output> write;
+    private final BooleanSupplier configAdmin;
 
     public ProductionSetupAgentTool(String agentName, Function<Input, Output> write) {
+        this(agentName, write, io.haifa.agent.superharness.server.auth.AccessOwner::admin);
+    }
+
+    public ProductionSetupAgentTool(String agentName, Function<Input, Output> write, BooleanSupplier configAdmin) {
         this.agentName = agentName;
         this.write = Objects.requireNonNull(write, "write");
+        this.configAdmin = Objects.requireNonNull(configAdmin, "configAdmin");
     }
 
     @Override
@@ -51,6 +58,7 @@ public final class ProductionSetupAgentTool
     public Output invoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
         requireOwner(Objects.requireNonNull(context, "context"));
+        if (!configAdmin.getAsBoolean()) return new Output(false, "Error: Admin privileges are required.");
         if (agentName == null || agentName.isBlank()) return new Output(false, "Error: no current agent_name");
         if (input.soul() == null || input.soul().isBlank()) {
             return new Output(false, "Error: soul content is empty; refusing to create agent with an empty SOUL.md");

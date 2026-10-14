@@ -395,7 +395,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
             String path = exchange.getRequestURI().getPath();
             Matcher owned = java.util.regex.Pattern.compile("^/api/threads/([^/]+)(?:/.*)?$").matcher(path);
-            if (owned.matches() && !"search".equals(owned.group(1)) && !visible(exchange, owned.group(1))) return;
+            boolean searchPost = "/api/threads/search".equals(path) && "POST".equals(exchange.getRequestMethod());
+            if (owned.matches() && !searchPost && !visible(exchange, owned.group(1))) return;
             if (path.equals("/api/threads") && exchange.getRequestMethod().equals("POST")) {
                 createThread(exchange);
                 return;

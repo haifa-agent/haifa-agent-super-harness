@@ -8,6 +8,7 @@ import io.haifa.agent.superharness.server.tool.clarification.ClarificationBounda
 import io.haifa.agent.tool.api.ToolSideEffect;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
 /** Self updates only; unsupported capability fields are rejected by the strict typed schema. */
@@ -20,10 +21,16 @@ public final class ProductionUpdateAgentTool
             .build();
     private final String agentName;
     private final Function<Input, Output> write;
+    private final BooleanSupplier configAdmin;
 
     public ProductionUpdateAgentTool(String agentName, Function<Input, Output> write) {
+        this(agentName, write, io.haifa.agent.superharness.server.auth.AccessOwner::admin);
+    }
+
+    public ProductionUpdateAgentTool(String agentName, Function<Input, Output> write, BooleanSupplier configAdmin) {
         this.agentName = agentName;
         this.write = Objects.requireNonNull(write, "write");
+        this.configAdmin = Objects.requireNonNull(configAdmin, "configAdmin");
     }
 
     @Override
@@ -35,6 +42,7 @@ public final class ProductionUpdateAgentTool
     public Output invoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
         ProductionSetupAgentTool.requireOwner(Objects.requireNonNull(context, "context"));
+        if (!configAdmin.getAsBoolean()) return new Output(false, "Error: Admin privileges are required.");
         if (agentName == null || agentName.isBlank()) return new Output(false, "Error: no current custom agent_name");
         if (input.soul().isPresent() && input.soul().orElseThrow().isBlank()) {
             return new Output(false, "Error: soul content is empty; omit soul to keep it unchanged");
