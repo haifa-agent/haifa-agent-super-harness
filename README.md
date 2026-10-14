@@ -289,7 +289,7 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -GatewayOnly
 ## 本地登录 profile
 
 默认启动保持免登录：Gateway 与前端都设置 `DEER_FLOW_AUTH_DISABLED=1`，`/api/v1/auth/me` 仍返回合成管理员。
-本地登录是另一条 profile，用独立端口和全新 data-root，不占用主工作树的 `18018`/`33018`：
+本地登录是另一条 profile，必须显式传入独立于 `local-tmp/main-service-data` 的 `-DataDirectory`，并使用独立端口，不占用主工作树的 `18018`/`33018`。已有免登录 Runtime 或 `owners/default`、且还没有 `auth/users.json` 的目录会被拒绝：
 
 ```powershell
 pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -LocalAuth -AllowSlot `

@@ -22,10 +22,25 @@ $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 if ([string]::IsNullOrWhiteSpace($SourceRepository)) {
     $SourceRepository = Join-Path $root 'deer-flow'
 }
+$mainDataRoot = [IO.Path]::GetFullPath((Join-Path $root 'local-tmp/main-service-data'))
+if ($LocalAuth -and -not $PSBoundParameters.ContainsKey('DataDirectory')) {
+    throw 'Local auth profile requires -DataDirectory for a fresh data root, separate from local-tmp/main-service-data.'
+}
 if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
     $DataDirectory = Join-Path $root 'local-tmp/main-service-data'
 }
 $dataRoot = [IO.Path]::GetFullPath($DataDirectory)
+if ($LocalAuth) {
+    if ($dataRoot -eq $mainDataRoot) {
+        throw 'Local auth profile must not use the main service data directory.'
+    }
+    $legacyRuntime = Test-Path -LiteralPath (Join-Path $dataRoot 'runtime/haifa-agent.sqlite')
+    $legacyOwner = Test-Path -LiteralPath (Join-Path $dataRoot 'owners/default')
+    $authUsers = Test-Path -LiteralPath (Join-Path $dataRoot 'auth/users.json')
+    if (($legacyRuntime -or $legacyOwner) -and -not $authUsers) {
+        throw 'Local auth profile refuses a data root that already contains an auth-disabled runtime or owners/default. Use a fresh directory, or one that already has auth/users.json.'
+    }
+}
 $sourceRoot = (Resolve-Path -LiteralPath $SourceRepository).Path
 $gatewayUrl = "http://127.0.0.1:$GatewayPort"
 $frontendUrl = "http://127.0.0.1:$FrontendPort"

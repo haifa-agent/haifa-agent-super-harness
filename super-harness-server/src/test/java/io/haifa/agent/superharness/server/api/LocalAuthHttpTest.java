@@ -202,6 +202,38 @@ class LocalAuthHttpTest {
         }
     }
 
+    @Test
+    void ordinaryUserCannotMutateGlobalConfiguration() throws Exception {
+        DeerFlowBootstrapApi api = start(dataDirectory, ORIGIN);
+        try {
+            URI base = base(api);
+            Session admin = Session.from(send(base, "POST", "/api/v1/auth/initialize",
+                    "{\"email\":\"admin@example.com\",\"password\":\"" + PHRASE + "\",\"remember_me\":true}",
+                    Map.of("Content-Type", "application/json", "Origin", ORIGIN)));
+            Session user = Session.from(send(base, "POST", "/api/v1/auth/register",
+                    "{\"email\":\"user@example.com\",\"password\":\"" + PHRASE + "\"}",
+                    Map.of("Content-Type", "application/json", "Origin", ORIGIN)));
+            assertThat(send(base, "POST", "/api/agents", "{}", user.jsonHeaders()).statusCode()).isEqualTo(403);
+            assertThat(send(base, "PUT", "/api/managed-models", "{}", user.jsonHeaders()).statusCode()).isEqualTo(403);
+            assertThat(send(base, "PATCH", "/api/mcp/config", "{}", user.jsonHeaders()).statusCode()).isEqualTo(403);
+            assertThat(send(base, "POST", "/api/skills/install", "{}", user.jsonHeaders()).statusCode()).isEqualTo(403);
+            assertThat(send(base, "GET", "/api/models", null, user.headers()).statusCode()).isNotEqualTo(403);
+            assertThat(send(base, "POST", "/api/agents", "{}", admin.jsonHeaders()).statusCode()).isNotEqualTo(403);
+
+            Map<String, String> preferences = user.jsonHeaders();
+            preferences.put("X-Expected-User-Id", user.userId);
+            assertThat(send(base, "PATCH", "/api/v1/auth/preferences", "{\"mode\":\"flash\"}", preferences).statusCode())
+                    .isEqualTo(200);
+            assertThat(send(base, "PATCH", "/api/v1/auth/preferences", "{\"model_name\":\"demo\"}", preferences).statusCode())
+                    .isEqualTo(200);
+            JsonNode saved = json.readTree(send(base, "GET", "/api/v1/auth/preferences", null, preferences).body());
+            assertThat(saved.get("mode").asText()).isEqualTo("flash");
+            assertThat(saved.get("model_name").asText()).isEqualTo("demo");
+        } finally {
+            api.close();
+        }
+    }
+
     private DeerFlowBootstrapApi start(Path data, String origins) throws Exception {
         Map<String, String> environment = new LinkedHashMap<>();
         environment.put(LocalAuthService.ENABLED, "1");

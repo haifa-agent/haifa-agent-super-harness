@@ -715,8 +715,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         registerExactGet("/api/features", FeaturesResponse.defaults());
 
         bindPrefix("/api/models", configurationApi);
-        bindPrefix("/api/managed-models", configurationApi);
-        bindPrefix("/api/agents", configurationApi);
+        bindPrefix("/api/managed-models", configurationApi, true);
+        bindPrefix("/api/agents", configurationApi, true);
         bindPrefix(
                 "/api/subagents",
                 new DeerFlowSubagentCatalogApi(
@@ -724,8 +724,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                         subagentCatalog,
                         configurationApi::isConfiguredModel,
                         ignored -> io.haifa.agent.superharness.server.auth.AccessOwner.admin()));
-        bindPrefix("/api/mcp", mcpApi);
-        bindPrefix("/api/skills", skillsApi);
+        bindPrefix("/api/mcp", mcpApi, true);
+        bindPrefix("/api/skills", skillsApi, true);
         bindPrefix(DeerFlowInputPolishApi.PATH, inputPolishApi);
         bindPrefix("/api/suggestions", suggestionsApi);
         bindPrefix("/api/projects", projectApi);
@@ -816,13 +816,26 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     }
 
     private void bindPrefix(String prefix, HttpHandler handler) {
+        bindPrefix(prefix, handler, false);
+    }
+
+    private void bindPrefix(String prefix, HttpHandler handler, boolean adminMutations) {
         for (io.javalin.http.HandlerType type : HTTP_METHODS) {
-            javalin.addHttpHandler(type, prefix, ctx -> dispatch(ctx, handler));
-            javalin.addHttpHandler(type, prefix + "/<*subpath>", ctx -> dispatch(ctx, handler));
+            javalin.addHttpHandler(type, prefix, ctx -> dispatch(ctx, handler, adminMutations));
+            javalin.addHttpHandler(type, prefix + "/<*subpath>", ctx -> dispatch(ctx, handler, adminMutations));
         }
     }
 
-    private void dispatch(io.javalin.http.Context ctx, HttpHandler handler) throws IOException {
+    private void dispatch(io.javalin.http.Context ctx, HttpHandler handler, boolean adminMutations) throws IOException {
+        if (adminMutations && localAuth != null && ctx.method() != io.javalin.http.HandlerType.GET
+                && !io.haifa.agent.superharness.server.auth.AccessOwner.admin()) {
+            ctx.status(403)
+                    .contentType("application/json")
+                    .header("Cache-Control", "no-store")
+                    .header("X-Content-Type-Options", "nosniff")
+                    .result(objectMapper.writeValueAsBytes(Map.of("detail", "Admin privileges are required.")));
+            return;
+        }
         try (JavalinHttpExchange exchange = new JavalinHttpExchange(ctx)) {
             handler.handle(exchange);
         }

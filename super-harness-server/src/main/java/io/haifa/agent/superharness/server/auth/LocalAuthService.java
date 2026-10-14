@@ -57,6 +57,7 @@ public final class LocalAuthService {
     private final byte[] jwtSecret;
     private final Set<String> allowedOrigins;
     private final ConcurrentHashMap<String, Attempt> attempts = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Object> preferenceLocks = new ConcurrentHashMap<>();
 
     private LocalAuthService(ObjectMapper json, Path dataDirectory, Map<String, String> environment) throws IOException {
         this.json = json;
@@ -271,10 +272,13 @@ public final class LocalAuthService {
             return;
         }
         Path file = preferenceFile(user.id);
-        ObjectNode merged = readPreferenceDocument(user.id);
-        body.fields().forEachRemaining(field -> merged.set(field.getKey(), field.getValue()));
-        writeAtomic(file, json.writerWithDefaultPrettyPrinter().writeValueAsBytes(merged));
-        ctx.json(merged);
+        Object lock = preferenceLocks.computeIfAbsent(user.id, ignored -> new Object());
+        synchronized (lock) {
+            ObjectNode merged = readPreferenceDocument(user.id);
+            body.fields().forEachRemaining(field -> merged.set(field.getKey(), field.getValue()));
+            writeAtomic(file, json.writerWithDefaultPrettyPrinter().writeValueAsBytes(merged));
+            ctx.json(merged);
+        }
     }
 
     private boolean fence(Context ctx, User user) {
@@ -645,12 +649,16 @@ public final class LocalAuthService {
     }
 
     private static void writeAtomic(Path target, byte[] bytes) throws IOException {
-        Path temporary = target.resolveSibling(target.getFileName() + ".tmp");
-        Files.write(temporary, bytes);
+        Path temporary = Files.createTempFile(target.getParent(), target.getFileName().toString(), ".tmp");
         try {
-            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (AtomicMoveNotSupportedException failure) {
-            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+            Files.write(temporary, bytes);
+            try {
+                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException failure) {
+                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(temporary);
         }
     }
 
