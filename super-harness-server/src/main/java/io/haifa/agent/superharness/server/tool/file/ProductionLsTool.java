@@ -8,7 +8,7 @@ import io.haifa.agent.project.path.WorkspacePath;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
-import io.haifa.agent.superharness.server.api.DeerFlowBootstrapApi;
+import io.haifa.agent.superharness.server.auth.ThreadOwners;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
 import io.haifa.agent.superharness.workspace.RestrictedWorkspaceService;
@@ -73,7 +73,7 @@ public final class ProductionLsTool implements JavaTool<ProductionLsTool.Input, 
         } catch (WorkspaceException failure) {
             return Output.failure(path, unreadable(path, failure));
         }
-        WorkspaceBinding binding = bindings.requireThreadWorkspace(DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId);
+        WorkspaceBinding binding = bindings.requireThreadWorkspace(ThreadOwners.of(threadId), threadId);
         WorkspaceFileService files = workspace.workspaceFiles(binding.ownerId(), binding.workspaceId());
         WorkspacePath root = FileToolSupport.workspacePath(binding.workspaceId(), normalized);
         List<FileEntry> entries;

@@ -30,7 +30,9 @@ import java.util.regex.Pattern;
 
 /** Frozen DeerFlow Trash transport backed by the persistent Project shelf authority. */
 final class DeerFlowTrashApi implements HttpHandler {
-    private static final String OWNER_ID = DeerFlowBootstrapApi.DEFAULT_USER_ID;
+    private static String ownerId() {
+        return io.haifa.agent.superharness.server.auth.AccessOwner.current();
+    }
     private static final int MAX_JSON_BYTES = 32 * 1024;
     private static final Pattern TRASH_DOCUMENTS = Pattern.compile("^/api/trash/documents$");
     private static final Pattern TRASH_RESTORE = Pattern.compile("^/api/trash/documents/([^/]+)/restore$");
@@ -109,7 +111,7 @@ final class DeerFlowTrashApi implements HttpHandler {
     private void listTrash(HttpExchange exchange) throws IOException {
         int limit = queryInt(exchange, "limit", 100, 1, 1000);
         int offset = queryInt(exchange, "offset", 0, 0, Integer.MAX_VALUE);
-        TrashDocumentList list = projects.listTrashDocuments(OWNER_ID, limit, offset);
+        TrashDocumentList list = projects.listTrashDocuments(ownerId(), limit, offset);
         sendJson(exchange, 200, new TrashListResponse(
                 list.documents().stream().map(this::trashResponse).toList(),
                 list.total(),
@@ -124,17 +126,17 @@ final class DeerFlowTrashApi implements HttpHandler {
             JsonNode body = readObject(exchange);
             targetProjectId = nullableText(body, "project_id");
         }
-        RestoreDocumentResult result = projects.restoreTrashDocument(OWNER_ID, documentId, targetProjectId);
+        RestoreDocumentResult result = projects.restoreTrashDocument(ownerId(), documentId, targetProjectId);
         sendJson(exchange, 200, new TrashRestoreResponse(result.outcome(), documentResponse(result.document())));
     }
 
     private void purgeDocument(HttpExchange exchange, String documentId) throws IOException {
-        projects.purgeTrashDocument(OWNER_ID, documentId);
+        projects.purgeTrashDocument(ownerId(), documentId);
         sendNoContent(exchange);
     }
 
     private void emptyTrash(HttpExchange exchange) throws IOException {
-        int purged = projects.emptyTrash(OWNER_ID);
+        int purged = projects.emptyTrash(ownerId());
         sendJson(exchange, 200, new TrashPurgeResponse(purged));
     }
 

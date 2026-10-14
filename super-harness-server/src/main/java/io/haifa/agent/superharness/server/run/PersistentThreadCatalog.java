@@ -81,7 +81,8 @@ public final class PersistentThreadCatalog {
                     optionalText(item, "session_id").map(AgentSessionId::new),
                     optionalText(item, "model_binding"),
                     readInteractionDisplays(item.path("interaction_displays")),
-                    readClarificationDisplays(item.path("clarification_displays")));
+                    readClarificationDisplays(item.path("clarification_displays")),
+                    optionalText(item, "owner_id").orElse("default"));
             if (entries.putIfAbsent(entry.threadId(), entry) != null) {
                 throw new IOException("thread catalog contains a duplicate thread_id");
             }
@@ -131,6 +132,7 @@ public final class PersistentThreadCatalog {
                 putNullable(encoded, "answeredValue", display.answeredValue());
                 putNullable(encoded, "answeredRunId", display.answeredRunId());
             }
+            if (!"default".equals(entry.ownerId())) item.put("owner_id", entry.ownerId());
         }
         byte[] bytes = json.writerWithDefaultPrettyPrinter().writeValueAsBytes(root);
         if (bytes.length > MAXIMUM_CATALOG_BYTES) {
@@ -339,11 +341,19 @@ public final class PersistentThreadCatalog {
             Optional<AgentSessionId> sessionId,
             Optional<String> modelBindingIdentity,
             List<InteractionDisplay> interactionDisplays,
-            List<ClarificationDisplay> clarificationDisplays) {
+            List<ClarificationDisplay> clarificationDisplays,
+            String ownerId) {
         public Entry(String threadId, Map<String, Object> metadata, Instant createdAt, Instant updatedAt,
                 Optional<AgentSessionId> sessionId, Optional<String> modelBindingIdentity) {
             this(threadId, metadata, createdAt, updatedAt, sessionId, modelBindingIdentity,
-                    List.of(), List.of());
+                    List.of(), List.of(), "default");
+        }
+
+        public Entry(String threadId, Map<String, Object> metadata, Instant createdAt, Instant updatedAt,
+                Optional<AgentSessionId> sessionId, Optional<String> modelBindingIdentity,
+                List<InteractionDisplay> interactionDisplays, List<ClarificationDisplay> clarificationDisplays) {
+            this(threadId, metadata, createdAt, updatedAt, sessionId, modelBindingIdentity,
+                    interactionDisplays, clarificationDisplays, "default");
         }
 
         public Entry {
@@ -357,6 +367,7 @@ public final class PersistentThreadCatalog {
             validateDisplays(interactionDisplays);
             clarificationDisplays = List.copyOf(clarificationDisplays);
             validateClarificationDisplays(clarificationDisplays);
+            if (ownerId == null || ownerId.isBlank()) ownerId = "default";
         }
     }
 }

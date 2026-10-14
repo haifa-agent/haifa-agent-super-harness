@@ -4,7 +4,7 @@ import io.haifa.agent.artifact.Artifact;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
-import io.haifa.agent.superharness.server.api.DeerFlowBootstrapApi;
+import io.haifa.agent.superharness.server.auth.ThreadOwners;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
 import io.haifa.agent.superharness.server.tool.clarification.ClarificationBoundaryRegistry;
 import io.haifa.agent.superharness.workspace.ArtifactPublishContext;
@@ -99,7 +99,7 @@ public final class ProductionWriteFileTool
         }
         WorkspaceBinding binding;
         try {
-            binding = bindings.requireThreadWorkspace(DeerFlowBootstrapApi.DEFAULT_USER_ID, threadId);
+            binding = bindings.requireThreadWorkspace(ThreadOwners.of(threadId), threadId);
         } catch (WorkspaceException failure) {
             return Output.failure(path, "No workspace is bound to this Thread");
         }

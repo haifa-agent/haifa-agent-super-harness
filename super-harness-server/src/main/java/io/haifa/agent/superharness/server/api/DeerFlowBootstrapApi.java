@@ -67,7 +67,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     public static final String DEFAULT_USER_ID = "default";
     static final String DEFAULT_SYSTEM_ROLE = "admin";
     static final String DEFAULT_USER_EMAIL = "default@test.local";
-    static final List<String> DEFAULT_PERMISSIONS =
+    public static final List<String> DEFAULT_PERMISSIONS =
             List.of(
                     "threads:read",
                     "threads:write",
@@ -80,6 +80,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                     "projects:delete");
 
     private final io.javalin.Javalin javalin;
+    private final io.haifa.agent.superharness.server.auth.LocalAuthService localAuth;
     private final String bindHost;
     private final int bindPort;
     private final ExecutorService executor;
@@ -127,6 +128,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings delegationSettings,
             Supplier<? extends ExecutorService> executionExecutorFactory,
             Long parentWallTimeMillisForTests) throws IOException {
+        this.localAuth = io.haifa.agent.superharness.server.auth.LocalAuthService.takePending();
         this.bindHost = bindHost;
         this.bindPort = bindPort;
         this.executor = executor;
@@ -158,7 +160,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.threadRunApi = new DeerFlowThreadRunApi(
                 objectMapper,
                 modelResolver,
-                projectId -> projects.projectExists(DEFAULT_USER_ID, projectId),
+                projectId -> projects.projectExists(
+                        io.haifa.agent.superharness.server.auth.AccessOwner.current(), projectId),
                 projects,
                 dataDirectory,
                 continuationKey,
@@ -345,13 +348,18 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Path dataDirectory,
             Map<String, String> environment)
             throws IOException {
-        return createWithKey(
-                configuration,
-                dataDirectory,
-                continuationKey(environment, dataDirectory),
-                null,
-                DeerFlowSuggestionsApi.Settings.fromEnvironment(environment),
-                io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings.fromEnvironment(environment));
+        io.haifa.agent.superharness.server.auth.LocalAuthService.prepare(dataDirectory, environment);
+        try {
+            return createWithKey(
+                    configuration,
+                    dataDirectory,
+                    continuationKey(environment, dataDirectory),
+                    null,
+                    DeerFlowSuggestionsApi.Settings.fromEnvironment(environment),
+                    io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings.fromEnvironment(environment));
+        } finally {
+            io.haifa.agent.superharness.server.auth.LocalAuthService.discardPending();
+        }
     }
 
     private static DeerFlowBootstrapApi createWithKey(
@@ -688,18 +696,22 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         });
 
         registerExactGet("/health", new HealthResponse("ok"));
-        registerExactGet(
-                "/api/v1/auth/setup-status",
-                new SetupStatusResponse(false, false));
-        registerExactGet(
-                "/api/v1/auth/me",
-                new AuthMeResponse(
-                        DEFAULT_USER_ID,
-                        DEFAULT_USER_EMAIL,
-                        DEFAULT_SYSTEM_ROLE,
-                        false,
-                        null,
-                        DEFAULT_PERMISSIONS));
+        if (localAuth == null) {
+            registerExactGet(
+                    "/api/v1/auth/setup-status",
+                    new SetupStatusResponse(false, false));
+            registerExactGet(
+                    "/api/v1/auth/me",
+                    new AuthMeResponse(
+                            DEFAULT_USER_ID,
+                            DEFAULT_USER_EMAIL,
+                            DEFAULT_SYSTEM_ROLE,
+                            false,
+                            null,
+                            DEFAULT_PERMISSIONS));
+        } else {
+            localAuth.install(javalin);
+        }
         registerExactGet("/api/features", FeaturesResponse.defaults());
 
         bindPrefix("/api/models", configurationApi);
@@ -711,7 +723,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                         objectMapper,
                         subagentCatalog,
                         configurationApi::isConfiguredModel,
-                        ignored -> DEFAULT_SYSTEM_ROLE.equals("admin")));
+                        ignored -> io.haifa.agent.superharness.server.auth.AccessOwner.admin()));
         bindPrefix("/api/mcp", mcpApi);
         bindPrefix("/api/skills", skillsApi);
         bindPrefix(DeerFlowInputPolishApi.PATH, inputPolishApi);
