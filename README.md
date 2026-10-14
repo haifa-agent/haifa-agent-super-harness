@@ -60,6 +60,13 @@ Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业�
   `read_only` 的 MCP 工具保留强制审批。
 - **默认 Web 工具**：三个生产 Web 工具通过 `JavaToolSpec.networkAccess(hosts)` 声明 `NETWORK_ACCESS` 与逻辑
   服务主机，仅它们被 `autoApproveReadOnlyNetworkTools` 豁免；代理配置见下文。
+- **宿主 Shell 工具（默认关闭）**：设进程变量 `HAIFA_SUPER_HARNESS_HOST_SHELL=on`（缺省、空、`off` 或非法值
+  均保持关闭，关闭时工具面与披露逐字不变）后，经公开 `HostExecutionPlatforms.hostGuarded` 注册 SDK 的
+  `execution_run`。命令或脚本以 Gateway OS 用户在**唯一注册的宿主 workspace** 内执行；模型不能选择 workspace
+  或工作目录（不暴露 `workdir`，传 `workdir` 会在审批前被拒），单次默认超时 120000 ms、上限 600000 ms
+  （对齐冻结 DeerFlow `bash_command_timeout: 600`），输出有界。每次调用一次审批，拒绝后命令不执行、不再放行。
+  **该宿主进程不是安全边界**：它拥有当前 OS 用户的完整文件系统、网络与内核权限，与冻结 DeerFlow
+  `sandbox.allow_host_bash` 同款；该风险已由人工书面接受，审批卡亦明示「no strong isolation」。
 - **模型与思考配置**：通过公开 `ModelReasoningPolicy` 接入思考开关与推理级别；Agent 的 `model_settings`
   冻结到新 Run，同型号参数变化通过配置 digest 重建下一 Turn 的 Bridge。
 - **运行诊断与用量投影**：`GET /api/threads/{thread_id}/runs/{run_id}` 的 `diagnostics` 与
