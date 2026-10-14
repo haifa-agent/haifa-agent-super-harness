@@ -44,6 +44,7 @@ import io.haifa.agent.superharness.events.ProjectionGap;
 import io.haifa.agent.superharness.events.ReplayResult;
 import io.haifa.agent.superharness.events.RunTerminalKind;
 import io.haifa.agent.superharness.server.config.McpRunTools;
+import io.haifa.agent.superharness.server.config.HostShellToolConfig;
 import io.haifa.agent.superharness.server.config.SkillRunTools;
 import io.haifa.agent.superharness.server.prompt.AgentPromptContext;
 import io.haifa.agent.superharness.server.prompt.InputTrustBoundary;
@@ -282,6 +283,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     }
 
     /** Test-only host physical-execution seam; production always supplies no executor factory. */
+    private final Path dataDirectoryRoot;
+
     DeerFlowThreadRunApi(ObjectMapper json,
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
             Predicate<String> projectExists, PersistentProjectWorkspaceService workspaceChanges,
@@ -309,6 +312,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         this.delegationProjections = java.util.Objects.requireNonNull(delegationProjections);
         this.uploadContext = java.util.Objects.requireNonNull(uploadContext, "uploadContext");
         this.threadCatalog = new PersistentThreadCatalog(json, dataDirectory);
+        this.dataDirectoryRoot = dataDirectory.toAbsolutePath().normalize();
         this.foundation = new DurableHaifaFoundation(dataDirectory, continuationKey);
         for (PersistentThreadCatalog.Entry entry : threadCatalog.list()) {
             threads.put(entry.threadId(), new ThreadRecord(entry));
@@ -1738,6 +1742,14 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         return newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt, delegation, false);
     }
 
+    /** The host shell Tool stays off unless the host explicitly enables it. */
+    private HostShellToolConfig hostShellConfig() {
+        if (dataDirectoryRoot == null) return null;
+        return HostShellToolConfig.fromEnvironment(
+                        System.getenv(), dataDirectoryRoot.resolve("workspace"), dataDirectoryRoot)
+                .orElse(null);
+    }
+
     private HaifaRunBridge newBridge(HaifaRunBridge.ModelBinding binding, ThreadRecord thread,
             McpRunTools.Projection mcpProjection, SkillRunTools.Projection skillProjection,
             AgentPromptContext agentPrompt,
@@ -1746,7 +1758,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         bridgeBuilds.incrementAndGet();
         return new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt), foundation, mcpProjection,
                 skillProjection, agentPrompt, delegation, childRunCapacity, isPlanMode, executionExecutorFactory,
-                parentWallTimeMillisForTests);
+                hostShellConfig(), parentWallTimeMillisForTests);
     }
 
     /** Test-only: the exact bridge currently attached to a Thread, or null when none is. */

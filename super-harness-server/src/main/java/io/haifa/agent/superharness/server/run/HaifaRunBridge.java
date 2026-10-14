@@ -55,9 +55,12 @@ import io.haifa.agent.sdk.product.ProductRunProfileRef;
 import io.haifa.agent.sdk.product.ProductRunProfile;
 import io.haifa.agent.sdk.product.ProductVersion;
 import io.haifa.agent.sdk.tool.JavaTool;
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.starter.HaifaAgentStarter;
+import io.haifa.agent.starter.HostExecutionPlatforms;
 import io.haifa.agent.starter.McpServerSpec;
 import io.haifa.agent.starter.McpToolPlatforms;
+import io.haifa.agent.superharness.server.config.HostShellToolConfig;
 import io.haifa.agent.superharness.server.config.McpRunTools;
 import io.haifa.agent.superharness.server.config.SkillRunTools;
 import io.haifa.agent.superharness.server.config.SubagentRunConfiguration;
@@ -183,12 +186,24 @@ public final class HaifaRunBridge implements AutoCloseable {
                 childRunCapacity, isPlanMode, null, null);
     }
 
+    /** Compatibility overload: no host shell Tool is declared. */
+    public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
+            boolean isPlanMode, Supplier<? extends ExecutorService> executionExecutorFactory,
+            Long parentWallTimeMillisForTests) {
+        this(binding, tools, foundation, mcpProjection, skillProjection, agentContext, delegation,
+                childRunCapacity, isPlanMode, executionExecutorFactory, null, parentWallTimeMillisForTests);
+    }
+
     /** Host physical-execution seam: an optional SDK execution executor factory, test-only. */
     public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools,
             DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
             SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
             SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
             boolean isPlanMode, Supplier<? extends ExecutorService> executionExecutorFactory,
+            HostShellToolConfig hostShell,
             Long parentWallTimeMillisForTests) {
         java.util.Objects.requireNonNull(childRunCapacity, "childRunCapacity");
         this.agentContext = java.util.Objects.requireNonNull(agentContext, "agent context must not be null");
@@ -198,12 +213,14 @@ public final class HaifaRunBridge implements AutoCloseable {
         // MCP ToolLifecycle events are projected by the frozen transcript only when the
         // bridge advertises tools; a bridge whose only tools come from MCP still does.
         this.hasTools = isPlanMode || delegation.enabled() || !tools.isEmpty() || !mcpSpecs.isEmpty()
-                || (skillProjection != null && skillProjection.installTools());
+                || (skillProjection != null && skillProjection.installTools())
+                || (hostShell != null && hostShell.enabled());
         // The canonical fingerprint covers every field that shaped the SDK declaration, so
         // a header credential reference or timeout change forces a later Run to rebuild.
         this.mcpSignature = mcpProjection.fingerprint();
         this.skillSignature = skillProjection == null ? "" :
                 (skillProjection.recovery() ? "recovery:" : "") + skillProjection.fingerprint();
+        HostExecutionPlatforms.HostExecutionPlatform hostExecution = null;
         McpToolPlatforms.McpToolPlatform platform = mcpSpecs.isEmpty() ? null : McpToolPlatforms.connect(
                 mcpSpecs, new TenantRef(McpRunTools.TENANT_ID),
                 new PrincipalRef(McpRunTools.PRINCIPAL_ID, McpRunTools.PRINCIPAL_TYPE));
@@ -248,6 +265,13 @@ public final class HaifaRunBridge implements AutoCloseable {
             Set<String> allowedTools = registeredToolNames(tools, skillProjection);
             allowedTools.addAll(this.mcpToolNames);
             allowedTools.remove("task");
+            // The host shell Tool is a product switch: off keeps the Tool surface and the frozen
+            // lead prompt exactly as before, on adds the SDK's own execution_run alias that the
+            // bridge registers below through the public SDK assembly entry.
+            boolean hostShellEnabled = hostShell != null && hostShell.enabled();
+            if (hostShellEnabled) {
+                allowedTools.add("execution_run");
+            }
             // Runtime adds its built-in task Tool from the Child authorization. It is not
             // a ToolPlatform catalog alias and must not enter ProductProfile.allowedTools.
             Set<String> promptTools = new LinkedHashSet<>(allowedTools);
@@ -330,6 +354,24 @@ public final class HaifaRunBridge implements AutoCloseable {
                         .toolRegistrations(SkillToolContributions.createRegistrations(
                                 foundation.persistence(), skillProjection.loader(), Instant::now));
             }
+            if (hostShellEnabled) {
+                // The SDK owns the host execution assembly: one Broker/Sandbox/Policy/Runtime, the
+                // frozen assembly policy and the execution-aware Approval prompt. SH declares only
+                // the workspace, the data root and the product timeout bounds.
+                SdkCaller caller = SdkCaller.defaultPublicUser();
+                hostExecution = HostExecutionPlatforms.hostGuarded(
+                        new HostExecutionPlatforms.HostExecutionSpec(
+                                hostShell.workspaceRoot(),
+                                hostShell.dataRoot(),
+                                hostShell.defaultTimeout(),
+                                hostShell.maximumTimeout(),
+                                hostShell.maximumOutputBytes(),
+                                hostShell.maximumOutputLines()),
+                        caller.tenant(),
+                        caller.principal());
+                // The Agent takes ownership on a successful build; a failed build closes it below.
+                hostExecution.applyTo(builder);
+            }
             if (platform != null) {
                 // The SDK owns per-server connection isolation, discovery, naming, invocation
                 // and release; SH only declares the projections. applyTo sets the builder's
@@ -343,6 +385,10 @@ public final class HaifaRunBridge implements AutoCloseable {
             }
             this.agent = builder.build();
         } catch (RuntimeException | Error failure) {
+            if (hostExecution != null) {
+                // The Agent never took ownership, so the bridge releases the host execution platform.
+                hostExecution.close();
+            }
             // The agent never took ownership, so the caller closes the connected platform.
             if (platform != null) {
                 try { platform.close(); }
