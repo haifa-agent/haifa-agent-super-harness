@@ -57,13 +57,16 @@ import io.haifa.agent.sdk.product.ProductRunProfile;
 import io.haifa.agent.sdk.product.ProductVersion;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.api.SdkCaller;
+import io.haifa.agent.skill.api.FrozenSkillBinding;
 import io.haifa.agent.starter.HaifaAgentStarter;
 import io.haifa.agent.starter.HostExecutionPlatforms;
 import io.haifa.agent.starter.McpServerSpec;
 import io.haifa.agent.starter.McpToolPlatforms;
+import io.haifa.agent.starter.SkillScriptPlatforms;
 import io.haifa.agent.superharness.server.config.HostShellToolConfig;
 import io.haifa.agent.superharness.server.config.McpRunTools;
 import io.haifa.agent.superharness.server.config.SkillRunTools;
+import io.haifa.agent.superharness.server.config.SkillScriptToolConfig;
 import io.haifa.agent.superharness.server.config.SubagentRunConfiguration;
 import io.haifa.agent.superharness.server.prompt.AgentPromptContext;
 import io.haifa.agent.superharness.server.prompt.LeadPromptComposer;
@@ -102,6 +105,7 @@ public final class HaifaRunBridge implements AutoCloseable {
     private final String promptSignature;
     private final String delegationSignature;
     private final Set<String> mcpToolNames;
+    private final Set<String> skillScriptToolNames;
     private final AgentPromptContext agentContext;
     private final AtomicLong turnPageReads = new AtomicLong();
 
@@ -118,6 +122,7 @@ public final class HaifaRunBridge implements AutoCloseable {
         this.promptSignature = "";
         this.delegationSignature = "";
         this.mcpToolNames = Set.of();
+        this.skillScriptToolNames = Set.of();
         this.agentContext = AgentPromptContext.defaults();
         this.agent = HaifaAgentStarter.builder()
                 .name("Super Harness local compatibility agent")
@@ -206,6 +211,20 @@ public final class HaifaRunBridge implements AutoCloseable {
             boolean isPlanMode, Supplier<? extends ExecutorService> executionExecutorFactory,
             HostShellToolConfig hostShell,
             Long parentWallTimeMillisForTests) {
+        this(binding, tools, foundation, mcpProjection, skillProjection, agentContext, delegation,
+                childRunCapacity, isPlanMode, executionExecutorFactory, hostShell, null,
+                parentWallTimeMillisForTests);
+    }
+
+    /** Host physical-execution seam plus the optional trusted Skill script declaration. */
+    public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
+            boolean isPlanMode, Supplier<? extends ExecutorService> executionExecutorFactory,
+            HostShellToolConfig hostShell,
+            SkillScriptToolConfig skillScript,
+            Long parentWallTimeMillisForTests) {
         java.util.Objects.requireNonNull(childRunCapacity, "childRunCapacity");
         this.agentContext = java.util.Objects.requireNonNull(agentContext, "agent context must not be null");
         this.isPlanMode = isPlanMode;
@@ -215,13 +234,17 @@ public final class HaifaRunBridge implements AutoCloseable {
         // bridge advertises tools; a bridge whose only tools come from MCP still does.
         this.hasTools = isPlanMode || delegation.enabled() || !tools.isEmpty() || !mcpSpecs.isEmpty()
                 || (skillProjection != null && skillProjection.installTools())
-                || (hostShell != null && hostShell.enabled());
+                || (hostShell != null && hostShell.enabled()) || skillScript != null;
+        // The declared Skill script Tool adds its catalog names to the prompt set before the
+        // composed prompt (and its signature) is rendered, so both stay switch-consistent.
+        this.skillScriptToolNames = skillScript == null ? Set.of() : Set.of(SkillScriptToolConfig.TOOL_NAME);
         // The canonical fingerprint covers every field that shaped the SDK declaration, so
         // a header credential reference or timeout change forces a later Run to rebuild.
         this.mcpSignature = mcpProjection.fingerprint();
         this.skillSignature = skillProjection == null ? "" :
                 (skillProjection.recovery() ? "recovery:" : "") + skillProjection.fingerprint();
         HostExecutionPlatforms.HostExecutionPlatform hostExecution = null;
+        SkillScriptPlatforms.SkillScriptPlatform skillScriptPlatform = null;
         McpToolPlatforms.McpToolPlatform platform = mcpSpecs.isEmpty() ? null : McpToolPlatforms.connect(
                 mcpSpecs, new TenantRef(McpRunTools.TENANT_ID),
                 new PrincipalRef(AccessOwner.current(), McpRunTools.PRINCIPAL_TYPE));
@@ -269,10 +292,15 @@ public final class HaifaRunBridge implements AutoCloseable {
             // The host shell Tool is a product switch: off keeps the Tool surface and the frozen
             // lead prompt exactly as before, on adds the SDK's own execution_run alias that the
             // bridge registers below through the public SDK assembly entry.
+            // A failed build closes it below.
+            // The Skill script Tool is a product switch chained onto the host shell switch: off
+            // keeps the Tool surface and the frozen lead prompt exactly as before, on adds the
+            // declared alias through the public SDK skill script entry below.
             boolean hostShellEnabled = hostShell != null && hostShell.enabled();
             if (hostShellEnabled) {
                 allowedTools.add("execution_run");
             }
+            allowedTools.addAll(this.skillScriptToolNames);
             // Runtime adds its built-in task Tool from the Child authorization. It is not
             // a ToolPlatform catalog alias and must not enter ProductProfile.allowedTools.
             Set<String> promptTools = new LinkedHashSet<>(allowedTools);
@@ -373,6 +401,43 @@ public final class HaifaRunBridge implements AutoCloseable {
                 // The Agent takes ownership on a successful build; a failed build closes it below.
                 hostExecution.applyTo(builder);
             }
+            if (skillScript != null) {
+                // The SDK owns the trusted skill script assembly: its own provider/broker/sandbox/
+                // policy path, the frozen package identity and the execution-aware approval prompt.
+                // SH declares only the Thread workspace, the data root, the bun runtime, the product
+                // timeout bounds and the bounded business argument mapping. The frozen binding is
+                // the one the same skill Projection admitted, so no side channel re-derives bytes.
+                SdkCaller scriptCaller = SdkCaller.defaultPublicUser();
+                FrozenSkillBinding skillBinding = SkillScriptToolConfig.declaredBinding(skillProjection)
+                        .orElseThrow();
+                skillScriptPlatform = SkillScriptPlatforms.trusted(
+                        new SkillScriptPlatforms.SkillScriptSpec(
+                                skillScript.workspaceRoot(),
+                                skillScript.dataRoot(),
+                                List.of(new SkillScriptPlatforms.SkillScriptRuntime(
+                                        SkillScriptToolConfig.SCRIPT_RUNTIME_REF, skillScript.bunExecutable())),
+                                skillProjection.loader(),
+                                List.of(new SkillScriptPlatforms.SkillScriptToolDeclaration(
+                                        SkillScriptToolConfig.toolName(),
+                                        SkillScriptToolConfig.title(),
+                                        SkillScriptToolConfig.description(),
+                                        SkillScriptToolConfig.inputSchema(),
+                                        skillScript.maximumTimeout(),
+                                        skillBinding,
+                                        SkillScriptToolConfig.SCRIPT_RELATIVE_PATH,
+                                        SkillScriptToolConfig.SCRIPT_RUNTIME_REF,
+                                        skillScript.defaultTimeout(),
+                                        SkillScriptToolConfig.purpose(),
+                                        new SkillScriptToolConfig.ImageGenArguments())),
+                                skillScript.defaultTimeout(),
+                                skillScript.maximumTimeout(),
+                                skillScript.maximumOutputBytes(),
+                                skillScript.maximumOutputLines()),
+                        scriptCaller.tenant(),
+                        scriptCaller.principal());
+                // The Agent takes ownership on a successful build; a failed build closes it below.
+                skillScriptPlatform.applyTo(builder);
+            }
             if (platform != null) {
                 // The SDK owns per-server connection isolation, discovery, naming, invocation
                 // and release; SH only declares the projections. applyTo sets the builder's
@@ -389,6 +454,11 @@ public final class HaifaRunBridge implements AutoCloseable {
             if (hostExecution != null) {
                 // The Agent never took ownership, so the bridge releases the host execution platform.
                 hostExecution.close();
+            }
+            if (skillScriptPlatform != null) {
+                // The Agent never took ownership, so the bridge releases the skill script platform.
+                try { skillScriptPlatform.close(); }
+                catch (RuntimeException | Error closing) { failure.addSuppressed(closing); }
             }
             // The agent never took ownership, so the caller closes the connected platform.
             if (platform != null) {
@@ -413,6 +483,9 @@ public final class HaifaRunBridge implements AutoCloseable {
 
     public String delegationSignature() { return delegationSignature; }
     public Set<String> mcpToolNames() { return mcpToolNames; }
+
+    /** Declared Skill script Tool names this bridge registered (empty when the switch is off or a fact is missing). */
+    public Set<String> skillScriptToolNames() { return skillScriptToolNames; }
 
     /** Tool callbacks retain the admitted identity even when two identities render the same prompt. */
     public boolean matchesAgentIdentity(AgentPromptContext candidate) {
