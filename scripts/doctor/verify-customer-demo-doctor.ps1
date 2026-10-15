@@ -67,7 +67,7 @@ Assert-Doctor ($plan.demoId -ceq 'DEMO-V0') 'Customer demo oracle must target DE
 Assert-Doctor ($plan.frozenFrontend.commit -ceq $expectedSha) 'Customer demo oracle drifted from the frozen DeerFlow commit.'
 Assert-Doctor ($plan.frozenFrontend.fallbackAllowed -eq $false) 'Customer demo oracle must forbid DeerFlow backend fallback.'
 Assert-Doctor ([int]$plan.runtime.gatewayPort -eq 18018 -and [int]$plan.runtime.frontendPort -eq 33018) 'Customer demo oracle must use the fixed main ports.'
-Assert-Doctor ($plan.runtime.sdkVersion -ceq '0.1.2-SNAPSHOT') 'Customer demo oracle must consume Haifa Agent 0.1.2-SNAPSHOT.'
+Assert-Doctor ($plan.runtime.sdkVersion -ceq '0.1.3-SNAPSHOT') 'Customer demo oracle must consume Haifa Agent 0.1.3-SNAPSHOT.'
 Assert-Doctor ($plan.model.id -ceq $ModelId) "Customer demo model id must be $ModelId."
 Assert-Doctor ($plan.model.credentialSource -ceq 'os') 'Customer demo model credential source must be os.'
 Assert-Doctor ($plan.budget.authorizationRequired -eq $true -and $plan.budget.paidRunAllowedByThisFile -eq $false) 'The oracle must not authorize a paid model run.'
@@ -93,9 +93,9 @@ Assert-Doctor ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($sourc
 Add-Check $checks 'frozen-frontend' 'PASS' "commit=$expectedSha; manifestSha256=$(Get-Sha256 $frontendManifestPath); fallback=false"
 
 $requiredSdkFiles = @(
-    'io/haifa/haifa-agent-bom/0.1.2-SNAPSHOT/haifa-agent-bom-0.1.2-SNAPSHOT.pom',
-    'io/haifa/haifa-agent-runtime-api/0.1.2-SNAPSHOT/haifa-agent-runtime-api-0.1.2-SNAPSHOT.jar',
-    'io/haifa/haifa-agent-artifact/0.1.2-SNAPSHOT/haifa-agent-artifact-0.1.2-SNAPSHOT.jar'
+    'io/haifa/haifa-agent-bom/0.1.3-SNAPSHOT/haifa-agent-bom-0.1.3-SNAPSHOT.pom',
+    'io/haifa/haifa-agent-runtime-api/0.1.3-SNAPSHOT/haifa-agent-runtime-api-0.1.3-SNAPSHOT.jar',
+    'io/haifa/haifa-agent-artifact/0.1.3-SNAPSHOT/haifa-agent-artifact-0.1.3-SNAPSHOT.jar'
 )
 $sdkHashes = [ordered]@{}
 foreach ($relative in $requiredSdkFiles) {
@@ -103,7 +103,7 @@ foreach ($relative in $requiredSdkFiles) {
     Assert-Doctor (Test-Path -LiteralPath $file -PathType Leaf) "Required Haifa Agent SDK artifact is missing: $file"
     $sdkHashes[$relative] = Get-Sha256 $file
 }
-Add-Check $checks 'haifa-sdk' 'PASS' "version=0.1.2-SNAPSHOT; artifacts=$($requiredSdkFiles.Count)"
+Add-Check $checks 'haifa-sdk' 'PASS' "version=0.1.3-SNAPSHOT; artifacts=$($requiredSdkFiles.Count)"
 
 $gitSha = (& git -C $root rev-parse HEAD).Trim()
 Assert-Doctor ($LASTEXITCODE -eq 0 -and $gitSha -match '^[0-9a-f]{40}$') 'Cannot resolve the Super Harness Git SHA.'
@@ -173,7 +173,7 @@ $report = [ordered]@{
     superHarnessSha = $gitSha
     oracleSha256 = Get-Sha256 $planFile
     frozenDeerFlowSha = $expectedSha
-    sdkVersion = '0.1.2-SNAPSHOT'
+    sdkVersion = '0.1.3-SNAPSHOT'
     sdkArtifactSha256 = $sdkHashes
     modelId = $ModelId
     gatewayPort = $GatewayPort

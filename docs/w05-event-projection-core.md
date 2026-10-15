@@ -1,7 +1,7 @@
 # W05 event projection core evidence
 
 The first slice was transport-neutral. The current slice connects that projection to the local
-compatibility server using only the public Haifa Agent `0.1.2-SNAPSHOT` event/run API and proves
+compatibility server using only the public Haifa Agent `0.1.3-SNAPSHOT` event/run API and proves
 ordering, replay, gap, terminal, and disconnect behavior through a real loopback SSE socket.
 
 ## Frozen DeerFlow evidence
@@ -35,7 +35,7 @@ network endpoint.
 
 ## Public Haifa API used
 
-The module has one direct Haifa dependency: `io.haifa:haifa-agent-sdk:0.1.2-SNAPSHOT`
+The module has one direct Haifa dependency: `io.haifa:haifa-agent-sdk:0.1.3-SNAPSHOT`
 from the local Maven repository. Maven Enforcer rejects product artifacts and direct
 implementation-module dependencies.
 
