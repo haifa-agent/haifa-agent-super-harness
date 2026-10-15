@@ -753,7 +753,9 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                         configurationApi::isConfiguredModel,
                         ignored -> io.haifa.agent.superharness.server.auth.AccessOwner.admin()));
         bindPrefix("/api/mcp", mcpApi, true);
-        bindPrefix("/api/channels", channelsApi, true);
+        // Admin is enforced inside DeerFlowChannelsApi for runtime-config only;
+        // ordinary owners must POST connect and DELETE their connections.
+        bindPrefix("/api/channels", channelsApi);
         bindPrefix("/api/skills", skillsApi, true);
         bindPrefix(DeerFlowInputPolishApi.PATH, inputPolishApi);
         bindPrefix("/api/suggestions", suggestionsApi);

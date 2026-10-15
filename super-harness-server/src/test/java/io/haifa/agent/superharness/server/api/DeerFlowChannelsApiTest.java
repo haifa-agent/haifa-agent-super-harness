@@ -222,7 +222,7 @@ class DeerFlowChannelsApiTest {
     }
 
     @Test
-    void nonAdminCannotMutateRuntimeConfigWhenSessionAuthActive() throws Exception {
+    void sessionAuthNonAdminCanConnectAndDisconnectButNotMutateRuntimeConfig() throws Exception {
         Path authRoot = dataDirectory.resolve("auth-lane");
         Map<String, String> environment = new LinkedHashMap<>();
         environment.put(LocalAuthService.ENABLED, "1");
@@ -233,6 +233,7 @@ class DeerFlowChannelsApiTest {
                 authRoot,
                 GatewayFixture.productionEnvironment(environment));
         authApi.start();
+        ChannelConnectionStore authConnections = new ChannelConnectionStore(json, authRoot);
         try {
             URI authBase = URI.create("http://127.0.0.1:" + authApi.address().getPort());
             HttpResponse<String> user = send(
@@ -243,24 +244,80 @@ class DeerFlowChannelsApiTest {
                     Map.of("Content-Type", "application/json", "Origin", ORIGIN));
             assertThat(user.statusCode()).isEqualTo(201);
             assertThat(json.readTree(user.body()).path("system_role").asText()).isEqualTo("user");
-            Session session = Session.from(user);
+            Session userSession = Session.from(user);
 
-            HttpResponse<String> denied = send(
+            HttpResponse<String> admin = send(
+                    authBase,
+                    "POST",
+                    "/api/v1/auth/initialize",
+                    "{\"email\":\"admin@example.com\",\"password\":\"" + PHRASE + "\",\"remember_me\":true}",
+                    Map.of("Content-Type", "application/json", "Origin", ORIGIN));
+            assertThat(admin.statusCode()).isEqualTo(201);
+            assertThat(json.readTree(admin.body()).path("system_role").asText()).isEqualTo("admin");
+            Session adminSession = Session.from(admin);
+
+            HttpResponse<String> configured = send(
+                    authBase,
+                    "POST",
+                    "/api/channels/feishu/runtime-config",
+                    "{\"values\":{\"app_id\":\"cli_auth\",\"app_secret\":\"secret-auth\"}}",
+                    adminSession.jsonHeaders(ORIGIN));
+            assertThat(configured.statusCode()).as(configured.body()).isEqualTo(200);
+            assertThat(json.readTree(configured.body()).path("configured").asBoolean()).isTrue();
+
+            HttpResponse<String> runtimeDenied = send(
                     authBase,
                     "POST",
                     "/api/channels/feishu/runtime-config",
                     "{\"values\":{\"app_id\":\"cli_x\",\"app_secret\":\"secret-x\"}}",
-                    session.jsonHeaders(ORIGIN));
-            assertThat(denied.statusCode()).isEqualTo(403);
-            assertThat(denied.body()).contains("Admin privileges");
+                    userSession.jsonHeaders(ORIGIN));
+            assertThat(runtimeDenied.statusCode()).isEqualTo(403);
+            assertThat(runtimeDenied.body()).contains(DeerFlowChannelsApi.ADMIN_REQUIRED);
 
-            HttpResponse<String> deleteDenied = send(
+            HttpResponse<String> runtimeDeleteDenied = send(
                     authBase,
                     "DELETE",
                     "/api/channels/feishu/runtime-config",
                     null,
-                    session.headers(ORIGIN));
-            assertThat(deleteDenied.statusCode()).isEqualTo(403);
+                    userSession.headers(ORIGIN));
+            assertThat(runtimeDeleteDenied.statusCode()).isEqualTo(403);
+            assertThat(runtimeDeleteDenied.body()).contains(DeerFlowChannelsApi.ADMIN_REQUIRED);
+
+            HttpResponse<String> connect = send(
+                    authBase,
+                    "POST",
+                    "/api/channels/feishu/connect",
+                    null,
+                    userSession.headers(ORIGIN));
+            assertThat(connect.statusCode()).as(connect.body()).isEqualTo(200);
+            JsonNode connectBody = json.readTree(connect.body());
+            String code = connectBody.path("code").asText();
+            assertThat(code).isNotBlank();
+            assertThat(connectBody.path("expires_in").asInt()).isEqualTo(600);
+
+            Optional<ObjectNode> bound = authConnections.bindFeishuFromConnectCode(
+                    code, "ou_auth_user", "oc_auth_chat", Map.of("chat_id", "oc_auth_chat"));
+            assertThat(bound).isPresent();
+            assertThat(bound.get().path("status").asText()).isEqualTo("connected");
+            String connectionId = bound.get().path("id").asText();
+
+            HttpResponse<String> listed = send(
+                    authBase, "GET", "/api/channels/connections", null, userSession.headers(ORIGIN));
+            assertThat(listed.statusCode()).isEqualTo(200);
+            assertThat(json.readTree(listed.body()).path("connections")).hasSize(1);
+
+            HttpResponse<String> deleted = send(
+                    authBase,
+                    "DELETE",
+                    "/api/channels/connections/" + connectionId,
+                    null,
+                    userSession.headers(ORIGIN));
+            assertThat(deleted.statusCode()).as(deleted.body()).isEqualTo(204);
+
+            HttpResponse<String> after = send(
+                    authBase, "GET", "/api/channels/connections", null, userSession.headers(ORIGIN));
+            assertThat(json.readTree(after.body()).path("connections").get(0).path("status").asText())
+                    .isEqualTo("revoked");
         } finally {
             authApi.close();
         }
