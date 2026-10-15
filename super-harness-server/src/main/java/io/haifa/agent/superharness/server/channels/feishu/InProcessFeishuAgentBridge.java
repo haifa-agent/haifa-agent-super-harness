@@ -71,7 +71,7 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
                 .put("id", UUID.randomUUID().toString())
                 .put("type", "human")
                 .put("content", userText == null ? "" : userText);
-        body.putArray("stream_mode").add("messages-tuple").add("values").add("updates").add("custom");
+        body.putArray("stream_mode").add("messages-tuple").add("updates").add("custom");
         body.putObject("context").put("mode", "flash");
         LocalHttpExchange exchange = new LocalHttpExchange(
                 "POST",
