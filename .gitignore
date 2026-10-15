@@ -2,3 +2,5 @@
 /private-docs/
 target/
 local-tmp/
+__pycache__/
+*.pyc
