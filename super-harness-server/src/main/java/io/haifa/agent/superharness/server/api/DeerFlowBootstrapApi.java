@@ -11,6 +11,8 @@ import io.haifa.agent.superharness.server.api.dto.HealthResponse;
 import io.haifa.agent.superharness.server.api.dto.SetupStatusResponse;
 import java.net.InetAddress;
 import io.haifa.agent.sdk.tool.JavaTool;
+import io.haifa.agent.superharness.server.config.ChannelConnectionStore;
+import io.haifa.agent.superharness.server.config.ChannelRuntimeConfigStore;
 import io.haifa.agent.superharness.server.config.LocalServerConfiguration;
 import io.haifa.agent.superharness.server.config.McpConfigStore;
 import io.haifa.agent.superharness.server.config.McpRunTools;
@@ -89,6 +91,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final DeerFlowConfigurationApi configurationApi;
     private final SubagentCatalogStore subagentCatalog;
     private final DeerFlowMcpApi mcpApi;
+    private final DeerFlowChannelsApi channelsApi;
     private final DeerFlowSkillsApi skillsApi;
     private final DeerFlowWorkspaceApi workspaceApi;
     private final DeerFlowProjectApi projectApi;
@@ -142,6 +145,12 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.subagentCatalog = new SubagentCatalogStore(objectMapper, dataDirectory);
         McpConfigStore mcpStore = new McpConfigStore(objectMapper, dataDirectory);
         this.mcpApi = new DeerFlowMcpApi(objectMapper, mcpStore);
+        ChannelRuntimeConfigStore channelRuntimeStore =
+                new ChannelRuntimeConfigStore(objectMapper, dataDirectory);
+        ChannelConnectionStore channelConnectionStore =
+                new ChannelConnectionStore(objectMapper, dataDirectory);
+        this.channelsApi =
+                new DeerFlowChannelsApi(objectMapper, channelRuntimeStore, channelConnectionStore);
         SkillConfigStore skillStore = testSkillStore == null
                 ? new SkillConfigStore(
                         objectMapper, dataDirectory, SkillConfigStore.repositoryRootFromWorkingDirectory())
@@ -744,6 +753,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                         configurationApi::isConfiguredModel,
                         ignored -> io.haifa.agent.superharness.server.auth.AccessOwner.admin()));
         bindPrefix("/api/mcp", mcpApi, true);
+        bindPrefix("/api/channels", channelsApi, true);
         bindPrefix("/api/skills", skillsApi, true);
         bindPrefix(DeerFlowInputPolishApi.PATH, inputPolishApi);
         bindPrefix("/api/suggestions", suggestionsApi);
