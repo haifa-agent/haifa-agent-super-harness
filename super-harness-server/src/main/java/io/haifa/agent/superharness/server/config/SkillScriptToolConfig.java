@@ -107,7 +107,11 @@ public record SkillScriptToolConfig(
                 workspaceRoot,
                 dataRoot,
                 bun,
-                HostShellToolConfig.DEFAULT_TIMEOUT,
+                // The real codex-cli generation runs for multiple minutes (the first full round
+                // timed out at 120 s while the wrapper was still generating); the script timeout
+                // therefore carries the product's largest declared bound, matching the host shell
+                // maximum.
+                HostShellToolConfig.MAXIMUM_TIMEOUT,
                 HostShellToolConfig.MAXIMUM_TIMEOUT,
                 HostShellToolConfig.MAXIMUM_OUTPUT_BYTES,
                 HostShellToolConfig.MAXIMUM_OUTPUT_LINES));

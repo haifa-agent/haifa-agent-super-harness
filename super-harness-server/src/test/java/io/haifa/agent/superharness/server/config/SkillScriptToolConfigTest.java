@@ -81,7 +81,7 @@ class SkillScriptToolConfigTest {
         var config = SkillScriptToolConfig.fromEnvironment(
                 environment(bun.toAbsolutePath().toString()),
                 bun, bun, SkillScriptProjections.projection(true)).orElseThrow();
-        assertThat(config.defaultTimeout()).isEqualTo(Duration.ofMillis(120_000));
+        assertThat(config.defaultTimeout()).isEqualTo(Duration.ofMillis(600_000));
         assertThat(config.maximumTimeout()).isEqualTo(Duration.ofMillis(600_000));
         assertThat(config.maximumOutputBytes()).isEqualTo(HostShellToolConfig.MAXIMUM_OUTPUT_BYTES);
         assertThat(config.maximumOutputLines()).isEqualTo(HostShellToolConfig.MAXIMUM_OUTPUT_LINES);

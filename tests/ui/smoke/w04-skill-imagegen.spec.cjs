@@ -457,7 +457,10 @@ test("A2 verified package identity prepares the frozen execution directory once"
     "the approved help probe must complete",
   ).toBeGreaterThanOrEqual(1);
   const usage = results.map((message) => message.content ?? []).join("\n");
-  expect(usage, "the executed bytes must come from the declared package identity").toContain("Usage:");
+  // The SDK result head-truncates long output, so assert on markers that survive the tail view:
+  // the usage example invokes the declared entry as a file and lists the fixed provider.
+  expect(usage, "the executed bytes must come from the declared package identity")
+    .toContain("npx -y bun scripts/main.ts");
   expect(usage, "the real package help must list the codex-cli provider and its --image flag").toContain("codex-cli");
 
   // Materialization audit inside this worktree's data root: this Run's own workspace carries the
