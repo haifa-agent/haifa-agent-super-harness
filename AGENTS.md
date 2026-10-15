@@ -6,14 +6,14 @@
 - 以 `private-docs/roadmap/35-super-harness-deerflow-parity.md` 及其产品、PRD 配套目录为范围与验收依据。
 - DeerFlow 前后端固定为 `bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294`，禁止随 `main` 漂移。
 - 直接复用冻结的 DeerFlow 前端并由 Haifa 后端兼容其真实 REST/SSE/WS/文件/auth 协议，禁止自研平行 UI 或让产品回落到 DeerFlow 后端；冻结参考后端只用于差分对照（见「冻结 DeerFlow 参考后端」）。
-- 仅通过本地 Maven 仓库消费 Haifa Agent 公开 JAR/BOM（HA 0.1.2 开发线专门承接本项目 SDK 功能缺口，见 `private-docs/prompts/038-*`），禁止源码路径依赖、复制 SDK 或依赖产品 JAR。SDK 版本规则：
-  - 上游每个 SDK worktree 发布到自己的坐标 `0.1.2-<worktree 目录名>-SNAPSHOT`；基线 `0.1.2-SNAPSHOT` 只从上游主检出的 `dev` 发布，代表已由人工合并的 SDK。
+- 仅通过本地 Maven 仓库消费 Haifa Agent 公开 JAR/BOM（HA 0.1.3 开发线专门承接本项目 SDK 功能缺口，见 `private-docs/prompts/038-*`），禁止源码路径依赖、复制 SDK 或依赖产品 JAR。SDK 版本规则：
+  - 上游每个 SDK worktree 发布到自己的坐标 `0.1.3-<worktree 目录名>-SNAPSHOT`；基线 `0.1.3-SNAPSHOT` 只从上游主检出的 `dev` 发布，代表已由人工合并的 SDK。
   - `main` 只消费基线；带 worktree 标识的版本不得进入被跟踪文件（检查见 README「定向测试与 SDK 版本选择」）。
   - 工作包 worktree 消费哪个上游 worktree 的 SDK 由主控通过 `local-tmp/sdk-selection.json` 指定；执行者不得自行更换版本或直接传 `-Dhaifa.version`。
   - 已发布的上游 SDK worktree 只在主控验收发现 SDK 问题后才修改并重新发布。构建戳以 Java 输入指纹（含每个 Haifa JAR 的 SHA-256 身份）比较，能识别同版本重新发布的内容变化，消费方据此自动重建。
   - 依赖尚未合入上游 `dev` 的 SDK 改动的分支不能合入 `main`：须等上游 PR 人工合并、基线从 `dev` 重新发布，删除 `local-tmp/sdk-selection.json` 后在基线上重跑门禁。带标识版本下的验证结果只证明候选分支。
 - 新增或修改能力前必须先按 `docs/runtime-product-boundary.md` 判断其归属：可复用的 Agent Runtime 语义必须上游到 Haifa Agent，并通过公开 API/SPI 与已发布 JAR/BOM 消费；Super Harness 只拥有 DeerFlow 兼容、产品语义、UI/BFF、业务集成与窄适配层，禁止实现第二套 Run/Loop/Memory/Tool/Skill/MCP/Sandbox/Artifact/Checkpoint/Permission/Multi-Agent Runtime。若归属不清，在新增领域对象、状态机或持久化表之前停止并进行架构裁决。
-- 按上一条判定须上游，或验收过程中确认必须完善上游 Haifa Agent SDK 时，只能在 `D:\workspace\haifa-agent` 仓库以 `dev`（HA `0.1.2-SNAPSHOT`，不设 baseline 分支）为起点，为每个功能创建独立 worktree 和新的 `feat-*` 开发分支；禁止直接修改或提交到 `dev`。完成后须用上游发布脚本把公开 JAR/BOM 发布到该 worktree 自己的坐标，由本项目按上面的 SDK 版本规则消费，同时记录 SDK commit（取自上游发布清单）、发布与回归证据；随后从该 `feat-*` 分支向 `dev` 发起 GitHub PR，由主控在 SHPM 登记对应任务与 PR/验证状态（`shpm verify add`/`shpm issue add`），并明确提醒人工审查合并。任何智能体不得自行合并该 PR，除非人工针对该具体 PR 另行书面授权。
+- 按上一条判定须上游，或验收过程中确认必须完善上游 Haifa Agent SDK 时，只能在 `D:\workspace\haifa-agent` 仓库以 `dev`（HA `0.1.3-SNAPSHOT`，不设 baseline 分支）为起点，为每个功能创建独立 worktree 和新的 `feat-*` 开发分支；禁止直接修改或提交到 `dev`。完成后须用上游发布脚本把公开 JAR/BOM 发布到该 worktree 自己的坐标，由本项目按上面的 SDK 版本规则消费，同时记录 SDK commit（取自上游发布清单）、发布与回归证据；随后从该 `feat-*` 分支向 `dev` 发起 GitHub PR，由主控在 SHPM 登记对应任务与 PR/验证状态（`shpm verify add`/`shpm issue add`），并明确提醒人工审查合并。任何智能体不得自行合并该 PR，除非人工针对该具体 PR 另行书面授权。
 - 为同一功能引入的领域模型复杂度必须与冻结 DeerFlow 的对应实现保持平衡或更低，禁止为了协议兼容复制、叠加或扩张不必要的领域对象、状态机、持久化概念和抽象层。若有证据表明只有更高的领域复杂度才能实现验收范围，执行智能体必须在编码前提交包含 DeerFlow 对照、复杂度增量、不可替代原因、风险与简化备选的设计说明，先经主控 Agent 评审，再等待人工裁决，未获人工明确同意不得实施或合入。
 
 ## 开发、测试与证据
@@ -26,24 +26,38 @@
 - Playwright 验收除功能断言外还必须报告流程健康度：各轮（冷轮仅在跑了时）的准备/构建、服务就绪、功能断言、证据归档耗时与总耗时，是否重试，首个超时或卡点，Next 动态编译时间，trace/screenshot/日志位置，以及结束后端口和子进程是否清理；复审及返工耗时另行记录。
 - 等待必须有明确对象、deadline 和超时证据，不增加原预算或自动重试；不得用无界等待掩盖启动或断言失败。
 - 回报默认给退出码、测试计数、逐 case 结果、首个失败签名、依赖影响和原始证据路径；复用明确的路径、SHA 和断言表，仅为定位问题展开必要日志片段，不反复输出同一全文。独立检索和读取合并到同一工具轮次；依赖步骤和修改顺序仍串行。
-- 仅并行执行真正独立且资源、端口、数据目录隔离的检查。重型 Maven/Next/Java 构建、UI 轮次和共享 Provider 由主控排队，不为减少轮次而并发。
+- 仅并行执行真正独立且资源、端口、数据目录隔离的检查。不同槽位的定向 Java 测试、合同检查与 Haifa 单后端受控 UI 可以并行。重型全仓 Maven、双后端差分、正式 live UI 与共享 Provider 由主控排队，不为减少轮次而并发。
 
-### 验收提速（不降低门禁）
+### 验收分层（L1 日常 / L2 工作包差分 / L3 演示）
 
-本节是现行规则，人工批准记录见节末。各条都不适用于客户演示「同一主线 SHA 连续两轮 L3」。
+本节是现行规则，人工批准记录见节末。把「证明切片正确」与「与冻结 DeerFlow 参考后端差分一致」「客户演示 GO」分开，避免把里程碑级差分叠进每个日常 PR。
+
+#### 三档定义
+
+| 档位 | 用途 | 默认证明 | 不默认要求 |
+| --- | --- | --- | --- |
+| **L1 日常合入** | 单个可合并切片 / PR | `change_scope.py` 给出的门禁：定向或全仓按指纹、`ui-*-round-x1`（产品/前端）、协议面可用 `controlled` + 合同/HTTP·SSE 断言 | 双后端差分、默认两轮暖轮、演示连续双轮 L3 |
+| **L2 工作包差分** | 工作包或相关合入批次出口 | 冻结前端 + Haifa / 参考后端双后端差分（如 `run-w18-dual-backend`），按 WP Oracle 攒批 | 每个日常 PR 强制双后端 |
+| **L3 客户演示** | 演示阶段 `GO` | 同一主线 SHA 连续两轮整链证据等既有演示门禁 | 用 L1/L2 单项 PASS 提升阶段 `GO` |
+
+- 日常 PR **不**强制双后端；双后端是 L2，由主控在工作包出口或相关批次安排。
+- 产品改动默认 **一轮**暖轮（`x1`）；`x2` 仅当改动落在 `tests/ui` / `scripts/ui` / `scripts/frontend`（UI 用例或 runner 自身），或主控/复审点名提升。
+- 协议/投影/REST·SSE 形状类改动（`server/api`、`server/auth`、`super-harness-events`、`super-harness-workspace` 等，以 `change_scope.py` 表为准）默认 `controlled`；真正吃模型语义的路径（`run` / `prompt` / `tool` / `config`、主资源、`pom.xml`、文件名含 `live`、SDK 身份变化、未知路径）仍为 `live`。
+- 各条 L1/L2 裁剪**不适用于**客户演示「同一主线 SHA 连续两轮 L3」。
 
 #### 流程与分工
 
-- 顺序：实现 → 定向测试 / 单 case 冒烟 → 集中自审修复 → 推送分支并开 PR → 一次性读取机器人审查并集中处理 → 变基到最新 `main` 并固定候选提交 → 正式门禁 → 报告可合并。
-- 内环：执行者运行受影响模块的定向测试、合同/语法检查和必要的单 case UI 排障。UI spec 或 fixture 配置变更先用 `scripts/ui/run-w18-ui-smoke.ps1 -CaseTitle <完整标题>` 执行受影响 case，`-PreflightOnly` 仅做本轮预检。内环结果只用于快速定位，不能替代正式门禁、真实 smoke 或主控独立验收。
-- 攒批：自审和审查发现的问题按根因攒批，一次修复后重跑受影响用例；禁止每修一个点就重跑全仓或 UI 整套，也不得靠反复整套重跑碰运气。正式门禁失败先保存原件并定位，再按影响范围修复复验。
-- 正式门禁指全仓门禁、正式 UI 轮次和慢测试，由主控排队：主控自己执行，或明确放行后由执行者在自己的槽位执行。执行者未获放行不启动，未运行的门禁在交接里记 `NOT_RUN`。
+- L1 顺序：实现 → 定向测试 / 合同 / 单 case 冒烟 → 集中自审修复 → 推送并开 PR → 一次性读取机器人审查并集中处理 → 变基到最新 `main` 并固定候选 → 跑 `change_scope` 给出的 L1 门禁 → 报告可合并。
+- 内环与 L1 合并：当执行者在本槽位跑完的定向测试 + 单 case/一轮 UI **恰好覆盖** `change_scope` 输出的 gates，且证据绑定最终候选 SHA、`sourceDirty=false` 时，主控抽检通过后可计为该 PR 的正式 L1 门禁，不必为同一 gates 再整套重跑。未覆盖的项仍须补跑；L2 差分与 L3 演示不在此合并范围内。
+- UI spec 或 fixture 配置变更先用 `scripts/ui/run-w18-ui-smoke.ps1 -CaseTitle <完整标题>` 执行受影响 case，`-PreflightOnly` 仅做本轮预检。
+- 攒批：自审和审查发现的问题按根因攒批，一次修复后重跑受影响用例；禁止每修一个点就重跑全仓或 UI 整套。正式门禁失败先保存原件并定位，再按影响范围修复复验。
+- L1 的 `verify-full`、正式 UI 仍由主控排队或明确放行后在执行者槽位执行；L2 双后端与 live 重轮次优先由主控排队。执行者未获放行不启动昂贵项，未运行的记 `NOT_RUN`。
 - 变基在审查意见处理完、固定候选提交之前进行，由主控要求或执行；候选固定后不再 amend/rebase，除非主控明确要求。
 
 #### PR 与机器人审查
 
-- PR 以可审查状态打开，不用 draft：机器人只在 PR 打开、draft 转 ready 或评论 `@codex review` 时审查，不审查 draft。此时的 PR 不代表任何门禁通过，PR 描述须写明正式门禁尚未运行。
-- 开 PR 后最多等机器人 10 分钟，超时按 `NO_REVIEW_YET` 记录并继续。结论为 `REVIEW_FAILED`（机器人自身的审查失败）时，可以评论一次 `@codex review` 重新触发；仍然失败就如实记录并继续。
+- PR 以可审查状态打开，不用 draft：机器人只在 PR 打开、draft 转 ready 或评论 `@codex review` 时审查，不审查 draft。此时的 PR 不代表任何门禁通过，PR 描述须写明 L1 正式门禁是否已跑、L2 是否延后到工作包出口。
+- 开 PR 后最多等机器人 10 分钟，超时按 `NO_REVIEW_YET` 记录并继续；**不因等待审查而阻塞已就绪的 L1 门禁排队**。结论为 `REVIEW_FAILED` 时，可以评论一次 `@codex review` 重新触发；仍然失败就如实记录并继续。
 - 审查意见只处理一轮：正确的采纳，不采纳的各写一句理由；不再主动请求重新审查。
 - 正式门禁通过后才出现的新意见，只有确认会导致错误行为的才修改并重跑受影响门禁，其余登记为后续事项。
 - 向人工报告 PR 可合并之前，必须运行 `python scripts/governance/pr_review_digest.py --repo <owner/name> --pr <编号>` 并给出结论。
@@ -51,25 +65,27 @@
 
 #### 按改动范围定门禁
 
-- 运行 `python scripts/governance/change_scope.py`，以输出的 `gates` 和 `uiModel` 为准；分类表只在该脚本里维护。输出是下限，主控或复审可以要求更多。
+- 运行 `python scripts/governance/change_scope.py`，以输出的 `gates`、`uiModel` 和 `acceptanceTier` 为准；分类表只在该脚本里维护。输出是 **L1 下限**，主控或复审可以要求更多（含提升为 `x2` 或追加 L2）。
 - 全仓门禁的结果绑定 Java 输入指纹：指纹相同且已有真实运行的通过记录时，由 `verify-full.ps1` 自动复用并注明来源。
-- UI 正式轮次默认使用真实模型，仅当 `uiModel` 为 `controlled`（改动全部落在脚本列出的受控范围内）时使用受控模型。
+- UI 正式轮次：`uiModel` 为 `controlled` 时用受控模型；为 `live` 时用真实模型。
 
 #### 正式轮次前的核对
 
-- 昂贵的全仓构建或双后端 UI 轮次开始前，先由执行者列出本任务的 Oracle case → 实际断言 → 必需前置条件 → 预期原始证据对应表，主控复核关键正反例；尤其不能用“不存在资源”的 404 冒充“已存在但跨身份不可访问”的隔离证据。映射不完整时先修测试，不启动正式轮次。
+- L1 小切片：任务卡保留 3～5 条原子断言即可，不必为每个 PR 写完整 Oracle 映射表。
+- 昂贵的全仓构建或 **L2 双后端** UI 开始前，仍须列出 Oracle case → 实际断言 → 必需前置 → 预期原件，主控复核关键正反例；尤其不能用“不存在资源”的 404 冒充“已存在但跨身份不可访问”的隔离证据。映射不完整时先修测试，不启动该昂贵轮次。
 - 正式 UI 前一次性核对冻结来源、SDK 实际落盘构件、前端依赖与浏览器、完整槽位端口绑定、独立 data-root/凭据引用、Provider、Gateway 和前端代理目标。预检失败先修环境或如实记 `NOT_RUN`/`BLOCKED_EXTERNAL`，不要等长轮次超时后才发现配置错误。
 
 #### UI 轮次
 
-- 同一提交上默认跑两次暖轮，用同脚本重复运行区分稳定问题与偶发问题。`gates` 只要求一轮（`ui-<model>-round-x1`）时一轮通过即可；该轮失败须先用同一脚本重跑一次，再定位。
-- 冷轮只在 `gates` 含 `ui-cold-round`，或前端依赖、槽位、代理目标变化、构建戳失效时跑。新 worktree 首次运行没有构建戳，第一轮自然就是冷轮。冷轮单独启动。
+- L1 产品/前端改动默认 **一轮**暖轮（`ui-<model>-round-x1`）；该轮失败须先用同一脚本重跑一次，再定位。`x2` 仅见于 UI 用例/runner 自身变更或主控提升。
+- 冷轮只在 `gates` 含 `ui-cold-round`，或前端依赖、槽位、代理目标变化、构建戳失效时跑。新 worktree 优先从主检出共享缓存恢复前端构建戳；无法恢复时首轮自然为冷轮。冷轮单独启动。
 - 同一提交上的重复运行可以在一次启动内完成（`-Passes 2 -SkipBuild`），仅限 runner 里已在真实运行中验证过可重复的 profile，其余 profile 分开启动。
 - 构建产物能否复用以构建戳为准（见「Maven 与构建」）。复用构建不等于复用 Run、Thread 或数据目录；测试结果能否复用只按「合入后复用」和全仓门禁的指纹复用判断。
 
 #### 合入后复用
 
 - 合入后 `main` 的源码树哈希和 SDK 身份与已验证候选相同，即可复用该候选的门禁和 UI 结果，合入方式不限。用 `python scripts/governance/evidence_reuse.py --target <合入后提交> <证据>` 核对，全部 `REUSABLE` 才复用；否则在合入后的提交上重跑。
+- **冲突感知（并行合入）**：他任务合入使 `main` 前进后，本任务变基到新 `main` 时：Java 输入指纹未变则可复用 `verify-full`；与本任务改动路径、共享协议面无交集且对应证据仍 `REUSABLE` 的 UI/脚本门禁可保留；仅对指纹变化、路径冲突或 `STALE` 的项重跑。不得在未变基、未核对的情况下用旧基线证据合入。
 - 固定端口主服务的刷新与 smoke 在每次合入后照常执行（命令见「派单与子智能体调度」）。
 
 #### 已登记的偶发失败
@@ -77,25 +93,26 @@
 - 全仓门禁只失败 `tests/known-intermittent.json` 内的用例（不超过两个，且本次改动未触及其覆盖范围）时，入口把失败的测试类重跑 3 次，全部通过则记通过并注明；首次失败原件照常保留并计入该 issue 的发生次数。
 - 清单只由主控增删，新增时告知人工；同一条累计三次必须安排修复。
 
-#### 批量验收
+#### 批量验收与 L2 差分
 
+- L2 双后端差分按工作包或相关合入批次攒批，不边合入边对每个小 PR 跑全量差分。
 - 先跑客户演示正向主链，再按依赖拆分独立用例，通常每批 10–15 项；执行前标明前置、依赖和影响范围。
 - 批次中不边测边改产品。局部失败先保存原件、登记问题并继续不受影响的用例；共享服务/身份/数据/端口等前置失效时只停止受影响批次，主链失败后的依赖用例记 `NOT_RUN`，其他独立组继续。
-- 批次结束按根因归并问题，一次修复后重跑受影响用例及必要回归；代码与断言稳定后才运行正式门禁。
+- 批次结束按根因归并问题，一次修复后重跑受影响用例及必要回归；代码与断言稳定后才运行 L2/L3 昂贵轮次。
 - 演示范围外的高级/偏门缺陷先挂 issue 和风险，不阻断无依赖的演示验证；必需 Oracle 失败仍保留 `FAIL`/`NO_GO`，演示触及故障路径时作为阻断处理。
 
 #### SHPM 登记封装
 
 - 派工用 `python scripts/governance/shpm_dispatch.py`，一次完成 task create（含提示词登记）、sprint link、task start、assign create。
 - 脚本回归用 `pwsh -NoProfile -File scripts/verify-scripts.ps1`，摘要写 `local-tmp/verify-scripts/`。
-- 门禁结果用 `python scripts/governance/shpm_record_gates.py` 从证据组目录登记全仓门禁摘要、脚本回归摘要、UI 证据目录和主服务刷新摘要；默认只打印一张表，加 `--execute` 才写入，参数见 [SHPM 使用手册](docs/shpm-manual.md)。结果原样登记，`deliver`、`accept`、阶段结果和 `GO` 仍由主控手工执行。
+- 门禁结果用 `python scripts/governance/shpm_record_gates.py` 从证据组目录登记全仓门禁摘要、脚本回归摘要、UI 证据目录和主服务刷新摘要；默认只打印一张表，加 `--execute` 才写入，参数见 [SHPM 使用手册](docs/shpm-manual.md)。结果原样登记，`deliver`、`accept`、阶段结果和 `GO` 仍由主控手工执行。登记时区分 L1 日常门禁与 L2 差分证据，避免把 WP 出口差分误记为每个子任务的 PR 门禁。
 
 #### 交接与等待
 
-- 每个执行 worktree 在 `local-tmp/acceptance-handoff.md` 维护短交接，模板见 `docs/acceptance-handoff-template.md`：只记录范围、源码 SHA/dirty、SDK 选择与发布来源/hash、断言/证据映射、首个 FAIL、未运行项及下一步。事实变化时更新，不复制长日志、密钥或 reasoning 正文；该交接不是另一份任务账本，不替代 SHPM。
+- 每个执行 worktree 在 `local-tmp/acceptance-handoff.md` 维护短交接，模板见 `docs/acceptance-handoff-template.md`：只记录范围、源码 SHA/dirty、SDK 选择与发布来源/hash、断言/证据映射、首个 FAIL、未运行项、本任务是 L1 还是附带 L2，以及下一步。事实变化时更新，不复制长日志、密钥或 reasoning 正文；该交接不是另一份任务账本，不替代 SHPM。
 - 后台任务使用有界进程等待并在完成时合并读取结果摘要；等待期间推进不依赖它的检查，避免固定 sleep 后反复读完整日志。等待方至少每 60 秒在自己的会话输出里给出有意义的进展或卡点；这不同于子智能体向主控的 15 分钟 checkpoint（见「派单与子智能体调度」）。
 
-批准记录：2026-09-30 批量验收；2026-10-03 按改动范围定门禁、UI 默认两次暖轮、SHPM 登记封装；2026-10-05 合入后按树哈希复用、指纹复用与 UI 模型选择、已登记的偶发失败、一次启动内重复运行；2026-10-06 本节合并改写，废止「快进合入不重跑」和手工门禁映射表，门禁时点改为报告可合并前，正式门禁由主控排队，Oracle 放宽须逐项批准，槽位 4（2026-10-03 批准为附加槽位）转为常规槽位，子智能体槽位共四个；同日批准机器人审查不可用期间的替代审查流程。
+批准记录：2026-09-30 批量验收；2026-10-03 按改动范围定门禁、UI 默认两次暖轮、SHPM 登记封装；2026-10-05 合入后按树哈希复用、指纹复用与 UI 模型选择、已登记的偶发失败、一次启动内重复运行；2026-10-06 本节合并改写，废止「快进合入不重跑」和手工门禁映射表，门禁时点改为报告可合并前，正式门禁由主控排队，Oracle 放宽须逐项批准，槽位 4（2026-10-03 批准为附加槽位）转为常规槽位，子智能体槽位共四个；同日批准机器人审查不可用期间的替代审查流程；**2026-10-15 验收分层 L1/L2/L3：日常 PR 默认一轮暖轮、协议面 controlled、双后端改工作包出口；产品默认 x2 暖轮废止为 L1 默认 x1。**
 
 ## Git 与 GitHub
 
@@ -138,18 +155,18 @@ $env:no_proxy=$env:NO_PROXY
 - 代理地址使用 `http://host:port`，HTTPS 目标经 CONNECT 转发；不支持 SOCKS、HTTPS 代理地址或代理认证。通用 `NO_PROXY` 使用逗号分隔的主机 / 域名，不使用通配符或 CIDR。
 - 仅设置启动进程的环境变量；不自动读取 WinINET，不修改用户、系统或 JVM 全局代理。检查配置时只输出变量是否存在，不打印代理值或凭据。完整配置说明见 [README](README.md)。
 
-### MCP 承载（Haifa SDK 0.1.2）
+### MCP 承载（Haifa SDK 0.1.3）
 
 - 协议版本：公开 `io.haifa.agent.starter.McpServerSpec.streamableHttp` 默认协议版本为 `2025-11-25`，而 `scripts/mcp/start-v2-test-mcp-servers.ps1` 起的本地 fixture 只协商到 `2025-06-18`。症状：`McpToolPlatforms.connect` 成功返回（不抛异常），但 SDK `optional()` 会静默降级成 0 个 Tool，模型侧 `request.tools()` 为空，表现为“桥接成功却没有 MCP 工具”。检查：对照 fixture `initialize` 的 `protocolVersion` 与 spec 的 `protocolVersion()`。最小修复：映射时显式 `.protocolVersion("2025-06-18")`（协议常量，非服务器/Tool 名称硬编码）。
 - 只读 Tool 也要审批：只读 MCP Tool（`McpServerSpec.readOnly()`）仍会命中 `PolicyPresets.standardApproval()` 的 `NETWORK_ACCESS` 规则并进入 APPROVAL。症状：Run 首次请求工具后停在 `WAITING_APPROVAL`，不会自动执行。检查：SSE 里出现 `artifact.human_input.request_id` 卡片。集成测试须以冻结隐藏回复（`additional_kwargs.human_input_response`，`option_id=approve`）批准后 join 同一 Run 的 stream，才能拿到真实 Tool 结果。
 - `hasTools()`：仅由 MCP 提供 Tool 的 `HaifaRunBridge` 必须让 `hasTools()` 为真，否则 SDK 的 `tool.call.requested` 在冻结 transcript 投影里无法映射，SSE 直接报 `unsupported_event_projection` 并提前结束。最小修复：`hasTools = !tools.isEmpty() || !mcpSpecs.isEmpty()`。
 
-### 受信技能脚本链（SDK 0.1.2，sdkCommit 52cac0db）
+### 受信技能脚本链（SDK 0.1.3，sdkCommit 52cac0db）
 
 - Product schema 子集限制：SDK `ToolDefinitionValidator` 校验输入 schema 使用「有界 schema 子集」；`pattern` 等关键词被拒（`inputSchema pattern is outside the bounded schema subset`，在 ToolAssembly.register 时抛出）。检查：装配即报错。最小修复：产品 input schema 只使用 type/minLength/maxLength/minimum/maximum/description/enum/required/additionalProperties，格式校验移到 argumentMapper（fail closed 同款）。
 - 技能脚本启用链：`PUT /api/skills/{name}` 对含 `scripts/` 的外部技能在启用时自动跑冻结静态 screen 并记 `bundled_reviews` 证据；语义 review 默认关闭（W15 parity）。此前 `SkillReviewApprovals.evidence` 假定 screen 结果带 `decision` 字段，静态-only 模式下返回的冻结 facts 没有 `decision`，`PUT` 直接 422 `Skill review did not permit publication`。最小修复：evidence() 在缺 `decision` 时接受未 blocked 的冻结 facts（decision=allow、authorization_source=configured-skill-screen）。
 - Loader 双接缝：技能脚本平台经 `SkillContentLoader.loadResourceBytes` 读取冻结包字节做物化；SH 的 store 级 wrapper（`currentReviewLoader`）此前只实现 `load(...)`，`(binding, visibility) -> ...` lambda 使字节读取落到接口 default（派生自可读 activation content），执行入口报 `TOOL_INVOCATION_FAILED` 技术细节外无 stack、无法定位。最小修复：wrapper 实现 load 与 loadResourceBytes 两条接缝，各自先做 grant 权限校验再委托 Composite loader；诊断时优先用公开入口的直接 JVM 探针（平台 + 真实 runtime + provider.invoke）复现，投资该接缝能让失败带完整 stack。
-- Shade 签名文件：0.1.2 基线升级后部分依赖 JAR 带 META-INF 签名文件；maven-shade uber JAR 必须排除 `META-INF/*.SF|*.DSA|*.RSA|SIG-*`，否则 exec JAR 启动即 `SecurityException: Invalid signature file digest for Manifest main attributes`。
+- Shade 签名文件：基线升级后部分依赖 JAR 带 META-INF 签名文件；maven-shade uber JAR 必须排除 `META-INF/*.SF|*.DSA|*.RSA|SIG-*`，否则 exec JAR 启动即 `SecurityException: Invalid signature file digest for Manifest main attributes`。
 - Credential Manager 饱和：本机 Credential Manager 已存在大量 `haifa:os:HAIFA_SUPER_HARNESS_*` 凭据（实测 869 条）；新建 data-root 首次启动的 continuation key 写入报 `CredWrite failed with error 8 (STORE_FAILURE)`，Extensions 现象与条数未做阈值验证。规避：该 lane 用 `HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF=env://NAME` + 进程环境注入 256-bit Base64 key（每 profile 每轮一个新 data-root + 新 key，不打印、不落盘）。该引用在 Windows 也被产品代码支持；存量凭据的清理与阈值裁决由主控处置（删除会影响对应 data-root 的重启）。
 
 ### 真实模型诊断

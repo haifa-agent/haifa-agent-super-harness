@@ -290,7 +290,7 @@ try {
     Assert-True ($manifestOne.governance.source -eq 'SHPM snapshot') "governance must read the SHPM snapshot"
     Assert-True ($manifestOne.governance.promptPathCheck -eq 'NOT_RUN') "prompt paths without private-docs must stay NOT_RUN"
     Assert-True ($manifestOne.PSObject.Properties.Name -notcontains 'dashboard') "dashboard consumers are no longer part of the gate"
-    Assert-True ($manifestOne.inputs.haifaSdkVersion -eq '0.1.2-SNAPSHOT') "Haifa SDK version must come from pom.xml"
+    Assert-True ($manifestOne.inputs.haifaSdkVersion -eq '0.1.3-SNAPSHOT') "Haifa SDK version must come from pom.xml"
     Assert-True ($manifestOne.mavenSurefire.status -eq 'PASS') "Surefire status must be PASS"
     Assert-True ($manifestOne.deerflow.runtimeStatus -eq 'NOT_RUN') "runtime NOT_RUN must be preserved"
     Assert-True ($manifestOne.overallStatus -eq 'NOT_RUN') "overall cannot become PASS while runtime is NOT_RUN"
