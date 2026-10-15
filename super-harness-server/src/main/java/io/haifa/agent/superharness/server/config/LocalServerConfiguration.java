@@ -64,7 +64,9 @@ public record LocalServerConfiguration(String profile, InetAddress bindAddress, 
             throw new IllegalArgumentException(
                     PROFILE_ENV + "=local must be set explicitly for auth-disabled mode");
         }
-        if (!"1".equals(environment.get(AUTH_DISABLED_ENV))) {
+        boolean localAuth = "1"
+                .equals(environment.get(io.haifa.agent.superharness.server.auth.LocalAuthService.ENABLED));
+        if (!localAuth && !"1".equals(environment.get(AUTH_DISABLED_ENV))) {
             throw new IllegalArgumentException(
                     AUTH_DISABLED_ENV + "=1 must be set explicitly for auth-disabled mode");
         }
