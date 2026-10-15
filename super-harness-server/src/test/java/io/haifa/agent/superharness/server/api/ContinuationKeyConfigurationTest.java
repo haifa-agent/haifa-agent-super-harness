@@ -88,14 +88,13 @@ class ContinuationKeyConfigurationTest {
     }
 
     @Test
-    void defaultOsCredentialTargetsAreScopedByCanonicalDataRoot() {
+    void defaultOsCredentialTargetIsTheSameForEveryDataRoot() {
         Path first = dataDirectory.resolve("slot-one");
         Path second = dataDirectory.resolve("slot-two");
 
         assertThat(DeerFlowBootstrapApi.defaultOsCredentialName(first))
-                .startsWith("HAIFA_SUPER_HARNESS_CONTINUATION_KEY_")
-                .isNotEqualTo(DeerFlowBootstrapApi.defaultOsCredentialName(second));
-        assertThat(DeerFlowBootstrapApi.defaultOsCredentialName(first))
+                .isEqualTo("HAIFA_SUPER_HARNESS_CONTINUATION_KEY")
+                .isEqualTo(DeerFlowBootstrapApi.defaultOsCredentialName(second))
                 .isEqualTo(DeerFlowBootstrapApi.defaultOsCredentialName(first.toAbsolutePath()));
     }
 

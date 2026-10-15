@@ -602,18 +602,10 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     }
 
     static String defaultOsCredentialName(Path dataDirectory) {
-        String canonicalIdentity = dataDirectory.toAbsolutePath()
-                .normalize()
-                .toString()
-                .toLowerCase(java.util.Locale.ROOT);
-        try {
-            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
-                    .digest(canonicalIdentity.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            String suffix = java.util.HexFormat.of().formatHex(digest, 0, 8);
-            return "HAIFA_SUPER_HARNESS_CONTINUATION_KEY_" + suffix;
-        } catch (java.security.NoSuchAlgorithmException impossible) {
-            throw new IllegalStateException("SHA-256 is required", impossible);
-        }
+        // Single fixed OS credential shared by every data-root. The previous per-data-root
+        // SHA-256 slot name wrote one credential per data-root and eventually filled the
+        // Windows Credential Manager; see W18-ContinuationKeyOsCredentialLeak.
+        return "HAIFA_SUPER_HARNESS_CONTINUATION_KEY";
     }
 
     private static SecretKey generateContinuationKey() {
