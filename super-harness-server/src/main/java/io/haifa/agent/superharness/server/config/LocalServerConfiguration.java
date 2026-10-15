@@ -3,6 +3,7 @@ package io.haifa.agent.superharness.server.config;
 import io.haifa.agent.superharness.server.auth.LocalAuthService;
 import java.io.IOException;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.nio.file.Files;
 import java.nio.file.Path;
