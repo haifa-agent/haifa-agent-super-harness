@@ -98,6 +98,13 @@ import javax.crypto.SecretKey;
 public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final System.Logger INTERACTION_LOG =
             System.getLogger(DeerFlowThreadRunApi.class.getName() + ".interaction");
+    /** Frozen route an admission failure belongs to; a server constant, never the client path. */
+    static final String RUN_STREAM_ROUTE = "POST /api/threads/{thread_id}/runs/stream";
+    /** Bounded reason length of one admission diagnostic line. */
+    private static final int ADMISSION_REASON_LIMIT = 200;
+    /** Bounded server-side record of an admission failure the frozen response cannot carry. */
+    private static final System.Logger ADMISSION_LOG =
+            System.getLogger(DeerFlowThreadRunApi.class.getName() + ".admission");
     private static final Pattern THREAD = Pattern.compile("^/api/threads/([^/]+)$");
     private static final Pattern THREAD_STATE = Pattern.compile("^/api/threads/([^/]+)/state$");
     private static final Pattern THREAD_HISTORY =
@@ -1267,6 +1274,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     selectedBridge = newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt, delegation, isPlanMode);
                 }
             } catch (RuntimeException failure) {
+                ADMISSION_LOG.log(System.Logger.Level.WARNING, admissionFailureMessage(failure));
                 if (createdBridge && thread.bridge != null) {
                     ownedBridges.remove(thread.bridge);
                     thread.bridge.close();
@@ -1300,6 +1308,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                         : Math.addExact(latestVisibleTurnSequence(thread, selectedBridge), 1);
                 started = selectedBridge.start(threadId, modelInput, Optional.ofNullable(thread.session));
             } catch (RuntimeException failure) {
+                ADMISSION_LOG.log(System.Logger.Level.WARNING, admissionFailureMessage(failure));
                 // A newly attached bridge uses the requested binding, so createdBridge and
                 // switchingModel cannot both be true. On a failed switch the old bridge stays
                 // attached for durable history and a subsequent Turn; only the rejected new
@@ -2987,6 +2996,37 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         // injection; the exception message, request text, credential and provider body are also
         // excluded. run_id is SDK-generated and format-controlled.
         System.err.println(code + " run_id=" + runId + " error=" + failure.getClass().getName());
+    }
+
+    /**
+     * Bounded server-side record of a Run admission failure. The frozen response stays the generic
+     * {@code Run could not start}, so this line is the only place the failure survives: an admission
+     * failure swallowed here is undiagnosable in production (a Run that never started has no durable
+     * record). It carries the frozen route, the exception class and a single-line length-bounded
+     * reason - never the request body, tool arguments, file contents or credentials, and never the
+     * client-controlled thread id, which may carry CR/LF and would allow log injection.
+     */
+    static String admissionFailureMessage(RuntimeException failure) {
+        StringBuilder message = new StringBuilder("Run admission failure on ")
+                .append(RUN_STREAM_ROUTE)
+                .append(": ")
+                .append(failure.getClass().getName());
+        String bounded = boundedReason(failure.getMessage());
+        if (bounded != null) {
+            message.append(" (").append(bounded).append(')');
+        }
+        return message.toString();
+    }
+
+    /** One log line at most: CR/LF collapsed and the reason truncated to a bounded length. */
+    private static String boundedReason(String reason) {
+        if (reason == null || reason.isBlank()) {
+            return null;
+        }
+        String singleLine = reason.replace('\r', ' ').replace('\n', ' ').strip();
+        return singleLine.length() <= ADMISSION_REASON_LIMIT
+                ? singleLine
+                : singleLine.substring(0, ADMISSION_REASON_LIMIT) + "...";
     }
 
     /** Bounded count of durable USER turns; stops as soon as a second turn proves the first-turn boundary is gone. */
