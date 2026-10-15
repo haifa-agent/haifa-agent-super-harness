@@ -12,6 +12,19 @@
 
 验收分三档（详见 [AGENTS.md「验收分层」](../../AGENTS.md)）：**L1** 日常 PR（`change_scope` 门禁，默认一轮 UI）；**L2** 工作包出口双后端差分（不默认挂每个 PR）；**L3** 客户演示同 SHA 连续双轮。下列流程一默认按 L1 合入；L2/L3 在工作包或演示阶段另行安排。
 
+```mermaid
+flowchart LR
+    DEV["实现切片"] --> L1["L1 日常 PR<br/>change_scope 下限<br/>一轮 UI；无默认双后端"]
+    L1 --> MERGE["squash 合入 main"]
+    MERGE --> WP{"工作包出口？"}
+    WP -->|"是"| L2["L2 双后端差分<br/>冻结前端 + Haifa / 参考后端攒批"]
+    WP -->|"否"| NEXT["继续下一 L1 切片"]
+    L2 --> DEMO{"演示阶段结算？"}
+    DEMO -->|"是"| L3["L3 同主线 SHA<br/>连续两轮整链 → sprint decide GO"]
+    DEMO -->|"否"| NEXT
+    L3 --> NEXT
+```
+
 ## 0. 先判定能力归属
 
 | 需求归属 | 处理方式 |
@@ -29,48 +42,55 @@
 
 适用于无需修改上游 SDK 的产品功能，默认消费已发布的 `0.1.2-SNAPSHOT` 基线。
 
-### 1.1 流程图
+### 1.1 流程图（L1 日常合入主链）
+
+本图是**单个日常 PR** 的路径。双后端差分与演示 GO **不在**本链上；任务结束后见右侧 L2/L3。
 
 ```mermaid
 flowchart TD
     R["需求 / Roadmap / PRD"] --> B{"能力归属明确？"}
     B -->|"否"| A["停止新增领域实现，进行架构裁决"]
-    B -->|"产品层，无 SDK 缺口"| P["编写提示词；核对 SHPM 与依赖"]
-    P --> D["主控分配独立 branch/worktree、槽位和 data-root<br/>使用 shpm_dispatch 登记 start / assign"]
-    D --> E["完整端口组实际绑定预检与环境准备"]
-    E --> I["实现 → 定向测试 / 单 case 冒烟 → 集中自审"]
+    B -->|"产品层，无 SDK 缺口"| P["编写提示词；核对 SHPM 与依赖<br/>标明本任务 L1；L2 是否延后到 WP"]
+    P --> D["主控分配独立 branch/worktree、槽位和 data-root<br/>shpm_dispatch：start / assign"]
+    D --> E["完整端口组绑定预检与环境准备"]
+    E --> I["实现 → 定向测试 / 合同 / 单 case 冒烟 → 集中自审"]
     I --> F{"内环是否通过？"}
     F -->|"产品 FAIL，先保存原件"| FIX["按根因集中修复"]
     FIX --> I
     F -->|"前置不足"| BLOCK["保留 FAIL / NOT_RUN / BLOCKED_EXTERNAL<br/>登记影响；继续独立用例或修复前置"]
     BLOCK --> E
-    F -->|"是"| PR["推送分支并开 PR（不用 draft）<br/>此时不代表任何门禁通过"]
-    PR --> BOT["一次性读取机器人审查并集中处理<br/>最多等 10 分钟，超时记 NO_REVIEW_YET<br/>REVIEW_FAILED 可重新触发一次"]
+    F -->|"是"| PR["推送并开 PR（不用 draft）<br/>写明 L1 未跑完 / L2 延后到 WP"]
+    PR --> BOT["一次性读机器人审查并集中处理<br/>最多等 10 分钟；不阻塞已就绪的 L1 排队"]
     BOT --> FIXCAND["按根因攒批修复"]
-    FIXCAND --> REBASE["按主控要求 rebase 到最新 main<br/>固定候选源码 SHA / SDK / 断言，此后不再 amend / rebase"]
-    REBASE --> PLAN["change_scope.py 的 L1 gates / uiModel 作为下限<br/>小切片用任务卡原子断言；昂贵轮次才做完整 Oracle 表"]
-    PLAN --> PRE["正式预检；clean / 重跑前外置保存需保留原件"]
-    PRE --> G["主控排队或放行 L1 门禁<br/>按 gates：全仓/复用、冷轮（若需）、一轮暖轮；内环已覆盖且证据绑最终 SHA 时可抽检计正式"]
-    G --> CHECK{"L1 必需门禁是否全部通过？"}
-    CHECK -->|"产品 FAIL，先归档"| FIX
-    CHECK -->|"前置不足或必需 NOT_RUN"| BLOCK
-    CHECK -->|"是"| REPORT["交付报告 → task deliver<br/>进入 ready_for_acceptance<br/>注明 L2 差分是否延后到 WP 出口"]
-    REPORT --> RECORD["主控登记真实 L1 门禁结果与候选 SHA"]
-    RECORD --> REVIEW["主控独立复审与验收，核对合入条件"]
+    FIXCAND --> REBASE["rebase 到最新 main<br/>固定候选 SHA / SDK / 断言"]
+    REBASE --> PLAN["change_scope → L1 gates / uiModel<br/>小切片：任务卡 3～5 条原子断言"]
+    PLAN --> PRE["L1 预检；clean/重跑前外置保存原件"]
+    PRE --> G["L1 门禁：verify-full 或复用<br/>冷轮若需；默认一轮暖轮<br/>内环已覆盖且绑最终 SHA → 主控抽检可计正式<br/>不含双后端"]
+    G --> CHECK{"L1 必需门禁通过？"}
+    CHECK -->|"FAIL"| FIX
+    CHECK -->|"前置不足 / NOT_RUN"| BLOCK
+    CHECK -->|"是"| REPORT["deliver → ready_for_acceptance<br/>交接注明 L2 是否 WP 出口再跑"]
+    REPORT --> RECORD["登记 L1 证据与候选 SHA"]
+    RECORD --> REVIEW["主控独立复审"]
     REVIEW --> RC{"复审通过？"}
-    RC -->|"否，保留阻断"| HOLD["主控登记问题并确定返工 / 前置恢复<br/>在独立 worktree 修复后重新交付；不 accept"]
+    RC -->|"否"| HOLD["登记阻断；独立 worktree 返工；不 accept"]
     HOLD --> I
-    RC -->|"是"| MERGE{"合入后 main 的源码树哈希与 SDK 身份<br/>与已验证候选一致？冲突感知复用见 AGENTS"}
-    MERGE -->|"是"| FF["合入（squash merge）；evidence_reuse.py 逐份核对<br/>全部 REUSABLE 时复用门禁与 UI 结果"]
-    MERGE -->|"否，或任一证据 STALE"| NEW["仅重跑指纹变化 / 路径冲突 / STALE 项<br/>追加证据并由主控复审"]
-    NEW --> NC{"最终 SHA 门禁与复审通过？"}
+    RC -->|"是"| MERGE{"合入后树哈希 + SDK 身份<br/>与候选一致？冲突感知复用"}
+    MERGE -->|"全部 REUSABLE"| FF["squash 合入 main"]
+    MERGE -->|"有 STALE / 冲突"| NEW["只重跑指纹变化、路径冲突或 STALE 项"]
+    NEW --> NC{"最终 SHA 门禁通过？"}
     NC -->|"否"| HOLD
-    NC -->|"是"| SMOKE["刷新固定主服务 18018/33018<br/>真实 smoke 并登记最终主线证据"]
+    NC -->|"是"| SMOKE["刷新主服务 18018/33018 + smoke"]
     FF --> SMOKE
-    SMOKE --> SC{"主服务 smoke 通过？"}
+    SMOKE --> SC{"smoke 通过？"}
     SC -->|"否"| HOLD
-    SC -->|"是"| ACCEPT["主控 task accept<br/>确认本任务进程与端口清理，assign release"]
-    ACCEPT --> FIN["任务 finished<br/>L2 差分在 WP 出口攒批；演示 L3 / GO 分开结算"]
+    SC -->|"是"| ACCEPT["task accept；清理端口；assign release"]
+    ACCEPT --> DONE["L1 任务 finished"]
+    DONE --> WP{"工作包出口要 L2？"}
+    WP -->|"否"| IDLE["等待下一 L1 切片<br/>演示 L3 另按 sprint 结算"]
+    WP -->|"是"| L2["L2：冻结前端双后端差分攒批<br/>Haifa vs 参考后端；不回头改写本 PR 门禁"]
+    L2 --> WPDONE["WP 差分证据登记后<br/>再 wp ready_for_acceptance / complete"]
+    WPDONE --> IDLE
 ```
 
 ### 1.2 开发与正式验收
@@ -112,43 +132,49 @@ flowchart TD
 
 本流程在流程一的资源、Oracle、证据和 SHPM 规则之上增加上游开发、候选 SDK 消费及正式基线回归。
 
-### 2.1 流程图
+### 2.1 流程图（上下游协同；下游按 L1，差分按 L2）
+
+上下游像蟹爪分叉再汇合：左侧上游 SDK，右侧下游 Super Harness。下游日常证明走 **L1**（候选 SDK 与切回基线各跑一次）；**双后端差分仍是 L2**，不挂在候选验证默认链上。图中「上游同 SHA L3」指 **Haifa Agent SDK 门禁**，不是客户演示 L3。
 
 ```mermaid
 flowchart TD
-    GAP["主控确认通用 Runtime 缺口与上下游任务依赖"] --> INIT["编写提示词、建立 SHPM 任务<br/>分配上下游独立 worktree 与下游槽位"]
-    INIT --> U_WT["上游从最新 origin/dev 建 feat-* worktree<br/>禁止直接修改 dev"]
-    U_WT --> U_DEV["SDK 开发 → 定向测试 → 集中自审"]
-    U_DEV --> U_TEST["固定上游提交，执行同 SHA L3<br/>Integration 按任务范围、前置和授权执行"]
-    U_TEST --> U_PUB["clean worktree 运行 publish-local-sdk.ps1<br/>发布带 worktree 标识坐标，核对清单 / SDK commit / hash"]
-    U_PUB --> U_PR["feat-* 向 dev 发起英文 GitHub PR<br/>主控登记 PR、问题与验证状态"]
-    U_PUB --> D_SELECT["主控指定下游 sdk-selection.json<br/>记录发布来源与实际落盘构件"]
-    D_SELECT --> D_CODE["下游适配 → 定向测试 / 单 case → 集中自审"]
-    D_CODE --> D_PLAN["固定候选 SHA；主控复核 Oracle 与完整预检"]
-    D_PLAN --> D_GATE["候选 SDK 上执行必需门禁<br/>按范围运行 UI、双后端差分与真实 smoke"]
-    D_GATE --> D_CHECK{"候选验证通过？"}
-    D_CHECK -->|"下游产品 FAIL，先保存原件"| D_CODE
+    GAP["主控确认 Runtime 缺口与上下游依赖"] --> INIT["提示词 + SHPM<br/>上下游独立 worktree；下游槽位"]
+    INIT --> U_WT["上游：origin/dev → feat-* worktree<br/>禁止直接改 dev"]
+    U_WT --> U_DEV["SDK 开发 → 定向测试 → 自审"]
+    U_DEV --> U_TEST["固定上游提交<br/>上游同 SHA L3（SDK 门禁）<br/>Integration 按范围/授权"]
+    U_TEST --> U_PUB["publish-local-sdk.ps1<br/>带 worktree 标识坐标；核对清单/hash"]
+    U_PUB --> U_PR["feat-* → dev 英文 PR<br/>主控登记；不自动合并"]
+    U_PUB --> D_SELECT["下游：主控写 sdk-selection.json"]
+    D_SELECT --> D_CODE["下游适配 → 定向/单 case → 自审"]
+    D_CODE --> D_PLAN["固定下游候选 SHA<br/>L1：change_scope + 原子断言<br/>昂贵项才做完整 Oracle"]
+    D_PLAN --> D_GATE["候选 SDK 上跑 L1 门禁<br/>全仓/复用、默认一轮 UI、真实 smoke（按范围）<br/>不含默认双后端"]
+    D_GATE --> D_CHECK{"候选 L1 通过？"}
+    D_CHECK -->|"下游产品 FAIL"| D_CODE
     D_CHECK -->|"主控确认 SDK 缺陷"| U_DEV
-    D_CHECK -->|"前置不足"| WAIT["保留 FAIL / NOT_RUN / BLOCKED_EXTERNAL<br/>恢复受影响前置后重验"]
+    D_CHECK -->|"前置不足"| WAIT["FAIL / NOT_RUN / BLOCKED_EXTERNAL<br/>恢复前置后重验"]
     WAIT --> D_PLAN
-    D_CHECK -->|"是"| PROOF["记录候选证据并补充上游 PR<br/>仅证明候选分支"]
-    U_PR --> REVIEW["主控核对 PR 与候选证据，提醒人工审查"]
+    D_CHECK -->|"是"| PROOF["记录候选 L1 证据<br/>仅证明候选分支"]
+    U_PR --> REVIEW["主控核对上游 PR + 候选证据<br/>提醒人工审查"]
     PROOF --> REVIEW
-    REVIEW --> HUMAN["等待人工审查合并 SDK PR<br/>智能体仅在针对该 PR 的另行书面授权下可合并"]
-    HUMAN --> BASE["上游主检出更新到已合入的 dev<br/>重新发布 0.1.2-SNAPSHOT，核对新发布清单"]
-    BASE --> RESTORE["下游删除 sdk-selection.json<br/>核对基线版本及实际构件 / hash"]
-    RESTORE --> REBASE["最终门禁前 rebase 到最新 main<br/>固定下游最终候选 SHA"]
-    REBASE --> FINAL["外置保存原件；重新构建 SDK 消费方后端<br/>基线上重跑必需全仓、UI、协议与真实 smoke"]
-    FINAL --> FC{"正式基线必需门禁通过？"}
-    FC -->|"FAIL 或必需 NOT_RUN"| ISSUE["保留证据并登记根因<br/>恢复前置或修复下游；SDK 缺陷由主控确认后回上游"]
+    REVIEW --> HUMAN["等待人工合并 SDK PR<br/>无针对该 PR 的书面授权则智能体不合并"]
+    HUMAN --> BASE["上游主检出跟到已合入 dev<br/>重发 0.1.2-SNAPSHOT 基线"]
+    BASE --> RESTORE["下游删除 sdk-selection.json<br/>核对基线坐标与落盘 hash"]
+    RESTORE --> REBASE["rebase 最新 main<br/>固定下游最终候选 SHA"]
+    REBASE --> FINAL["重建消费方后端<br/>基线上重跑 L1：全仓、一轮 UI、协议、smoke<br/>仍不含默认双后端"]
+    FINAL --> FC{"基线 L1 通过？"}
+    FC -->|"FAIL / NOT_RUN"| ISSUE["保留证据；修下游或回上游"]
     ISSUE --> D_CODE
-    ISSUE -->|"主控确认 SDK 缺陷"| U_DEV
-    FC -->|"是"| DELIVERY["报告 → deliver → 登记基线证据<br/>主控独立复审"]
-    DELIVERY --> MERGE["按流程一「合入后复用」核对并合入<br/>源码树哈希或 SDK 身份改变须重验，未通过不结算"]
-    MERGE --> SMOKE["刷新固定主服务并运行真实 smoke"]
-    SMOKE --> SC{"独立复审、最终 SHA 门禁与 smoke 全部通过？"}
-    SC -->|"否，保留阻断并返工"| ISSUE
-    SC -->|"是"| FIN["主控 accept；清理并 release<br/>工作包 / 阶段分别结算"]
+    ISSUE -->|"SDK 缺陷"| U_DEV
+    FC -->|"是"| DELIVERY["deliver → 登记基线 L1 证据<br/>主控独立复审"]
+    DELIVERY --> MERGE["按流程一冲突感知复用后合入"]
+    MERGE --> SMOKE["刷新主服务 + smoke"]
+    SMOKE --> SC{"复审 + 最终 SHA + smoke 通过？"}
+    SC -->|"否"| ISSUE
+    SC -->|"是"| ACCEPT["accept；清理；release<br/>下游 L1 任务 finished"]
+    ACCEPT --> WP{"工作包出口要 L2？"}
+    WP -->|"否"| IDLE["演示 L3 / GO 另按 sprint"]
+    WP -->|"是"| L2["L2：冻结前端双后端差分攒批<br/>与候选/基线 L1 证据分开登记"]
+    L2 --> IDLE
 ```
 
 ### 2.2 跨仓核心约束
@@ -246,7 +272,9 @@ shpm assign release $assignmentId --idempotency-key "$operationKey-release" --js
 | --- | --- | --- |
 | 工作空间 | 下游独立 branch/worktree、端口和数据目录 | 上下游独立特性 worktree；下游独立槽位和数据目录 |
 | SDK | 已发布基线 | 研发期主控指定候选坐标；合入前切回重新发布的基线 |
-| 最终门禁 | 最终 rebase 后的候选 SHA，按范围与 Oracle 执行 | 上游同 SHA 门禁及发布来源；下游正式基线上的最终候选门禁 |
-| 合入前提 | 必需门禁与主控复审通过；最终源码状态与证据一致 | 另要求 SDK PR 已获授权合并入 dev，基线已发布，selection 已删除且基线回归通过 |
-| 产物复用 | 后端按 Java 输入指纹（含 SDK JAR 身份）、前端按独立构建输入匹配；合入后按源码树哈希与 SDK 身份核对 | SDK 同版本重发布使构建戳失效，强制重建消费方后端；前端按独立输入校验 |
-| 结算 | deliver → verify → 独立验收 → accept / release；工作包、阶段与 GO 分开 | 同左；候选 SDK 验证不等于正式基线交付 |
+| L1 日常门禁 | 最终 rebase 后的候选 SHA；`change_scope` 下限（默认一轮 UI） | 上游同 SHA SDK 门禁及发布来源；下游在**候选 SDK**与**切回基线**上各跑一次 L1 |
+| L2 差分 | 工作包出口攒批双后端；不挂每个 PR | 同左；候选/基线 L1 PASS 不等于已做 L2 |
+| L3 演示 | sprint 同主线 SHA 连续双轮；与 L1/L2 分开结算 |
+| 合入前提 | L1 必需门禁与主控复审通过；最终源码状态与证据一致 | 另要求 SDK PR 已获授权合并入 dev，基线已发布，selection 已删除且基线 L1 回归通过 |
+| 产物复用 | 后端按 Java 输入指纹（含 SDK JAR 身份）、前端按独立构建输入匹配；合入后冲突感知复用 | SDK 同版本重发布使构建戳失效，强制重建消费方后端；前端按独立输入校验 |
+| 结算 | deliver → verify → 独立验收 → accept / release；WP（L2）与演示（L3/GO）分开 | 同左；候选 SDK 验证不等于正式基线交付，也不等于 L2 差分 |
