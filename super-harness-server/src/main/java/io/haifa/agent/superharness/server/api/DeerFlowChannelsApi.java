@@ -30,6 +30,7 @@ import java.util.regex.Pattern;
  * Gateway data-root; POST/DELETE runtime-config starts/stops the Feishu WS worker.</p>
  */
 final class DeerFlowChannelsApi implements HttpHandler {
+    private static final System.Logger LOG = System.getLogger(DeerFlowChannelsApi.class.getName());
     static final String ADMIN_REQUIRED = "Admin privileges required to manage channel runtime credentials.";
     private static final String MASKED = "********";
     private static final int MAX_BODY_BYTES = 64 * 1024;
@@ -110,6 +111,33 @@ final class DeerFlowChannelsApi implements HttpHandler {
     void overrideFeishuTransportFactory(FeishuTransport.Factory factory) {
         if (feishuWorker != null) {
             feishuWorker.overrideTransportFactory(factory);
+        }
+    }
+
+    /**
+     * After Gateway restart, reopen the Feishu WebSocket when persisted runtime credentials are
+     * still configured. Does not start a provider that was explicitly disconnected. Failures are
+     * logged and leave HTTP up; the admin can re-save runtime-config to retry.
+     */
+    void restorePersistedFeishuWorker() {
+        if (feishuWorker == null || !channelConnectionsEnabled || !feishuEnabled) {
+            return;
+        }
+        ProviderMeta meta = PROVIDERS.get("feishu");
+        ObjectNode runtime = effectiveRuntime("feishu");
+        if (!runtimeConfigured("feishu", meta, runtime)) {
+            return;
+        }
+        try {
+            feishuWorker.startOrRestart(
+                    runtime.path("app_id").asText(""),
+                    runtime.path("app_secret").asText(""),
+                    runtime.path("domain").asText(FeishuOpenDomain.DEFAULT));
+        } catch (Exception failure) {
+            LOG.log(
+                    System.Logger.Level.WARNING,
+                    "Persisted Feishu channel credentials are present but the worker failed to start",
+                    failure);
         }
     }
 

@@ -172,6 +172,80 @@ class FeishuChannelWorkerTest {
         assertThat(transport.running()).isFalse();
     }
 
+    @Test
+    void gatewayRestartRestoresFeishuWorkerFromPersistedRuntimeConfig() throws Exception {
+        postJson(
+                "/api/channels/feishu/runtime-config",
+                "{\"values\":{\"app_id\":\"cli_persist\",\"app_secret\":\"secret-persist\","
+                        + "\"domain\":\"https://open.larksuite.com\"}}");
+        assertThat(api.feishuWorker().running()).isTrue();
+        api.close();
+
+        AtomicReference<RecordingFeishuTransport> restarted = new AtomicReference<>();
+        api = DeerFlowBootstrapApi.createForTests(
+                new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
+                dataDirectory,
+                ignored -> LocalProbeModelTestSupport.binding());
+        api.channelsApi().overrideFeishuTransportFactory(() -> {
+            RecordingFeishuTransport transport = new RecordingFeishuTransport();
+            restarted.set(transport);
+            return transport;
+        });
+        assertThat(api.feishuWorker().running()).isFalse();
+        api.start();
+        baseUri = URI.create("http://127.0.0.1:" + api.address().getPort());
+
+        assertThat(api.feishuWorker().running()).isTrue();
+        assertThat(restarted.get()).isNotNull();
+        assertThat(restarted.get().running()).isTrue();
+        assertThat(restarted.get().appId()).isEqualTo("cli_persist");
+        assertThat(restarted.get().domain()).isEqualTo(FeishuOpenDomain.LARK_SUITE);
+        assertThat(get("/api/channels/providers").path("providers").get(0).path("configured").asBoolean())
+                .isTrue();
+    }
+
+    @Test
+    void gatewayRestartDoesNotRestoreDisconnectedFeishuWorker() throws Exception {
+        postJson(
+                "/api/channels/feishu/runtime-config",
+                "{\"values\":{\"app_id\":\"cli_gone\",\"app_secret\":\"secret-gone\"}}");
+        delete("/api/channels/feishu/runtime-config");
+        assertThat(api.feishuWorker().running()).isFalse();
+        api.close();
+
+        AtomicReference<RecordingFeishuTransport> restarted = new AtomicReference<>();
+        api = DeerFlowBootstrapApi.createForTests(
+                new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
+                dataDirectory,
+                ignored -> LocalProbeModelTestSupport.binding());
+        api.channelsApi().overrideFeishuTransportFactory(() -> {
+            RecordingFeishuTransport transport = new RecordingFeishuTransport();
+            restarted.set(transport);
+            return transport;
+        });
+        api.start();
+        baseUri = URI.create("http://127.0.0.1:" + api.address().getPort());
+
+        assertThat(api.feishuWorker().running()).isFalse();
+        assertThat(restarted.get()).isNull();
+    }
+
+    @Test
+    void groupChatMentionPrefixStillBindsConnectCode() throws Exception {
+        postJson(
+                "/api/channels/feishu/runtime-config",
+                "{\"values\":{\"app_id\":\"cli_a\",\"app_secret\":\"secret-a\"}}");
+        String code = postJson("/api/channels/feishu/connect", "").path("code").asText();
+        RecordingFeishuTransport transport = transportRef.get();
+        api.feishuWorker()
+                .handleInbound(new FeishuInboundMessage(
+                        "oc_group", "om_group", "ou_group_user", "@_user_1 /connect " + code, "group"));
+
+        assertThat(transport.replies())
+                .anyMatch(reply -> reply.text().contains("Feishu connected to DeerFlow."));
+        assertThat(get("/api/channels/connections").path("connections")).hasSize(1);
+    }
+
     private JsonNode get(String path) throws Exception {
         HttpResponse<String> response = client.send(
                 HttpRequest.newBuilder(baseUri.resolve(path)).GET().build(),

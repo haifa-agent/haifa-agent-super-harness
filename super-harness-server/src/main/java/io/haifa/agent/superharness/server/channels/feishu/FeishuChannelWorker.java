@@ -15,11 +15,17 @@ import java.util.regex.Pattern;
 /**
  * Thin Feishu IM adapter: transport lifecycle + {@code /connect} bind + bound chat → DeerFlow
  * thread/Run. Does not port ChannelManager/MessageBus.
+ *
+ * <p>Inbound events share one daemon thread today (DeerFlow also serializes per-chat work). Decoupling
+ * fast {@code /connect} replies from long {@code runTurn} waits is a follow-up concurrency slice,
+ * not part of L1b parity.
  */
 public final class FeishuChannelWorker implements AutoCloseable {
     private static final System.Logger LOG = System.getLogger(FeishuChannelWorker.class.getName());
     private static final Pattern CONNECT_CODE =
             Pattern.compile("^/connect\\s+(\\S+)\\s*$", Pattern.CASE_INSENSITIVE);
+    private static final String INBOUND_FAILURE_REPLY =
+            "An error occurred while processing your request. Please try again.";
 
     private final ChannelConnectionStore connections;
     private final FeishuChatThreadStore threadMap;
@@ -112,6 +118,17 @@ public final class FeishuChannelWorker implements AutoCloseable {
                 handleInbound(message);
             } catch (Exception failure) {
                 LOG.log(System.Logger.Level.WARNING, "Feishu inbound handling failed", failure);
+                // Surface a card to the user; silent log-only failures look like a hung bot.
+                try {
+                    if (message != null && message.messageId() != null && !message.messageId().isBlank()) {
+                        reply(message.messageId(), INBOUND_FAILURE_REPLY);
+                    }
+                } catch (Exception replyFailure) {
+                    LOG.log(
+                            System.Logger.Level.WARNING,
+                            "Feishu inbound failure reply also failed",
+                            replyFailure);
+                }
             }
         });
     }
@@ -121,7 +138,9 @@ public final class FeishuChannelWorker implements AutoCloseable {
         if (message == null || message.text().isBlank()) {
             return;
         }
-        Matcher connect = CONNECT_CODE.matcher(message.text().trim());
+        // Group chats leave "@bot /connect <code>" with the mention in the text (DeerFlow
+        // strip_leading_mentions). Strip only for the command match; ordinary chat keeps mentions.
+        Matcher connect = CONNECT_CODE.matcher(stripLeadingMentions(message.text().trim()));
         if (connect.matches()) {
             handleConnect(message, connect.group(1));
             return;
@@ -140,6 +159,39 @@ public final class FeishuChannelWorker implements AutoCloseable {
         String owner = connection.path("owner_user_id").asText(AccessOwner.DEFAULT);
         String connectionId = connection.path("id").asText("");
         runChat(owner, connectionId, message);
+    }
+
+    /**
+     * Drop leading platform mention tokens ({@code @_user_1}, {@code @bot}, {@code <@id>}) so group
+     * {@code @bot /connect <code>} binds like a bare connect. Matches DeerFlow
+     * {@code strip_leading_mentions}.
+     */
+    static String stripLeadingMentions(String text) {
+        if (text == null || text.isEmpty()) {
+            return "";
+        }
+        String remainder = text;
+        while (!remainder.isEmpty()) {
+            if (Character.isWhitespace(remainder.charAt(0))) {
+                break;
+            }
+            String[] parts = remainder.split("\\s+", 2);
+            if (parts.length == 0 || !isLeadingMentionToken(parts[0])) {
+                break;
+            }
+            remainder = parts.length > 1 ? parts[1] : "";
+        }
+        return remainder;
+    }
+
+    private static boolean isLeadingMentionToken(String token) {
+        if (token == null || token.isEmpty()) {
+            return false;
+        }
+        if (token.startsWith("<@") && token.endsWith(">") && token.length() > 3) {
+            return true;
+        }
+        return token.startsWith("@") && token.length() > 1;
     }
 
     private void handleConnect(FeishuInboundMessage message, String code) throws Exception {

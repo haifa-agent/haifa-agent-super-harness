@@ -670,6 +670,9 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
 
     public void start() {
         javalin.start(bindHost, bindPort);
+        // Reopen Feishu WS when runtime-config.json still has credentials (DeerFlow ChannelService
+        // merges runtime config at startup). Call after HTTP bind and after test transport overrides.
+        channelsApi.restorePersistedFeishuWorker();
     }
 
     public InetSocketAddress address() {
