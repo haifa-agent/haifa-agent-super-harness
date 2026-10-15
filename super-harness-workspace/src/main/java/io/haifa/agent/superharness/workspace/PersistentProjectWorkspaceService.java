@@ -688,6 +688,16 @@ public final class PersistentProjectWorkspaceService {
         return registry.bind(ownerId, threadId);
     }
 
+    /**
+     * Binds (or verifies) the Thread workspace and returns its host user-data root — the directory
+     * behind the logical {@code /mnt/user-data} tree. Only the trusted Skill script Tool consumes
+     * the raw path: the SDK executes the package entry with this root as the workspace, so its
+     * {@code outputs/} lands exactly where every other producer and the Artifact chain serve.
+     */
+    public synchronized Path bindThreadWorkspaceDataRoot(String ownerId, String threadId) {
+        return registry.userDataRoot(bindThreadWorkspace(ownerId, threadId).workspaceId());
+    }
+
     public WorkspaceBinding requireThreadWorkspace(String ownerId, String threadId) {
         return registry.require(ownerId, threadId);
     }

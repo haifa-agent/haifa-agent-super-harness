@@ -26,12 +26,33 @@ final class SkillReviewApprovals {
     }
 
     static ObjectNode evidence(ObjectMapper json, SkillRegistration registration, JsonNode scan) {
-        String decision = scan.path("decision").asText();
-        if (!java.util.Set.of("allow", "warn").contains(decision)) throw new IllegalArgumentException("Skill review did not permit publication");
-        return json.createObjectNode().put("registration_digest", registration.registrationDigest().value())
+        String decision = scan.path("decision").asText("");
+        if (decision.isEmpty()) {
+            // W15 parity: the semantic per-file review is opt-in, so the deterministic screen can
+            // return raw frozen facts without a semantic verdict. The same scan still binds the
+            // evidence to the exact SDK package digests; a blocked scan never reaches here.
+            if (scan.path("blocked").asBoolean(false)) {
+                throw new IllegalArgumentException("Deterministic Skill scan blocked the package");
+            }
+            if (!scan.path("findings").isArray()) {
+                throw new IllegalArgumentException("Skill screen did not produce frozen scan facts");
+            }
+            decision = "allow";
+        }
+        if (!java.util.Set.of("allow", "warn").contains(decision)) {
+            throw new IllegalArgumentException("Skill review did not permit publication");
+        }
+        ObjectNode recorded = json.createObjectNode().put("registration_digest", registration.registrationDigest().value())
                 .put("package_digest", registration.packageIndex().digest().value())
                 .put("issued_at", Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS).toString())
                 .put("decision", decision).put("revoked", false);
+        if (scan.path("authorization_source").asText().isBlank()) {
+            recorded.put("authorization_source", "configured-skill-screen");
+        } else {
+            recorded.put("authorization_source", scan.path("authorization_source").asText());
+        }
+        recorded.set("static_findings", scan.path("findings").deepCopy());
+        return recorded;
     }
 
     static SkillPackageReviewGrant grant(SkillRegistration registration, JsonNode evidence) {
