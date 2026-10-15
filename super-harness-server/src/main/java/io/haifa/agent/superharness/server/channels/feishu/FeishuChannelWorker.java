@@ -1,6 +1,6 @@
 package io.haifa.agent.superharness.server.channels.feishu;
 
-import com.fasterxml.jackson.databind.ObjectNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.haifa.agent.superharness.server.auth.AccessOwner;
 import io.haifa.agent.superharness.server.config.ChannelConnectionStore;
 import java.util.LinkedHashMap;
