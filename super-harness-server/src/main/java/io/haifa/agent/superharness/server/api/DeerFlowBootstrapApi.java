@@ -547,33 +547,38 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             }
             String target = "haifa:os:" + name;
             Optional<String> stored = credentials.read(target).filter(value -> !value.isBlank());
-            if (stored.isEmpty()) {
-                if (explicitReference) {
-                    throw new IllegalStateException("continuation key credential is unavailable");
-                }
-                Path database = dataDirectory.toAbsolutePath()
-                        .normalize()
-                        .resolve("runtime")
-                        .resolve("haifa-agent.sqlite");
-                if (java.nio.file.Files.exists(database)) {
-                    throw new IllegalStateException(
-                            "continuation key credential is unavailable for the existing Runtime database");
-                }
-                encoded = Base64.getEncoder().encodeToString(generateContinuationKey().getEncoded());
-                credentials.write(target, encoded);
-                String verified = credentials
-                        .read(target)
-                        .filter(value -> !value.isBlank())
-                        .orElseThrow(() -> new IllegalStateException(
-                                "continuation key credential could not be verified after provisioning"));
-                if (!java.security.MessageDigest.isEqual(
-                        encoded.getBytes(java.nio.charset.StandardCharsets.US_ASCII),
-                        verified.getBytes(java.nio.charset.StandardCharsets.US_ASCII))) {
-                    throw new IllegalStateException(
-                            "continuation key credential could not be verified after provisioning");
-                }
-            } else {
+            if (stored.isPresent()) {
                 encoded = stored.orElseThrow();
+            } else if (explicitReference) {
+                throw new IllegalStateException("continuation key credential is unavailable");
+            } else {
+                Optional<String> legacy = credentials
+                        .read("haifa:os:" + legacyOsCredentialName(dataDirectory))
+                        .filter(value -> !value.isBlank());
+                if (legacy.isPresent()) {
+                    // Reuse the pre-existing per-data-root key without changing it. The legacy
+                    // target is left untouched so every existing Runtime database stays readable;
+                    // only fresh data-roots provision the single fixed target.
+                    encoded = legacy.orElseThrow();
+                } else {
+                    Path database = dataDirectory.toAbsolutePath()
+                            .normalize()
+                            .resolve("runtime")
+                            .resolve("haifa-agent.sqlite");
+                    if (java.nio.file.Files.exists(database)) {
+                        throw new IllegalStateException(
+                                "continuation key credential is unavailable for the existing Runtime database");
+                    }
+                    credentials.write(
+                            target, Base64.getEncoder().encodeToString(generateContinuationKey().getEncoded()));
+                    // Concurrent first-time starters can race on the shared fixed target; adopt
+                    // whichever value ends up stored so they converge on a single key.
+                    encoded = credentials
+                            .read(target)
+                            .filter(value -> !value.isBlank())
+                            .orElseThrow(() -> new IllegalStateException(
+                                    "continuation key credential could not be verified after provisioning"));
+                }
             }
         } else {
             throw new IllegalArgumentException(
@@ -606,6 +611,22 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         // SHA-256 slot name wrote one credential per data-root and eventually filled the
         // Windows Credential Manager; see W18-ContinuationKeyOsCredentialLeak.
         return "HAIFA_SUPER_HARNESS_CONTINUATION_KEY";
+    }
+
+    static String legacyOsCredentialName(Path dataDirectory) {
+        // Pre-fix per-data-root target, still read as a fallback so existing Runtime
+        // databases stay decryptable: HAIFA_SUPER_HARNESS_CONTINUATION_KEY_<sha256(data-root)[:16]>.
+        String canonicalIdentity = dataDirectory.toAbsolutePath()
+                .normalize()
+                .toString()
+                .toLowerCase(java.util.Locale.ROOT);
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(canonicalIdentity.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return "HAIFA_SUPER_HARNESS_CONTINUATION_KEY_" + java.util.HexFormat.of().formatHex(digest, 0, 8);
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is required", impossible);
+        }
     }
 
     private static SecretKey generateContinuationKey() {
