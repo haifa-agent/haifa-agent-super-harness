@@ -1,7 +1,8 @@
 """Tells which gates a change needs, from the files it touches since main.
 
 Classifies every changed or untracked file and prints the required gates as JSON
-(AGENTS.md, change-scoped gates). The widest class wins:
+(AGENTS.md, change-scoped gates, L1 daily / L2 work-package / L3 demo tiers).
+The widest class wins:
 
   docs       *.md, docs/                               -> docs check only
   scripts    scripts/, tests/checks/, build-support/, .mvn/, mvnw*, tests/known-intermittent.json
@@ -11,24 +12,25 @@ Classifies every changed or untracked file and prints the required gates as JSON
   java-test  super-harness-*/src/test/                 -> verify-full-reuse when the Java input
                                                           fingerprint is unchanged, else
                                                           verify-full
-  ui         tests/ui/, scripts/ui/, scripts/frontend/ -> two UI rounds
-  frontend   frontend/                                 -> a cold UI round, then warm rounds
+  ui         tests/ui/, scripts/ui/, scripts/frontend/ -> two UI rounds (spec/runner self-change)
+  frontend   frontend/                                 -> a cold UI round, then one warm round
   product    super-harness-*/src/main/, pom.xml files, resources/, contracts/, third-party/,
-             anything unrecognised                     -> verify-full and two UI rounds
+             anything unrecognised                     -> verify-full and one UI round (L1 default)
 
 Rule B uses the Java input fingerprint, not the commit: a change whose files are all in the
 fingerprint exclusion list (docs, scripts, tests, root *.md) keeps the last full-gate result
 reusable and gets ``verify-full-reuse``, which needs a real run only when no valid PASS record
 with that fingerprint exists.
 
-Rule D names every UI round ``ui-<model>-round-<n>``: the model is ``live`` unless every changed
-path is inside ``UI_CONTROLLED_PATTERNS``, and ``ui-live`` is forced by any pom.xml, a
-``tests/ui``/``scripts/ui`` spec or runner whose name contains ``live``, server
-run/prompt/tool/config, main resources, other module src/main/, an SDK identity change since
-the merge base, or a path the table does not know.
+Rule D names every UI round ``ui-<model>-round-<n>``: the model is ``live`` only when a changed
+path forces live semantics (run/prompt/tool/config, main resources, pom.xml, live-named UI
+specs/runners, SDK identity change, or an unknown path). Protocol/projection surfaces
+(server api/, auth/, events, workspace) stay ``controlled`` so L1 daily PRs can use the
+controlled model plus contract tests. Dual-backend differential is L2 (work-package exit),
+not emitted here as a default PR gate.
 
 The output is advice for executor and controller. It runs nothing, and a reviewer may always
-ask for more.
+ask for more (including promoting a round to x2 or requiring L2 dual-backend).
 
     python scripts/governance/change_scope.py [--repo <root>] [--base main]
 """
@@ -57,11 +59,17 @@ RULES = (
     ("scripts", re.compile(r"^(scripts|tests/checks|build-support|\.mvn)/|^mvnw(\.cmd)?$|^tests/known-intermittent\.json$")),
 )
 
-# Rule D: which model a formal UI round must use. Default is the real model; a change stays
-# controlled only when every changed path is inside the controlled table. Each entry is data,
-# not logic, so the controller can review and adjust the boundary in one place. A path that
-# matches no controlled entry (including an unknown/new directory) forces the real model.
+# Rule D: which model a formal UI round must use. Default for protocol/projection paths is
+# controlled (L1). Live is forced only by the live table, a live-named UI file, SDK identity
+# change, or an unknown path. Each entry is data so the controller can adjust the boundary.
 SERVER_API_PREFIX = "super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/"
+# Checked before UI_LIVE_PATTERNS so protocol surfaces are not swallowed by "other src/main/".
+UI_PROTOCOL_CONTROLLED_PATTERNS = (
+    ("server api/", re.compile(r"^super-harness-server/src/main/java/.*/server/api/")),
+    ("server auth protocol", re.compile(r"^super-harness-server/src/main/java/.*/server/auth/")),
+    ("event projection", re.compile(r"^super-harness-events/")),
+    ("workspace protocol", re.compile(r"^super-harness-workspace/")),
+)
 UI_CONTROLLED_PATTERNS = (
     ("docs/ or any *.md", re.compile(r"(^docs/|\.md$)")),
     ("scripts/", re.compile(r"^scripts/")),
@@ -96,6 +104,9 @@ def classify_ui_path(path: str) -> tuple[str, str | None]:
         return "live", f"{path}: spec/runner 文件名含 live"
     if normalized.startswith(SERVER_API_PREFIX):
         return "controlled", None
+    for reason, pattern in UI_PROTOCOL_CONTROLLED_PATTERNS:
+        if pattern.search(normalized):
+            return "controlled", None
     for reason, pattern in UI_LIVE_PATTERNS:
         if pattern.search(normalized):
             return "live", f"{path}: {reason}"
@@ -142,8 +153,12 @@ def required_gates(files: list[str], sdk_identity_changed: bool = False) -> list
         gates.append("verify-full-reuse")
     if "frontend" in classes:
         gates.append("ui-cold-round")
-    if classes & {"product", "ui", "frontend"}:
+    # L1 default: one warm round for product/frontend. Two rounds only when UI specs/runners
+    # themselves change (flaky surface / self-test), or when a reviewer promotes the gate.
+    if "ui" in classes:
         gates.append(f"ui-{model}-round-x2")
+    elif classes & {"product", "frontend"}:
+        gates.append(f"ui-{model}-round-x1")
     elif "scripts" in classes and shared_scripts:
         gates.append(f"ui-{model}-round-x1")
     return gates
@@ -217,6 +232,11 @@ def main(argv: list[str] | None = None) -> int:
                 "uiModel": model,
                 "uiModelReason": model_reason,
                 "gates": required_gates(files, sdk_changed),
+                "acceptanceTier": {
+                    "dailyPr": "L1",
+                    "dualBackend": "L2-work-package-exit",
+                    "customerDemo": "L3",
+                },
             },
             indent=2,
         )

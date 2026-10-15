@@ -14,7 +14,7 @@ if ([string]::IsNullOrWhiteSpace($SourceRepository)) {
 }
 
 $sourcePath = [System.IO.Path]::GetFullPath($SourceRepository)
-$haifaBom = Join-Path $sourcePath 'io\haifa\haifa-agent-bom\0.1.2-SNAPSHOT\haifa-agent-bom-0.1.2-SNAPSHOT.pom'
+$haifaBom = Join-Path $sourcePath 'io\haifa\haifa-agent-bom\0.1.3-SNAPSHOT\haifa-agent-bom-0.1.3-SNAPSHOT.pom'
 if (-not (Test-Path -LiteralPath $haifaBom -PathType Leaf)) {
     throw "Published Haifa BOM not found in Maven repository: $haifaBom"
 }

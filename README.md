@@ -1,7 +1,7 @@
 # Haifa Super Harness
 
 本仓库是冻结 DeerFlow 对齐项目的独立 Java 21 产品工程。项目只通过 Maven 仓库中已发布的
-`io.haifa:haifa-agent-bom:0.1.2-SNAPSHOT` 及公开 JAR 消费 Haifa Agent，不依赖 Haifa Agent 源码目录。
+`io.haifa:haifa-agent-bom:0.1.3-SNAPSHOT` 及公开 JAR 消费 Haifa Agent，不依赖 Haifa Agent 源码目录。
 Super Harness 直接复用冻结的 DeerFlow 前端，并以 Haifa Agent 作为唯一 Agent Runtime，兼容其真实
 REST/SSE/WS/文件/auth 协议。冻结 DeerFlow 固定为
 `bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294`，不随 `main` 漂移。
@@ -197,7 +197,7 @@ SDK 版本规则见 `AGENTS.md`「范围与依赖」。工作包 worktree 消费
 跟踪的 `local-tmp/sdk-selection.json`：
 
 ```json
-{ "haifaVersion": "0.1.2-<worktree>-SNAPSHOT" }
+{ "haifaVersion": "0.1.3-<worktree>-SNAPSHOT" }
 ```
 
 `test-targeted.ps1` 与 UI runner 读取它并传 `-Dhaifa.version`；文件不存在时使用基线并输出
@@ -207,7 +207,9 @@ SDK 版本规则见 `AGENTS.md`「范围与依赖」。工作包 worktree 消费
 生成只含 public/protected 签名的摘要到 `local-tmp/sdk-api/<版本>/`；执行者读该摘要而不访问本地 Maven 仓库，
 SDK 重新发布后重跑脚本。
 
-流水线辅助脚本：
+流水线辅助脚本（验收分 **L1 日常 PR** / **L2 工作包双后端差分** / **L3 客户演示**，见
+[AGENTS.md「验收分层」](AGENTS.md) 与 [功能交付流程](docs/engineering/002-feature-delivery-workflows.md)；
+`change_scope.py` 只输出 L1 下限，`acceptanceTier` 标明双后端属 L2）：
 
 ```powershell
 python scripts/governance/change_scope.py

@@ -7,6 +7,7 @@
 
 - 更新时刻：<带时区>
 - Task/范围：<SHPM ID；本次交付与延期范围>
+- 验收档位：<L1 日常 / 附带 L2 WP 差分；L3 仅演示>
 - Worktree/branch：<绝对路径；分支>
 - Source：<HEAD SHA；sourceTree 哈希；javaInputFingerprint；dirty路径；最后验证的源码状态>
 - SDK：<selection ABSENT/SELECTED；坐标；sdkIdentity；上游发布清单路径/commit；JAR hash>

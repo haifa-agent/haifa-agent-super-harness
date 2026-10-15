@@ -5,10 +5,25 @@
 | **文档编号** | 002 |
 | **主题** | Super Harness 纯产品功能与跨 SDK 功能的交付顺序、门禁和结算条件 |
 | **适用仓库** | `D:\workspace\haifa-agent-super-harness`、`D:\workspace\haifa-agent` |
-| **更新日期** | 2026-10-06 |
+| **更新日期** | 2026-10-15 |
 | **依据规范** | [AGENTS.md](../../AGENTS.md)、[Runtime / Product Boundary](../runtime-product-boundary.md)、[SHPM 使用手册](../shpm-manual.md)，以及上游 `AGENTS.md`、`build-support/README.md` |
 
 本文是操作索引；具体任务的 Oracle、必需门禁和人工验收要求以当前派单、Roadmap 35 / PRD 及上述规则为准。脚本建议、局部 PASS 和候选 SDK 证据不能自动提升任务、工作包或阶段为 `PASS` / `GO`。
+
+验收分三档（详见 [AGENTS.md「验收分层」](../../AGENTS.md)）：**L1** 日常 PR（`change_scope` 门禁，默认一轮 UI）；**L2** 工作包出口双后端差分（不默认挂每个 PR）；**L3** 客户演示同 SHA 连续双轮。下列流程一默认按 L1 合入；L2/L3 在工作包或演示阶段另行安排。
+
+```mermaid
+flowchart LR
+    DEV["实现切片"] --> L1["L1 日常 PR<br/>change_scope 下限<br/>一轮 UI；无默认双后端"]
+    L1 --> MERGE["squash 合入 main"]
+    MERGE --> WP{"工作包出口？"}
+    WP -->|"是"| L2["L2 双后端差分<br/>冻结前端 + Haifa / 参考后端攒批"]
+    WP -->|"否"| NEXT["继续下一 L1 切片"]
+    L2 --> DEMO{"演示阶段结算？"}
+    DEMO -->|"是"| L3["L3 同主线 SHA<br/>连续两轮整链 → sprint decide GO"]
+    DEMO -->|"否"| NEXT
+    L3 --> NEXT
+```
 
 ## 0. 先判定能力归属
 
@@ -25,62 +40,69 @@
 
 ## 1. 流程一：纯 Super Harness 产品交付
 
-适用于无需修改上游 SDK 的产品功能，默认消费已发布的 `0.1.2-SNAPSHOT` 基线。
+适用于无需修改上游 SDK 的产品功能，默认消费已发布的 `0.1.3-SNAPSHOT` 基线。
 
-### 1.1 流程图
+### 1.1 流程图（L1 日常合入主链）
+
+本图是**单个日常 PR** 的路径。双后端差分与演示 GO **不在**本链上；任务结束后见右侧 L2/L3。
 
 ```mermaid
 flowchart TD
     R["需求 / Roadmap / PRD"] --> B{"能力归属明确？"}
     B -->|"否"| A["停止新增领域实现，进行架构裁决"]
-    B -->|"产品层，无 SDK 缺口"| P["编写提示词；核对 SHPM 与依赖"]
-    P --> D["主控分配独立 branch/worktree、槽位和 data-root<br/>使用 shpm_dispatch 登记 start / assign"]
-    D --> E["完整端口组实际绑定预检与环境准备"]
-    E --> I["实现 → 定向测试 / 单 case 冒烟 → 集中自审"]
+    B -->|"产品层，无 SDK 缺口"| P["编写提示词；核对 SHPM 与依赖<br/>标明本任务 L1；L2 是否延后到 WP"]
+    P --> D["主控分配独立 branch/worktree、槽位和 data-root<br/>shpm_dispatch：start / assign"]
+    D --> E["完整端口组绑定预检与环境准备"]
+    E --> I["实现 → 定向测试 / 合同 / 单 case 冒烟 → 集中自审"]
     I --> F{"内环是否通过？"}
     F -->|"产品 FAIL，先保存原件"| FIX["按根因集中修复"]
     FIX --> I
     F -->|"前置不足"| BLOCK["保留 FAIL / NOT_RUN / BLOCKED_EXTERNAL<br/>登记影响；继续独立用例或修复前置"]
     BLOCK --> E
-    F -->|"是"| PR["推送分支并开 PR（不用 draft）<br/>此时不代表任何门禁通过"]
-    PR --> BOT["一次性读取机器人审查并集中处理<br/>最多等 10 分钟，超时记 NO_REVIEW_YET<br/>REVIEW_FAILED 可重新触发一次"]
+    F -->|"是"| PR["推送并开 PR（不用 draft）<br/>写明 L1 未跑完 / L2 延后到 WP"]
+    PR --> BOT["一次性读机器人审查并集中处理<br/>最多等 10 分钟；不阻塞已就绪的 L1 排队"]
     BOT --> FIXCAND["按根因攒批修复"]
-    FIXCAND --> REBASE["按主控要求 rebase 到最新 main<br/>固定候选源码 SHA / SDK / 断言，此后不再 amend / rebase"]
-    REBASE --> PLAN["change_scope.py 的 gates / uiModel 作为门禁下限<br/>主控复核 Oracle→断言→前置→原件映射"]
-    PLAN --> PRE["正式预检；clean / 重跑前外置保存需保留原件"]
-    PRE --> G["主控排队：自己执行或放行正式门禁<br/>按 gates 跑全仓门禁、冷轮、暖轮及真实 smoke"]
-    G --> CHECK{"必需门禁是否全部通过？"}
-    CHECK -->|"产品 FAIL，先归档"| FIX
-    CHECK -->|"前置不足或必需 NOT_RUN"| BLOCK
-    CHECK -->|"是"| REPORT["交付报告 → task deliver<br/>进入 ready_for_acceptance"]
-    REPORT --> RECORD["主控登记真实门禁结果与候选 SHA"]
-    RECORD --> REVIEW["主控独立复审与验收，核对合入条件"]
+    FIXCAND --> REBASE["rebase 到最新 main<br/>固定候选 SHA / SDK / 断言"]
+    REBASE --> PLAN["change_scope → L1 gates / uiModel<br/>小切片：任务卡 3～5 条原子断言"]
+    PLAN --> PRE["L1 预检；clean/重跑前外置保存原件"]
+    PRE --> G["L1 门禁：verify-full 或复用<br/>冷轮若需；默认一轮暖轮<br/>内环已覆盖且绑最终 SHA → 主控抽检可计正式<br/>不含双后端"]
+    G --> CHECK{"L1 必需门禁通过？"}
+    CHECK -->|"FAIL"| FIX
+    CHECK -->|"前置不足 / NOT_RUN"| BLOCK
+    CHECK -->|"是"| REPORT["deliver → ready_for_acceptance<br/>交接注明 L2 是否 WP 出口再跑"]
+    REPORT --> RECORD["登记 L1 证据与候选 SHA"]
+    RECORD --> REVIEW["主控独立复审"]
     REVIEW --> RC{"复审通过？"}
-    RC -->|"否，保留阻断"| HOLD["主控登记问题并确定返工 / 前置恢复<br/>在独立 worktree 修复后重新交付；不 accept"]
+    RC -->|"否"| HOLD["登记阻断；独立 worktree 返工；不 accept"]
     HOLD --> I
-    RC -->|"是"| MERGE{"合入后 main 的源码树哈希与 SDK 身份<br/>与已验证候选一致？"}
-    MERGE -->|"是"| FF["合入（squash merge）；evidence_reuse.py 逐份核对<br/>全部 REUSABLE 时复用门禁与 UI 结果"]
-    MERGE -->|"否，或任一证据 STALE"| NEW["在最终合入 SHA 上重跑必需门禁<br/>追加证据并由主控复审"]
-    NEW --> NC{"最终 SHA 门禁与复审通过？"}
+    RC -->|"是"| MERGE{"合入后树哈希 + SDK 身份<br/>与候选一致？冲突感知复用"}
+    MERGE -->|"全部 REUSABLE"| FF["squash 合入 main"]
+    MERGE -->|"有 STALE / 冲突"| NEW["只重跑指纹变化、路径冲突或 STALE 项"]
+    NEW --> NC{"最终 SHA 门禁通过？"}
     NC -->|"否"| HOLD
-    NC -->|"是"| SMOKE["刷新固定主服务 18018/33018<br/>真实 smoke 并登记最终主线证据"]
+    NC -->|"是"| SMOKE["刷新主服务 18018/33018 + smoke"]
     FF --> SMOKE
-    SMOKE --> SC{"主服务 smoke 通过？"}
+    SMOKE --> SC{"smoke 通过？"}
     SC -->|"否"| HOLD
-    SC -->|"是"| ACCEPT["主控 task accept<br/>确认本任务进程与端口清理，assign release"]
-    ACCEPT --> FIN["任务 finished<br/>工作包 / 演示阶段 / GO 分别验收结算"]
+    SC -->|"是"| ACCEPT["task accept；清理端口；assign release"]
+    ACCEPT --> DONE["L1 任务 finished"]
+    DONE --> WP{"工作包出口要 L2？"}
+    WP -->|"否"| IDLE["等待下一 L1 切片<br/>演示 L3 另按 sprint 结算"]
+    WP -->|"是"| L2["L2：冻结前端双后端差分攒批<br/>Haifa vs 参考后端；不回头改写本 PR 门禁"]
+    L2 --> WPDONE["WP 差分证据登记后<br/>再 wp ready_for_acceptance / complete"]
+    WPDONE --> IDLE
 ```
 
 ### 1.2 开发与正式验收
 
-1. **派工与资源**：先确认任务依赖、独立 branch/worktree、基线 SHA、完整槽位端口和独立 `data-root`。子智能体槽位共四个：槽位 1 `20618/25618`、槽位 2 `30618/35618`、槽位 3 `40618/45618`、槽位 4 `11618/16618`，同一时刻每槽仅一任务。开发服务不占用主端口 `18018/33018`。启动前检查动态/排除端口范围，并对完整端口组实际绑定预检；不能只查监听表。
-2. **内环**：执行者实现后运行受影响定向测试和必要的单 case UI，集中自审、按根因攒批修复，再进入稳定候选正式门禁。UI spec/fixture 变更先用 `-CaseTitle '<完整标题>'` 跑受影响 case。局部结果和 `-PreflightOnly` 不代替全套验收。commit/push 前只要求范围内定向测试、`git diff --check`、secret scan 和 SDK 基线检查。
-3. **候选 SHA 与正式门禁**：机器人审查意见处理完后，按主控要求 rebase 到最新 `main`，固定候选 SHA、SDK 构件和断言；候选固定后不再 amend/rebase，除非主控明确要求。全仓门禁、正式 UI 轮次和慢测试是正式门禁，由主控排队：主控自己执行，或明确放行后由执行者在自己的槽位执行；未运行的记 `NOT_RUN`。门禁和真实 smoke 须在报告可合并前完成。源码、SDK 构件或断言改变后，重跑受影响门禁，不沿用失效 PASS；交付证据须绑定最终候选提交，不能用 dirty 状态的结果证明最终 SHA。
-4. **PR 与机器人审查**：内环稳定后先把分支推送到远端并开 PR。PR 以可审查状态打开，不用 draft：机器人只在 PR 打开、draft 转 ready 或评论 `@codex review` 时审查。此时的 PR 不代表任何门禁通过，PR 描述须写明正式门禁尚未运行。结论为 `REVIEW_FAILED` 时可以评论一次 `@codex review` 重新触发，仍然失败就如实记录并继续。开 PR 后最多等机器人审查 10 分钟，超时按 `NO_REVIEW_YET` 记录并继续，不无界等待。审查意见只处理一轮：正确的采纳，不采纳的各写一句理由，不再主动请求重新审查。按根因攒批修复后固定候选提交，再进入正式门禁；正式门禁通过后才出现的新意见，只有确认会导致错误行为时才修改并重跑受影响门禁，其余登记为后续事项。向人工报告 PR 可合并之前，必须运行 `scripts/governance/pr_review_digest.py` 并给出结论。
-5. **Oracle 与预检**：昂贵全仓构建或双后端 UI 之前，列出 `Oracle case → 实际断言 → 必需前置条件 → 预期原始证据`，由主控复核关键正反例。正式 UI 一次性核对冻结来源、SDK 实际落盘构件、前端依赖与浏览器、完整端口组、独立数据/凭据、Provider、Gateway 和前端代理目标。已存在资源的跨身份拒绝不能由不存在资源的 404 替代。
+1. **派工与资源**：先确认任务依赖、独立 branch/worktree、基线 SHA、完整槽位端口和独立 `data-root`，以及本任务是 **L1 日常** 还是附带 **L2 WP 差分**。子智能体槽位共四个：槽位 1 `20618/25618`、槽位 2 `30618/35618`、槽位 3 `40618/45618`、槽位 4 `11618/16618`，同一时刻每槽仅一任务。开发服务不占用主端口 `18018/33018`。启动前检查动态/排除端口范围，并对完整端口组实际绑定预检；不能只查监听表。
+2. **内环 / L1**：执行者实现后运行受影响定向测试和必要的单 case UI，集中自审、按根因攒批修复。当这些结果覆盖 `change_scope` 的 L1 gates 且证据绑定最终候选 SHA 时，主控抽检后可计为正式 L1，无需为同一 gates 再整套重跑。UI spec/fixture 变更先用 `-CaseTitle '<完整标题>'` 跑受影响 case。`-PreflightOnly` 与未覆盖项不能冒充正式门禁。commit/push 前只要求范围内定向测试、`git diff --check`、secret scan 和 SDK 基线检查。
+3. **候选 SHA 与 L1 门禁**：机器人审查意见处理完后，按主控要求 rebase 到最新 `main`，固定候选 SHA、SDK 构件和断言；候选固定后不再 amend/rebase，除非主控明确要求。`verify-full`、正式 UI（默认一轮）由主控排队或放行后在执行者槽位执行；未运行的记 `NOT_RUN`。L1 门禁须在报告可合并前完成；**双后端差分不是 L1 默认项**。源码、SDK 构件或断言改变后，重跑受影响门禁；交付证据须绑定最终候选提交。
+4. **PR 与机器人审查**：内环稳定后先把分支推送到远端并开 PR。PR 以可审查状态打开，不用 draft。PR 描述写明 L1 门禁状态，以及 L2 是否延后到工作包出口。结论为 `REVIEW_FAILED` 时可以评论一次 `@codex review` 重新触发。开 PR 后最多等机器人 10 分钟，超时按 `NO_REVIEW_YET` 记录并继续；不因审查等待阻塞已就绪的 L1 门禁。审查意见只处理一轮。向人工报告 PR 可合并之前，必须运行 `scripts/governance/pr_review_digest.py` 并给出结论。
+5. **Oracle 与预检**：L1 小切片用任务卡 3～5 条原子断言。昂贵全仓或 **L2 双后端** 之前，仍列出 `Oracle case → 实际断言 → 必需前置 → 预期原件`，由主控复核关键正反例。正式 UI 一次性核对冻结来源、SDK 落盘构件、前端依赖与浏览器、完整端口组、独立数据/凭据、Provider、Gateway 和前端代理目标。已存在资源的跨身份拒绝不能由不存在资源的 404 替代。
 6. **原件与失败**：任何 `mvn clean` 或重跑之前，将需保留的 trace、截图及前后端/Provider 原始日志复制到该工作包外置证据目录，记录原路径和复制路径。首次 FAIL 永久保留；`NOT_RUN` 写明缺失前置。前置失效只停止受影响批次，独立用例继续；批次内不边测边改产品，结束后归并根因修复。不得放宽断言或缩改 Oracle 换取绿灯；确需裁剪某条 Oracle 时，须经人工逐项批准并在 SHPM 登记为已知差异。
 
-门禁范围以 `python scripts/governance/change_scope.py` 输出的 `gates` 和 `uiModel` 为准，混合改动由脚本取并集；改动路径到门禁的分类表只在该脚本里维护，本文不再抄写。输出是下限，须对照任务 Oracle 复核，主控或复审可以要求更多。`gates` 里各项的含义：
+门禁范围以 `python scripts/governance/change_scope.py` 输出的 `gates`、`uiModel` 和 `acceptanceTier` 为准，混合改动由脚本取并集；改动路径到门禁的分类表只在该脚本里维护。输出是 **L1 下限**，须对照任务 Oracle 复核，主控或复审可以要求更多（含 `x2` 或 L2）。`gates` 里各项的含义：
 
 | `gates` 项 | 含义 |
 | --- | --- |
@@ -89,73 +111,80 @@ flowchart TD
 | `verify-full` | Java 输入指纹已变，全仓门禁须真跑 |
 | `verify-full-reuse` | Java 输入指纹未变，只需存在同指纹的真实通过摘要；`verify-full.ps1` 自动复用并注明来源，没有时真跑一次 |
 | `ui-cold-round` | 冷轮，单独启动 |
-| `ui-<model>-round-x2` | 同一提交上两次暖轮，用同脚本重复运行区分稳定问题与偶发问题 |
-| `ui-<model>-round-x1` | 一轮暖轮，通过即可；失败须先用同一脚本重跑一次再定位 |
+| `ui-<model>-round-x1` | **L1 默认**：一轮暖轮，通过即可；失败须先用同一脚本重跑一次再定位 |
+| `ui-<model>-round-x2` | 仅 UI 用例/runner 自身变更（或主控提升）时两次暖轮 |
 
-`<model>` 为 `live` 时使用真实模型，仅当改动全部落在脚本的受控表内时为 `controlled`（脚本内分别称 Rule B、Rule D）。除 `gates` 含 `ui-cold-round` 外，冷轮也在前端依赖、槽位、代理目标变化或构建戳失效时执行；新 worktree 无构建戳时首轮自然为冷轮。同一提交上的重复运行可以在一次启动内完成（`-Passes 2 -SkipBuild`），仅限 runner 里已验证可重复的 profile。局部冒烟及另一 SHA 的结果不能替代必需轮次。
+`<model>` 为 `controlled` 时用受控模型（协议/投影面及文档脚本测试等，见脚本表）；为 `live` 时用真实模型（run/prompt/tool/config、主资源、pom、live 文件名、SDK 身份变化、未知路径）。除 `gates` 含 `ui-cold-round` 外，冷轮也在前端依赖、槽位、代理目标变化或构建戳失效时执行；新 worktree 优先恢复共享前端缓存，否则首轮为冷轮。同一提交上的重复运行可以在一次启动内完成（`-Passes 2 -SkipBuild`），仅限已验证可重复的 profile。
 
-每轮报告准备/构建、就绪、断言、归档、复审及返工耗时，启动与总耗时、重试、首个超时/卡点、Next 动态编译时间、trace/截图/日志位置及端口/子进程清理结果。等待必须有对象、deadline 和超时证据；重型构建、UI 与共享 Provider 由主控排队。
+每轮报告准备/构建、就绪、断言、归档、复审及返工耗时，启动与总耗时、重试、首个超时/卡点、Next 动态编译时间、trace/截图/日志位置及端口/子进程清理结果。等待必须有对象、deadline 和超时证据；全仓、双后端、live UI 与共享 Provider 由主控排队；跨槽位定向测试与受控单后端 UI 可并行。
 
 真实 smoke 的断言和必需 Run/Tool/Artifact/Approval 证据按任务范围确定。需要访问真实 Provider 时先确认当前任务的授权与凭据；未授权或前置不足如实记 `NOT_RUN`，不私自运行，也不以本地 fixture 替代真实模型门禁。
 
 ### 1.3 合入、复用与 SHPM 结算
 
-- **合入后复用**：合入方式不限（本仓库 PR 一律 squash merge）；合入后 `main` 的源码树哈希和 SDK 身份与已验证候选相同即可复用，用 `python scripts/governance/evidence_reuse.py --target <合入后提交> <证据>` 逐份核对，全部 `REUSABLE` 才复用，`STALE` 一律在合入后的提交上重跑。全仓门禁用 Java 输入指纹判定，脚本回归摘要和 UI 证据用 `sourceTree` + `sdkIdentity` + `sourceDirty=false` 判定；缺字段的旧证据记为 `STALE`。若相应门禁按范围不适用，应在交接中写明依据。客户演示“同一主线 SHA 连续两轮 L3”不受此裁剪影响。
+- **合入后复用**：合入方式不限（本仓库 PR 一律 squash merge）；合入后 `main` 的源码树哈希和 SDK 身份与已验证候选相同即可复用，用 `python scripts/governance/evidence_reuse.py --target <合入后提交> <证据>` 逐份核对，全部 `REUSABLE` 才复用。并行合入时采用冲突感知：指纹未变可复用 `verify-full`；仅对路径冲突或 `STALE` 项重跑。全仓门禁用 Java 输入指纹判定，脚本回归摘要和 UI 证据用 `sourceTree` + `sdkIdentity` + `sourceDirty=false` 判定；缺字段的旧证据记为 `STALE`。客户演示“同一主线 SHA 连续两轮 L3”不受 L1/L2 裁剪影响。
 - **构建复用**：后端比较 Java 输入指纹（排除 `docs/`、`tests/`、`scripts/`、根目录 `*.md` 后的源码树，加每个 Haifa JAR 的 SHA-256 身份及 JDK/Maven 版本），前端检查冻结源码树、lockfile、代理目标和构建 profile。复用产物不复用 Run、Thread 或数据目录；测试结果能否复用只按上一条和全仓门禁的指纹复用判断。SDK 同版本重新发布后的重建见 §2.2。
+- **L2 工作包差分**：工作包出口或相关合入批次再跑冻结前端双后端差分；不作为每个日常 PR 的默认 gates。SHPM 登记时区分 L1 与 L2 证据。
 - **状态链**：主控按 `start / assign → checkpoint → deliver → verify → 独立验收 → accept / release` 推进。`deliver` 只进入 `ready_for_acceptance`；`accept` 需要独立复审、已合入及最终主线 SHA 证据，之后确认本任务端口和子进程清理并释放派工。复审失败保留必需 FAIL 和阻断 Issue，合法返工状态处理按 SHPM 手册执行，不虚假 accept。
-- **分开结算**：单任务 finished 不等于工作包完成。全部任务及工作包退出条件满足后，主控再执行 `wp state ready_for_acceptance` / `wp complete`；演示阶段另查依赖、登记阶段验证与结果，`GO` 通过 `sprint decide` 设置，不自动关闭长期工作包。
+- **分开结算**：单任务 finished 不等于工作包完成，也不等于 L2 差分已做。全部任务及工作包退出条件（含约定的 L2）满足后，主控再执行 `wp state ready_for_acceptance` / `wp complete`；演示阶段另查依赖、登记阶段验证与结果，`GO` 通过 `sprint decide` 设置，不自动关闭长期工作包。
 
 ## 2. 流程二：跨 Haifa Agent SDK 协同交付
 
 本流程在流程一的资源、Oracle、证据和 SHPM 规则之上增加上游开发、候选 SDK 消费及正式基线回归。
 
-### 2.1 流程图
+### 2.1 流程图（上下游协同；下游按 L1，差分按 L2）
+
+上下游像蟹爪分叉再汇合：左侧上游 SDK，右侧下游 Super Harness。下游日常证明走 **L1**（候选 SDK 与切回基线各跑一次）；**双后端差分仍是 L2**，不挂在候选验证默认链上。图中「上游同 SHA L3」指 **Haifa Agent SDK 门禁**，不是客户演示 L3。
 
 ```mermaid
 flowchart TD
-    GAP["主控确认通用 Runtime 缺口与上下游任务依赖"] --> INIT["编写提示词、建立 SHPM 任务<br/>分配上下游独立 worktree 与下游槽位"]
-    INIT --> U_WT["上游从最新 origin/dev 建 feat-* worktree<br/>禁止直接修改 dev"]
-    U_WT --> U_DEV["SDK 开发 → 定向测试 → 集中自审"]
-    U_DEV --> U_TEST["固定上游提交，执行同 SHA L3<br/>Integration 按任务范围、前置和授权执行"]
-    U_TEST --> U_PUB["clean worktree 运行 publish-local-sdk.ps1<br/>发布带 worktree 标识坐标，核对清单 / SDK commit / hash"]
-    U_PUB --> U_PR["feat-* 向 dev 发起英文 GitHub PR<br/>主控登记 PR、问题与验证状态"]
-    U_PUB --> D_SELECT["主控指定下游 sdk-selection.json<br/>记录发布来源与实际落盘构件"]
-    D_SELECT --> D_CODE["下游适配 → 定向测试 / 单 case → 集中自审"]
-    D_CODE --> D_PLAN["固定候选 SHA；主控复核 Oracle 与完整预检"]
-    D_PLAN --> D_GATE["候选 SDK 上执行必需门禁<br/>按范围运行 UI、双后端差分与真实 smoke"]
-    D_GATE --> D_CHECK{"候选验证通过？"}
-    D_CHECK -->|"下游产品 FAIL，先保存原件"| D_CODE
+    GAP["主控确认 Runtime 缺口与上下游依赖"] --> INIT["提示词 + SHPM<br/>上下游独立 worktree；下游槽位"]
+    INIT --> U_WT["上游：origin/dev → feat-* worktree<br/>禁止直接改 dev"]
+    U_WT --> U_DEV["SDK 开发 → 定向测试 → 自审"]
+    U_DEV --> U_TEST["固定上游提交<br/>上游同 SHA L3（SDK 门禁）<br/>Integration 按范围/授权"]
+    U_TEST --> U_PUB["publish-local-sdk.ps1<br/>带 worktree 标识坐标；核对清单/hash"]
+    U_PUB --> U_PR["feat-* → dev 英文 PR<br/>主控登记；不自动合并"]
+    U_PUB --> D_SELECT["下游：主控写 sdk-selection.json"]
+    D_SELECT --> D_CODE["下游适配 → 定向/单 case → 自审"]
+    D_CODE --> D_PLAN["固定下游候选 SHA<br/>L1：change_scope + 原子断言<br/>昂贵项才做完整 Oracle"]
+    D_PLAN --> D_GATE["候选 SDK 上跑 L1 门禁<br/>全仓/复用、默认一轮 UI、真实 smoke（按范围）<br/>不含默认双后端"]
+    D_GATE --> D_CHECK{"候选 L1 通过？"}
+    D_CHECK -->|"下游产品 FAIL"| D_CODE
     D_CHECK -->|"主控确认 SDK 缺陷"| U_DEV
-    D_CHECK -->|"前置不足"| WAIT["保留 FAIL / NOT_RUN / BLOCKED_EXTERNAL<br/>恢复受影响前置后重验"]
+    D_CHECK -->|"前置不足"| WAIT["FAIL / NOT_RUN / BLOCKED_EXTERNAL<br/>恢复前置后重验"]
     WAIT --> D_PLAN
-    D_CHECK -->|"是"| PROOF["记录候选证据并补充上游 PR<br/>仅证明候选分支"]
-    U_PR --> REVIEW["主控核对 PR 与候选证据，提醒人工审查"]
+    D_CHECK -->|"是"| PROOF["记录候选 L1 证据<br/>仅证明候选分支"]
+    U_PR --> REVIEW["主控核对上游 PR + 候选证据<br/>提醒人工审查"]
     PROOF --> REVIEW
-    REVIEW --> HUMAN["等待人工审查合并 SDK PR<br/>智能体仅在针对该 PR 的另行书面授权下可合并"]
-    HUMAN --> BASE["上游主检出更新到已合入的 dev<br/>重新发布 0.1.2-SNAPSHOT，核对新发布清单"]
-    BASE --> RESTORE["下游删除 sdk-selection.json<br/>核对基线版本及实际构件 / hash"]
-    RESTORE --> REBASE["最终门禁前 rebase 到最新 main<br/>固定下游最终候选 SHA"]
-    REBASE --> FINAL["外置保存原件；重新构建 SDK 消费方后端<br/>基线上重跑必需全仓、UI、协议与真实 smoke"]
-    FINAL --> FC{"正式基线必需门禁通过？"}
-    FC -->|"FAIL 或必需 NOT_RUN"| ISSUE["保留证据并登记根因<br/>恢复前置或修复下游；SDK 缺陷由主控确认后回上游"]
+    REVIEW --> HUMAN["等待人工合并 SDK PR<br/>无针对该 PR 的书面授权则智能体不合并"]
+    HUMAN --> BASE["上游主检出跟到已合入 dev<br/>重发 0.1.3-SNAPSHOT 基线"]
+    BASE --> RESTORE["下游删除 sdk-selection.json<br/>核对基线坐标与落盘 hash"]
+    RESTORE --> REBASE["rebase 最新 main<br/>固定下游最终候选 SHA"]
+    REBASE --> FINAL["重建消费方后端<br/>基线上重跑 L1：全仓、一轮 UI、协议、smoke<br/>仍不含默认双后端"]
+    FINAL --> FC{"基线 L1 通过？"}
+    FC -->|"FAIL / NOT_RUN"| ISSUE["保留证据；修下游或回上游"]
     ISSUE --> D_CODE
-    ISSUE -->|"主控确认 SDK 缺陷"| U_DEV
-    FC -->|"是"| DELIVERY["报告 → deliver → 登记基线证据<br/>主控独立复审"]
-    DELIVERY --> MERGE["按流程一「合入后复用」核对并合入<br/>源码树哈希或 SDK 身份改变须重验，未通过不结算"]
-    MERGE --> SMOKE["刷新固定主服务并运行真实 smoke"]
-    SMOKE --> SC{"独立复审、最终 SHA 门禁与 smoke 全部通过？"}
-    SC -->|"否，保留阻断并返工"| ISSUE
-    SC -->|"是"| FIN["主控 accept；清理并 release<br/>工作包 / 阶段分别结算"]
+    ISSUE -->|"SDK 缺陷"| U_DEV
+    FC -->|"是"| DELIVERY["deliver → 登记基线 L1 证据<br/>主控独立复审"]
+    DELIVERY --> MERGE["按流程一冲突感知复用后合入"]
+    MERGE --> SMOKE["刷新主服务 + smoke"]
+    SMOKE --> SC{"复审 + 最终 SHA + smoke 通过？"}
+    SC -->|"否"| ISSUE
+    SC -->|"是"| ACCEPT["accept；清理；release<br/>下游 L1 任务 finished"]
+    ACCEPT --> WP{"工作包出口要 L2？"}
+    WP -->|"否"| IDLE["演示 L3 / GO 另按 sprint"]
+    WP -->|"是"| L2["L2：冻结前端双后端差分攒批<br/>与候选/基线 L1 证据分开登记"]
+    L2 --> IDLE
 ```
 
 ### 2.2 跨仓核心约束
 
 1. **上游分支与验证**：在 `D:\workspace\haifa-agent` 从最新 `origin/dev` 创建 `feat-*` 分支，worktree 放在 `D:\workspace\haifa-agent-worktrees\`；不在 `dev` 上开发。先做受影响定向验证，再按上游规则完成同一 SHA 的 L3 `-Pci-fast clean verify`。Integration 必须有同 SHA Unit PASS，并核对测试配置、显式开关与当前任务授权；不能将任意 `ci-integration-only` 结果视为全部真实 Provider 用例通过。
-2. **发布与来源**：只有 `scripts/publish-local-sdk.ps1` 可向本地 Maven 仓库发布 SDK；发布要求工作树 clean。特性 worktree 坐标为 `0.1.2-<worktree 目录名>-SNAPSHOT`，基线 `0.1.2-SNAPSHOT` 只由上游主检出的 `dev` 发布。按实际 `haifa-sdk-publish-manifest.json` 核对版本、`sdkCommit`、分支、worktree 和公开构件 hash/长度，并核对 BOM/POM；公开模块清单以发布脚本当前分类为准，不把历史构件数量当作永久常量。发布脚本跳过测试，其 SUCCESS 不替代同 SHA 测试门禁。
+2. **发布与来源**：只有 `scripts/publish-local-sdk.ps1` 可向本地 Maven 仓库发布 SDK；发布要求工作树 clean。特性 worktree 坐标为 `0.1.3-<worktree 目录名>-SNAPSHOT`，基线 `0.1.3-SNAPSHOT` 只由上游主检出的 `dev` 发布。按实际 `haifa-sdk-publish-manifest.json` 核对版本、`sdkCommit`、分支、worktree 和公开构件 hash/长度，并核对 BOM/POM；公开模块清单以发布脚本当前分类为准，不把历史构件数量当作永久常量。发布脚本跳过测试，其 SUCCESS 不替代同 SHA 测试门禁。
 3. **下游选择**：由主控在已分配的下游 worktree 写入 `local-tmp/sdk-selection.json`，执行者不自行更换版本、不用修改 POM 或直接传 `-Dhaifa.version` 来选择候选 SDK。带标识版本不进入被跟踪文件；只能消费公开 JAR/BOM，不依赖 SDK 源码或产品 JAR。
 4. **修改与重发布**：候选 SDK 的问题须由主控验收确认后再修改并重新发布。重发布时版本号可能不变，但服务端构建戳现含每个 Haifa JAR 的 SHA-256 身份，会识别同版本重发布的内容变化并使旧产物不可复用；先保留首次 FAIL，再重新构建消费方后端并重跑受影响门禁。
 5. **人工 PR 卡点**：特性分支向 `dev` 发起英文 GitHub PR，由主控在 SHPM 登记 `verify` / `issue` 和关联状态，提醒人工审查合并。智能体不得自行合并，除非人工针对该具体 PR 另行书面授权。人工合并后，须将上游主检出更新到已合入的 `dev`，再重新发布基线，不能把远端 PR 已合并等同于本机基线已更新。
-6. **基线正式回归**：下游删除 selection，核对新基线发布清单、SDK commit 和实际落盘构件，运行基线版本检查；最终门禁前 rebase 并固定下游 SHA。`verify-full.ps1` 的 `clean verify` 重新构建后端，然后在基线上重跑必需 UI、协议、双后端差分（若任务要求）及真实 smoke。候选 SDK 的 PASS 不替代基线回归；依赖尚未合入上游 `dev` 的分支不得合入下游 `main`。
+6. **基线正式回归（下游 L1）**：下游删除 selection，核对新基线发布清单、SDK commit 和实际落盘构件，运行基线版本检查；最终门禁前 rebase 并固定下游 SHA。`verify-full.ps1` 的 `clean verify` 重新构建后端，然后在基线上重跑 L1 必需项（UI 默认一轮、协议、真实 smoke，按 `change_scope`）。**双后端差分属 L2**，在工作包出口或主控点名时另跑，不作为基线回归默认项。候选 SDK 的 PASS 不替代基线 L1 回归；依赖尚未合入上游 `dev` 的分支不得合入下游 `main`。
 7. **复用边界**：SDK 更新后构建戳因 JAR 身份变化而失效，消费方据此自动重建；带 `-SkipBuild` / `-SkipServerBuild` 强制复用时构建戳不符会直接失败。先通过 `verify-full.ps1` 重建后端，再让 UI runner 使用该新产物。无需清空 Maven 本地仓库，也不无条件清空前端缓存：冻结源码、lockfile、代理目标及 profile 未变且构建戳通过时，runner 可以自动复用前端产物。只改文档、脚本、测试或 UI 用例而不动 Java 输入的提交，Java 输入指纹不变，可复用已有 JAR。每轮仍使用独立数据与新证据。
 
 ## 3. 常用入口与命令模板
@@ -243,7 +272,9 @@ shpm assign release $assignmentId --idempotency-key "$operationKey-release" --js
 | --- | --- | --- |
 | 工作空间 | 下游独立 branch/worktree、端口和数据目录 | 上下游独立特性 worktree；下游独立槽位和数据目录 |
 | SDK | 已发布基线 | 研发期主控指定候选坐标；合入前切回重新发布的基线 |
-| 最终门禁 | 最终 rebase 后的候选 SHA，按范围与 Oracle 执行 | 上游同 SHA 门禁及发布来源；下游正式基线上的最终候选门禁 |
-| 合入前提 | 必需门禁与主控复审通过；最终源码状态与证据一致 | 另要求 SDK PR 已获授权合并入 dev，基线已发布，selection 已删除且基线回归通过 |
-| 产物复用 | 后端按 Java 输入指纹（含 SDK JAR 身份）、前端按独立构建输入匹配；合入后按源码树哈希与 SDK 身份核对 | SDK 同版本重发布使构建戳失效，强制重建消费方后端；前端按独立输入校验 |
-| 结算 | deliver → verify → 独立验收 → accept / release；工作包、阶段与 GO 分开 | 同左；候选 SDK 验证不等于正式基线交付 |
+| L1 日常门禁 | 最终 rebase 后的候选 SHA；`change_scope` 下限（默认一轮 UI） | 上游同 SHA SDK 门禁及发布来源；下游在**候选 SDK**与**切回基线**上各跑一次 L1 |
+| L2 差分 | 工作包出口攒批双后端；不挂每个 PR | 同左；候选/基线 L1 PASS 不等于已做 L2 |
+| L3 演示 | sprint 同主线 SHA 连续双轮；与 L1/L2 分开结算 |
+| 合入前提 | L1 必需门禁与主控复审通过；最终源码状态与证据一致 | 另要求 SDK PR 已获授权合并入 dev，基线已发布，selection 已删除且基线 L1 回归通过 |
+| 产物复用 | 后端按 Java 输入指纹（含 SDK JAR 身份）、前端按独立构建输入匹配；合入后冲突感知复用 | SDK 同版本重发布使构建戳失效，强制重建消费方后端；前端按独立输入校验 |
+| 结算 | deliver → verify → 独立验收 → accept / release；WP（L2）与演示（L3/GO）分开 | 同左；候选 SDK 验证不等于正式基线交付，也不等于 L2 差分 |

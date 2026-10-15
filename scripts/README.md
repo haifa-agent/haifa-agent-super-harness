@@ -89,7 +89,7 @@
 | --- | --- |
 | `audit-work-package-delivery.ps1` | SHPM 与实际交付/worktree 审计 |
 | `audit_disconnected_branches.py` | 用相同文件树连接新旧历史，批量核对旧分支内容并导出未确认差异 |
-| `change_scope.py` | 按 main 以来的改动给出所需门禁（Python）：Rule B 按 Java 输入指纹给出 `verify-full` / `verify-full-reuse`，Rule D 给出 `ui-live-round-*` / `ui-controlled-round-*` |
+| `change_scope.py` | 按 main 以来的改动给出 **L1** 门禁下限（Python）：Rule B 按 Java 输入指纹给出 `verify-full` / `verify-full-reuse`；Rule D 给出 `ui-*-round-x1`（产品/前端默认一轮）或 UI 用例自身变更时的 `x2`；协议面默认 `controlled`；JSON 含 `acceptanceTier`（双后端为 L2，不作为日常 PR 默认门禁） |
 | `evidence_reuse.py` | 只读核对旧证据能否复用（`--target` 逐份判 `REUSABLE`/`STALE`），并供 `verify-full.ps1` 选出同指纹的真实 PASS 摘要（Python） |
 | `pr_review_digest.py` | 只读读取 PR 机器人审查并输出 `botVerdict`/`findings`（Python） |
 | `sdk_api_digest.py` | 从本地仓库 JAR 分批 `javap` 生成 SDK 公开/受保护签名摘要；`sdk_identity()` 供内容指纹复用（Python，主控运行） |
