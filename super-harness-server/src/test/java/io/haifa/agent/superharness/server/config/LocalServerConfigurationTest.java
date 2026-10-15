@@ -4,14 +4,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.net.InetAddress;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import io.haifa.agent.superharness.server.auth.LocalAuthService;
 import java.util.HashMap;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class LocalServerConfigurationTest {
     @Test
-    void explicitLocalModeDefaultsOnlyTheLoopbackAddressAndPort() {
+    void explicitLocalModeDefaultsOnlyTheLoopbackAddressAndPort() throws Exception {
         LocalServerConfiguration configuration =
                 LocalServerConfiguration.fromEnvironment(localEnvironment());
 
@@ -44,6 +46,47 @@ class LocalServerConfigurationTest {
     }
 
     @Test
+    void allowsNonLoopbackBindAddressForLocalAuth() throws Exception {
+        LocalServerConfiguration configuration =
+                new LocalServerConfiguration("local", InetAddress.getByName("0.0.0.0"), 8001, true);
+        assertThat(configuration.localAuth()).isTrue();
+    }
+
+    @Test
+    void localAuthRequiresAnExplicitDataDirectory() {
+        Map<String, String> environment = new HashMap<>();
+        environment.put(LocalServerConfiguration.PROFILE_ENV, "local");
+        environment.put(LocalAuthService.ENABLED, "1");
+        assertThatThrownBy(() -> LocalServerConfiguration.fromEnvironment(environment))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("SUPER_HARNESS_DATA_DIR");
+    }
+
+    @Test
+    void localAuthRefusesALegacyAuthDisabledDataRoot(@org.junit.jupiter.api.io.TempDir Path tempDir)
+            throws Exception {
+        Files.createDirectories(tempDir.resolve("owners/default"));
+        Map<String, String> environment = new HashMap<>();
+        environment.put(LocalServerConfiguration.PROFILE_ENV, "local");
+        environment.put(LocalAuthService.ENABLED, "1");
+        environment.put(LocalServerConfiguration.DATA_DIR_ENV, tempDir.toString());
+        assertThatThrownBy(() -> LocalServerConfiguration.fromEnvironment(environment))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("auth-disabled runtime");
+    }
+
+    @Test
+    void localAuthAcceptsAFreshExplicitDataRoot(@org.junit.jupiter.api.io.TempDir Path tempDir)
+            throws Exception {
+        Map<String, String> environment = new HashMap<>();
+        environment.put(LocalServerConfiguration.PROFILE_ENV, "local");
+        environment.put(LocalAuthService.ENABLED, "1");
+        environment.put(LocalServerConfiguration.DATA_DIR_ENV, tempDir.toString());
+        LocalServerConfiguration configuration = LocalServerConfiguration.fromEnvironment(environment);
+        assertThat(configuration.localAuth()).isTrue();
+    }
+
+    @Test
     void rejectsNonLocalProfile() throws Exception {
         assertThatThrownBy(
                         () ->
@@ -68,7 +111,7 @@ class LocalServerConfigurationTest {
     }
 
     @Test
-    void resolvesAnExplicitWorkPackageDataDirectory() {
+    void resolvesAnExplicitWorkPackageDataDirectory() throws Exception {
         LocalServerConfiguration configuration =
                 LocalServerConfiguration.fromEnvironment(localEnvironment());
         Map<String, String> environment = new HashMap<>(localEnvironment());
