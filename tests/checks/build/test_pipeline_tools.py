@@ -697,7 +697,7 @@ class PrReviewDigestTest(unittest.TestCase):
 
 
 class SdkApiDigestTest(unittest.TestCase):
-    VERSION = "0.1.2-SNAPSHOT"
+    VERSION = "0.1.3-SNAPSHOT"
     BOM = """<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0">
     <modelVersion>4.0.0</modelVersion>
@@ -794,8 +794,8 @@ class SdkApiDigestTest(unittest.TestCase):
             selection = worktree / "local-tmp/sdk-selection.json"
             selection.parent.mkdir(parents=True)
             self.assertEqual(sdk_api_digest.read_version(selection, None), self.VERSION)
-            selection.write_text(json.dumps({"haifaVersion": "0.1.2-feature-SNAPSHOT"}), encoding="utf-8")
-            self.assertEqual(sdk_api_digest.read_version(selection, None), "0.1.2-feature-SNAPSHOT")
+            selection.write_text(json.dumps({"haifaVersion": "0.1.3-feature-SNAPSHOT"}), encoding="utf-8")
+            self.assertEqual(sdk_api_digest.read_version(selection, None), "0.1.3-feature-SNAPSHOT")
             self.assertEqual(sdk_api_digest.read_version(selection, "9.9.9"), "9.9.9")
             selection.write_text(json.dumps({"haifaVersion": "not-a-version"}), encoding="utf-8")
             with self.assertRaises(sdk_api_digest.SdkDigestError):
@@ -907,7 +907,7 @@ class MainServiceTest(unittest.TestCase):
             with self.assertRaises(main_service.MainServiceError):
                 main_service.stamp_source_sha(jar)
             (Path(directory) / "haifa-build-stamp.json").write_text(
-                json.dumps({"sourceSha": "abc123", "haifaVersion": "0.1.2-SNAPSHOT"}), encoding="utf-8")
+                json.dumps({"sourceSha": "abc123", "haifaVersion": "0.1.3-SNAPSHOT"}), encoding="utf-8")
             self.assertEqual(main_service.stamp_source_sha(jar), "abc123")
 
     def test_rollback_decision(self):

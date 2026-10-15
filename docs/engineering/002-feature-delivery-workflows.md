@@ -25,7 +25,7 @@
 
 ## 1. 流程一：纯 Super Harness 产品交付
 
-适用于无需修改上游 SDK 的产品功能，默认消费已发布的 `0.1.2-SNAPSHOT` 基线。
+适用于无需修改上游 SDK 的产品功能，默认消费已发布的 `0.1.3-SNAPSHOT` 基线。
 
 ### 1.1 流程图
 
@@ -132,7 +132,7 @@ flowchart TD
     U_PR --> REVIEW["主控核对 PR 与候选证据，提醒人工审查"]
     PROOF --> REVIEW
     REVIEW --> HUMAN["等待人工审查合并 SDK PR<br/>智能体仅在针对该 PR 的另行书面授权下可合并"]
-    HUMAN --> BASE["上游主检出更新到已合入的 dev<br/>重新发布 0.1.2-SNAPSHOT，核对新发布清单"]
+    HUMAN --> BASE["上游主检出更新到已合入的 dev<br/>重新发布 0.1.3-SNAPSHOT，核对新发布清单"]
     BASE --> RESTORE["下游删除 sdk-selection.json<br/>核对基线版本及实际构件 / hash"]
     RESTORE --> REBASE["最终门禁前 rebase 到最新 main<br/>固定下游最终候选 SHA"]
     REBASE --> FINAL["外置保存原件；重新构建 SDK 消费方后端<br/>基线上重跑必需全仓、UI、协议与真实 smoke"]
@@ -151,7 +151,7 @@ flowchart TD
 ### 2.2 跨仓核心约束
 
 1. **上游分支与验证**：在 `D:\workspace\haifa-agent` 从最新 `origin/dev` 创建 `feat-*` 分支，worktree 放在 `D:\workspace\haifa-agent-worktrees\`；不在 `dev` 上开发。先做受影响定向验证，再按上游规则完成同一 SHA 的 L3 `-Pci-fast clean verify`。Integration 必须有同 SHA Unit PASS，并核对测试配置、显式开关与当前任务授权；不能将任意 `ci-integration-only` 结果视为全部真实 Provider 用例通过。
-2. **发布与来源**：只有 `scripts/publish-local-sdk.ps1` 可向本地 Maven 仓库发布 SDK；发布要求工作树 clean。特性 worktree 坐标为 `0.1.2-<worktree 目录名>-SNAPSHOT`，基线 `0.1.2-SNAPSHOT` 只由上游主检出的 `dev` 发布。按实际 `haifa-sdk-publish-manifest.json` 核对版本、`sdkCommit`、分支、worktree 和公开构件 hash/长度，并核对 BOM/POM；公开模块清单以发布脚本当前分类为准，不把历史构件数量当作永久常量。发布脚本跳过测试，其 SUCCESS 不替代同 SHA 测试门禁。
+2. **发布与来源**：只有 `scripts/publish-local-sdk.ps1` 可向本地 Maven 仓库发布 SDK；发布要求工作树 clean。特性 worktree 坐标为 `0.1.3-<worktree 目录名>-SNAPSHOT`，基线 `0.1.3-SNAPSHOT` 只由上游主检出的 `dev` 发布。按实际 `haifa-sdk-publish-manifest.json` 核对版本、`sdkCommit`、分支、worktree 和公开构件 hash/长度，并核对 BOM/POM；公开模块清单以发布脚本当前分类为准，不把历史构件数量当作永久常量。发布脚本跳过测试，其 SUCCESS 不替代同 SHA 测试门禁。
 3. **下游选择**：由主控在已分配的下游 worktree 写入 `local-tmp/sdk-selection.json`，执行者不自行更换版本、不用修改 POM 或直接传 `-Dhaifa.version` 来选择候选 SDK。带标识版本不进入被跟踪文件；只能消费公开 JAR/BOM，不依赖 SDK 源码或产品 JAR。
 4. **修改与重发布**：候选 SDK 的问题须由主控验收确认后再修改并重新发布。重发布时版本号可能不变，但服务端构建戳现含每个 Haifa JAR 的 SHA-256 身份，会识别同版本重发布的内容变化并使旧产物不可复用；先保留首次 FAIL，再重新构建消费方后端并重跑受影响门禁。
 5. **人工 PR 卡点**：特性分支向 `dev` 发起英文 GitHub PR，由主控在 SHPM 登记 `verify` / `issue` 和关联状态，提醒人工审查合并。智能体不得自行合并，除非人工针对该具体 PR 另行书面授权。人工合并后，须将上游主检出更新到已合入的 `dev`，再重新发布基线，不能把远端 PR 已合并等同于本机基线已更新。

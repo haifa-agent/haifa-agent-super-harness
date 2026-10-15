@@ -1,7 +1,7 @@
 # Haifa Super Harness
 
 本仓库是冻结 DeerFlow 对齐项目的独立 Java 21 产品工程。项目只通过 Maven 仓库中已发布的
-`io.haifa:haifa-agent-bom:0.1.2-SNAPSHOT` 及公开 JAR 消费 Haifa Agent，不依赖 Haifa Agent 源码目录。
+`io.haifa:haifa-agent-bom:0.1.3-SNAPSHOT` 及公开 JAR 消费 Haifa Agent，不依赖 Haifa Agent 源码目录。
 Super Harness 直接复用冻结的 DeerFlow 前端，并以 Haifa Agent 作为唯一 Agent Runtime，兼容其真实
 REST/SSE/WS/文件/auth 协议。冻结 DeerFlow 固定为
 `bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294`，不随 `main` 漂移。
@@ -197,7 +197,7 @@ SDK 版本规则见 `AGENTS.md`「范围与依赖」。工作包 worktree 消费
 跟踪的 `local-tmp/sdk-selection.json`：
 
 ```json
-{ "haifaVersion": "0.1.2-<worktree>-SNAPSHOT" }
+{ "haifaVersion": "0.1.3-<worktree>-SNAPSHOT" }
 ```
 
 `test-targeted.ps1` 与 UI runner 读取它并传 `-Dhaifa.version`；文件不存在时使用基线并输出
