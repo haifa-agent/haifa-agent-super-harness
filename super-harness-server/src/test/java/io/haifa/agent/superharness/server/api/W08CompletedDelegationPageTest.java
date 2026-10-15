@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -83,7 +84,13 @@ class W08CompletedDelegationPageTest {
                         .timeout(Duration.ofSeconds(40)).header("Content-Type", "application/json")
                         .POST(HttpRequest.BodyPublishers.ofString(DelegationHttpFixture.input(true).toString()))
                         .build(), HttpResponse.BodyHandlers.ofInputStream());
-                try (InputStream first = started.body()) {
+                try (InputStream first = started.body();
+                        var drainExecutor = Executors.newVirtualThreadPerTaskExecutor()) {
+                    // Drain the creator concurrently so TCP backpressure cannot stall the live
+                    // observer loop; product code also refuses to let Steer/join bulk sync slide the
+                    // shared retention window past that observer's delivered cursor.
+                    CompletableFuture<String> creatorDrain =
+                            CompletableFuture.supplyAsync(() -> readSseUnbounded(first), drainExecutor);
                     assertThat(beforeSteer.await(15, TimeUnit.SECONDS)).isTrue();
                     HttpResponse<InputStream> steered = client.send(HttpRequest.newBuilder()
                             .uri(gateway.base.resolve("/api/threads/" + thread + "/runs/stream"))
@@ -116,8 +123,8 @@ class W08CompletedDelegationPageTest {
                         try (InputStream joined = recovered.body()) {
                             assertThat(recovered.statusCode()).isEqualTo(200);
                             release.countDown();
-                            String firstText = readSseBounded(first);
                             String secondText = readSseBounded(joined);
+                            String firstText = creatorDrain.get(40, TimeUnit.SECONDS);
                             Files.writeString(evidence.resolve("steer-creator.sse"), firstText);
                             Files.writeString(evidence.resolve("steer-recovered-join.sse"), secondText);
                             assertThat(firstText).contains("event: end");
@@ -224,6 +231,15 @@ class W08CompletedDelegationPageTest {
             var result = executor.submit(() -> new String(input.readAllBytes(), StandardCharsets.UTF_8));
             try { return result.get(40, TimeUnit.SECONDS); }
             finally { input.close(); result.cancel(true); }
+        }
+    }
+
+    /** Background creator drain: do not close the stream from a helper while the caller owns it. */
+    private static String readSseUnbounded(InputStream input) {
+        try {
+            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (Exception exception) {
+            throw new IllegalStateException("creator SSE drain failed", exception);
         }
     }
 
