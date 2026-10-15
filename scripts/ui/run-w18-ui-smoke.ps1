@@ -133,13 +133,21 @@ if (-not $dataRoot.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase
     throw 'W18 data directory must remain inside this worktree.'
 }
 
-# W04 imagegen setup, before any service or build: materialize the bounded baoyu-image-gen
-# admission seed inside this profile's isolated data root (never the user home), record the
-# cached bun directory for the Gateway PATH, and snapshot the profile facts for the spec. The
-# deferred A1-A8 gate and the runner AllowedNotRun list read tests/ui/smoke/w04-imagegen-deferred.json.
+# W04 imagegen setup, before any service or build: materialize the real upstream
+# baoyu-image-gen package (the controller-staged local-tmp/w04-real-skill copy) inside
+# this profile's isolated data root (never the user home), record the cached bun
+# directory and the codex CLI directory for the Gateway PATH, and snapshot the profile
+# facts for the spec. The deferred A1-A8 gate and the runner AllowedNotRun list read
+# tests/ui/smoke/w04-imagegen-deferred.json.
 $w04 = $null
 $w04Deferred = @()
 if ($W04ImageGen) {
+    $w04SeedSource = Join-Path $root 'local-tmp/w04-real-skill/baoyu-image-gen'
+    $w04SourceManifest = Join-Path $root 'local-tmp/w04-real-skill/MANIFEST.sha256'
+    if (-not (Test-Path -LiteralPath (Join-Path $w04SeedSource 'scripts/main.ts') -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $w04SourceManifest -PathType Leaf)) {
+        throw 'The staged real baoyu-image-gen copy is missing: the controller must stage local-tmp/w04-real-skill inside this worktree.'
+    }
     $w04SkillsDirectory = Join-Path $dataRoot 'skills-fixture'
     $w04SeedPackage = Join-Path $w04SkillsDirectory 'baoyu-image-gen'
     $w04SeedManifest = Join-Path $dataRoot 'skill-seed-manifest.json'
@@ -147,7 +155,8 @@ if ($W04ImageGen) {
     Push-Location $root
     try {
         & python -B (Join-Path $root 'tests/ui/fixtures/w04/baoyu_imagegen_seed.py') `
-            --package $w04SeedPackage --extend $w04ExtendDirectory --manifest $w04SeedManifest 2>&1 |
+            --package $w04SeedPackage --extend $w04ExtendDirectory --manifest $w04SeedManifest `
+            --source $w04SeedSource --source-manifest $w04SourceManifest 2>&1 |
             Tee-Object -FilePath (Join-Path $evidenceRoot 'w04-seed.raw.log')
         if ($LASTEXITCODE -ne 0) { throw 'W04 imagegen seed materialization failed; inspect w04-seed.raw.log.' }
     }
@@ -165,6 +174,22 @@ if ($W04ImageGen) {
         if (Test-Path -LiteralPath (Join-Path $candidate 'bun.exe') -PathType Leaf) { $w04BunHome = $candidate }
     }
     $w04BunPath = if ($w04BunHome) { (Join-Path $w04BunHome 'bun.exe') } else { $null }
+    # The real package's codex-cli provider resolves `bun` and the wrapper resolves `codex`
+    # from the process PATH, so the codex CLI directory joins the same one-round PATH prefix.
+    # The controller may pin it through W04_CODEX_HOME; otherwise this session's PATH decides.
+    $w04CodexHome = $null
+    $w04CodexCandidate = [Environment]::GetEnvironmentVariable('W04_CODEX_HOME', 'Process')
+    if (-not $w04CodexCandidate) {
+        $codexResolved = Get-Command codex -ErrorAction SilentlyContinue
+        if ($codexResolved) { $w04CodexCandidate = Split-Path -Parent $codexResolved.Source }
+    }
+    if ($w04CodexCandidate) {
+        $codexCandidate = [IO.Path]::GetFullPath($w04CodexCandidate).TrimEnd('\', '/')
+        if (Test-Path -LiteralPath (Join-Path $codexCandidate 'codex.exe') -PathType Leaf) { $w04CodexHome = $codexCandidate }
+    }
+    if ($w04BunHome -and -not $w04CodexHome) {
+        throw 'W04 imagegen round requires the codex CLI next to the declared bun runtime: set W04_CODEX_HOME or put codex.exe on PATH.'
+    }
     # The W04 profile starts a brand-new data root every round. The per-data-root Credential
     # Manager provisioning can be unavailable on a host whose Credential Manager is full, so this
     # profile injects the Runtime continuation key as an external process-environment reference:
@@ -184,11 +209,18 @@ if ($W04ImageGen) {
         bunHome = $w04BunHome
         bunPath = $w04BunPath
         bunHomeCandidate = $w04BunCandidate
+        codexHome = $w04CodexHome
+        codexPath = $(if ($w04CodexHome) { Join-Path $w04CodexHome 'codex.exe' } else { $null })
+        stagedSource = $w04SeedSource
+        stagedSourceManifest = $w04SourceManifest
+        codexCacheDirectory = $(if ($W04ImageGen) { Join-Path $dataRoot 'baoyu-codex-cache' } else { $null })
+        codexImagegenLog = $(if ($W04ImageGen) { Join-Path $evidenceRoot 'w04-codex-imagegen.jsonl' } else { $null })
         workspaceStorageRoot = (Join-Path $dataRoot 'workspace')
     }
     $w04 | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'w04-profile.json') -Encoding utf8
     $w04SeedStatus = & python -B (Join-Path $root 'tests/ui/fixtures/w04/baoyu_imagegen_seed.py') `
-        --package $w04SeedPackage --extend $w04ExtendDirectory --manifest $w04SeedManifest --verify 2>&1
+        --package $w04SeedPackage --extend $w04ExtendDirectory --manifest $w04SeedManifest `
+        --source $w04SeedSource --source-manifest $w04SourceManifest --verify 2>&1
     if ($LASTEXITCODE -ne 0) { throw "W04 imagegen seed verification failed: $w04SeedStatus" }
     $w04DeferredManifest = Get-Content -Raw -LiteralPath (Join-Path $root 'tests/ui/smoke/w04-imagegen-deferred.json') |
         ConvertFrom-Json
@@ -234,6 +266,12 @@ $managedEnvironment = @{
     HAIFA_SUPER_HARNESS_HOST_SHELL = $(if ($W04ImageGen) { 'on' } else { $null })
     HAIFA_SUPER_HARNESS_SKILLS_DIR = $(if ($W04ImageGen) { $w04.skillsDirectory } else { $null })
     HAIFA_SUPER_HARNESS_BUN_PATH = $(if ($W04ImageGen) { $w04.bunPath } else { $null })
+    # The real codex-cli provider resolves bun and codex from the process PATH (the runner joins
+    # both directories there); these BAOYU_* variables only redirect the wrapper's own idempotency
+    # cache and JSONL log into this round's data root and evidence directory, so no user home is
+    # written and no cached image from an earlier round can ever be returned.
+    BAOYU_CODEX_IMAGEGEN_CACHE_DIR = $(if ($W04ImageGen) { Join-Path $dataRoot 'baoyu-codex-cache' } else { $null })
+    BAOYU_CODEX_IMAGEGEN_LOG_FILE = $(if ($W04ImageGen) { Join-Path $evidenceRoot 'w04-codex-imagegen.jsonl' } else { $null })
     # W04 profile continuation key: external env reference (see the seed block above). The value
     # table is never persisted; the key itself is only tracked in the process environment.
     HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF = $(if ($W04ImageGen) { 'env://W04_IMAGEGEN_CONTINUATION_KEY' } else { $null })
@@ -313,9 +351,13 @@ try {
         [Environment]::SetEnvironmentVariable($name, $managedEnvironment[$name], 'Process')
     }
     if ($W04ImageGen -and $w04.bunHome) {
-        # Only ever a PATH prefix for this round; the save/restore loop below restores it.
+        # Only ever a PATH prefix for this round; the save/restore loop below restores it. The
+        # codex directory joins the prefix so the package's codex-cli provider can resolve `bun`
+        # and its wrapper can resolve `codex` from the process PATH.
         $savedEnvironment['PATH'] = [Environment]::GetEnvironmentVariable('PATH', 'Process')
-        [Environment]::SetEnvironmentVariable('PATH', "$($w04.bunHome);$($savedEnvironment['PATH'])", 'Process')
+        $pathPrefix = $w04.bunHome
+        if ($w04.codexHome) { $pathPrefix = "$($w04.codexHome);$pathPrefix" }
+        [Environment]::SetEnvironmentVariable('PATH', "$pathPrefix;$($savedEnvironment['PATH'])", 'Process')
     }
     $profile = & (Join-Path $root 'scripts/frontend/verify-haifa-frontend-profile.ps1') `
         -RepositoryRoot $root `

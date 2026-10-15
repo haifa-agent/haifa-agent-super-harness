@@ -1,9 +1,14 @@
-// W04 baoyu-image-gen trusted Skill script profile: the frozen UI plus the isolated execution
-// seed with the declared bun runtime.
+// W04 baoyu-image-gen trusted Skill script profile: the frozen UI plus the real upstream
+// package bytes (the controller-staged local-tmp/w04-real-skill copy) with the declared bun
+// runtime and the codex-cli provider on the Gateway PATH.
 //
 // Assertion table (038-32 contract 5.1, adapted to this lane's declared facts): A0 proves profile
 // admission without a model call; A1-A8 drive real Runs through the frozen UI with the live DeepSeek
-// managed model. The runner records whether the declared bun runtime exists (w04-profile.json
+// managed model. A2/A3 assert the real package's own usage banner and entry output; A4 cancels the
+// Run mid-generation (the real codex-cli generation is the long-running execution) and asserts the
+// terminated process left no orphan and no artifact; A6 compares the downloaded Artifact bytes with
+// the real generated PNG in this Run's workspace plus the PNG magic/dimension/size checks. The
+// runner records whether the declared bun runtime exists (w04-profile.json
 // `runtime: declared|undeclared`):
 //   - declared round: A1-A8 all assert real behaviour (A8 exercises the model boundary: the runtime
 //     is not a model choice, so a schema-level injection is rejected before any process).
@@ -140,7 +145,7 @@ function runIdentity(response) {
   return { threadId: match[1], runId: match[2], location };
 }
 
-async function runChat(page, context, prompt, deadlineMs = 150_000, cardAction = "approve") {
+async function runChat(page, context, prompt, deadlineMs = 150_000, cardAction = "approve", cancelAfterApprovalMs = 0) {
   await page.goto("/workspace/chats/new", { waitUntil: "domcontentloaded" });
   const input = page.locator('textarea[name="message"]');
   await expect(input).toBeVisible();
@@ -161,12 +166,22 @@ async function runChat(page, context, prompt, deadlineMs = 150_000, cardAction =
   const identity = runIdentity(response);
   const deadline = Date.now() + deadlineMs;
   let answered = null;
+  let approvedAt = 0;
+  let cancelledAt = 0;
   while (Date.now() < deadline) {
     const snapshot = await context.request.get(`${APP}${identity.location}`, { timeout: 5_000 });
     expect(snapshot.status(), await snapshot.text()).toBe(200);
     const status = (await snapshot.json()).status;
-    if (status === "success" || status === "error" || status === "timeout") {
-      return { identity, terminal: status, ...answered };
+    if (["success", "error", "timeout"].includes(status)) {
+      return {
+        identity, terminal: status, ...answered,
+        cancelledSigil: cancelledAt > 0,
+      };
+    }
+    // Frozen projection maps WAITING_APPROVAL and CANCELLED both to "interrupted"; only after this
+    // test has itself cancelled the Run does "interrupted" mean the cancelled terminal state.
+    if (status === "interrupted" && cancelledAt > 0) {
+      return { identity, terminal: "interrupted", ...answered, cancelledSigil: true };
     }
     const card = page.getByTestId("human-input-card");
     if (card.count && (await card.count())) {
@@ -189,9 +204,25 @@ async function runChat(page, context, prompt, deadlineMs = 150_000, cardAction =
           const continuation = await answeredResponse;
           expect(continuation.status(), await continuation.text()).toBe(200);
           answered = { [action === "approve" ? "approved" : "denied"]: true };
+          if (action === "approve") approvedAt = Date.now();
           break;
         }
       }
+    }
+    if (
+      approvedAt > 0 &&
+      !cancelledAt &&
+      cancelAfterApprovalMs > 0 &&
+      Date.now() - approvedAt >= cancelAfterApprovalMs
+    ) {
+      // The user cancels the Run while the approved Skill script generation is in flight; the
+      // cancellation reaches the SDK handle (suspendReportedNotes cancel semantics) and the
+      // trust execution boundary records the terminated process.
+      const cancel = await context.request.post(`${APP}${identity.location}/cancel?wait=0&action=interrupt`, {
+        timeout: 10_000,
+      });
+      expect(cancel.status(), await cancel.text()).toBe(202);
+      cancelledAt = Date.now();
     }
     await page.waitForTimeout(250); // Bounded observation of this Run; no retry, no budget change.
   }
@@ -224,6 +255,42 @@ function toolResult(state, callId) {
   return state.messages.find(
     (message) => message.type === "tool" && message.tool_call_id === callId,
   );
+}
+
+// This Run's own workspace directory: exactly one workspace binds the thread via its
+// binding.properties record (the truth the harness assigns per Run).
+function boundThreadWorkspaces(profile, threadId) {
+  const storageRoot = path.resolve(profile.workspaceStorageRoot, "workspaces");
+  if (!fs.existsSync(storageRoot)) return [];
+  return fs
+    .readdirSync(storageRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^ws-[0-9a-f]{32}$/.test(entry.name))
+    .filter((entry) => {
+      const binding = path.join(storageRoot, entry.name, "binding.properties");
+      if (!fs.existsSync(binding)) return false;
+      const content = fs.readFileSync(binding, "utf8");
+      return content.split(/\r?\n/).some((line) => line.trim() === `threadId=${threadId}`);
+    })
+    .map((entry) => path.join(storageRoot, entry.name));
+}
+
+// The real codex-cli provider writes one JSON line per wrapper event when
+// BAOYU_CODEX_IMAGEGEN_LOG_FILE is declared; it is independent execution evidence.
+function codexLogEvents(profile) {
+  const log = profile.codexImagegenLog;
+  if (!log || !fs.existsSync(log)) return [];
+  return fs
+    .readFileSync(log, "utf8")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
 }
 
 const GENERATE_PROMPT =
@@ -285,14 +352,15 @@ test("A0 isolated baoyu-image-gen execution seed with the host shell profile", a
   }
   expect(packageDigest(files), "JDK-locked package digest").toBe(manifest.packageSha256);
 
-  // EXTEND seeding: the package copy and the data-root .baoyu-skills copy are byte-identical
-  // and declare the isolated provider fact without touching any external directory.
-  const extendContent = files.get("EXTEND.md");
-  expect(extendContent.toString("utf8")).toContain(`default_provider: ${EXTEND_PROVIDER}`);
+  // The real upstream package carries no EXTEND.md of its own, so the Harness-authored
+  // companion declares the isolated provider fact in the data root without any upstream
+  // byte carrying it and without touching an external directory.
+  expect(files.has("EXTEND.md"), "the real upstream package declares no package EXTEND.md").toBe(false);
   const companion = path.resolve(profile.extendPath);
   expect(companion.includes(".baoyu-skills"), "the companion EXTEND seeding must live in the data root").toBe(true);
-  expect(fs.readFileSync(companion).equals(extendContent), "companion EXTEND.md must mirror the package copy").toBe(true);
-  expect(manifest.companion.sha256).toBe(sha256(extendContent));
+  const companionBytes = fs.readFileSync(companion);
+  expect(companionBytes.toString("utf8")).toContain(`default_provider: ${EXTEND_PROVIDER}`);
+  expect(manifest.companion.sha256).toBe(sha256(companionBytes));
 
   const auth = await context.request.get(`${APP}/api/v1/auth/me`);
   expect(auth.status(), await auth.text()).toBe(200);
@@ -375,6 +443,7 @@ test("A2 verified package identity prepares the frozen execution directory once"
     page,
     context,
     `${GENERATE_PROMPT} Run the script entry in help mode (help: true) first, then report its usage output verbatim.`,
+    280_000,
   );
   expect(attempt.terminal, `the identity run must complete, got ${attempt.terminal}`).toBe("success");
   expect(attempt.approved, "the execution approval must be answered").toBe(true);
@@ -388,22 +457,12 @@ test("A2 verified package identity prepares the frozen execution directory once"
     "the approved help probe must complete",
   ).toBeGreaterThanOrEqual(1);
   const usage = results.map((message) => message.content ?? []).join("\n");
-  expect(usage, "the executed bytes must come from the declared package identity").toContain("W04_SEED_MAIN_OK");
+  expect(usage, "the executed bytes must come from the declared package identity").toContain("Usage:");
+  expect(usage, "the real package help must list the codex-cli provider and its --image flag").toContain("codex-cli");
 
   // Materialization audit inside this worktree's data root: this Run's own workspace carries the
   // prepared version directory with the declared entry bytes; no temporary directory remains.
-  const storageRoot = path.resolve(profile.workspaceStorageRoot, "workspaces");
-  const threadWorkspaces = fs.existsSync(storageRoot)
-    ? fs.readdirSync(storageRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && /^ws-[0-9a-f]{32}$/.test(entry.name))
-        .filter((entry) => {
-          const binding = path.join(storageRoot, entry.name, "binding.properties");
-          if (!fs.existsSync(binding)) return false;
-          const content = fs.readFileSync(binding, "utf8");
-          return content.split(/\r?\n/).some((line) => line.trim() === `threadId=${attempt.identity.threadId}`);
-        })
-        .map((entry) => path.join(storageRoot, entry.name))
-    : [];
+  const threadWorkspaces = boundThreadWorkspaces(profile, attempt.identity.threadId);
   expect(threadWorkspaces.length, "the audited Run owns exactly one workspace directory").toBe(1);
   const versionDir = path.join(threadWorkspaces[0], "user-data", ".haifa-trusted-skills");
   expect(fs.existsSync(versionDir), "the declared package must materialize in the Run workspace").toBe(true);
@@ -433,7 +492,8 @@ test("A3 multi-file package resolves relative imports and entry-file identity", 
   const attempt = await runChat(
     page,
     context,
-    `${GENERATE_PROMPT} Call the tool with { "prompt": "entry identity probe", "image_name": "a3-entry.png" } so the entry resolves its providers, then report the printed lines.`,
+    `${GENERATE_PROMPT} Call the tool with { "prompt": "entry identity probe", "image_name": "a3-entry.png" } so the entry generates through its codex-cli provider, then report the printed lines.`,
+    280_000,
   );
   expect(attempt.terminal).toBe("success");
   expect(attempt.approved, "the execution approval must be answered").toBe(true);
@@ -442,44 +502,99 @@ test("A3 multi-file package resolves relative imports and entry-file identity", 
     .filter((call) => JSON.stringify(call.args ?? {}).includes("entry identity probe"));
   expect(calls, "the generation call must reference the bounded business arguments").toHaveLength(1);
   const result = toolResult(state, calls[0].id);
-  expect(result?.additional_kwargs?.haifa_tool_status, "relative imports must execute successfully").toBe("completed");
+  expect(result?.additional_kwargs?.haifa_tool_status, "the real entry must execute successfully").toBe("completed");
   const text = `${result?.content ?? ""}\n${JSON.stringify(result?.additional_kwargs?.haifa_tool_result ?? {})}`;
-  // The relative-import evidence comes from the entry's own printed facts: the banner constant and
-  // the EXTEND provider read through ../lib/extend.ts prove multi-file cross-directory execution.
-  expect(text).toContain("W04_SEED_PROVIDER_OK=codex-cli");
-  expect(text).toContain("W04_SEED_ARTIFACT=outputs/a3-entry.png");
+  // The real entry prints the resolved output path on stdout and the provider's wrapper records
+  // its execution in the captured JSONL diagnostic log; together they prove the real multi-file
+  // package entry generated through the codex-cli provider end to end.
+  expect(text).toContain("a3-entry.png");
+  const profile = readProfile();
+  expect(
+    codexLogEvents(profile).some((event) => event.event === "done" && Number(event.bytes) > 0),
+    "the real codex-cli provider must record a successful generation",
+  ).toBe(true);
+
+  // The real generated pixels land in this Run's workspace under outputs/.
+  const threadWorkspaces = boundThreadWorkspaces(profile, attempt.identity.threadId);
+  expect(threadWorkspaces.length, "the audited Run owns exactly one workspace directory").toBe(1);
+  const generated = path.join(threadWorkspaces[0], "user-data", "outputs", "a3-entry.png");
+  const generatedBytes = fs.readFileSync(generated);
+  expect(generatedBytes.length, "the real generation must write a non-trivial PNG").toBeGreaterThan(10_000);
+  expect(generatedBytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+    "the real generation must produce real PNG magic bytes").toBe(true);
   await saveEvidence(testInfo, "w04-a3-entry", {
     case: "A3", contract: ASSERTION_TABLE.A3, identity: attempt.identity,
     toolCall: calls[0], text: text.slice(0, 4000),
+    generated: { path: generated, byteSize: generatedBytes.length, sha256: sha256(generatedBytes) },
   });
 });
 
-test("A4 timeout and cancellation terminate the whole process tree", async ({ context, page }, testInfo) => {
+test("A4 cancellation terminates the real generation process tree", async ({ context, page }, testInfo) => {
   await requireExecution(testInfo, "A4");
   await enableSkill(context);
+  // The real codex-cli generation is this lane's long-running execution: the Run is cancelled
+  // a bounded interval after the approval starts the script, so the cancellation lands while
+  // the package entry and its codex child are running.
   const attempt = await runChat(
     page,
     context,
-    `${GENERATE_PROMPT} Call the tool with { "prompt": "timeout probe", "image_name": "a4-timeout.png", "sleep_millis": 600000 } to make the declared timeout terminate the process, then report the tool result.`,
+    `${GENERATE_PROMPT} Call the tool with { "prompt": "cancel probe", "image_name": "a4-cancel.png" } and wait for the tool result, then report it.`,
     280_000,
+    "approve",
+    4_000,
   );
-  expect(attempt.terminal, "the timed-out Run must still reach an interpretable terminal status").toBe("success");
-  expect(attempt.approved, "the timeout probe approval must be answered").toBe(true);
+  expect(attempt.cancelledSigil, "the cancellation must actually be sent").toBe(true);
+  expect(attempt.terminal, `the cancelled Run must still reach an interpretable terminal status, got ${attempt.terminal}`).toBe("interrupted");
   const state = await threadState(context, attempt.identity);
   const calls = ownCalls(state, attempt.identity.runId);
+  expect(calls.length, "the model must reach the tool before the cancel").toBeGreaterThanOrEqual(1);
   const results = calls.map((call) => toolResult(state, call.id)).filter(Boolean);
   const terminated = results.filter((message) => {
     const envelope = message.additional_kwargs?.haifa_tool_result ?? {};
-    return envelope.timedOut === true || envelope.cancelled === true;
+    const toolStatus = message.additional_kwargs?.haifa_tool_status;
+    const toolError = message.additional_kwargs?.haifa_tool_error;
+    return (
+      envelope.timedOut === true ||
+      envelope.cancelled === true ||
+      toolStatus === "cancelled" ||
+      toolStatus === "timeout" ||
+      typeof toolError === "string"
+    );
   });
-  expect(terminated.length, "the declared timeout must surface as a terminated tool result").toBeGreaterThanOrEqual(1);
   expect(
-    (state.artifacts ?? []).some((entry) => String(entry).includes("a4-timeout.png")),
-    "a terminated process must not publish the probe artifact",
+    terminated.length,
+    "a cancelled execution must never surface as a completed tool result",
+  ).toBe(results.length);
+  expect(
+    results.some((message) => message.additional_kwargs?.haifa_tool_status === "completed"),
+    "a cancelled execution must never complete",
   ).toBe(false);
+  expect(
+    (state.artifacts ?? []).some((entry) => String(entry).includes("a4-cancel.png")),
+    "a cancelled execution must publish no artifact",
+  ).toBe(false);
+  // The cancelled generation's product file must never exist on disk in any lane workspace.
+  const storageRoot = path.resolve(readProfile().workspaceStorageRoot, "workspaces");
+  const cancelledOnDisk = (function walkOutputs(root) {
+    if (!fs.existsSync(root)) return null;
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      const outputs = path.join(root, entry.name, "user-data", "outputs");
+      if (!fs.existsSync(outputs)) continue;
+      for (const file of fs.readdirSync(outputs)) {
+        if (file === "a4-cancel.png") return path.join(outputs, file);
+      }
+    }
+    return null;
+  })(storageRoot);
+  expect(cancelledOnDisk, "the cancelled generation's product path must never exist").toBeNull();
   await saveEvidence(testInfo, "w04-a4-process-tree", {
     case: "A4", contract: ASSERTION_TABLE.A4, identity: attempt.identity,
-    timedOutResults: terminated.map((message) => message.additional_kwargs.haifa_tool_result),
+    terminalStatus: attempt.terminal,
+    toolResults: results.map((message) => ({
+      status: message.additional_kwargs?.haifa_tool_status ?? null,
+      envelope: message.additional_kwargs?.haifa_tool_result ?? null,
+      error: message.additional_kwargs?.haifa_tool_error ?? null,
+    })),
   });
   await page.screenshot({ path: testInfo.outputPath("w04-a4-process-tree.png"), fullPage: true });
 });
@@ -491,6 +606,7 @@ test("A5 output outside outputs is rejected and publishes no artifact", async ({
     page,
     context,
     `${GENERATE_PROMPT} First call the tool with { "prompt": "boundary probe", "image_name": "sub/way.png" } (a deliberate path escape), then retry once with { "prompt": "boundary probe", "image_name": "a5-bounds.png" }, and report both tool results verbatim.`,
+    280_000,
   );
   expect(["success", "error"]).toContain(attempt.terminal); // bounded rejection stays interpretable
   const state = await threadState(context, attempt.identity);
@@ -530,13 +646,22 @@ test("A5 output outside outputs is rejected and publishes no artifact", async ({
   });
 });
 
-test("A6 run artifact lands in outputs with verifiable download SHA-256", async ({ context, page }, testInfo) => {
+function pngDimensions(bytes) {
+  // Fixed 8-byte signature + 4-byte length + "IHDR" + 13 bytes of IHDR data.
+  if (bytes.length < 33 || bytes.readUInt32BE(8) !== 13 || bytes.toString("latin1", 12, 16) !== "IHDR") {
+    return null;
+  }
+  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+}
+
+test("A6 real generation artifact bytes download and match the workspace file", async ({ context, page }, testInfo) => {
   await requireExecution(testInfo, "A6");
   await enableSkill(context);
   const attempt = await runChat(
     page,
     context,
-    `${GENERATE_PROMPT} Call the tool with { "prompt": "artifact chain probe", "image_name": "w04-artifact.png" }, wait for the tool result, then present outputs/w04-artifact.png with present_files so the user can download it, and report the SHA-256 line.`,
+    `${GENERATE_PROMPT} Call the tool with { "prompt": "artifact chain probe", "image_name": "w04-artifact.png" }, wait for the tool result, then present outputs/w04-artifact.png with present_files so the user can download it, and report the tool result.`,
+    280_000,
   );
   expect(attempt.terminal).toBe("success");
   expect(attempt.approved, "the execution approval must be answered").toBe(true);
@@ -545,20 +670,46 @@ test("A6 run artifact lands in outputs with verifiable download SHA-256", async 
     String(entry).startsWith("/mnt/user-data/outputs/") && String(entry).includes("w04-artifact.png"));
   expect(artifactPath, "the generated image must enter the artifact list under outputs/").toBeTruthy();
   const producerCalls = ownCalls(state, attempt.identity.runId);
-  const producerResult = producerCalls
-    .map((call) => toolResult(state, call.id))
-    .find((message) => message && String(message.content ?? "").includes("W04_SEED_IMAGE_SHA256="));
-  expect(producerResult, "the producer tool result must announce the artifact digest").toBeTruthy();
-  const claimed = producerResult.content.match(/W04_SEED_IMAGE_SHA256=([0-9a-f]{64})/);
-  expect(claimed, "the tool result must carry the printed SHA-256 line").toBeTruthy();
+  const producerCall = producerCalls.find((call) =>
+    JSON.stringify(call.args ?? {}).includes("w04-artifact.png"));
+  expect(producerCall, "the producing tool call must target this image").toBeTruthy();
+  const producerResult = toolResult(state, producerCall.id);
+  expect(producerResult?.additional_kwargs?.haifa_tool_status, "the producer call must complete").toBe("completed");
+
+  // The producer's own output text names the resolved path next to the image name, and the
+  // provider's wrapper log records the real codex-cli generation independently of the UI.
+  const producerText = `${producerResult?.content ?? ""}\n${JSON.stringify(producerResult?.additional_kwargs?.haifa_tool_result ?? {})}`;
+  expect(producerText).toContain("w04-artifact.png");
+  expect(
+    codexLogEvents(readProfile()).filter((event) => event.event === "done" && Number(event.bytes) > 10_000).length,
+    "the real codex-cli provider must record the full-size generation",
+  ).toBeGreaterThanOrEqual(1);
+
+  // The real generated pixels are read from this Run's own workspace, independently of the
+  // Artifact chain: the download must be exactly these bytes.
+  const threadWorkspaces = boundThreadWorkspaces(readProfile(), attempt.identity.threadId);
+  expect(threadWorkspaces.length, "the audited Run owns exactly one workspace directory").toBe(1);
+  const onDisk = path.join(threadWorkspaces[0], "user-data", "outputs", "w04-artifact.png");
+  const fileBytes = fs.readFileSync(onDisk);
+  const fileSha = sha256(fileBytes);
+  expect(fileBytes.length, "a real generated image is not a tiny synthetic file").toBeGreaterThan(10_000);
+  expect(fileBytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+    "the workspace bytes must carry real PNG magic").toBe(true);
+  const dims = pngDimensions(fileBytes);
+  expect(dims, "the workspace bytes must parse as a real PNG IHDR").toBeTruthy();
+  expect([dims.width, dims.height].some((value) => value > 256),
+    `a real generated image has real dimensions, got ${dims.width}x${dims.height}`).toBe(true);
+  expect(dims.width !== 192 || dims.height !== 96,
+    "the image must not be the old deterministic fixtures synthetic PNG").toBe(true);
+
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByTestId("artifact-trigger").first().click();
-  const downloadReady = page.waitForEvent("download", { timeout: 20_000 });
+  const downloadReady = page.waitForEvent("download", { timeout: 30_000 });
   await page.getByRole("link", { name: /^(Download|下载)$/ }).first().click();
   const download = await downloadReady;
   const bytes = fs.readFileSync(await download.path());
   const downloadedSha = sha256(bytes);
-  expect(downloadedSha, "the artifact download bytes must match the executed artifact").toBe(claimed[1]);
+  expect(downloadedSha, "the artifact download bytes must match the real workspace image").toBe(fileSha);
   const again = await context.request.get(
     `${APP}/api/threads/${attempt.identity.threadId}/artifacts/${routeArtifact(artifactPath)}`,
     { timeout: 15_000 });
@@ -568,7 +719,10 @@ test("A6 run artifact lands in outputs with verifiable download SHA-256", async 
   await saveEvidence(testInfo, "w04-a6-artifact", {
     case: "A6", contract: ASSERTION_TABLE.A6, identity: attempt.identity,
     artifactPath, downloadedSha, byteSize: bytes.length,
+    image: { byteSize: fileBytes.length, sha256: fileSha, width: dims.width, height: dims.height },
+    workspaceFile: onDisk,
   });
+  await page.screenshot({ path: testInfo.outputPath("w04-a6-artifact.png"), fullPage: true });
 });
 
 test("A7 cross-Run isolation keeps artifacts thread-scoped", async ({ context, page }, testInfo) => {
@@ -578,6 +732,7 @@ test("A7 cross-Run isolation keeps artifacts thread-scoped", async ({ context, p
     page,
     context,
     `${GENERATE_PROMPT} Call the tool with { "prompt": "isolation probe", "image_name": "w04-isolation.png" }, then present outputs/w04-isolation.png with present_files.`,
+    280_000,
   );
   expect(first.terminal).toBe("success");
   expect(first.approved, "the isolation producer approval must be answered").toBe(true);
