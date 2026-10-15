@@ -81,7 +81,7 @@ final class DeerFlowInputPolishApi implements HttpHandler {
             send(exchange, 405, Map.of("detail", "Method Not Allowed"));
             return;
         }
-        if (!isLoopbackPeer(exchange)) {
+        if (!isLoopbackPeer(exchange) && !io.haifa.agent.superharness.server.auth.LocalAuthService.sessionAuthActive()) {
             send(exchange, 403, Map.of("detail", "Local profile accepts loopback clients only"));
             return;
         }

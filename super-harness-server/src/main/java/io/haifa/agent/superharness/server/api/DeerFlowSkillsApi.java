@@ -35,8 +35,11 @@ public final class DeerFlowSkillsApi implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        if (exchange.getRemoteAddress() == null || exchange.getRemoteAddress().getAddress() == null
-                || !exchange.getRemoteAddress().getAddress().isLoopbackAddress()) {
+        boolean loopbackPeer = exchange.getRemoteAddress() != null
+                && exchange.getRemoteAddress().getAddress() != null
+                && exchange.getRemoteAddress().getAddress().isLoopbackAddress();
+        if (!loopbackPeer
+                && !io.haifa.agent.superharness.server.auth.LocalAuthService.sessionAuthActive()) {
             send(exchange, 403, Map.of("detail", "Local profile accepts loopback clients only"));
             return;
         }

@@ -44,6 +44,7 @@ public final class LocalAuthService {
     private static final Duration LOCKOUT = Duration.ofSeconds(300);
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final ThreadLocal<LocalAuthService> PENDING = new ThreadLocal<>();
+    private static volatile boolean sessionAuthActive;
     /** Frozen {@code _COMMON_PASSWORDS}: lowercased entries of length 8 or more. */
     private static final Set<String> COMMON_PASSWORDS = Set.of(
             "password", "password1", "password12", "password123", "password1234",
@@ -80,16 +81,27 @@ public final class LocalAuthService {
 
     public static void prepare(Path dataDirectory, Map<String, String> environment) throws IOException {
         PENDING.set(open(dataDirectory, environment));
+        sessionAuthActive = PENDING.get() != null;
     }
 
     public static LocalAuthService takePending() {
         LocalAuthService value = PENDING.get();
         PENDING.remove();
+        sessionAuthActive = value != null;
         return value;
     }
 
     public static void discardPending() {
         PENDING.remove();
+    }
+
+    /**
+     * True while a constructed local auth service is pending for this bootstrap. The session
+     * authenticates every request, so the per-handler loopback-client gates treat any remote
+     * peer as authenticated traffic instead of rejecting non-loopback clients outright.
+     */
+    public static boolean sessionAuthActive() {
+        return sessionAuthActive;
     }
 
     public static LocalAuthService open(Path dataDirectory, Map<String, String> environment) throws IOException {

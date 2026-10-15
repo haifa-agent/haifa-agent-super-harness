@@ -34,7 +34,8 @@ final class DeerFlowSubagentCatalogApi implements HttpHandler {
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         try {
-            if (!DeerFlowBootstrapApi.isLoopbackPeer(exchange)) {
+            if (!DeerFlowBootstrapApi.isLoopbackPeer(exchange)
+                    && !io.haifa.agent.superharness.server.auth.LocalAuthService.sessionAuthActive()) {
                 send(exchange, 403, Map.of("detail", "Local profile accepts loopback clients only"));
                 return;
             }
