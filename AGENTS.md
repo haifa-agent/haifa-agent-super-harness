@@ -118,6 +118,12 @@
 - 低内存：空闲提交内存很低时，默认堆的 `mvn` 与 fixture JVM 会报 `Could not reserve enough space` / `Native memory allocation (mmap) failed ... G1 virtual space`。使用入口的 `-LowMemory`；自行启动 JVM 时，fixture 用 `JAVA_TOOL_OPTIONS=-Xmx96m -XX:+UseSerialGC`，Maven 用 `MAVEN_OPTS=-Xmx512m -XX:+UseSerialGC`，surefire 用 `-DargLine=-Xmx768m -XX:+UseSerialGC`。
 - 冻结资源字节：冻结文件必须按 Git 提交的原始字节落盘，来源 / 哈希校验必须通过。`core.autocrlf=true` 的新 worktree 可能把冻结资源检出为 CRLF，例如 `super-harness-server/src/main/resources/upstream/deerflow/w15/` 下的 Python 资源，Gateway 构造时报 `Frozen Skill scanner resource hash mismatch`。检查：逐项比对该目录 `manifest.json` 的 SHA-256 与实际字节。修复：依靠仓库 `.gitattributes` 的 `text eol=lf` 规则，在相关路径 clean 的独立 worktree 用 `git archive HEAD <路径>` 导出并解包（冻结前端对应 `frontend`、`third-party`、`contracts`），再重建。不修改 manifest 或固定哈希、不关闭校验、不改全局 Git 配置。
 
+### 已有 data-root 的 Skill scanner 派生缓存
+
+- 症状：升级已审核的产品 JAR 后，Gateway 启动报 `Skill scanner cache changed`；新 data-root 测试通过不能证明旧 data-root 缓存兼容。先保存失败日志，分别从旧／新 exec JAR 的 `upstream/deerflow/w15/` 读取资源原字节，用 SHA-256 和逐字节比较核对 `skills/scanner/` 对应文件；同时核对该文件在两版本之间的实际 Git 变更。
+- 仅当缓存精确等于旧 JAR、资源确实随已审核的新 JAR 更新时，将该单个派生文件归档并移到独立证据目录，让原构造器按新 JAR 和原 manifest 校验重新生成。保留原失败，不关闭 hash 校验、不改 manifest、不移动整个 `skills/`，不触碰数据库、凭据或用户 Skill 源包。缓存不匹配旧资源、存在链接或变更来源不明时停止，不按升级处理。
+- 按原入口和原期限刷新后，核对新缓存字节、健康检查、真实模型 smoke、原 data-root／凭据及端口／PID。新版本失败需要回滚旧 JAR 时，先恢复归档的对应旧派生资源；不得在缓存不兼容时把服务回滚启动失败记为 ready。
+
 ### 默认 Web 工具环境代理
 
 - 在启动 Gateway 的同一 PowerShell 会话中配置进程级变量，然后启动或重启 Gateway：
@@ -140,7 +146,7 @@ $env:no_proxy=$env:NO_PROXY
 
 ### 真实模型诊断
 
-- 静态 review 的 Python：W15 静态 review 使用 `python -I -B`，隔离模式不加载用户 site-packages。系统 Python 普通导入 `yaml` 成功，不能证明隔离子进程可用；检查：`<python> -I -B -c 'import yaml; print(yaml.__version__)'`。缺 PyYAML 时 review 拒绝，不能去掉 `-I` 或在线安装目标依赖绕过。以进程变量 `HAIFA_SUPER_HARNESS_SKILL_PYTHON` 指向已经具备该依赖的解释器；本机冻结 reference 的 `backend/.venv/Scripts/python.exe` 带 PyYAML 6.0.3，仅用于运行纯静态审查模块，不启用其后端或目标脚本。
+- 静态 review 的 Python：W15 静态 review 使用 `python -I -B`，隔离模式不加载用户 site-packages。系统 Python 普通导入 `yaml` 成功，不能证明隔离子进程可用；检查：`<python> -I -B -c 'import yaml; print(yaml.__version__)'`。缺 PyYAML 时 review 拒绝，不能去掉 `-I` 或在线安装目标依赖绕过。以进程变量 `HAIFA_SUPER_HARNESS_SKILL_PYTHON` 指向已经具备该依赖的解释器；本机现有 `D:/agents/deer-flow/backend/.venv/Scripts/python.exe` 带 PyYAML 6.0.3（须先实际 `Test-Path` 并用该解释器 `-I -B -c 'import yaml; print(yaml.__version__)'` 核对）；`D:/workspace/haifa-agent-super-harness/deer-flow/backend/.venv/Scripts/python.exe` 当前不存在，不能因前端冻结来源在该目录就推断解释器也在，仅用于运行纯静态审查模块，不启用其后端或目标脚本。
 - `base_url` 决定 SDK 方言：`DeerFlowConfigurationApi.binding` 仅在 endpoint 精确为 `https://api.deepseek.com` 时使用 DeepSeek 方言并固定 `thinking=disabled`。把真实模型临时改到本地代理路径时，standard 方言会在发 HTTP 前拒绝（`provider endpoint path must be /v1`，Run 为 `MODEL_CALL_FAILED`）；改成 `/v1` 虽可发出本地请求，但请求缺少原 DeepSeek thinking 选项，不能视为同语义采集。检查：核对实际 model config、SDK bytecode `validateSnapshot`、原 `model.call.failed` 与 Provider 是否收到 HTTP。处理：恢复直接 HTTPS 配置，采集前置 FAIL 单独保留，不以代理改写请求或更换方言掩盖差异；后续采集须先证明保持原请求语义。
 
 ### Windows 快照目录观察
@@ -178,6 +184,7 @@ corepack pnpm install --offline --frozen-lockfile
 
 ### 凭据与数据目录
 
+- 临时 HTTP 测试的 OS 凭据累积：本机普通 `GatewayFixture.production` 曾持续报 `CredWrite failed with error 8 (STORE_FAILURE)`，单类复验也失败；不能仅据错误码断言物理内存不足或随意清理凭据。普通测试使用 `GatewayFixture.productionEnvironment` 的显式测试环境密钥，保留调用方显式引用；默认 OS 首次配置、丢失与重启由 `ContinuationKeyConfigurationTest` 验证。检查：`pwsh -NoProfile -File scripts/test-targeted.ps1 -Test "PlanModeLifecycleHttpTest,ContinuationKeyConfigurationTest,AcceptanceFixturesTest" -LowMemory`；只输出凭据存在性和计数，不输出值，不删已有数据库或主服务凭据。
 - 持久 SQLite Runtime 的 model continuation 使用 AES-GCM 稳定密钥。Windows 默认使用**单个固定** Windows Credential Manager target：`haifa:os:HAIFA_SUPER_HARNESS_CONTINUATION_KEY`（不再按 data-root 分槽）。历史实现曾按规范化绝对 data-root 的 SHA-256 前 16 个十六进制字符分槽（`haifa:os:HAIFA_SUPER_HARNESS_CONTINUATION_KEY_<data-root-hash>`），每个 data-root 写一条凭据并最终写满 Windows Credential Manager，故已废止。仅当该固定凭据尚不存在时首次启动可生成并写入，已有凭据不得覆盖；已有数据库但凭据丢失必须启动失败，禁止静默换钥；固定凭据缺失时会回退读取旧的按 data-root 分槽凭据（只读复用、不改动其 key、也不迁移）以兼容既存数据库。由此，本机新建 data-root 共用同一把密钥。显式 `os://NAME` 属于外部托管引用，缺失时即使数据库尚不存在也必须失败。Linux/CI 必须通过 `HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF=env://NAME` 指向外部注入的 Base64 256-bit key。症状：启动前报 continuation key unavailable/invalid。检查：`Test-Path <data-root>/runtime/haifa-agent.sqlite` 确认数据库是否存在，`cmdkey /list` 只检查 `haifa:os:HAIFA_SUPER_HARNESS_CONTINUATION_KEY` 是否存在（不得输出 secret），并查看 `server-*.stderr.log`。最小修复：恢复该固定 OS 凭据或原外部 secret 引用，不能删除数据库或生成替代 key；修复后以同一数据目录完成关闭重启并验证 transcript/history/runs 可读。
 - 由上一条推出：不同启动方式不得共用同一 data-root。例如 W05 Playwright 的 Interaction 测试 classpath profile 与生产 JAR ActiveReconnect profile 混用时，后者会报 `continuation key credential is unavailable for the existing Runtime database`。从首次运行起就为每种 profile 分配独立的新 data-root 子目录。
 
@@ -187,14 +194,14 @@ corepack pnpm install --offline --frozen-lockfile
 
 ### OpenCode CLI
 
-- 主控确认任务的独立 branch/worktree、端口、数据目录和验收范围，在派单提示词中提供 SDK 坐标、测试命令及证据要求。提示词正文由主控读取，作为一个位置参数传入；模型固定为 `deepseek/deepseek-flash`，必须在命令中显式指定。
+- 主控确认任务的独立 branch/worktree、端口、数据目录和验收范围，在派单提示词中提供 SDK 坐标、测试命令及证据要求。提示词正文由主控读取，作为一个位置参数传入；模型固定为 `opencode-go/glm-5.3-flash`，必须在命令中显式指定。
 
 ```powershell
 $taskPrompt = Get-Content -LiteralPath '<主控已确认的提示词文件>' -Raw
 Push-Location '<已分配的 worktree 根目录>'
 try {
     New-Item -ItemType Directory -Force -Path local-tmp | Out-Null
-    opencode run --model deepseek/deepseek-flash $taskPrompt 2>&1 |
+    opencode run --model opencode-go/glm-5.3-flash $taskPrompt 2>&1 |
         Tee-Object -FilePath local-tmp/opencode-run.log
 } finally {
     Pop-Location
@@ -206,7 +213,11 @@ try {
 - 任务需要 SDK 类型事实时，主控在派工前运行 `python scripts/governance/sdk_api_digest.py --worktree <worktree>`，并在提示词里写明摘要位于 `local-tmp/sdk-api/<版本>/`。执行者在该目录检索公开签名；摘要里没有的信息在交接里写明并停下。SDK 重新发布后主控重新运行脚本。
 - 验收服务优先由仓库 runner 管理；自行启动的常驻服务在同一次 shell 调用的 `try/finally` 中启动、使用和清理，避免继承调用方管道后留存。CLI 直接运行或交给既有后台执行器，不使用 PowerShell `Start-Job` 承载。
 - 用 `opencode-run.log`、Git 改动、checkpoint 和真实测试证据检查进展与交付；退出码 0 不能单独判定完成。权限拒绝或上下文不足时交回主控，不放宽外部目录权限绕过；检查和清理只针对本任务的精确进程。
+- 有界调用需要续接已读上下文时，先确认原 CLI 的精确进程已终止并保存原件；从本任务 `--format json` 原始日志核对唯一 `sessionID`，用 `opencode run --session <sessionID> --model opencode-go/glm-5.3-flash` 在同一 worktree 续接，仍设置独立 deadline。不得以默认 `--continue` 猜测全局最近会话；续接不改变功能验收预算，也不把先前 deadline 或 FAIL 改为 PASS。
+- Windows 下 Python `subprocess` 不通过 `opencode.cmd` 传递多行提示词：`.cmd` 的 `%*` 转发可截断换行后的正文，使模型仅收到首段但仍退出 0。使用已安装 shim 指向的原生 `opencode.exe`，以参数数组、明确 `cwd` 和单个完整正文参数调用，不拼接 shell 命令、不改全局配置。首次使用派单封装时，用该任务的 `opencode export <sessionId>` 保存首条 user text 的原始字节数和 SHA-256；若 CLI 使用带外层引号的参数包裹格式，先按该格式解码，再核对正文与提示词字节数和 SHA-256 完全一致；导出仅存本任务外置证据目录，不能只凭 CLI 0 或模型自行描述判断提示词完整。忽略目录中的上下文文件须提供准确绝对路径直接读取，不能因 glob 默认过滤 `local-tmp` 就越界搜索或放宽权限。
 - 继承的 `PWD`：OpenCode 以环境变量 `PWD` 为工作目录，优先于进程 `cwd`。从 Git Bash 等会导出 `PWD` 的 shell 用 `subprocess.Popen(..., cwd=worktree)` 启动时，子进程仍带着调用方的 `PWD`。症状：执行者把调用方所在仓库当成当前目录，访问已分配 worktree 时 stderr 报 `permission requested: external_directory (...); auto-rejecting`，十几秒内以退出码 0 结束且没有任何改动。检查：stdout 里第一条 `pwd` 的输出。修复：启动前从子进程环境中移除 `PWD` 和 `OLDPWD`，或按上面的示例在 PowerShell 7 会话里用 `Push-Location` 启动。修复后用同一提示词重新启动，并核对 `pwd` 输出为已分配的 worktree。
+
+- OpenCode 提示词传输保真：Windows 原生 executable 的位置参数曾在会话导出中比传入正文多出两个外层双引号。以本轮日志中唯一的 `sessionID` 执行 `opencode export <sessionID>`，从该会话的 user/text part 对照实际正文 UTF-8 字节数和 SHA-256；正文不相同就记保真 `FAIL`，外层引号归一化只能作诊断，不能冒充精确通过。不得读取无关会话，不使用 `--continue`，不以退出码或保真检查替代源码交付和运行验收；传输修复须在新的有界轮次独立验证。
 
 ### agy CLI（Antigravity）
 
@@ -231,6 +242,7 @@ try {
 - 流式调用用 `agy --model gemini-3.8-flash-high --input-format stream-json --output-format stream-json --print ""`。stdin 逐行写 `{"event":"user","message":{"role":"user","content":"提示词正文"}}` 并 flush；stdout 逐行解析 `init`、`step_update`、`result`，可实时读取文本增量与工具结果，stderr 单独保存。追加消息实测排队到下一轮，不是当前轮即时 steering。
 - 写权限：无头模式（`--print`）无法弹出权限确认，需要写文件的任务不加模式参数时，`write_file` 会被自动拒绝，stderr 报 `no output produced — a tool required the "write_file" permission that headless mode cannot prompt for`，最终回复为空。需要写文件或执行命令的任务在每次调用时加 `--mode accept-edits`；2026-10-06 实测该模式下可在 worktree 内写文件，并可执行 `git status`、`pwsh -NoProfile -Command ...`。不修改 agy 的 `settings.json`，不使用 `--dangerously-skip-permissions`。该模式下 JSON 结果可能出现 `status=ERROR`（`The stream was interrupted`）而各步骤实际已完成，以文件和实际改动为准。
 - 调用方设置独立 deadline，保留 stdout/stderr 与 `--log-file` 日志；不能仅依赖 `--print-timeout`。只读任务加 `--mode plan`；交付须核对最终状态、文件改动和真实验收证据，不能只看退出码。
+- 需要续接时，先确认原精确进程已终止并保存原件；只从本任务 `--log-file` 中核对唯一 `Created conversation <ID>`，用 `agy --conversation <ID> --model gemini-3.8-flash-high` 在同一 worktree 续接，写入交接文件时仍须 `--mode accept-edits`。不得默认续接全局最近会话，且每次续接须有独立 deadline、原会话归属和新交付证据。
 
 # 主控 Agent 规则
 
