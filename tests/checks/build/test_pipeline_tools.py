@@ -88,13 +88,27 @@ class ChangeScopeTest(unittest.TestCase):
             change_scope.required_gates(["super-harness-server/src/test/java/X.java"]),
             ["verify-full"],
         )
+        # L1 daily default: product changes get one warm round (not x2).
         self.assertEqual(
             change_scope.required_gates(["super-harness-server/src/main/java/X.java", "README.md"]),
-            ["docs-check", "verify-full", "ui-live-round-x2"],
+            ["docs-check", "verify-full", "ui-live-round-x1"],
         )
         self.assertEqual(
             change_scope.required_gates(["frontend/pnpm-lock.yaml"]),
-            ["verify-full", "ui-cold-round", "ui-live-round-x2"],
+            ["verify-full", "ui-cold-round", "ui-live-round-x1"],
+        )
+        # Protocol/projection product paths stay controlled + x1.
+        self.assertEqual(
+            change_scope.required_gates([
+                "super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/X.java",
+            ]),
+            ["verify-full", "ui-controlled-round-x1"],
+        )
+        self.assertEqual(
+            change_scope.required_gates([
+                "super-harness-events/src/main/java/io/haifa/agent/superharness/events/X.java",
+            ]),
+            ["verify-full", "ui-controlled-round-x1"],
         )
 
     def test_any_markdown_is_documentation(self):
@@ -111,6 +125,9 @@ class UiModelDecisionTest(unittest.TestCase):
             "tests/ui/smoke/loopback-openai-provider.cjs",
             "docs/engineering/002-feature-delivery-workflows.md",
             "super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/X.java",
+            "super-harness-server/src/main/java/io/haifa/agent/superharness/server/auth/X.java",
+            "super-harness-events/src/main/java/io/haifa/agent/superharness/events/X.java",
+            "super-harness-workspace/src/main/java/io/haifa/agent/superharness/workspace/X.java",
         ]
         for path in controlled:
             self.assertEqual(change_scope.ui_model_decision([path])[0], "controlled", path)
@@ -122,7 +139,9 @@ class UiModelDecisionTest(unittest.TestCase):
             "super-harness-server/src/main/java/io/haifa/agent/superharness/server/tool/X.java": "tool",
             "super-harness-server/src/main/java/io/haifa/agent/superharness/server/config/X.java": "config",
             "super-harness-server/src/main/resources/application.yml": "resources",
-            "super-harness-events/src/main/java/X.java": "src/main",
+            # Non-protocol product Java (e.g. plan) still forces live via other src/main/.
+            "super-harness-server/src/main/java/io/haifa/agent/superharness/server/plan/X.java": "src/main",
+            "super-harness-app/src/main/java/X.java": "src/main",
             "pom.xml": "pom.xml",
             "tests/checks/customer-demo-v2/mcp-servers/pom.xml": "pom.xml",
             "tests/ui/smoke/live-deepseek.spec.cjs": "live",

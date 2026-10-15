@@ -1,6 +1,6 @@
 """Read a pull request's automated review without writing anything.
 
-The frozen workflow (AGENTS.md, "验收提速") asks a task to read the bot review once
+The frozen workflow (AGENTS.md, "验收分层") asks a task to read the bot review once
 after opening a draft PR, instead of discovering it after the formal gate. This script
 performs only ``gh api`` GET requests: it reads the pull request, its reactions, its
 review comments and the bot's review summary comment, and prints a JSON digest. It never posts a comment,

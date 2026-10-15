@@ -5,10 +5,12 @@
 | **文档编号** | 002 |
 | **主题** | Super Harness 纯产品功能与跨 SDK 功能的交付顺序、门禁和结算条件 |
 | **适用仓库** | `D:\workspace\haifa-agent-super-harness`、`D:\workspace\haifa-agent` |
-| **更新日期** | 2026-10-06 |
+| **更新日期** | 2026-10-15 |
 | **依据规范** | [AGENTS.md](../../AGENTS.md)、[Runtime / Product Boundary](../runtime-product-boundary.md)、[SHPM 使用手册](../shpm-manual.md)，以及上游 `AGENTS.md`、`build-support/README.md` |
 
 本文是操作索引；具体任务的 Oracle、必需门禁和人工验收要求以当前派单、Roadmap 35 / PRD 及上述规则为准。脚本建议、局部 PASS 和候选 SDK 证据不能自动提升任务、工作包或阶段为 `PASS` / `GO`。
+
+验收分三档（详见 [AGENTS.md「验收分层」](../../AGENTS.md)）：**L1** 日常 PR（`change_scope` 门禁，默认一轮 UI）；**L2** 工作包出口双后端差分（不默认挂每个 PR）；**L3** 客户演示同 SHA 连续双轮。下列流程一默认按 L1 合入；L2/L3 在工作包或演示阶段另行安排。
 
 ## 0. 先判定能力归属
 
@@ -46,21 +48,21 @@ flowchart TD
     PR --> BOT["一次性读取机器人审查并集中处理<br/>最多等 10 分钟，超时记 NO_REVIEW_YET<br/>REVIEW_FAILED 可重新触发一次"]
     BOT --> FIXCAND["按根因攒批修复"]
     FIXCAND --> REBASE["按主控要求 rebase 到最新 main<br/>固定候选源码 SHA / SDK / 断言，此后不再 amend / rebase"]
-    REBASE --> PLAN["change_scope.py 的 gates / uiModel 作为门禁下限<br/>主控复核 Oracle→断言→前置→原件映射"]
+    REBASE --> PLAN["change_scope.py 的 L1 gates / uiModel 作为下限<br/>小切片用任务卡原子断言；昂贵轮次才做完整 Oracle 表"]
     PLAN --> PRE["正式预检；clean / 重跑前外置保存需保留原件"]
-    PRE --> G["主控排队：自己执行或放行正式门禁<br/>按 gates 跑全仓门禁、冷轮、暖轮及真实 smoke"]
-    G --> CHECK{"必需门禁是否全部通过？"}
+    PRE --> G["主控排队或放行 L1 门禁<br/>按 gates：全仓/复用、冷轮（若需）、一轮暖轮；内环已覆盖且证据绑最终 SHA 时可抽检计正式"]
+    G --> CHECK{"L1 必需门禁是否全部通过？"}
     CHECK -->|"产品 FAIL，先归档"| FIX
     CHECK -->|"前置不足或必需 NOT_RUN"| BLOCK
-    CHECK -->|"是"| REPORT["交付报告 → task deliver<br/>进入 ready_for_acceptance"]
-    REPORT --> RECORD["主控登记真实门禁结果与候选 SHA"]
+    CHECK -->|"是"| REPORT["交付报告 → task deliver<br/>进入 ready_for_acceptance<br/>注明 L2 差分是否延后到 WP 出口"]
+    REPORT --> RECORD["主控登记真实 L1 门禁结果与候选 SHA"]
     RECORD --> REVIEW["主控独立复审与验收，核对合入条件"]
     REVIEW --> RC{"复审通过？"}
     RC -->|"否，保留阻断"| HOLD["主控登记问题并确定返工 / 前置恢复<br/>在独立 worktree 修复后重新交付；不 accept"]
     HOLD --> I
-    RC -->|"是"| MERGE{"合入后 main 的源码树哈希与 SDK 身份<br/>与已验证候选一致？"}
+    RC -->|"是"| MERGE{"合入后 main 的源码树哈希与 SDK 身份<br/>与已验证候选一致？冲突感知复用见 AGENTS"}
     MERGE -->|"是"| FF["合入（squash merge）；evidence_reuse.py 逐份核对<br/>全部 REUSABLE 时复用门禁与 UI 结果"]
-    MERGE -->|"否，或任一证据 STALE"| NEW["在最终合入 SHA 上重跑必需门禁<br/>追加证据并由主控复审"]
+    MERGE -->|"否，或任一证据 STALE"| NEW["仅重跑指纹变化 / 路径冲突 / STALE 项<br/>追加证据并由主控复审"]
     NEW --> NC{"最终 SHA 门禁与复审通过？"}
     NC -->|"否"| HOLD
     NC -->|"是"| SMOKE["刷新固定主服务 18018/33018<br/>真实 smoke 并登记最终主线证据"]
@@ -68,19 +70,19 @@ flowchart TD
     SMOKE --> SC{"主服务 smoke 通过？"}
     SC -->|"否"| HOLD
     SC -->|"是"| ACCEPT["主控 task accept<br/>确认本任务进程与端口清理，assign release"]
-    ACCEPT --> FIN["任务 finished<br/>工作包 / 演示阶段 / GO 分别验收结算"]
+    ACCEPT --> FIN["任务 finished<br/>L2 差分在 WP 出口攒批；演示 L3 / GO 分开结算"]
 ```
 
 ### 1.2 开发与正式验收
 
-1. **派工与资源**：先确认任务依赖、独立 branch/worktree、基线 SHA、完整槽位端口和独立 `data-root`。子智能体槽位共四个：槽位 1 `20618/25618`、槽位 2 `30618/35618`、槽位 3 `40618/45618`、槽位 4 `11618/16618`，同一时刻每槽仅一任务。开发服务不占用主端口 `18018/33018`。启动前检查动态/排除端口范围，并对完整端口组实际绑定预检；不能只查监听表。
-2. **内环**：执行者实现后运行受影响定向测试和必要的单 case UI，集中自审、按根因攒批修复，再进入稳定候选正式门禁。UI spec/fixture 变更先用 `-CaseTitle '<完整标题>'` 跑受影响 case。局部结果和 `-PreflightOnly` 不代替全套验收。commit/push 前只要求范围内定向测试、`git diff --check`、secret scan 和 SDK 基线检查。
-3. **候选 SHA 与正式门禁**：机器人审查意见处理完后，按主控要求 rebase 到最新 `main`，固定候选 SHA、SDK 构件和断言；候选固定后不再 amend/rebase，除非主控明确要求。全仓门禁、正式 UI 轮次和慢测试是正式门禁，由主控排队：主控自己执行，或明确放行后由执行者在自己的槽位执行；未运行的记 `NOT_RUN`。门禁和真实 smoke 须在报告可合并前完成。源码、SDK 构件或断言改变后，重跑受影响门禁，不沿用失效 PASS；交付证据须绑定最终候选提交，不能用 dirty 状态的结果证明最终 SHA。
-4. **PR 与机器人审查**：内环稳定后先把分支推送到远端并开 PR。PR 以可审查状态打开，不用 draft：机器人只在 PR 打开、draft 转 ready 或评论 `@codex review` 时审查。此时的 PR 不代表任何门禁通过，PR 描述须写明正式门禁尚未运行。结论为 `REVIEW_FAILED` 时可以评论一次 `@codex review` 重新触发，仍然失败就如实记录并继续。开 PR 后最多等机器人审查 10 分钟，超时按 `NO_REVIEW_YET` 记录并继续，不无界等待。审查意见只处理一轮：正确的采纳，不采纳的各写一句理由，不再主动请求重新审查。按根因攒批修复后固定候选提交，再进入正式门禁；正式门禁通过后才出现的新意见，只有确认会导致错误行为时才修改并重跑受影响门禁，其余登记为后续事项。向人工报告 PR 可合并之前，必须运行 `scripts/governance/pr_review_digest.py` 并给出结论。
-5. **Oracle 与预检**：昂贵全仓构建或双后端 UI 之前，列出 `Oracle case → 实际断言 → 必需前置条件 → 预期原始证据`，由主控复核关键正反例。正式 UI 一次性核对冻结来源、SDK 实际落盘构件、前端依赖与浏览器、完整端口组、独立数据/凭据、Provider、Gateway 和前端代理目标。已存在资源的跨身份拒绝不能由不存在资源的 404 替代。
+1. **派工与资源**：先确认任务依赖、独立 branch/worktree、基线 SHA、完整槽位端口和独立 `data-root`，以及本任务是 **L1 日常** 还是附带 **L2 WP 差分**。子智能体槽位共四个：槽位 1 `20618/25618`、槽位 2 `30618/35618`、槽位 3 `40618/45618`、槽位 4 `11618/16618`，同一时刻每槽仅一任务。开发服务不占用主端口 `18018/33018`。启动前检查动态/排除端口范围，并对完整端口组实际绑定预检；不能只查监听表。
+2. **内环 / L1**：执行者实现后运行受影响定向测试和必要的单 case UI，集中自审、按根因攒批修复。当这些结果覆盖 `change_scope` 的 L1 gates 且证据绑定最终候选 SHA 时，主控抽检后可计为正式 L1，无需为同一 gates 再整套重跑。UI spec/fixture 变更先用 `-CaseTitle '<完整标题>'` 跑受影响 case。`-PreflightOnly` 与未覆盖项不能冒充正式门禁。commit/push 前只要求范围内定向测试、`git diff --check`、secret scan 和 SDK 基线检查。
+3. **候选 SHA 与 L1 门禁**：机器人审查意见处理完后，按主控要求 rebase 到最新 `main`，固定候选 SHA、SDK 构件和断言；候选固定后不再 amend/rebase，除非主控明确要求。`verify-full`、正式 UI（默认一轮）由主控排队或放行后在执行者槽位执行；未运行的记 `NOT_RUN`。L1 门禁须在报告可合并前完成；**双后端差分不是 L1 默认项**。源码、SDK 构件或断言改变后，重跑受影响门禁；交付证据须绑定最终候选提交。
+4. **PR 与机器人审查**：内环稳定后先把分支推送到远端并开 PR。PR 以可审查状态打开，不用 draft。PR 描述写明 L1 门禁状态，以及 L2 是否延后到工作包出口。结论为 `REVIEW_FAILED` 时可以评论一次 `@codex review` 重新触发。开 PR 后最多等机器人 10 分钟，超时按 `NO_REVIEW_YET` 记录并继续；不因审查等待阻塞已就绪的 L1 门禁。审查意见只处理一轮。向人工报告 PR 可合并之前，必须运行 `scripts/governance/pr_review_digest.py` 并给出结论。
+5. **Oracle 与预检**：L1 小切片用任务卡 3～5 条原子断言。昂贵全仓或 **L2 双后端** 之前，仍列出 `Oracle case → 实际断言 → 必需前置 → 预期原件`，由主控复核关键正反例。正式 UI 一次性核对冻结来源、SDK 落盘构件、前端依赖与浏览器、完整端口组、独立数据/凭据、Provider、Gateway 和前端代理目标。已存在资源的跨身份拒绝不能由不存在资源的 404 替代。
 6. **原件与失败**：任何 `mvn clean` 或重跑之前，将需保留的 trace、截图及前后端/Provider 原始日志复制到该工作包外置证据目录，记录原路径和复制路径。首次 FAIL 永久保留；`NOT_RUN` 写明缺失前置。前置失效只停止受影响批次，独立用例继续；批次内不边测边改产品，结束后归并根因修复。不得放宽断言或缩改 Oracle 换取绿灯；确需裁剪某条 Oracle 时，须经人工逐项批准并在 SHPM 登记为已知差异。
 
-门禁范围以 `python scripts/governance/change_scope.py` 输出的 `gates` 和 `uiModel` 为准，混合改动由脚本取并集；改动路径到门禁的分类表只在该脚本里维护，本文不再抄写。输出是下限，须对照任务 Oracle 复核，主控或复审可以要求更多。`gates` 里各项的含义：
+门禁范围以 `python scripts/governance/change_scope.py` 输出的 `gates`、`uiModel` 和 `acceptanceTier` 为准，混合改动由脚本取并集；改动路径到门禁的分类表只在该脚本里维护。输出是 **L1 下限**，须对照任务 Oracle 复核，主控或复审可以要求更多（含 `x2` 或 L2）。`gates` 里各项的含义：
 
 | `gates` 项 | 含义 |
 | --- | --- |
@@ -89,21 +91,22 @@ flowchart TD
 | `verify-full` | Java 输入指纹已变，全仓门禁须真跑 |
 | `verify-full-reuse` | Java 输入指纹未变，只需存在同指纹的真实通过摘要；`verify-full.ps1` 自动复用并注明来源，没有时真跑一次 |
 | `ui-cold-round` | 冷轮，单独启动 |
-| `ui-<model>-round-x2` | 同一提交上两次暖轮，用同脚本重复运行区分稳定问题与偶发问题 |
-| `ui-<model>-round-x1` | 一轮暖轮，通过即可；失败须先用同一脚本重跑一次再定位 |
+| `ui-<model>-round-x1` | **L1 默认**：一轮暖轮，通过即可；失败须先用同一脚本重跑一次再定位 |
+| `ui-<model>-round-x2` | 仅 UI 用例/runner 自身变更（或主控提升）时两次暖轮 |
 
-`<model>` 为 `live` 时使用真实模型，仅当改动全部落在脚本的受控表内时为 `controlled`（脚本内分别称 Rule B、Rule D）。除 `gates` 含 `ui-cold-round` 外，冷轮也在前端依赖、槽位、代理目标变化或构建戳失效时执行；新 worktree 无构建戳时首轮自然为冷轮。同一提交上的重复运行可以在一次启动内完成（`-Passes 2 -SkipBuild`），仅限 runner 里已验证可重复的 profile。局部冒烟及另一 SHA 的结果不能替代必需轮次。
+`<model>` 为 `controlled` 时用受控模型（协议/投影面及文档脚本测试等，见脚本表）；为 `live` 时用真实模型（run/prompt/tool/config、主资源、pom、live 文件名、SDK 身份变化、未知路径）。除 `gates` 含 `ui-cold-round` 外，冷轮也在前端依赖、槽位、代理目标变化或构建戳失效时执行；新 worktree 优先恢复共享前端缓存，否则首轮为冷轮。同一提交上的重复运行可以在一次启动内完成（`-Passes 2 -SkipBuild`），仅限已验证可重复的 profile。
 
-每轮报告准备/构建、就绪、断言、归档、复审及返工耗时，启动与总耗时、重试、首个超时/卡点、Next 动态编译时间、trace/截图/日志位置及端口/子进程清理结果。等待必须有对象、deadline 和超时证据；重型构建、UI 与共享 Provider 由主控排队。
+每轮报告准备/构建、就绪、断言、归档、复审及返工耗时，启动与总耗时、重试、首个超时/卡点、Next 动态编译时间、trace/截图/日志位置及端口/子进程清理结果。等待必须有对象、deadline 和超时证据；全仓、双后端、live UI 与共享 Provider 由主控排队；跨槽位定向测试与受控单后端 UI 可并行。
 
 真实 smoke 的断言和必需 Run/Tool/Artifact/Approval 证据按任务范围确定。需要访问真实 Provider 时先确认当前任务的授权与凭据；未授权或前置不足如实记 `NOT_RUN`，不私自运行，也不以本地 fixture 替代真实模型门禁。
 
 ### 1.3 合入、复用与 SHPM 结算
 
-- **合入后复用**：合入方式不限（本仓库 PR 一律 squash merge）；合入后 `main` 的源码树哈希和 SDK 身份与已验证候选相同即可复用，用 `python scripts/governance/evidence_reuse.py --target <合入后提交> <证据>` 逐份核对，全部 `REUSABLE` 才复用，`STALE` 一律在合入后的提交上重跑。全仓门禁用 Java 输入指纹判定，脚本回归摘要和 UI 证据用 `sourceTree` + `sdkIdentity` + `sourceDirty=false` 判定；缺字段的旧证据记为 `STALE`。若相应门禁按范围不适用，应在交接中写明依据。客户演示“同一主线 SHA 连续两轮 L3”不受此裁剪影响。
+- **合入后复用**：合入方式不限（本仓库 PR 一律 squash merge）；合入后 `main` 的源码树哈希和 SDK 身份与已验证候选相同即可复用，用 `python scripts/governance/evidence_reuse.py --target <合入后提交> <证据>` 逐份核对，全部 `REUSABLE` 才复用。并行合入时采用冲突感知：指纹未变可复用 `verify-full`；仅对路径冲突或 `STALE` 项重跑。全仓门禁用 Java 输入指纹判定，脚本回归摘要和 UI 证据用 `sourceTree` + `sdkIdentity` + `sourceDirty=false` 判定；缺字段的旧证据记为 `STALE`。客户演示“同一主线 SHA 连续两轮 L3”不受 L1/L2 裁剪影响。
 - **构建复用**：后端比较 Java 输入指纹（排除 `docs/`、`tests/`、`scripts/`、根目录 `*.md` 后的源码树，加每个 Haifa JAR 的 SHA-256 身份及 JDK/Maven 版本），前端检查冻结源码树、lockfile、代理目标和构建 profile。复用产物不复用 Run、Thread 或数据目录；测试结果能否复用只按上一条和全仓门禁的指纹复用判断。SDK 同版本重新发布后的重建见 §2.2。
+- **L2 工作包差分**：工作包出口或相关合入批次再跑冻结前端双后端差分；不作为每个日常 PR 的默认 gates。SHPM 登记时区分 L1 与 L2 证据。
 - **状态链**：主控按 `start / assign → checkpoint → deliver → verify → 独立验收 → accept / release` 推进。`deliver` 只进入 `ready_for_acceptance`；`accept` 需要独立复审、已合入及最终主线 SHA 证据，之后确认本任务端口和子进程清理并释放派工。复审失败保留必需 FAIL 和阻断 Issue，合法返工状态处理按 SHPM 手册执行，不虚假 accept。
-- **分开结算**：单任务 finished 不等于工作包完成。全部任务及工作包退出条件满足后，主控再执行 `wp state ready_for_acceptance` / `wp complete`；演示阶段另查依赖、登记阶段验证与结果，`GO` 通过 `sprint decide` 设置，不自动关闭长期工作包。
+- **分开结算**：单任务 finished 不等于工作包完成，也不等于 L2 差分已做。全部任务及工作包退出条件（含约定的 L2）满足后，主控再执行 `wp state ready_for_acceptance` / `wp complete`；演示阶段另查依赖、登记阶段验证与结果，`GO` 通过 `sprint decide` 设置，不自动关闭长期工作包。
 
 ## 2. 流程二：跨 Haifa Agent SDK 协同交付
 
