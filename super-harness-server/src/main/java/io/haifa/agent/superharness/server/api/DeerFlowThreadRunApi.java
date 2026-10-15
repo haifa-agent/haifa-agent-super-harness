@@ -100,8 +100,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             System.getLogger(DeerFlowThreadRunApi.class.getName() + ".interaction");
     /** Frozen route an admission failure belongs to; a server constant, never the client path. */
     static final String RUN_STREAM_ROUTE = "POST /api/threads/{thread_id}/runs/stream";
-    /** Bounded reason length of one admission diagnostic line. */
-    private static final int ADMISSION_REASON_LIMIT = 200;
+    /** Bounded cause-chain depth of one admission diagnostic line. */
+    private static final int ADMISSION_CAUSE_LIMIT = 3;
     /** Bounded server-side record of an admission failure the frozen response cannot carry. */
     private static final System.Logger ADMISSION_LOG =
             System.getLogger(DeerFlowThreadRunApi.class.getName() + ".admission");
@@ -3002,31 +3002,34 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
      * Bounded server-side record of a Run admission failure. The frozen response stays the generic
      * {@code Run could not start}, so this line is the only place the failure survives: an admission
      * failure swallowed here is undiagnosable in production (a Run that never started has no durable
-     * record). It carries the frozen route, the exception class and a single-line length-bounded
-     * reason - never the request body, tool arguments, file contents or credentials, and never the
-     * client-controlled thread id, which may carry CR/LF and would allow log injection.
+     * record). It carries the frozen route, the exception class and the class chain of its causes:
+     * admission fails before the request is validated, so a message may echo client text or a
+     * provider body and is never recorded. The client-controlled thread id is excluded for the same
+     * reason - createThread permits CR/LF, which would allow log injection.
      */
     static String admissionFailureMessage(RuntimeException failure) {
         StringBuilder message = new StringBuilder("Run admission failure on ")
                 .append(RUN_STREAM_ROUTE)
                 .append(": ")
                 .append(failure.getClass().getName());
-        String bounded = boundedReason(failure.getMessage());
-        if (bounded != null) {
-            message.append(" (").append(bounded).append(')');
+        String causes = causeClasses(failure);
+        if (causes != null) {
+            message.append(" (").append(causes).append(')');
         }
         return message.toString();
     }
 
-    /** One log line at most: CR/LF collapsed and the reason truncated to a bounded length. */
-    private static String boundedReason(String reason) {
-        if (reason == null || reason.isBlank()) {
-            return null;
+    /** Class names of the cause chain, bounded; an exception message is never recorded. */
+    private static String causeClasses(Throwable failure) {
+        StringBuilder chain = new StringBuilder();
+        Throwable cause = failure.getCause();
+        for (int depth = 0; cause != null && depth < ADMISSION_CAUSE_LIMIT; depth++, cause = cause.getCause()) {
+            if (chain.length() > 0) {
+                chain.append(" <- ");
+            }
+            chain.append(cause.getClass().getName());
         }
-        String singleLine = reason.replace('\r', ' ').replace('\n', ' ').strip();
-        return singleLine.length() <= ADMISSION_REASON_LIMIT
-                ? singleLine
-                : singleLine.substring(0, ADMISSION_REASON_LIMIT) + "...";
+        return chain.length() == 0 ? null : chain.toString();
     }
 
     /** Bounded count of durable USER turns; stops as soon as a second turn proves the first-turn boundary is gone. */
