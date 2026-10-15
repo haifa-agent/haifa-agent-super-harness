@@ -113,7 +113,7 @@ final class DeerFlowWorkspaceApi {
     private boolean route(
             HttpExchange exchange, String threadId, String method, boolean requireExisting, Route route)
             throws IOException {
-        if (!isLoopbackPeer(exchange)) {
+        if (!isLoopbackPeer(exchange) && !io.haifa.agent.superharness.server.auth.LocalAuthService.sessionAuthActive()) {
             sendJson(exchange, 403, Map.of("detail", "Local profile accepts loopback clients only"));
             return true;
         }

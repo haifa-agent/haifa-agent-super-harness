@@ -693,7 +693,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             String remoteAddr = ctx.req().getRemoteAddr();
             try {
                 InetAddress addr = InetAddress.getByName(remoteAddr != null ? remoteAddr : "127.0.0.1");
-                if (!addr.isLoopbackAddress()) {
+                if (!addr.isLoopbackAddress()
+                        && !io.haifa.agent.superharness.server.auth.LocalAuthService.sessionAuthActive()) {
                     ctx.status(403)
                             .contentType("application/json")
                             .header("Cache-Control", "no-store")
