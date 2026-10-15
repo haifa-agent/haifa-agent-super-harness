@@ -81,7 +81,8 @@ class DeerFlowChannelsApiTest {
         assertThat(feishu.path("configured").asBoolean()).isFalse();
         assertThat(feishu.path("connectable").asBoolean()).isFalse();
         assertThat(feishu.path("credential_fields")).extracting(node -> node.path("name").asText())
-                .containsExactly("app_id", "app_secret");
+                .containsExactly("app_id", "app_secret", "domain");
+        assertThat(feishu.path("credential_fields").get(2).path("required").asBoolean()).isFalse();
 
         JsonNode configured = postJson(
                 "/api/channels/feishu/runtime-config",

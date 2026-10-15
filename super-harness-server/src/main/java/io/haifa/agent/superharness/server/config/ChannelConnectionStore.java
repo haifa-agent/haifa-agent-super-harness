@@ -277,6 +277,42 @@ public final class ChannelConnectionStore {
                 "connected"));
     }
 
+    /**
+     * Active (non-revoked) connection for an external Feishu identity, including
+     * {@code owner_user_id} for Run ownership. Prefer workspace match; optional null workspace is
+     * not used by the Feishu worker (chat_id is the workspace).
+     */
+    public Optional<ObjectNode> findConnectionByExternalIdentity(
+            String provider, String externalAccountId, String workspaceId) {
+        Objects.requireNonNull(provider, "provider");
+        String externalId = normalizeOptional(externalAccountId);
+        String workspace = normalizeOptional(workspaceId);
+        if (externalId == null) {
+            return Optional.empty();
+        }
+        synchronized (lock) {
+            StoreData data = read();
+            for (ObjectNode row : data.connections) {
+                if (!provider.equals(text(row, "provider"))) {
+                    continue;
+                }
+                if ("revoked".equals(text(row, "status"))) {
+                    continue;
+                }
+                if (!Objects.equals(normalizeOptional(text(row, "external_account_id")), externalId)) {
+                    continue;
+                }
+                if (!Objects.equals(normalizeOptional(text(row, "workspace_id")), workspace)) {
+                    continue;
+                }
+                ObjectNode out = projection(row);
+                out.put("owner_user_id", text(row, "owner_user_id"));
+                return Optional.of(out);
+            }
+            return Optional.empty();
+        }
+    }
+
     private ObjectNode projection(ObjectNode row) {
         ObjectNode out = json.createObjectNode();
         out.put("id", text(row, "id"));

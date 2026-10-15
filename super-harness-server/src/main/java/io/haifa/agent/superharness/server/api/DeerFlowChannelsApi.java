@@ -8,6 +8,9 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import io.haifa.agent.superharness.server.auth.AccessOwner;
 import io.haifa.agent.superharness.server.auth.LocalAuthService;
+import io.haifa.agent.superharness.server.channels.feishu.FeishuChannelWorker;
+import io.haifa.agent.superharness.server.channels.feishu.FeishuOpenDomain;
+import io.haifa.agent.superharness.server.channels.feishu.FeishuTransport;
 import io.haifa.agent.superharness.server.config.ChannelConnectionStore;
 import io.haifa.agent.superharness.server.config.ChannelRuntimeConfigStore;
 import java.io.ByteArrayOutputStream;
@@ -20,11 +23,11 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Frozen DeerFlow IM channel connections REST projection (Feishu-only L1).
+ * Frozen DeerFlow IM channel connections REST projection (Feishu-only L1b).
  *
  * <p>Wire shape mirrors {@code deer-flow/.../channel_connections.py} and
  * {@code frontend/src/core/channels/api.ts}. Runtime credentials and bindings live under the
- * Gateway data-root; the Feishu WebSocket worker is intentionally deferred.</p>
+ * Gateway data-root; POST/DELETE runtime-config starts/stops the Feishu WS worker.</p>
  */
 final class DeerFlowChannelsApi implements HttpHandler {
     static final String ADMIN_REQUIRED = "Admin privileges required to manage channel runtime credentials.";
@@ -44,12 +47,14 @@ final class DeerFlowChannelsApi implements HttpHandler {
                     "binding_code",
                     List.of(
                             new CredentialField("app_id", "App ID", "text", true),
-                            new CredentialField("app_secret", "App secret", "password", true)),
+                            new CredentialField("app_secret", "App secret", "password", true),
+                            new CredentialField("domain", "Open Platform domain", "text", false)),
                     List.of("app_id", "app_secret")));
 
     private final ObjectMapper json;
     private final ChannelRuntimeConfigStore runtimeStore;
     private final ChannelConnectionStore connectionStore;
+    private final FeishuChannelWorker feishuWorker;
     private final boolean channelConnectionsEnabled;
     private final boolean feishuEnabled;
 
@@ -57,7 +62,15 @@ final class DeerFlowChannelsApi implements HttpHandler {
             ObjectMapper json,
             ChannelRuntimeConfigStore runtimeStore,
             ChannelConnectionStore connectionStore) {
-        this(json, runtimeStore, connectionStore, true, true);
+        this(json, runtimeStore, connectionStore, null, true, true);
+    }
+
+    DeerFlowChannelsApi(
+            ObjectMapper json,
+            ChannelRuntimeConfigStore runtimeStore,
+            ChannelConnectionStore connectionStore,
+            FeishuChannelWorker feishuWorker) {
+        this(json, runtimeStore, connectionStore, feishuWorker, true, true);
     }
 
     DeerFlowChannelsApi(
@@ -66,16 +79,38 @@ final class DeerFlowChannelsApi implements HttpHandler {
             ChannelConnectionStore connectionStore,
             boolean channelConnectionsEnabled,
             boolean feishuEnabled) {
+        this(json, runtimeStore, connectionStore, null, channelConnectionsEnabled, feishuEnabled);
+    }
+
+    DeerFlowChannelsApi(
+            ObjectMapper json,
+            ChannelRuntimeConfigStore runtimeStore,
+            ChannelConnectionStore connectionStore,
+            FeishuChannelWorker feishuWorker,
+            boolean channelConnectionsEnabled,
+            boolean feishuEnabled) {
         this.json = json;
         this.runtimeStore = runtimeStore;
         this.connectionStore = connectionStore;
+        this.feishuWorker = feishuWorker;
         this.channelConnectionsEnabled = channelConnectionsEnabled;
         this.feishuEnabled = feishuEnabled;
     }
 
-    /** Package/test-visible Feishu bind seam (no WebSocket / lark-oapi). */
+    /** Package/test-visible Feishu bind seam. */
     ChannelConnectionStore connections() {
         return connectionStore;
+    }
+
+    /** Package/test-visible worker (may be null when constructed without one). */
+    FeishuChannelWorker feishuWorker() {
+        return feishuWorker;
+    }
+
+    void overrideFeishuTransportFactory(FeishuTransport.Factory factory) {
+        if (feishuWorker != null) {
+            feishuWorker.overrideTransportFactory(factory);
+        }
     }
 
     @Override
@@ -239,13 +274,34 @@ final class DeerFlowChannelsApi implements HttpHandler {
                 }
             }
             String value = raw == null ? "" : raw.trim();
+            if ("domain".equals(field.name)) {
+                try {
+                    value = FeishuOpenDomain.normalizeOrThrow(value);
+                } catch (IllegalArgumentException invalid) {
+                    throw new ChannelsException(400, invalid.getMessage());
+                }
+            }
             if (field.required && value.isEmpty()) {
                 throw new ChannelsException(
                         400, "Missing required channel configuration: " + field.label);
             }
             runtime.put(field.name, value);
         }
-        // Worker start is a no-op success for this L1 slice (no Feishu WebSocket yet).
+        if ("feishu".equals(provider) && !runtime.hasNonNull("domain")) {
+            runtime.put("domain", FeishuOpenDomain.DEFAULT);
+        }
+        if ("feishu".equals(provider) && feishuWorker != null) {
+            try {
+                feishuWorker.startOrRestart(
+                        runtime.path("app_id").asText(""),
+                        runtime.path("app_secret").asText(""),
+                        runtime.path("domain").asText(FeishuOpenDomain.DEFAULT));
+            } catch (Exception failure) {
+                throw new ChannelsException(
+                        400,
+                        "Failed to start Feishu channel. Check the values and try again.");
+            }
+        }
         runtimeStore.setProviderConfig(provider, runtime);
         send(exchange, 200, providerResponse(provider, meta, newestOwnerConnection(provider)));
     }
@@ -256,6 +312,9 @@ final class DeerFlowChannelsApi implements HttpHandler {
         ProviderMeta meta = requireProvider(provider);
         if (!providerEnabled(provider)) {
             throw new ChannelsException(400, "Channel provider is not enabled");
+        }
+        if ("feishu".equals(provider) && feishuWorker != null) {
+            feishuWorker.stop();
         }
         connectionStore.disconnectProviderConnections(provider);
         runtimeStore.setProviderDisconnected(provider);
