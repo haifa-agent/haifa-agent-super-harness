@@ -97,7 +97,8 @@ class ProductionFileToolsTest {
                 Map.entry("skill_manage", new ProductionSkillManageTool(skills, "thread-descriptions").spec().description()),
                 Map.entry("review_skill_package", new ProductionReviewSkillPackageTool(skills, screening,
                         ignored -> Map.of()).spec().description()),
-                Map.entry("write_todos", io.haifa.agent.superharness.server.plan.PlanAuthoringResources.toolDescription()));
+                Map.entry("write_todos", io.haifa.agent.superharness.server.plan.PlanAuthoringResources.toolDescription()),
+                Map.entry("view_image", fixture.viewImage.spec().description()));
         JsonNode manifest = JSON.readTree(getClass().getClassLoader()
                 .getResourceAsStream("upstream/deerflow/tool-descriptions/manifest.json"));
         for (JsonNode entry : manifest.path("descriptions")) {
