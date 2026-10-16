@@ -1071,8 +1071,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             DeerFlowInteractionHttpProjection.FrozenResponse response = interactionResponse.orElseThrow();
             if (DeerFlowInteractionHttpProjection.CLARIFICATION_SOURCE.equals(response.source())) {
                 // Frozen has no server-side Interaction for ask_clarification: the hidden reply is a
-                // normal human message that opens the next Run. A forged or already answered
-                // request_id therefore never triggers an approval action; it just starts a Turn.
+                // normal human message that opens the next Run, and a forged request_id never
+                // triggers an approval. An already answered request_id is rejected inside admission
+                // before another Turn starts.
                 clarificationAck = response;
             } else {
                 respondToInteraction(
@@ -1149,6 +1150,10 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
         synchronized (thread) {
             restoreDurableAdmission(thread);
+            if (clarificationAck != null && clarificationAlreadyAnswered(thread, clarificationAck.requestId())) {
+                sendJson(exchange, 409, Map.of("detail", "Interaction response already accepted"));
+                return;
+            }
             if (thread.activeRunId != null) {
                 RunRecord active = runs.get(thread.activeRunId);
                 if (active == null) {
@@ -2037,6 +2042,15 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             throw new IOException("clarification card presentation could not be persisted", failedPersistence);
         }
         return display;
+    }
+
+    private static boolean clarificationAlreadyAnswered(ThreadRecord thread, String requestId) {
+        for (var display : thread.clarificationDisplays) {
+            if (requestId.equals(display.requestId()) && display.answeredKind() != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void markClarificationAnswered(
