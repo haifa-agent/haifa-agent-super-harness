@@ -50,11 +50,23 @@
           "frontend/tests/unit/components/workspace/input-box-active-steer.dom.test.tsx",
           "frontend/tests/unit/core/threads/active-steer.test.ts"
         ]
+      },
+      {
+        "id": "0003-human-input-approval-presentation",
+        "file": "third-party/deerflow/patches/0003-human-input-approval-presentation.patch",
+        "sha256": "c25cde64cc72f77c8691deb1aab2d059dcffeb237d651215766fdb546a1dcf68",
+        "reason": "Optimize risk confirmation approval presentation with rich metadata, command preview, and folded technical audit drawer.",
+        "affectedFiles": [
+          "frontend/src/components/workspace/messages/human-input-card.tsx",
+          "frontend/src/core/messages/human-input.ts",
+          "frontend/tests/unit/components/workspace/messages/human-input-card.test.ts",
+          "frontend/tests/unit/core/messages/human-input.test.ts"
+        ]
       }
     ],
     "fileCount": 985,
-    "totalBytes": 21191902,
-    "contentInventorySha256": "280df8c3239bb6bd5c5d21f32f4d26ac0291827da9264e2a8bfc879c05f282db"
+    "totalBytes": 21207461,
+    "contentInventorySha256": "1af850ed11813c5a6b64aaf0a96d8bf85aca0dc7ccc4af7eee864f97566d238d"
   },
   "build": {
     "node": ">=22",

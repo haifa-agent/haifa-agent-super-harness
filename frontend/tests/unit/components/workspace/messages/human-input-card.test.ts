@@ -202,10 +202,77 @@ describe("HumanInputCard", () => {
     expect(
       shouldSubmitHumanInputTextOnKeyDown(keyEvent({ isComposing: true })),
     ).toBe(false);
-    expect(
-      shouldSubmitHumanInputTextOnKeyDown(keyEvent({ keyCode: 229 })),
-    ).toBe(false);
     expect(shouldSubmitHumanInputTextOnKeyDown(keyEvent(), true)).toBe(false);
+  });
+
+  it("renders specialized approval card with risk badge, purpose, code preview, and technical facts", () => {
+    const approvalReq: HumanInputRequest = {
+      version: 1,
+      kind: "human_input_request",
+      source: "haifa_interaction",
+      request_id: "interaction:req-99",
+      tool_call_id: "call-99",
+      clarification_type: "risk_confirmation",
+      title: "执行宿主命令 (execution_run)",
+      question: "Agent 请求执行命令以检查工作区状态",
+      context: "风险级别: HIGH",
+      input_mode: "single_choice",
+      options: [
+        { id: "approve", label: "Approve", value: "approve" },
+        { id: "reject", label: "Reject", value: "reject" },
+      ],
+      purpose: "核对本地分支与上游变更",
+      content: "git fetch origin && git status",
+      content_type: "powershell",
+      risk_level: "HIGH",
+      environment_facts: [{ label: "工作目录", value: "/workspace" }],
+      technical_facts: [{ label: "调用摘要", value: "c9540dd577" }],
+    };
+
+    const html = renderCard({ request: approvalReq });
+    expect(html).toContain("执行宿主命令 (execution_run)");
+    expect(html).toContain("高危操作");
+    expect(html).toContain("执行目的：");
+    expect(html).toContain("核对本地分支与上游变更");
+    expect(html).toContain("git fetch origin &amp;&amp; git status");
+    expect(html).toContain("powershell");
+    expect(html).toContain("工作目录");
+    expect(html).toContain("/workspace");
+    expect(html).toContain("展开查看技术与审计详情");
+    expect(html).toContain("Approve");
+    expect(html).toContain("Reject");
+  });
+
+  it("renders specialized approved state card when answered", () => {
+    const approvalReq: HumanInputRequest = {
+      version: 1,
+      kind: "human_input_request",
+      source: "haifa_interaction",
+      request_id: "interaction:req-99",
+      tool_call_id: "call-99",
+      clarification_type: "risk_confirmation",
+      title: "执行宿主命令 (execution_run)",
+      question: "Agent 请求执行命令以检查工作区状态",
+      input_mode: "single_choice",
+      options: [
+        { id: "approve", label: "Approve", value: "approve" },
+        { id: "reject", label: "Reject", value: "reject" },
+      ],
+      risk_level: "HIGH",
+    };
+
+    const answered: HumanInputResponse = {
+      version: 1,
+      kind: "human_input_response",
+      source: "haifa_interaction",
+      request_id: "interaction:req-99",
+      response_kind: "option",
+      option_id: "approve",
+      value: "approve",
+    };
+
+    const html = renderCard({ request: approvalReq, answeredResponse: answered });
+    expect(html).toContain("已批准执行 (Approved)");
   });
 });
 

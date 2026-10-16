@@ -602,3 +602,42 @@ test("derives answered state for a form request answered by text", () => {
   );
   expect(state.latestOpenRequestId).toBeNull();
 });
+
+test("extractHumanInputRequest extracts rich approval presentation fields", () => {
+  const approvalPayload = {
+    version: 1,
+    kind: "human_input_request",
+    source: "haifa_interaction",
+    request_id: "interaction-req-1",
+    tool_call_id: "call-1",
+    clarification_type: "risk_confirmation",
+    title: "执行系统 PowerShell 命令",
+    question: "Agent 请求执行命令以检查工作区状态",
+    context: "风险级别: HIGH",
+    input_mode: "single_choice",
+    options: [
+      { id: "approve", label: "Approve", value: "approve" },
+      { id: "reject", label: "Reject", value: "reject" },
+    ],
+    purpose: "Agent 请求执行命令以检查工作区状态",
+    content: "git status -s",
+    content_type: "powershell",
+    risk_level: "HIGH",
+    environment_facts: [{ label: "工作目录", value: "/workspace" }],
+    technical_facts: [{ label: "调用摘要", value: "c9540d" }],
+  };
+
+  const parsed = extractHumanInputRequest(toolMessage(approvalPayload));
+  expect(parsed).not.toBeNull();
+  expect(parsed?.title).toBe("执行系统 PowerShell 命令");
+  expect(parsed?.purpose).toBe("Agent 请求执行命令以检查工作区状态");
+  expect(parsed?.content).toBe("git status -s");
+  expect(parsed?.content_type).toBe("powershell");
+  expect(parsed?.risk_level).toBe("HIGH");
+  expect(parsed?.environment_facts).toEqual([
+    { label: "工作目录", value: "/workspace" },
+  ]);
+  expect(parsed?.technical_facts).toEqual([
+    { label: "调用摘要", value: "c9540d" },
+  ]);
+});

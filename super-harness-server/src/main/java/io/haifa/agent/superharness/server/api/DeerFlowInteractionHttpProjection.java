@@ -8,6 +8,7 @@ import io.haifa.agent.runtime.api.InteractionResponseId;
 import io.haifa.agent.runtime.api.InteractionResponseSubmission;
 import io.haifa.agent.runtime.api.InteractionState;
 import io.haifa.agent.runtime.api.InteractionView;
+import io.haifa.agent.runtime.api.ApprovalPresentation;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -65,21 +66,155 @@ final class DeerFlowInteractionHttpProjection {
         return Optional.of(new FrozenResponse(source, requestId, responseKind, optionId, value));
     }
 
+    record ApprovalData(
+            String title,
+            String question,
+            String context,
+            String purpose,
+            String content,
+            String contentType,
+            String riskLevel,
+            List<Map<String, String>> environmentFacts,
+            List<Map<String, String>> technicalFacts) {}
+
+    static ApprovalData buildApprovalData(InteractionView interaction) {
+        if (interaction.approvalPresentation().isPresent()) {
+            ApprovalPresentation presentation = interaction.approvalPresentation().get();
+            String title = presentation.title();
+            String purpose = presentation.purpose();
+            String content = presentation.content();
+            String contentType = presentation.contentType();
+            String riskLevel = presentation.risk().orElse("HIGH");
+            List<Map<String, String>> env = presentation.environment().stream()
+                    .map(fact -> Map.of("label", fact.label(), "value", fact.value()))
+                    .toList();
+            List<Map<String, String>> tech = presentation.technical().stream()
+                    .map(fact -> Map.of("label", fact.label(), "value", fact.value()))
+                    .toList();
+            String question = purpose.isBlank() ? "Agent 请求执行该操作以继续任务，是否批准？" : purpose;
+            return new ApprovalData(title, question, "风险级别: " + riskLevel, purpose, content, contentType, riskLevel, env, tech);
+        }
+
+        String toolRef = interaction.target().reference();
+        String simpleName = simpleToolName(toolRef);
+        String safePrompt = interaction.safePrompt();
+
+        String title = friendlyTitle(interaction.title(), simpleName);
+        List<Map<String, String>> techFacts = new ArrayList<>();
+        List<Map<String, String>> envFacts = new ArrayList<>();
+        String content = null;
+        String contentType = null;
+        String purpose = null;
+        String riskLevel = "HIGH";
+
+        if (safePrompt.contains("\n") && (safePrompt.contains("Mode:") || safePrompt.contains("Command:") || safePrompt.contains("Script:"))) {
+            String[] lines = safePrompt.split("\n");
+            for (String line : lines) {
+                String trimmed = line.trim();
+                if (trimmed.startsWith("Mode:")) {
+                    techFacts.add(Map.of("label", "模式", "value", trimmed.substring("Mode:".length()).trim()));
+                } else if (trimmed.startsWith("Language:")) {
+                    contentType = trimmed.substring("Language:".length()).trim();
+                    techFacts.add(Map.of("label", "语言", "value", contentType));
+                } else if (trimmed.startsWith("Command:")) {
+                    content = trimmed.substring("Command:".length()).trim();
+                } else if (trimmed.startsWith("Script:")) {
+                    content = trimmed.substring("Script:".length()).trim();
+                } else if (trimmed.startsWith("Purpose:")) {
+                    purpose = trimmed.substring("Purpose:".length()).trim();
+                } else if (trimmed.startsWith("Timeout:")) {
+                    techFacts.add(Map.of("label", "超时", "value", trimmed.substring("Timeout:".length()).trim()));
+                } else if (trimmed.startsWith("Workspace:")) {
+                    envFacts.add(Map.of("label", "工作目录", "value", trimmed.substring("Workspace:".length()).trim()));
+                } else if (trimmed.startsWith("Provider:")) {
+                    envFacts.add(Map.of("label", "提供方", "value", trimmed.substring("Provider:".length()).trim()));
+                } else if (trimmed.startsWith("Network:")) {
+                    envFacts.add(Map.of("label", "网络访问", "value", trimmed.substring("Network:".length()).trim()));
+                } else if (trimmed.startsWith("Invocation digest:")) {
+                    techFacts.add(Map.of("label", "调用摘要", "value", trimmed.substring("Invocation digest:".length()).trim()));
+                } else if (trimmed.startsWith("Risks:")) {
+                    riskLevel = trimmed.contains("CRITICAL") ? "CRITICAL" : (trimmed.contains("HIGH") ? "HIGH" : "MEDIUM");
+                }
+            }
+        }
+
+        if (purpose == null || purpose.isBlank()) {
+            purpose = "Agent 请求执行 " + simpleName + " 工具以继续推进任务。";
+        }
+        if (techFacts.isEmpty()) {
+            techFacts.add(Map.of("label", "工具标识", "value", toolRef));
+            interaction.target().digest().ifPresent(digest -> techFacts.add(Map.of("label", "调用摘要", "value", digest)));
+        }
+
+        String question = purpose;
+        String context = "风险级别: " + riskLevel;
+        return new ApprovalData(title, question, context, purpose, content, contentType, riskLevel, envFacts, techFacts);
+    }
+
+    private static String simpleToolName(String reference) {
+        if (reference == null || reference.isBlank()) {
+            return "tool";
+        }
+        int at = reference.indexOf('@');
+        if (at > 0) {
+            return reference.substring(0, at);
+        }
+        int hash = reference.indexOf('#');
+        if (hash > 0) {
+            return reference.substring(0, hash);
+        }
+        return reference;
+    }
+
+    private static String friendlyTitle(String originalTitle, String simpleName) {
+        if (originalTitle != null && !originalTitle.isBlank()
+                && !originalTitle.equals("Approve tool")
+                && !originalTitle.equals("Approval required")
+                && !originalTitle.contains("@")
+                && !originalTitle.contains("#")) {
+            return originalTitle;
+        }
+        return switch (simpleName) {
+            case "execution_run" -> "执行宿主命令 (execution_run)";
+            case "write_file" -> "修改/写入文件 (write_file)";
+            case "edit_file" -> "编辑文件 (edit_file)";
+            case "web_search" -> "网络搜索 (web_search)";
+            case "web_fetch" -> "抓取网页内容 (web_fetch)";
+            default -> "申请批准工具调用: " + simpleName;
+        };
+    }
+
     static Map<String, Object> requestMessage(InteractionView interaction, String runId) {
         requireApprovalCard(interaction);
+        ApprovalData data = buildApprovalData(interaction);
         return requestMessage(
                 runId,
                 interaction.requestId().value(),
                 interaction.target().reference(),
-                interaction.title(),
-                interaction.safePrompt(),
-                interaction.target().safeSummary(),
-                interaction.allowedActions().stream().map(InteractionAction::value).toList());
+                data.title(),
+                data.question(),
+                data.context(),
+                interaction.allowedActions().stream().map(InteractionAction::value).toList(),
+                data.purpose(),
+                data.content(),
+                data.contentType(),
+                data.riskLevel(),
+                data.environmentFacts(),
+                data.technicalFacts());
     }
 
     static Map<String, Object> requestMessage(
             String runId, String requestId, String toolCallId, String title, String question,
             String context, List<String> actions) {
+        return requestMessage(
+                runId, requestId, toolCallId, title, question, context, actions,
+                null, null, null, null, List.of(), List.of());
+    }
+
+    static Map<String, Object> requestMessage(
+            String runId, String requestId, String toolCallId, String title, String question,
+            String context, List<String> actions, String purpose, String content, String contentType,
+            String riskLevel, List<Map<String, String>> envFacts, List<Map<String, String>> techFacts) {
         List<Map<String, Object>> options = new ArrayList<>();
         for (String value : actions) {
             options.add(Map.of(
@@ -100,6 +235,24 @@ final class DeerFlowInteractionHttpProjection {
         payload.put("context", context);
         payload.put("input_mode", "single_choice");
         payload.put("options", options);
+        if (purpose != null && !purpose.isBlank()) {
+            payload.put("purpose", purpose);
+        }
+        if (content != null && !content.isBlank()) {
+            payload.put("content", content);
+        }
+        if (contentType != null && !contentType.isBlank()) {
+            payload.put("content_type", contentType);
+        }
+        if (riskLevel != null && !riskLevel.isBlank()) {
+            payload.put("risk_level", riskLevel);
+        }
+        if (envFacts != null && !envFacts.isEmpty()) {
+            payload.put("environment_facts", envFacts);
+        }
+        if (techFacts != null && !techFacts.isEmpty()) {
+            payload.put("technical_facts", techFacts);
+        }
 
         String interactionMessageId = "interaction-" + requestId;
         // The top-level tool_call_id is only the frozen UI grouping identity. It must not collide

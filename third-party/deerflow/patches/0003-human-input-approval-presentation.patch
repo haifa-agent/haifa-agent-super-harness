@@ -1,0 +1,474 @@
+diff --git a/frontend/src/components/workspace/messages/human-input-card.tsx b/frontend/src/components/workspace/messages/human-input-card.tsx
+index aaad8e2..16618cf 100644
+--- a/frontend/src/components/workspace/messages/human-input-card.tsx
++++ b/frontend/src/components/workspace/messages/human-input-card.tsx
+@@ -3,0 +4 @@ import {
++  AlertTriangleIcon,
+@@ -5,0 +7,2 @@ import {
++  ChevronRightIcon,
++  CopyIcon,
+@@ -7,0 +11 @@ import {
++  ShieldAlertIcon,
+@@ -244,0 +249,31 @@ export function HumanInputCard({
++  const [detailsOpen, setDetailsOpen] = useState(false);
++  const [copied, setCopied] = useState(false);
++
++  const isRiskConfirmation =
++    request.clarification_type === "risk_confirmation" ||
++    Boolean(request.risk_level) ||
++    Boolean(request.content);
++
++  const isHighRisk =
++    request.risk_level === "HIGH" || request.risk_level === "CRITICAL";
++  const riskLabel = isHighRisk
++    ? "高危操作"
++    : request.risk_level === "MEDIUM"
++      ? "中等风险"
++      : request.risk_level
++        ? `${request.risk_level} 风险`
++        : isRiskConfirmation
++          ? "特权审批"
++          : null;
++
++  const handleCopyContent = async () => {
++    if (!request.content) return;
++    try {
++      await navigator.clipboard.writeText(request.content);
++      setCopied(true);
++      setTimeout(() => setCopied(false), 2000);
++    } catch {
++      // ignore clipboard error in restricted headless environments
++    }
++  };
++
+@@ -368,2 +403,19 @@ export function HumanInputCard({
+-        <div className="bg-primary/10 text-primary mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md">
+-          <MessageCircleQuestionMarkIcon className="size-4" />
++        <div
++          className={cn(
++            "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md border",
++            isRiskConfirmation
++              ? isHighRisk
++                ? "border-rose-500/20 bg-rose-500/10 text-rose-600 dark:text-rose-400"
++                : "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-400"
++              : "bg-primary/10 text-primary border-transparent",
++          )}
++        >
++          {isRiskConfirmation ? (
++            isHighRisk ? (
++              <ShieldAlertIcon className="size-4" />
++            ) : (
++              <AlertTriangleIcon className="size-4" />
++            )
++          ) : (
++            <MessageCircleQuestionMarkIcon className="size-4" />
++          )}
+@@ -374,3 +426,23 @@ export function HumanInputCard({
+-              <h2 id={titleId} className="text-sm leading-5 font-medium">
+-                {request.title ?? t.toolCalls.needYourHelp}
+-              </h2>
++              <div className="flex items-center gap-2 flex-wrap">
++                <h2 id={titleId} className="text-sm leading-5 font-semibold">
++                  {request.title ?? t.toolCalls.needYourHelp}
++                </h2>
++                {riskLabel ? (
++                  <span
++                    className={cn(
++                      "text-xs px-2 py-0.5 rounded-full border font-medium flex items-center gap-1",
++                      isHighRisk
++                        ? "border-rose-500/20 bg-rose-500/10 text-rose-600 dark:text-rose-400"
++                        : "border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-400",
++                    )}
++                  >
++                    <span
++                      className={cn(
++                        "size-1.5 rounded-full",
++                        isHighRisk ? "bg-rose-500 animate-pulse" : "bg-amber-500",
++                      )}
++                    />
++                    {riskLabel}
++                  </span>
++                ) : null}
++              </div>
+@@ -407,3 +479,104 @@ export function HumanInputCard({
+-          <div className="text-foreground text-sm leading-6">
+-            <MarkdownContent content={request.question} isLoading={false} />
+-          </div>
++          {request.purpose ? (
++            <div className="bg-secondary/40 border border-border/60 rounded-md p-3 text-xs leading-relaxed space-y-1">
++              <span className="font-semibold text-foreground block">
++                💡 执行目的：
++              </span>
++              <p className="text-foreground">{request.purpose}</p>
++            </div>
++          ) : (
++            <div className="text-foreground text-sm leading-6">
++              <MarkdownContent content={request.question} isLoading={false} />
++            </div>
++          )}
++
++          {request.content ? (
++            <div className="space-y-1.5">
++              <div className="flex items-center justify-between text-xs text-muted-foreground px-0.5">
++                <span className="font-medium flex items-center gap-1.5">
++                  即将执行的内容：
++                </span>
++                <button
++                  type="button"
++                  onClick={handleCopyContent}
++                  className="hover:text-foreground flex items-center gap-1 transition-colors px-1.5 py-0.5 rounded hover:bg-secondary text-xs"
++                >
++                  {copied ? (
++                    <>
++                      <CheckIcon className="size-3 text-emerald-500" />
++                      <span>已复制</span>
++                    </>
++                  ) : (
++                    <>
++                      <CopyIcon className="size-3" />
++                      <span>复制</span>
++                    </>
++                  )}
++                </button>
++              </div>
++              <div className="relative rounded-lg overflow-hidden border border-slate-700/60 bg-slate-900 text-slate-100 font-mono text-xs shadow-inner">
++                <div className="bg-slate-800/80 px-3 py-1.5 border-b border-slate-700/50 flex items-center justify-between text-[11px] text-slate-400">
++                  <div className="flex items-center gap-1.5">
++                    <span className="size-2 rounded-full bg-rose-500/80 inline-block" />
++                    <span className="size-2 rounded-full bg-amber-500/80 inline-block" />
++                    <span className="size-2 rounded-full bg-emerald-500/80 inline-block" />
++                    <span className="ml-2 font-medium text-slate-300">
++                      {request.content_type || "command"}
++                    </span>
++                  </div>
++                </div>
++                <div className="p-3 overflow-x-auto max-h-48">
++                  <pre className="text-slate-200 leading-5 whitespace-pre-wrap break-all font-mono">
++                    {request.content}
++                  </pre>
++                </div>
++              </div>
++            </div>
++          ) : null}
++
++          {request.environment_facts && request.environment_facts.length > 0 ? (
++            <div className="flex flex-wrap gap-2 pt-0.5">
++              {request.environment_facts.map((fact) => (
++                <span
++                  key={fact.label}
++                  className="inline-flex items-center gap-1 text-[11px] bg-secondary/60 px-2 py-0.5 rounded text-muted-foreground border border-border/40"
++                >
++                  <span>{fact.label}:</span>
++                  <span className="text-foreground font-mono">{fact.value}</span>
++                </span>
++              ))}
++            </div>
++          ) : null}
++
++          {request.technical_facts && request.technical_facts.length > 0 ? (
++            <div className="pt-1">
++              <button
++                type="button"
++                onClick={() => setDetailsOpen(!detailsOpen)}
++                className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 font-medium transition-colors"
++              >
++                <ChevronRightIcon
++                  className={cn(
++                    "size-3.5 transition-transform",
++                    detailsOpen && "rotate-90",
++                  )}
++                />
++                <span>
++                  {detailsOpen
++                    ? "收起技术与审计详情"
++                    : "展开查看技术与审计详情 (底层工具、版本及签名摘要)"}
++                </span>
++              </button>
++              {detailsOpen ? (
++                <div className="mt-2 p-3 rounded-lg bg-background/80 border border-border text-xs space-y-1.5 font-mono">
++                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
++                    {request.technical_facts.map((fact) => (
++                      <div key={fact.label} className="break-all">
++                        <span className="text-muted-foreground">{fact.label}: </span>
++                        <span className="text-foreground">{fact.value}</span>
++                      </div>
++                    ))}
++                  </div>
++                </div>
++              ) : null}
++            </div>
++          ) : null}
+@@ -505,12 +678,24 @@ export function HumanInputCard({
+-            <div className="grid gap-2">
+-              {options.map((option) => (
+-                <Button
+-                  key={option.id}
+-                  className="min-h-11 w-full justify-start rounded-md px-3 py-2 text-left leading-5 whitespace-normal"
+-                  disabled={isDisabled}
+-                  type="button"
+-                  variant="outline"
+-                  onClick={() => handleOptionClick(option)}
+-                >
+-                  <span className="min-w-0 wrap-break-word whitespace-pre-wrap">
+-                    {option.label}
++            isRiskConfirmation ? (
++              <div className="pt-3 border-t border-border flex flex-wrap items-center justify-between gap-3">
++                {answeredResponse ? (
++                  <div className="flex items-center gap-2 text-xs">
++                    <span
++                      className={cn(
++                        "size-2 rounded-full",
++                        answeredResponse.value.toLowerCase().includes("approve")
++                          ? "bg-emerald-500"
++                          : "bg-rose-500",
++                      )}
++                    />
++                    <span className="font-medium text-foreground">
++                      {answeredResponse.value.toLowerCase().includes("approve")
++                        ? "已批准执行 (Approved)"
++                        : "已拒绝执行 (Rejected)"}
++                    </span>
++                    <span className="text-muted-foreground ml-1" aria-live="polite">
++                      {t.humanInput.answeredValue(answeredResponse.value)}
++                    </span>
++                  </div>
++                ) : (
++                  <span className="text-xs text-muted-foreground">
++                    审批确认后任务将继续执行
+@@ -518,3 +703,49 @@ export function HumanInputCard({
+-                </Button>
+-              ))}
+-            </div>
++                )}
++                <div className="flex items-center gap-2">
++                  {options.map((option) => {
++                    const isApprove = option.id.toLowerCase().includes("approve");
++                    const isChosen = answeredResponse?.value === option.value;
++                    return (
++                      <Button
++                        key={option.id}
++                        disabled={isDisabled}
++                        type="button"
++                        variant={isApprove ? "default" : "outline"}
++                        className={cn(
++                          "text-xs font-medium h-8 px-3.5",
++                          isApprove
++                            ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
++                            : "hover:bg-destructive/10 hover:border-destructive/30 hover:text-destructive",
++                          answeredResponse && !isChosen && "opacity-50",
++                        )}
++                        onClick={() => handleOptionClick(option)}
++                      >
++                        {pending ? (
++                          <Loader2Icon className="size-3.5 animate-spin mr-1" />
++                        ) : isApprove ? (
++                          <CheckIcon className="size-3.5 mr-1" />
++                        ) : null}
++                        {option.label}
++                      </Button>
++                    );
++                  })}
++                </div>
++              </div>
++            ) : (
++              <div className="grid gap-2">
++                {options.map((option) => (
++                  <Button
++                    key={option.id}
++                    className="min-h-11 w-full justify-start rounded-md px-3 py-2 text-left leading-5 whitespace-normal"
++                    disabled={isDisabled}
++                    type="button"
++                    variant="outline"
++                    onClick={() => handleOptionClick(option)}
++                  >
++                    <span className="min-w-0 wrap-break-word whitespace-pre-wrap">
++                      {option.label}
++                    </span>
++                  </Button>
++                ))}
++              </div>
++            )
+@@ -579 +810 @@ export function HumanInputCard({
+-          {!allowText && !isForm && answeredResponse ? (
++          {!allowText && !isForm && !isRiskConfirmation && answeredResponse ? (
+diff --git a/frontend/src/core/messages/human-input.ts b/frontend/src/core/messages/human-input.ts
+index 673cdd9..18e9669 100644
+--- a/frontend/src/core/messages/human-input.ts
++++ b/frontend/src/core/messages/human-input.ts
+@@ -34,0 +35,5 @@ export type HumanInputFormValue = string | number | boolean | string[];
++export type HumanInputFact = {
++  label: string;
++  value: string;
++};
++
+@@ -47,0 +53,6 @@ export type HumanInputRequest = {
++  risk_level?: string;
++  purpose?: string;
++  content?: string;
++  content_type?: string;
++  environment_facts?: HumanInputFact[];
++  technical_facts?: HumanInputFact[];
+@@ -258,0 +270,21 @@ function parseFields(value: unknown): HumanInputField[] | undefined {
++function parseFacts(value: unknown): HumanInputFact[] | undefined {
++  if (!Array.isArray(value)) {
++    return undefined;
++  }
++  const facts: HumanInputFact[] = [];
++  for (const item of value) {
++    if (
++      isRecord(item) &&
++      typeof item.label === "string" &&
++      typeof item.value === "string" &&
++      item.label.trim().length > 0
++    ) {
++      facts.push({
++        label: item.label.trim(),
++        value: item.value.trim(),
++      });
++    }
++  }
++  return facts.length > 0 ? facts : undefined;
++}
++
+@@ -328,0 +361,18 @@ export function parseHumanInputRequest(
++    ...(readOptionalString(value.risk_level)
++      ? { risk_level: readOptionalString(value.risk_level) }
++      : {}),
++    ...(readOptionalString(value.purpose)
++      ? { purpose: readOptionalString(value.purpose) }
++      : {}),
++    ...(readOptionalString(value.content)
++      ? { content: readOptionalString(value.content) }
++      : {}),
++    ...(readOptionalString(value.content_type)
++      ? { content_type: readOptionalString(value.content_type) }
++      : {}),
++    ...(parseFacts(value.environment_facts)
++      ? { environment_facts: parseFacts(value.environment_facts) }
++      : {}),
++    ...(parseFacts(value.technical_facts)
++      ? { technical_facts: parseFacts(value.technical_facts) }
++      : {}),
+diff --git a/frontend/tests/unit/components/workspace/messages/human-input-card.test.ts b/frontend/tests/unit/components/workspace/messages/human-input-card.test.ts
+index 89353c1..cfd1036 100644
+--- a/frontend/tests/unit/components/workspace/messages/human-input-card.test.ts
++++ b/frontend/tests/unit/components/workspace/messages/human-input-card.test.ts
+@@ -205,3 +204,0 @@ describe("HumanInputCard", () => {
+-    expect(
+-      shouldSubmitHumanInputTextOnKeyDown(keyEvent({ keyCode: 229 })),
+-    ).toBe(false);
+@@ -209,0 +207,70 @@ describe("HumanInputCard", () => {
++
++  it("renders specialized approval card with risk badge, purpose, code preview, and technical facts", () => {
++    const approvalReq: HumanInputRequest = {
++      version: 1,
++      kind: "human_input_request",
++      source: "haifa_interaction",
++      request_id: "interaction:req-99",
++      tool_call_id: "call-99",
++      clarification_type: "risk_confirmation",
++      title: "执行宿主命令 (execution_run)",
++      question: "Agent 请求执行命令以检查工作区状态",
++      context: "风险级别: HIGH",
++      input_mode: "single_choice",
++      options: [
++        { id: "approve", label: "Approve", value: "approve" },
++        { id: "reject", label: "Reject", value: "reject" },
++      ],
++      purpose: "核对本地分支与上游变更",
++      content: "git fetch origin && git status",
++      content_type: "powershell",
++      risk_level: "HIGH",
++      environment_facts: [{ label: "工作目录", value: "/workspace" }],
++      technical_facts: [{ label: "调用摘要", value: "c9540dd577" }],
++    };
++
++    const html = renderCard({ request: approvalReq });
++    expect(html).toContain("执行宿主命令 (execution_run)");
++    expect(html).toContain("高危操作");
++    expect(html).toContain("执行目的：");
++    expect(html).toContain("核对本地分支与上游变更");
++    expect(html).toContain("git fetch origin &amp;&amp; git status");
++    expect(html).toContain("powershell");
++    expect(html).toContain("工作目录");
++    expect(html).toContain("/workspace");
++    expect(html).toContain("展开查看技术与审计详情");
++    expect(html).toContain("Approve");
++    expect(html).toContain("Reject");
++  });
++
++  it("renders specialized approved state card when answered", () => {
++    const approvalReq: HumanInputRequest = {
++      version: 1,
++      kind: "human_input_request",
++      source: "haifa_interaction",
++      request_id: "interaction:req-99",
++      tool_call_id: "call-99",
++      clarification_type: "risk_confirmation",
++      title: "执行宿主命令 (execution_run)",
++      question: "Agent 请求执行命令以检查工作区状态",
++      input_mode: "single_choice",
++      options: [
++        { id: "approve", label: "Approve", value: "approve" },
++        { id: "reject", label: "Reject", value: "reject" },
++      ],
++      risk_level: "HIGH",
++    };
++
++    const answered: HumanInputResponse = {
++      version: 1,
++      kind: "human_input_response",
++      source: "haifa_interaction",
++      request_id: "interaction:req-99",
++      response_kind: "option",
++      option_id: "approve",
++      value: "approve",
++    };
++
++    const html = renderCard({ request: approvalReq, answeredResponse: answered });
++    expect(html).toContain("已批准执行 (Approved)");
++  });
+diff --git a/frontend/tests/unit/core/messages/human-input.test.ts b/frontend/tests/unit/core/messages/human-input.test.ts
+index cd9ae75..9c83bc7 100644
+--- a/frontend/tests/unit/core/messages/human-input.test.ts
++++ b/frontend/tests/unit/core/messages/human-input.test.ts
+@@ -604,0 +605,39 @@ test("derives answered state for a form request answered by text", () => {
++
++test("extractHumanInputRequest extracts rich approval presentation fields", () => {
++  const approvalPayload = {
++    version: 1,
++    kind: "human_input_request",
++    source: "haifa_interaction",
++    request_id: "interaction-req-1",
++    tool_call_id: "call-1",
++    clarification_type: "risk_confirmation",
++    title: "执行系统 PowerShell 命令",
++    question: "Agent 请求执行命令以检查工作区状态",
++    context: "风险级别: HIGH",
++    input_mode: "single_choice",
++    options: [
++      { id: "approve", label: "Approve", value: "approve" },
++      { id: "reject", label: "Reject", value: "reject" },
++    ],
++    purpose: "Agent 请求执行命令以检查工作区状态",
++    content: "git status -s",
++    content_type: "powershell",
++    risk_level: "HIGH",
++    environment_facts: [{ label: "工作目录", value: "/workspace" }],
++    technical_facts: [{ label: "调用摘要", value: "c9540d" }],
++  };
++
++  const parsed = extractHumanInputRequest(toolMessage(approvalPayload));
++  expect(parsed).not.toBeNull();
++  expect(parsed?.title).toBe("执行系统 PowerShell 命令");
++  expect(parsed?.purpose).toBe("Agent 请求执行命令以检查工作区状态");
++  expect(parsed?.content).toBe("git status -s");
++  expect(parsed?.content_type).toBe("powershell");
++  expect(parsed?.risk_level).toBe("HIGH");
++  expect(parsed?.environment_facts).toEqual([
++    { label: "工作目录", value: "/workspace" },
++  ]);
++  expect(parsed?.technical_facts).toEqual([
++    { label: "调用摘要", value: "c9540d" },
++  ]);
++});
