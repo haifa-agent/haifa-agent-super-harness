@@ -5,10 +5,17 @@ import io.haifa.agent.execution.core.tool.TrustedScriptArguments;
 import io.haifa.agent.skill.api.FrozenSkillBinding;
 import io.haifa.agent.tool.api.ToolName;
 import io.haifa.agent.tool.api.ToolSchema;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -78,6 +85,22 @@ public record SkillScriptToolConfig(
     private static final Set<String> SUPPORTED_PROVIDERS = Set.of(
             "codex-cli", "openai", "azure", "google", "openrouter", "dashscope", "zai",
             "minimax", "jimeng", "seedream", "replicate", "agnes");
+
+    /**
+     * The SDK's bounded trusted-script argv enforces at most this many characters per argv item
+     * ({@code io.haifa.agent.execution.core.tool.TrustedScriptArguments}). A longer prompt is not
+     * passed as a {@code --prompt} item but materialized as a Workspace file the script reads via
+     * {@code --promptfiles}, so the argv stays bounded while the product may still accept a long
+     * {@code prompt} in the input schema.
+     */
+    static final int MAX_ARGV_ITEM_LENGTH = 1024;
+
+    /**
+     * Workspace-relative directory the mapper writes long prompts into (below the Thread user-data
+     * root, outside {@code outputs/} so the Artifact chain never publishes it) before the skill
+     * script reads it through {@code --promptfiles}.
+     */
+    static final String PROMPT_INPUT_DIRECTORY = ".haifa-skill-inputs";
 
     private static final Set<String> MODEL_ARGUMENTS = Set.of("prompt", "image_name", "help", "sleep_millis");
 
@@ -307,9 +330,11 @@ public record SkillScriptToolConfig(
     public static final class ImageGenArguments implements TrustedScriptArgumentMapper {
 
         private final String provider;
+        private final Path workspaceRoot;
 
-        public ImageGenArguments(String provider) {
+        public ImageGenArguments(String provider, Path workspaceRoot) {
             this.provider = Objects.requireNonNull(provider, "provider must not be null");
+            this.workspaceRoot = Objects.requireNonNull(workspaceRoot, "workspaceRoot must not be null");
         }
 
         @Override
@@ -334,8 +359,16 @@ public record SkillScriptToolConfig(
             argv.add(provider);
             argv.add("--image");
             argv.add("outputs/" + imageName);
-            argv.add("--prompt");
-            argv.add(prompt);
+            if (prompt.length() <= MAX_ARGV_ITEM_LENGTH) {
+                argv.add("--prompt");
+                argv.add(prompt);
+            } else {
+                // The prompt would exceed the SDK's per-argv-item bound, so it travels as a
+                // Workspace file the script reads through --promptfiles. The argv item is only the
+                // short relative path; the model's prompt bytes are written verbatim as UTF-8.
+                argv.add("--promptfiles");
+                argv.add(materializePrompt(prompt));
+            }
             if (arguments.get("sleep_millis") != null) {
                 if (!(arguments.get("sleep_millis") instanceof Integer sleepMillis)
                         || sleepMillis < 0 || sleepMillis > 600_000) {
@@ -345,6 +378,38 @@ public record SkillScriptToolConfig(
                 argv.add(Integer.toString(sleepMillis));
             }
             return TrustedScriptArguments.atWorkspaceRoot(List.copyOf(argv));
+        }
+
+        /**
+         * Writes the prompt bytes into {@code <workspaceRoot>/<PROMPT_INPUT_DIRECTORY>/} and returns
+         * the short Workspace-relative path for the {@code --promptfiles} argv item. The file name is
+         * the prompt digest, so a repeated prompt is idempotent and never grows the workspace; an
+         * existing file with different bytes is rewritten. A Workspace that cannot hold the file
+         * fails the invocation closed rather than truncating the prompt.
+         */
+        private String materializePrompt(String prompt) {
+            String name = "prompt-" + promptDigest(prompt) + ".md";
+            Path directory = workspaceRoot.resolve(PROMPT_INPUT_DIRECTORY);
+            Path file = directory.resolve(name);
+            byte[] bytes = prompt.getBytes(StandardCharsets.UTF_8);
+            try {
+                Files.createDirectories(directory);
+                if (!Files.isRegularFile(file) || !Arrays.equals(Files.readAllBytes(file), bytes)) {
+                    Files.write(file, bytes);
+                }
+            } catch (IOException failure) {
+                throw new UncheckedIOException("the Skill script prompt could not be materialized", failure);
+            }
+            return PROMPT_INPUT_DIRECTORY + "/" + name;
+        }
+
+        private static String promptDigest(String prompt) {
+            try {
+                byte[] hash = MessageDigest.getInstance("SHA-256").digest(prompt.getBytes(StandardCharsets.UTF_8));
+                return HexFormat.of().formatHex(hash).substring(0, 16);
+            } catch (NoSuchAlgorithmException impossible) {
+                throw new IllegalStateException("SHA-256 is unavailable", impossible);
+            }
         }
 
         private static String boundedText(Object value, String field) {

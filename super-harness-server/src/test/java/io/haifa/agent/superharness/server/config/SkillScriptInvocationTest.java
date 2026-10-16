@@ -61,7 +61,7 @@ public class SkillScriptInvocationTest {
                                 SkillScriptToolConfig.SCRIPT_RUNTIME_REF,
                                 Duration.ofSeconds(120),
                                 SkillScriptToolConfig.purpose(),
-                                new SkillScriptToolConfig.ImageGenArguments(SkillScriptToolConfig.DEFAULT_PROVIDER))),
+                                new SkillScriptToolConfig.ImageGenArguments(SkillScriptToolConfig.DEFAULT_PROVIDER, workspace))),
                         Duration.ofSeconds(120),
                         Duration.ofSeconds(600),
                         262144,

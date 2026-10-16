@@ -3,6 +3,7 @@ package io.haifa.agent.superharness.server.config;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -88,8 +89,9 @@ class SkillScriptToolConfigTest {
     }
 
     @Test
-    void mapperFixesProviderImageAndRejectsBounds() {
-        var mapper = new SkillScriptToolConfig.ImageGenArguments(SkillScriptToolConfig.DEFAULT_PROVIDER);
+    void mapperFixesProviderImageAndRejectsBounds(@TempDir Path temporary) {
+        var mapper = new SkillScriptToolConfig.ImageGenArguments(
+                SkillScriptToolConfig.DEFAULT_PROVIDER, temporary);
         var mapped = mapper.map(Map.of(
                 "prompt", "a lighthouse",
                 "image_name", "w04-artifact.png",
@@ -138,7 +140,7 @@ class SkillScriptToolConfigTest {
         var config = SkillScriptToolConfig.fromEnvironment(
                 configured, workspace, dataRoot, SkillScriptProjections.projection(true)).orElseThrow();
         assertThat(config.provider()).isEqualTo("dashscope");
-        assertThat(new SkillScriptToolConfig.ImageGenArguments(config.provider()).map(Map.of(
+        assertThat(new SkillScriptToolConfig.ImageGenArguments(config.provider(), workspace).map(Map.of(
                 "prompt", "a lighthouse", "image_name", "w04.png")).argv())
                 .containsExactly("--provider", "dashscope", "--image", "outputs/w04.png",
                         "--prompt", "a lighthouse");
@@ -152,6 +154,34 @@ class SkillScriptToolConfigTest {
         assertThat(SkillScriptToolConfig.fromEnvironment(
                 unknown, workspace, dataRoot, SkillScriptProjections.projection(true))).isEmpty();
         assertThat(SkillScriptToolConfig.toolNames(unknown, SkillScriptProjections.projection(true))).isEmpty();
+    }
+
+    /**
+     * A prompt longer than the SDK's per-argv-item bound is not sent as a {@code --prompt} item (the
+     * SDK rejects items over 1024 characters). It is materialized as a UTF-8 Workspace file the
+     * script reads through {@code --promptfiles}, so the argv stays bounded while the product still
+     * accepts a long prompt, and every argv item keeps within the SDK bound.
+     */
+    @Test
+    void longPromptTravelsAsAWorkspaceFileForPromptfiles(@TempDir Path temporary) throws Exception {
+        Path workspace = Files.createDirectories(temporary.resolve("workspace"));
+        var mapper = new SkillScriptToolConfig.ImageGenArguments(
+                SkillScriptToolConfig.DEFAULT_PROVIDER, workspace);
+        String prompt = "信息图: AI Agent 自主性的 4 个等级。".repeat(60);
+        assertThat(prompt.length()).isGreaterThan(1024);
+
+        var mapped = mapper.map(Map.of("prompt", prompt, "image_name", "info.png"));
+        String relative = mapped.argv().get(mapped.argv().indexOf("--promptfiles") + 1);
+        assertThat(relative).startsWith(SkillScriptToolConfig.PROMPT_INPUT_DIRECTORY + "/").endsWith(".md");
+        assertThat(mapped.argv()).containsExactly("--provider", "codex-cli", "--image", "outputs/info.png",
+                "--promptfiles", relative);
+        assertThat(mapped.argv()).allSatisfy(item -> assertThat(item.length()).isLessThanOrEqualTo(1024));
+        assertThat(new String(Files.readAllBytes(workspace.resolve(relative)), StandardCharsets.UTF_8))
+                .isEqualTo(prompt);
+        // A repeated prompt reuses the same file (the name is the prompt digest).
+        assertThat(mapper.map(Map.of("prompt", prompt, "image_name", "info.png")).argv())
+                .containsExactly("--provider", "codex-cli", "--image", "outputs/info.png",
+                        "--promptfiles", relative);
     }
 
     /**
