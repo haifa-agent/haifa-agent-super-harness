@@ -7,11 +7,13 @@ Haifa Super Harness 是一个可在本地部署的 AI 助手工作台，帮助�
 
 > [DeerFlow](https://github.com/bytedance/deer-flow) 是由字节跳动开发并开源的 AI 智能体框架，通过协同子智能体、工具与技能完成研究、编程和内容创作等复杂任务。
 
-![欢迎页](assets/images/welcome.png)
-
-![设置页](assets/images/setting.png)
-
-![能力展示](assets/images/capability.png)
+<table>
+  <tr>
+    <td width="33%"><a href="assets/images/welcome.png"><img src="assets/images/welcome.png" alt="欢迎页" width="100%"></a></td>
+    <td width="33%"><a href="assets/images/setting.png"><img src="assets/images/setting.png" alt="设置页" width="100%"></a></td>
+    <td width="33%"><a href="assets/images/capability.png"><img src="assets/images/capability.png" alt="能力展示" width="100%"></a></td>
+  </tr>
+</table>
 
 ## 架构边界
 
