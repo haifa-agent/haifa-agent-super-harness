@@ -43,7 +43,8 @@ public class SkillScriptBridgeAssemblyTest {
                 Files.createDirectories(temporary.resolve("workspace")),
                 Files.createDirectories(temporary.resolve("data")),
                 bun,
-                Duration.ofMillis(120_000), Duration.ofMillis(600_000), 262_144, 5_000);
+                Duration.ofMillis(120_000), Duration.ofMillis(600_000), 262_144, 5_000,
+                SkillScriptToolConfig.DEFAULT_PROVIDER);
 
         var model = new ControlledModel();
         try (var foundation = new DurableHaifaFoundation(
