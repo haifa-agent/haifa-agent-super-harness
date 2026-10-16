@@ -11,6 +11,16 @@
         "super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/DeerFlowUploadContext.java",
         "super-harness-server/src/main/java/io/haifa/agent/superharness/server/api/DeerFlowThreadRunApi.java"
       ]
+    },
+    {
+      "test": "W08CompletedDelegationPageTest",
+      "module": "super-harness-server",
+      "issue": "W08-COMPLETED-DELEGATION-PAGE-GAP-INTERMITTENT",
+      "since": "2026-10-16",
+      "firstFailureEvidence": "local-tmp/verify-full/verify-full-20261016-212925-566.json",
+      "covers": [
+        "super-harness-server/src/test/java/io/haifa/agent/superharness/server/api/W08CompletedDelegationPageTest.java"
+      ]
     }
   ]
 }
