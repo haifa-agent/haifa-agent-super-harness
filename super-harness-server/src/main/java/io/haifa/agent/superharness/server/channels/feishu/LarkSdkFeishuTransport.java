@@ -5,6 +5,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lark.oapi.Client;
 import com.lark.oapi.core.utils.Jsons;
 import com.lark.oapi.event.EventDispatcher;
+import com.lark.oapi.event.cardcallback.P2CardActionTriggerHandler;
+import com.lark.oapi.event.cardcallback.model.CallBackAction;
+import com.lark.oapi.event.cardcallback.model.CallBackCard;
+import com.lark.oapi.event.cardcallback.model.CallBackContext;
+import com.lark.oapi.event.cardcallback.model.CallBackOperator;
+import com.lark.oapi.event.cardcallback.model.CallBackToast;
+import com.lark.oapi.event.cardcallback.model.P2CardActionTrigger;
+import com.lark.oapi.event.cardcallback.model.P2CardActionTriggerData;
+import com.lark.oapi.event.cardcallback.model.P2CardActionTriggerResponse;
 import com.lark.oapi.service.im.ImService;
 import com.lark.oapi.service.im.v1.model.EventMessage;
 import com.lark.oapi.service.im.v1.model.EventSender;
@@ -13,6 +22,7 @@ import com.lark.oapi.service.im.v1.model.ReplyMessageReq;
 import com.lark.oapi.service.im.v1.model.ReplyMessageReqBody;
 import com.lark.oapi.service.im.v1.model.UserId;
 import java.lang.reflect.Method;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -29,6 +39,12 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
     private com.lark.oapi.ws.Client wsClient;
     private Client apiClient;
     private String domain = FeishuOpenDomain.DEFAULT;
+    private volatile CardActionHandler cardActions;
+
+    @Override
+    public void bindCardActions(CardActionHandler handler) {
+        this.cardActions = handler;
+    }
 
     @Override
     public void start(String appId, String appSecret, String domain, InboundHandler handler) {
@@ -44,6 +60,12 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                         @Override
                         public void handle(P2MessageReceiveV1 event) {
                             deliver(event, handler);
+                        }
+                    })
+                    .onP2CardActionTrigger(new P2CardActionTriggerHandler() {
+                        @Override
+                        public P2CardActionTriggerResponse handle(P2CardActionTrigger event) {
+                            return respondToCard(event);
                         }
                     })
                     .build();
@@ -110,14 +132,19 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
 
     @Override
     public void replyCard(String messageId, String text) throws Exception {
+        replyInteractive(messageId, cardPayloadMap(text == null ? "" : text));
+    }
+
+    @Override
+    public void replyInteractive(String messageId, Map<String, Object> card) throws Exception {
         Client api;
         synchronized (lock) {
             api = apiClient;
         }
-        if (api == null || messageId == null || messageId.isBlank()) {
+        if (api == null || messageId == null || messageId.isBlank() || card == null) {
             return;
         }
-        String content = Jsons.DEFAULT.toJson(cardPayload(text == null ? "" : text));
+        String content = Jsons.DEFAULT.toJson(card);
         ReplyMessageReq request = ReplyMessageReq.newBuilder()
                 .messageId(messageId)
                 .replyMessageReqBody(ReplyMessageReqBody.newBuilder()
@@ -170,6 +197,71 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                 message.getChatType()));
     }
 
+    private P2CardActionTriggerResponse respondToCard(P2CardActionTrigger event) {
+        FeishuInboundMessage message = cardMessage(event);
+        String toast = FeishuInteraction.INVALID;
+        CardActionHandler handler = cardActions;
+        if (handler != null) {
+            try {
+                toast = handler.toastFor(message);
+            } catch (RuntimeException failure) {
+                LOG.log(System.Logger.Level.WARNING, "Feishu card action was rejected", failure);
+                toast = FeishuInteraction.INVALID;
+            }
+        }
+        return callbackResponse(toast, FeishuInteraction.settledCard(message, toast));
+    }
+
+    static P2CardActionTriggerResponse toastResponse(String content) {
+        return callbackResponse(content, null);
+    }
+
+    static P2CardActionTriggerResponse callbackResponse(String content, Map<String, Object> card) {
+        CallBackToast toast = new CallBackToast();
+        toast.setType("info");
+        toast.setContent(content == null || content.isBlank() ? FeishuInteraction.PROCESSING : content);
+        P2CardActionTriggerResponse response = new P2CardActionTriggerResponse();
+        response.setToast(toast);
+        if (card != null) {
+            CallBackCard update = new CallBackCard();
+            update.setType("raw");
+            update.setData(card);
+            response.setCard(update);
+        }
+        return response;
+    }
+
+    static FeishuInboundMessage cardMessage(P2CardActionTrigger event) {
+        P2CardActionTriggerData data = event == null ? null : event.getEvent();
+        CallBackContext context = data == null ? null : data.getContext();
+        CallBackOperator operator = data == null ? null : data.getOperator();
+        CallBackAction action = data == null ? null : data.getAction();
+        Map<String, Object> value = action == null ? null : action.getValue();
+        String requestId = textValue(value, "request_id");
+        String actionName = action == null || action.getName() == null ? "" : action.getName().trim();
+        String typed = firstText(
+                textValue(action == null ? null : action.getFormValue(), "other"),
+                action == null || action.getInputValue() == null ? "" : action.getInputValue().trim());
+        boolean other = FeishuInteraction.OTHER_OPTION.equals(textValue(value, "action"))
+                || "other_submit".equals(actionName);
+        String optionId = other
+                ? FeishuInteraction.OTHER_OPTION
+                : firstText(textValue(value, "option_id"), textValue(value, "action"));
+        String submitted = other ? typed : firstText(textValue(value, "value"), optionId);
+        return new FeishuInboundMessage(
+                context == null ? "" : context.getOpenChatId(),
+                context == null ? "" : context.getOpenMessageId(),
+                operator == null ? "" : operator.getOpenId(),
+                "",
+                "",
+                new FeishuInboundMessage.CardAction(
+                        textValue(value, "source"),
+                        requestId,
+                        optionId,
+                        submitted,
+                        textValue(value, "card_schema")));
+    }
+
     private static String extractText(String contentJson) {
         if (contentJson == null || contentJson.isBlank()) {
             return "";
@@ -185,15 +277,31 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
         }
     }
 
+    private static String textValue(Map<String, Object> value, String key) {
+        if (value == null || key == null) {
+            return "";
+        }
+        Object raw = value.get(key);
+        return raw == null ? "" : String.valueOf(raw).trim();
+    }
+
+    private static String firstText(String preferred, String fallback) {
+        return preferred == null || preferred.isBlank() ? (fallback == null ? "" : fallback) : preferred;
+    }
+
     /**
      * DeerFlow interactive card: markdown element so code fences, headings, and emphasis render in
      * the Feishu client ({@code feishu.py} {@code _build_card_content}).
      */
     static Object cardPayload(String text) {
-        return java.util.Map.of(
+        return cardPayloadMap(text);
+    }
+
+    private static Map<String, Object> cardPayloadMap(String text) {
+        return Map.of(
                 "config",
-                java.util.Map.of("wide_screen_mode", true, "update_multi", true),
+                Map.of("wide_screen_mode", true, "update_multi", true),
                 "elements",
-                java.util.List.of(java.util.Map.of("tag", "markdown", "content", text)));
+                java.util.List.of(Map.of("tag", "markdown", "content", text)));
     }
 }
