@@ -478,7 +478,7 @@ class DispatchTest(unittest.TestCase):
         self.assertTrue(all("--idempotency-key" in step and "--json" in step for step in steps))
 
     def test_slot_ports_follow_the_agents_table(self):
-        expected = {1: "20618/25618", 2: "30618/35618", 3: "40618/45618", 4: "11618/16618"}
+        expected = {1: "20618/25618", 2: "30618/35618", 3: "40618/45618", 4: "11618/16618", 5: "21618/26618", 6: "22618/27618"}
         self.assertEqual(sorted(dispatch.SLOT_PORTS), sorted(expected))
         for slot, ports in expected.items():
             assign = dispatch.build_steps(self.namespace(slot=slot), Path("D:/repo"), "sha", "2026-10-06")[-1]
@@ -486,7 +486,7 @@ class DispatchTest(unittest.TestCase):
             self.assertEqual(assign[assign.index("--ports") + 1], ports, slot)
 
     def test_missing_slot_or_data_root_emits_no_step(self):
-        for overrides, fragment in (({"slot": None}, "--slot is required"), ({"slot": 5}, "Slot 5"),
+        for overrides, fragment in (({"slot": None}, "--slot is required"), ({"slot": 7}, "Slot 7"),
                                     ({"data_root": None}, "--data-root is required"),
                                     ({"data_root": ""}, "--data-root is required")):
             with self.assertRaises(dispatch.DispatchError) as raised:
