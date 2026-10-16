@@ -32,6 +32,11 @@ export type HumanInputField = {
 
 export type HumanInputFormValue = string | number | boolean | string[];
 
+export type HumanInputFact = {
+  label: string;
+  value: string;
+};
+
 export type HumanInputRequest = {
   version: 1 | 2;
   kind: "human_input_request";
@@ -45,6 +50,12 @@ export type HumanInputRequest = {
   input_mode: HumanInputMode;
   options?: HumanInputOption[];
   fields?: HumanInputField[];
+  risk_level?: string;
+  purpose?: string;
+  content?: string;
+  content_type?: string;
+  environment_facts?: HumanInputFact[];
+  technical_facts?: HumanInputFact[];
 };
 
 export type HumanInputResponse =
@@ -256,6 +267,27 @@ function parseFields(value: unknown): HumanInputField[] | undefined {
   return fields;
 }
 
+function parseFacts(value: unknown): HumanInputFact[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const facts: HumanInputFact[] = [];
+  for (const item of value) {
+    if (
+      isRecord(item) &&
+      typeof item.label === "string" &&
+      typeof item.value === "string" &&
+      item.label.trim().length > 0
+    ) {
+      facts.push({
+        label: item.label.trim(),
+        value: item.value.trim(),
+      });
+    }
+  }
+  return facts.length > 0 ? facts : undefined;
+}
+
 export function parseHumanInputRequest(
   value: unknown,
 ): HumanInputRequest | null {
@@ -326,6 +358,24 @@ export function parseHumanInputRequest(
     input_mode: value.input_mode,
     ...(options ? { options } : {}),
     ...(fields ? { fields } : {}),
+    ...(readOptionalString(value.risk_level)
+      ? { risk_level: readOptionalString(value.risk_level) }
+      : {}),
+    ...(readOptionalString(value.purpose)
+      ? { purpose: readOptionalString(value.purpose) }
+      : {}),
+    ...(readOptionalString(value.content)
+      ? { content: readOptionalString(value.content) }
+      : {}),
+    ...(readOptionalString(value.content_type)
+      ? { content_type: readOptionalString(value.content_type) }
+      : {}),
+    ...(parseFacts(value.environment_facts)
+      ? { environment_facts: parseFacts(value.environment_facts) }
+      : {}),
+    ...(parseFacts(value.technical_facts)
+      ? { technical_facts: parseFacts(value.technical_facts) }
+      : {}),
   };
 }
 
