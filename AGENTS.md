@@ -221,14 +221,14 @@ corepack pnpm install --offline --frozen-lockfile
 
 ### OpenCode CLI
 
-- 主控确认任务的独立 branch/worktree、端口、数据目录和验收范围，在派单提示词中提供 SDK 坐标、测试命令及证据要求。提示词正文由主控读取，作为一个位置参数传入；模型固定为 `opencode-go/glm-5.3-flash`，必须在命令中显式指定。
+- 主控确认任务的独立 branch/worktree、端口、数据目录和验收范围，在派单提示词中提供 SDK 坐标、测试命令及证据要求。提示词正文由主控读取，作为一个位置参数传入；模型固定为 `opencode-go/deepseek-v4.1-flash`，必须在命令中显式指定。
 
 ```powershell
 $taskPrompt = Get-Content -LiteralPath '<主控已确认的提示词文件>' -Raw
 Push-Location '<已分配的 worktree 根目录>'
 try {
     New-Item -ItemType Directory -Force -Path local-tmp | Out-Null
-    opencode run --model opencode-go/glm-5.3-flash $taskPrompt 2>&1 |
+    opencode run --model opencode-go/deepseek-v4.1-flash $taskPrompt 2>&1 |
         Tee-Object -FilePath local-tmp/opencode-run.log
 } finally {
     Pop-Location
@@ -240,8 +240,8 @@ try {
 - 任务需要 SDK 类型事实时，主控在派工前运行 `python scripts/governance/sdk_api_digest.py --worktree <worktree>`，并在提示词里写明摘要位于 `local-tmp/sdk-api/<版本>/`。执行者在该目录检索公开签名；摘要里没有的信息在交接里写明并停下。SDK 重新发布后主控重新运行脚本。
 - 验收服务优先由仓库 runner 管理；自行启动的常驻服务在同一次 shell 调用的 `try/finally` 中启动、使用和清理，避免继承调用方管道后留存。CLI 直接运行或交给既有后台执行器，不使用 PowerShell `Start-Job` 承载。
 - 用 `opencode-run.log`、Git 改动、checkpoint 和真实测试证据检查进展与交付；退出码 0 不能单独判定完成。权限拒绝或上下文不足时交回主控，不放宽外部目录权限绕过；检查和清理只针对本任务的精确进程。
-- 有界调用需要续接已读上下文时，先确认原 CLI 的精确进程已终止并保存原件；从本任务 `--format json` 原始日志核对唯一 `sessionID`，用 `opencode run --session <sessionID> --model opencode-go/glm-5.3-flash` 在同一 worktree 续接，仍设置独立 deadline。不得以默认 `--continue` 猜测全局最近会话；续接不改变功能验收预算，也不把先前 deadline 或 FAIL 改为 PASS。
-- Windows 下 Python `subprocess` 不通过 `opencode.cmd` 传递多行提示词：`.cmd` 的 `%*` 转发可截断换行后的正文，使模型仅收到首段但仍退出 0。使用已安装 shim 指向的原生 `opencode.exe`，以参数数组、明确 `cwd` 和单个完整正文参数调用，不拼接 shell 命令、不改全局配置。首次使用派单封装时，用该任务的 `opencode export <sessionId>` 保存首条 user text 的原始字节数和 SHA-256；若 CLI 使用带外层引号的参数包裹格式，先按该格式解码，再核对正文与提示词字节数和 SHA-256 完全一致；导出仅存本任务外置证据目录，不能只凭 CLI 0 或模型自行描述判断提示词完整。忽略目录中的上下文文件须提供准确绝对路径直接读取，不能因 glob 默认过滤 `local-tmp` 就越界搜索或放宽权限。
+- 有界调用需要续接已读上下文时，先确认原 CLI 的精确进程已终止并保存原件；从本任务 `--format json` 原始日志核对唯一 `sessionID`，用 `opencode run --session <sessionID> --model opencode-go/deepseek-v4.1-flash` 在同一 worktree 续接，仍设置独立 deadline。不得以默认 `--continue` 猜测全局最近会话；续接不改变功能验收预算，也不把先前 deadline 或 FAIL 改为 PASS。
+`- Windows 下 Python `subprocess` 不通过 `opencode.cmd` 传递多行提示词：`.cmd` 的 `%*` 转发可截断换行后的正文，使模型仅收到首段但仍退出 0。使用已安装 shim 指向的原生 `opencode.exe`，以参数数组、明确 `cwd` 和单个完整正文参数调用，不拼接 shell 命令、不改全局配置。首次使用派单封装时，用该任务的 `opencode export <sessionId>` 保存首条 user text 的原始字节数和 SHA-256；若 CLI 使用带外层引号的参数包裹格式，先按该格式解码，再核对正文与提示词字节数和 SHA-256 完全一致；导出仅存本任务外置证据目录，不能只凭 CLI 0 或模型自行描述判断提示词完整。忽略目录中的上下文文件须提供准确绝对路径直接读取，不能因 glob 默认过滤 `local-tmp` 就越界搜索或放宽权限。
 - 继承的 `PWD`：OpenCode 以环境变量 `PWD` 为工作目录，优先于进程 `cwd`。从 Git Bash 等会导出 `PWD` 的 shell 用 `subprocess.Popen(..., cwd=worktree)` 启动时，子进程仍带着调用方的 `PWD`。症状：执行者把调用方所在仓库当成当前目录，访问已分配 worktree 时 stderr 报 `permission requested: external_directory (...); auto-rejecting`，十几秒内以退出码 0 结束且没有任何改动。检查：stdout 里第一条 `pwd` 的输出。修复：启动前从子进程环境中移除 `PWD` 和 `OLDPWD`，或按上面的示例在 PowerShell 7 会话里用 `Push-Location` 启动。修复后用同一提示词重新启动，并核对 `pwd` 输出为已分配的 worktree。
 
 - OpenCode 提示词传输保真：Windows 原生 executable 的位置参数曾在会话导出中比传入正文多出两个外层双引号。以本轮日志中唯一的 `sessionID` 执行 `opencode export <sessionID>`，从该会话的 user/text part 对照实际正文 UTF-8 字节数和 SHA-256；正文不相同就记保真 `FAIL`，外层引号归一化只能作诊断，不能冒充精确通过。不得读取无关会话，不使用 `--continue`，不以退出码或保真检查替代源码交付和运行验收；传输修复须在新的有界轮次独立验证。
