@@ -413,7 +413,24 @@ class DeerFlowInteractionHttpApiTest {
     }
 
     private void restoreCatalog(Path catalog, Path backup) throws Exception {
-        Files.delete(catalog);
+        if (Files.exists(catalog)) {
+            for (int i = 0; i < 20; i++) {
+                try {
+                    Files.deleteIfExists(catalog);
+                    break;
+                } catch (Exception e) {
+                    Thread.sleep(50);
+                }
+            }
+        }
+        for (int i = 0; i < 20; i++) {
+            try {
+                Files.move(backup, catalog, StandardCopyOption.REPLACE_EXISTING);
+                return;
+            } catch (java.nio.file.FileAlreadyExistsException | java.nio.file.AccessDeniedException e) {
+                Thread.sleep(50);
+            }
+        }
         Files.move(backup, catalog, StandardCopyOption.REPLACE_EXISTING);
     }
 
