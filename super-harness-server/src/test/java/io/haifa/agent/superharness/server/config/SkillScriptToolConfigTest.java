@@ -89,7 +89,7 @@ class SkillScriptToolConfigTest {
 
     @Test
     void mapperFixesProviderImageAndRejectsBounds() {
-        var mapper = new SkillScriptToolConfig.ImageGenArguments();
+        var mapper = new SkillScriptToolConfig.ImageGenArguments(SkillScriptToolConfig.DEFAULT_PROVIDER);
         var mapped = mapper.map(Map.of(
                 "prompt", "a lighthouse",
                 "image_name", "w04-artifact.png",
@@ -119,6 +119,39 @@ class SkillScriptToolConfigTest {
                 "prompt", "x", "image_name", "a.png", "sleep_millis", 700_000))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("sleep_millis");
+    }
+
+    /**
+     * The image Provider is a deployment fact: the declared value reaches the fixed argv, blank
+     * falls back to the product default, and any value outside the Skill's bounded Provider set
+     * keeps the whole Tool off instead of routing to an unintended Provider.
+     */
+    @Test
+    void configuredProviderReachesTheArgvAndUnknownValuesFailClosed(@TempDir Path temporary) throws Exception {
+        Path bun = Files.createDirectories(temporary.resolve("bun-home"));
+        Files.writeString(bun.resolve("bun.exe"), "stub");
+        Path workspace = Files.createDirectories(temporary.resolve("workspace"));
+        Path dataRoot = Files.createDirectories(temporary.resolve("data"));
+
+        Map<String, String> configured = environment(bun.toAbsolutePath().toString());
+        configured.put(SkillScriptToolConfig.PROVIDER_ENVIRONMENT_KEY, "DashScope");
+        var config = SkillScriptToolConfig.fromEnvironment(
+                configured, workspace, dataRoot, SkillScriptProjections.projection(true)).orElseThrow();
+        assertThat(config.provider()).isEqualTo("dashscope");
+        assertThat(new SkillScriptToolConfig.ImageGenArguments(config.provider()).map(Map.of(
+                "prompt", "a lighthouse", "image_name", "w04.png")).argv())
+                .containsExactly("--provider", "dashscope", "--image", "outputs/w04.png",
+                        "--prompt", "a lighthouse");
+
+        // A blank value keeps the product default; an unknown value turns the Tool off.
+        assertThat(SkillScriptToolConfig.provider("  ")).contains(SkillScriptToolConfig.DEFAULT_PROVIDER);
+        assertThat(SkillScriptToolConfig.provider("codex-cli")).contains("codex-cli");
+
+        Map<String, String> unknown = environment(bun.toAbsolutePath().toString());
+        unknown.put(SkillScriptToolConfig.PROVIDER_ENVIRONMENT_KEY, "not-a-provider");
+        assertThat(SkillScriptToolConfig.fromEnvironment(
+                unknown, workspace, dataRoot, SkillScriptProjections.projection(true))).isEmpty();
+        assertThat(SkillScriptToolConfig.toolNames(unknown, SkillScriptProjections.projection(true))).isEmpty();
     }
 
     /**
