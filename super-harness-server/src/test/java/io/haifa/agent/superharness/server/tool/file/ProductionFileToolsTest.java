@@ -68,6 +68,8 @@ class ProductionFileToolsTest {
                 List.of("include_outline", "max_results", "query", "extensions"), List.of());
         assertSchema(generator, "present_files", ProductionPresentFilesTool.Input.class,
                 List.of("filepaths"), List.of("filepaths"));
+        assertSchema(generator, "view_image", ProductionViewImageTool.Input.class,
+                List.of("image_path"), List.of("image_path"));
     }
 
     @Test
@@ -95,7 +97,8 @@ class ProductionFileToolsTest {
                 Map.entry("skill_manage", new ProductionSkillManageTool(skills, "thread-descriptions").spec().description()),
                 Map.entry("review_skill_package", new ProductionReviewSkillPackageTool(skills, screening,
                         ignored -> Map.of()).spec().description()),
-                Map.entry("write_todos", io.haifa.agent.superharness.server.plan.PlanAuthoringResources.toolDescription()));
+                Map.entry("write_todos", io.haifa.agent.superharness.server.plan.PlanAuthoringResources.toolDescription()),
+                Map.entry("view_image", fixture.viewImage.spec().description()));
         JsonNode manifest = JSON.readTree(getClass().getClassLoader()
                 .getResourceAsStream("upstream/deerflow/tool-descriptions/manifest.json"));
         for (JsonNode entry : manifest.path("descriptions")) {
@@ -411,9 +414,11 @@ class ProductionFileToolsTest {
             this.grep = new ProductionGrepTool(threadId, bindings, workspace);
             this.uploads = new ProductionListUploadedFilesTool(threadId, bindings, workspace, currentRunUploads);
             this.present = new ProductionPresentFilesTool(threadId, projectRef, bindings, workspace);
+            this.viewImage = new ProductionViewImageTool(threadId, bindings, workspace);
             this.currentRunUploads = currentRunUploads;
         }
 
+        private final ProductionViewImageTool viewImage;
         private final CurrentRunUploads currentRunUploads;
 
         private void setCurrentRun(java.util.Set<String> names) {

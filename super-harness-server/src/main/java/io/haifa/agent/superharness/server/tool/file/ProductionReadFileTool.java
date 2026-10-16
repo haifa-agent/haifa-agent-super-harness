@@ -100,7 +100,8 @@ public final class ProductionReadFileTool
         UploadFileFacts facts = UploadFileFacts.of(bytes);
         if (facts.text().isEmpty()) {
             return new Output(path, bytes.length, facts.sha256(), facts.encoding(), 0, 0, 0, false, "",
-                    "file is not valid UTF-8 text; read_file cannot return it as text");
+                    "cannot read '" + path + "' as text \u2014 it appears to be a binary file (e.g. .xlsx, .pdf, or an image). "
+                            + "read_file only supports UTF-8 text. Use bash with a suitable library instead (pandas/openpyxl for spreadsheets), or view_image for images.");
         }
         String text = facts.text().orElseThrow();
         // Frozen ReadBeforeWriteMiddleware stamps the hash of every successful read_file result;
@@ -140,7 +141,8 @@ public final class ProductionReadFileTool
     public String summarize(Output output) {
         if (!output.error().isEmpty()) {
             return "Error: " + output.error() + "\npath=" + output.path()
-                    + (output.sha256().isEmpty() ? "" : " sha256=" + output.sha256() + " bytes=" + output.size());
+                    + (output.sha256().isEmpty() ? "" : " sha256=" + output.sha256() + " bytes=" + output.size())
+                    + (output.encoding().isEmpty() ? "" : " encoding=" + output.encoding());
         }
         StringBuilder summary = new StringBuilder()
                 .append("path=").append(output.path())
