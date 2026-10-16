@@ -120,4 +120,50 @@ class SkillScriptToolConfigTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("sleep_millis");
     }
+
+    /**
+     * The layout a packaged bun ships with on most hosts: the declared path is a link to the real
+     * runtime. The SDK entry admits the declaration only when it names an exact file, so the
+     * declaration follows the link instead of handing the SDK a path its preflight rejects at Run
+     * admission (which failed every Run while the Tool was declared).
+     */
+    @Test
+    void followsASymlinkedBunToTheExactFile(@TempDir Path temporary) throws Exception {
+        Path home = Files.createDirectories(temporary.resolve("bun-home"));
+        Path executable = home.resolve("bun.exe");
+        Files.writeString(executable, "stub");
+        Path fileLink = SymbolicLinks.create(temporary.resolve("bun"), executable);
+        Path directoryLink = SymbolicLinks.create(temporary.resolve("bun-home-link"), home);
+        Path workspace = Files.createDirectories(temporary.resolve("workspace"));
+        Path dataRoot = Files.createDirectories(temporary.resolve("data"));
+
+        var config = SkillScriptToolConfig.fromEnvironment(
+                environment(fileLink.toAbsolutePath().toString()), workspace, dataRoot,
+                SkillScriptProjections.projection(true)).orElseThrow();
+        assertThat(config.bunExecutable()).isEqualTo(executable.toAbsolutePath().normalize());
+        assertThat(Files.isSymbolicLink(config.bunExecutable())).isFalse();
+        assertThat(SkillScriptToolConfig.toolNames(
+                environment(fileLink.toAbsolutePath().toString()), SkillScriptProjections.projection(true)))
+                .containsExactly(SkillScriptToolConfig.TOOL_NAME);
+
+        // The directory form follows a linked directory the same way.
+        assertThat(SkillScriptToolConfig.bunExecutable(directoryLink.toAbsolutePath().toString()))
+                .isEqualTo(executable.toAbsolutePath().normalize());
+    }
+
+    /** A link that names nothing keeps the Tool off instead of admitting an unusable runtime. */
+    @Test
+    void unresolvedSymbolicLinkKeepsTheRuntimeUndeclared(@TempDir Path temporary) throws Exception {
+        Path link = SymbolicLinks.create(
+                temporary.resolve("broken-bun"), temporary.resolve("missing-bun.exe"));
+        Path workspace = Files.createDirectories(temporary.resolve("workspace"));
+        Path dataRoot = Files.createDirectories(temporary.resolve("data"));
+
+        assertThat(SkillScriptToolConfig.fromEnvironment(
+                environment(link.toAbsolutePath().toString()), workspace, dataRoot,
+                SkillScriptProjections.projection(true))).isEmpty();
+        assertThat(SkillScriptToolConfig.toolNames(
+                environment(link.toAbsolutePath().toString()), SkillScriptProjections.projection(true)))
+                .isEmpty();
+    }
 }
