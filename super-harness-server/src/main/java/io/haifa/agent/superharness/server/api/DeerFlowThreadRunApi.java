@@ -1533,6 +1533,9 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                         // presentation yet. Never accept its side effect before the card is durable.
                         ensureSavedPendingDisplay(thread, run, pending.orElseThrow());
                     } catch (IOException | IllegalArgumentException unavailablePresentation) {
+                        INTERACTION_LOG.log(System.Logger.Level.WARNING,
+                                "Interaction card could not be saved: "
+                                        + unavailablePresentation.getClass().getName());
                         sendJson(exchange, 503, Map.of(
                                 "detail", "Interaction card could not be saved; approval was not submitted"));
                         return;
@@ -3984,6 +3987,11 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         }
         Map<Integer, List<Map<String, Object>>> byRound = new LinkedHashMap<>();
         synchronized (thread) {
+            if (run != null) {
+                synchronized (run) {
+                    adoptPendingInteractionCard(thread, run, runId);
+                }
+            }
             for (var display : thread.interactionDisplays) {
                 if (!display.runId().equals(runId)) continue;
                 if (!isVisibleInteractionDisplay(thread, display)) continue;
@@ -4008,6 +4016,44 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             }
         }
         return byRound;
+    }
+
+    /**
+     * Makes a waiting Run's Interaction card durable before projecting Thread messages, so a card
+     * raised while no client was attached (whose stream event has since left the bounded replay
+     * window) is still visible and answerable after a reload. The SDK pending view stays
+     * authoritative: a card that cannot be persisted is still projected in memory for this read, so
+     * the durable-state recovery the reconnect advertises always yields the card.
+     */
+    private void adoptPendingInteractionCard(ThreadRecord thread, RunRecord run, String runId) {
+        Optional<InteractionView> pending = run.bridge.pendingInteraction(new AgentRunId(runId));
+        if (pending.isEmpty()) {
+            return;
+        }
+        String requestId = pending.orElseThrow().requestId().value();
+        if (!requestId.equals(run.interactionRequestId)) {
+            // A new approval supersedes any response already accepted for the previous one. Without
+            // this the responding path would see a stale accepted response and refuse the new
+            // submission as a different response.
+            run.acceptedInteractionResponse = null;
+        }
+        boolean saved = thread.interactionDisplays.stream()
+                .anyMatch(display -> display.runId().equals(runId) && display.requestId().equals(requestId));
+        if (saved) {
+            run.interactionRequestId = requestId;
+            return;
+        }
+        try {
+            var display = ensureSavedPendingDisplay(thread, run, pending.orElseThrow());
+            run.interactionRequestMessage = requestMessage(display);
+        } catch (IOException | IllegalArgumentException unavailable) {
+            INTERACTION_LOG.log(System.Logger.Level.WARNING,
+                    "Pending Interaction card could not be persisted while reading the Thread: "
+                            + unavailable.getClass().getName());
+            run.interactionRequestMessage =
+                    DeerFlowInteractionHttpProjection.requestMessage(pending.orElseThrow(), runId);
+        }
+        run.interactionRequestId = requestId;
     }
 
     private static String interactionMessageToolCallId(Map<String, Object> message) {
@@ -4126,9 +4172,16 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return display;
         }
         DeerFlowInteractionHttpProjection.requestMessage(view, run.runId.value());
+        // The saved card must keep a strictly increasing request sequence (validateDisplays); a
+        // pending card raised while the client was disconnected can otherwise reuse a sequence that
+        // an earlier saved card already holds, and the card would never persist.
+        long latest = thread.interactionDisplays.stream()
+                .mapToLong(PersistentThreadCatalog.InteractionDisplay::requestSequence)
+                .max()
+                .orElse(0);
         var display = new PersistentThreadCatalog.InteractionDisplay(
                 run.runId.value(), requestId,
-                Math.max(thread.nextMessageSequence, run.humanSequence + 1),
+                Math.max(Math.max(thread.nextMessageSequence, run.humanSequence + 1), latest + 1),
                 view.createdAt(), view.target().reference(), view.title(),
                 view.safePrompt(), view.target().safeSummary(),
                 view.allowedActions().stream().map(action -> action.value()).toList(), null);
