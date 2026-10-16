@@ -29,7 +29,13 @@ public final class PersistentThreadCatalog {
     private static final int FORMAT_VERSION = 1;
     private static final long MAXIMUM_CATALOG_BYTES = 4L * 1024 * 1024;
     static final int MAX_INTERACTION_DISPLAYS_PER_THREAD = 64;
-    static final int MAX_INTERACTION_DISPLAYS_PER_RUN = 8;
+    /**
+     * A single Run can legitimately raise more approval cards than this over a long multi-step task
+     * (for example a Skill that shells out repeatedly), so the per-Run bound must not bind below the
+     * per-Thread one: a longer Run would otherwise stop persisting cards and its pending approval
+     * could neither be shown nor answered. Storage stays bounded by the per-Thread cap.
+     */
+    static final int MAX_INTERACTION_DISPLAYS_PER_RUN = MAX_INTERACTION_DISPLAYS_PER_THREAD;
     static final int MAX_CLARIFICATION_DISPLAYS_PER_THREAD = 64;
 
     private final ObjectMapper json;
