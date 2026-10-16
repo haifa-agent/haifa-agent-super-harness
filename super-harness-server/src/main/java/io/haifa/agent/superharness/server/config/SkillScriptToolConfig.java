@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -25,10 +26,13 @@ import java.util.regex.Pattern;
  *
  * <p>Everything the model could otherwise choose is a product fact: the runtime (the declared bun
  * executable), the script (the Skill package's frozen entry), the working directory (the current
- * Thread workspace root, so {@code outputs/} is reachable) and the Provider/argv shape (the mapper
- * maps only the bounded business arguments). The SDK entry validates the declaration again when it
- * assembles the platform, and the frozen Tool identity covers the runtime reference, the script
- * timeout and the approval purpose.
+ * Thread workspace root, so {@code outputs/} is reachable) and the argv shape (the mapper maps only
+ * the bounded business arguments). The image Provider is also a deployment fact, not a model choice:
+ * it defaults to {@value #DEFAULT_PROVIDER} and is overridden by {@value #PROVIDER_ENVIRONMENT_KEY}
+ * within the bounded Provider set the packaged Skill entry accepts; a value outside that set keeps
+ * the Tool off. The SDK entry validates the declaration again when it assembles the platform, and
+ * the frozen Tool identity covers the runtime reference, the script timeout and the approval
+ * purpose.
  */
 public record SkillScriptToolConfig(
         Path workspaceRoot,
@@ -37,7 +41,8 @@ public record SkillScriptToolConfig(
         Duration defaultTimeout,
         Duration maximumTimeout,
         int maximumOutputBytes,
-        int maximumOutputLines) {
+        int maximumOutputLines,
+        String provider) {
 
     /** Alias of the seeded Skill whose frozen binding the Tool executes. */
     public static final String SKILL_ALIAS = "baoyu-image-gen";
@@ -54,8 +59,25 @@ public record SkillScriptToolConfig(
     /** Environment variable carrying the absolute bun executable (or its home directory). */
     public static final String BUN_ENVIRONMENT_KEY = "HAIFA_SUPER_HARNESS_BUN_PATH";
 
-    /** Fixed Provider argument; it needs no API key and is not the model's choice. */
-    static final String PROVIDER_ARGUMENT = "codex-cli";
+    /**
+     * Environment variable selecting the image Provider the mapper passes to the Skill script as a
+     * fixed {@code --provider} argument. The Provider is a deployment fact (like the runtime and the
+     * script), never a model choice, so any value outside {@link #SUPPORTED_PROVIDERS} keeps the Tool
+     * off instead of widening or misrouting the execution surface.
+     */
+    public static final String PROVIDER_ENVIRONMENT_KEY = "HAIFA_SUPER_HARNESS_SKILL_PROVIDER";
+
+    /** Product default Provider; the packaged Skill ships codex-cli first. */
+    public static final String DEFAULT_PROVIDER = "codex-cli";
+
+    /**
+     * The bounded Provider set the packaged Skill entry accepts through {@code --provider}. It is a
+     * product fact mirrored from the Skill's own provider list; an unknown value is not passed
+     * through, so an operator typo fails closed rather than reaching the script.
+     */
+    private static final Set<String> SUPPORTED_PROVIDERS = Set.of(
+            "codex-cli", "openai", "azure", "google", "openrouter", "dashscope", "zai",
+            "minimax", "jimeng", "seedream", "replicate", "agnes");
 
     private static final Set<String> MODEL_ARGUMENTS = Set.of("prompt", "image_name", "help", "sleep_millis");
 
@@ -77,6 +99,22 @@ public record SkillScriptToolConfig(
         if (maximumOutputBytes <= 0 || maximumOutputLines <= 0) {
             throw new IllegalArgumentException("output bounds must be positive");
         }
+        Objects.requireNonNull(provider, "provider must not be null");
+        if (!SUPPORTED_PROVIDERS.contains(provider)) {
+            throw new IllegalArgumentException("unsupported Skill script Provider: " + provider);
+        }
+    }
+
+    /**
+     * Resolves the declared Provider: blank means the product default, a known value is normalized to
+     * lower case and anything else is empty so the caller keeps the Tool off.
+     */
+    public static Optional<String> provider(String rawValue) {
+        if (rawValue == null || rawValue.isBlank()) {
+            return Optional.of(DEFAULT_PROVIDER);
+        }
+        String candidate = rawValue.strip().toLowerCase(Locale.ROOT);
+        return SUPPORTED_PROVIDERS.contains(candidate) ? Optional.of(candidate) : Optional.empty();
     }
 
     /** The Tool name as a public value object, so no caller re-derives the string. */
@@ -103,18 +141,22 @@ public record SkillScriptToolConfig(
         if (bun == null) {
             return Optional.empty();
         }
+        String provider = provider(environment.get(PROVIDER_ENVIRONMENT_KEY)).orElse(null);
+        if (provider == null) {
+            return Optional.empty();
+        }
         return Optional.of(new SkillScriptToolConfig(
                 workspaceRoot,
                 dataRoot,
                 bun,
-                // The real codex-cli generation runs for multiple minutes (the first full round
-                // timed out at 120 s while the wrapper was still generating); the script timeout
-                // therefore carries the product's largest declared bound, matching the host shell
-                // maximum.
+                // The real generation runs for multiple minutes (the first full round timed out at
+                // 120 s while the wrapper was still generating); the script timeout therefore
+                // carries the product's largest declared bound, matching the host shell maximum.
                 HostShellToolConfig.MAXIMUM_TIMEOUT,
                 HostShellToolConfig.MAXIMUM_TIMEOUT,
                 HostShellToolConfig.MAXIMUM_OUTPUT_BYTES,
-                HostShellToolConfig.MAXIMUM_OUTPUT_LINES));
+                HostShellToolConfig.MAXIMUM_OUTPUT_LINES,
+                provider));
     }
 
     /**
@@ -132,6 +174,9 @@ public record SkillScriptToolConfig(
             return Set.of();
         }
         if (bunExecutable(environment.get(BUN_ENVIRONMENT_KEY)) == null) {
+            return Set.of();
+        }
+        if (provider(environment.get(PROVIDER_ENVIRONMENT_KEY)).isEmpty()) {
             return Set.of();
         }
         return Set.of(TOOL_NAME);
@@ -253,12 +298,20 @@ public record SkillScriptToolConfig(
     private static final Pattern IMAGE_NAME = Pattern.compile("^[a-z0-9][a-z0-9._-]{0,55}\\.png$");
 
     /**
-     * Product argument mapping: model arguments to fixed argv, with {@code --provider codex-cli} and
-     * {@code --image outputs/<name>} always fixed for generation. Unknown arguments, unsafe output
-     * names and out-of-bound probes fail closed here, before any approval carries weight and before
-     * any process can start.
+     * Product argument mapping: model arguments to fixed argv, with {@code --provider <declared>} and
+     * {@code --image outputs/<name>} always fixed for generation. The Provider is the deployment fact
+     * resolved at declaration time, never a model argument. Unknown arguments, unsafe output names
+     * and out-of-bound probes fail closed here, before any approval carries weight and before any
+     * process can start.
      */
     public static final class ImageGenArguments implements TrustedScriptArgumentMapper {
+
+        private final String provider;
+
+        public ImageGenArguments(String provider) {
+            this.provider = Objects.requireNonNull(provider, "provider must not be null");
+        }
+
         @Override
         public TrustedScriptArguments map(Map<String, Object> arguments) {
             Objects.requireNonNull(arguments, "arguments must not be null");
@@ -278,7 +331,7 @@ public record SkillScriptToolConfig(
             }
             List<String> argv = new ArrayList<>();
             argv.add("--provider");
-            argv.add(PROVIDER_ARGUMENT);
+            argv.add(provider);
             argv.add("--image");
             argv.add("outputs/" + imageName);
             argv.add("--prompt");

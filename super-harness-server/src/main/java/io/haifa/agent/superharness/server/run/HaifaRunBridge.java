@@ -428,7 +428,7 @@ public final class HaifaRunBridge implements AutoCloseable {
                                         SkillScriptToolConfig.SCRIPT_RUNTIME_REF,
                                         skillScript.defaultTimeout(),
                                         SkillScriptToolConfig.purpose(),
-                                        new SkillScriptToolConfig.ImageGenArguments())),
+                                        new SkillScriptToolConfig.ImageGenArguments(skillScript.provider()))),
                                 skillScript.defaultTimeout(),
                                 skillScript.maximumTimeout(),
                                 skillScript.maximumOutputBytes(),
