@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.haifa.agent.core.run.AgentRunId;
 import io.haifa.agent.core.session.AgentSessionId;
+import io.haifa.agent.runtime.api.ApprovalPresentation;
 import io.haifa.agent.runtime.api.InteractionAction;
 import io.haifa.agent.runtime.api.InteractionConsequenceView;
 import io.haifa.agent.runtime.api.InteractionInputContract;
@@ -603,6 +604,104 @@ class DeerFlowInteractionHttpApiTest {
                 .isEqualTo(sdkReceivedAt);
         assertThat(DeerFlowInteractionHttpProjection.sdkMillisecondTime(sdkReceivedAt))
                 .isEqualTo(sdkReceivedAt);
+    }
+
+    @Test
+    void requestMessageProjectsApprovalPresentationWhenPresent() {
+        var presentation = new ApprovalPresentation(
+                "执行系统 PowerShell 命令",
+                "Agent 请求执行命令以检查工作区状态",
+                "powershell",
+                "git status -s",
+                List.of(new ApprovalPresentation.Fact("工作目录", "/workspace")),
+                List.of(new ApprovalPresentation.Fact("调用摘要", "digest-123")),
+                Optional.of("HIGH"));
+        var requestId = new InteractionRequestId("approval-req-present");
+        var view = new InteractionView(
+                requestId,
+                new AgentRunId("run-1"),
+                new AgentSessionId("session-1"),
+                1,
+                InteractionKind.APPROVAL,
+                InteractionState.PENDING,
+                "Approval required",
+                "Approve tool execution_run (...)",
+                List.of(InteractionAction.APPROVE, InteractionAction.REJECT),
+                InteractionInputContract.NONE,
+                new InteractionTargetView("tool", "execution_run@3.0.0#haifa-execution#digest-123", Optional.of("3.0.0"), Optional.of("digest-123"), "Tool execution_run"),
+                new InteractionRequesterView("human", "Operator"),
+                Instant.now(),
+                Optional.empty(),
+                new InteractionConsequenceView("Approve", "Reject", "Expire"),
+                Optional.of(presentation));
+
+        Map<String, Object> message = DeerFlowInteractionHttpProjection.requestMessage(view, "run-1");
+        assertThat(message.get("type")).isEqualTo("tool");
+        assertThat(message.get("name")).isEqualTo("ask_clarification");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> artifact = (Map<String, Object>) message.get("artifact");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) artifact.get("human_input");
+
+        assertThat(payload.get("title")).isEqualTo("执行系统 PowerShell 命令");
+        assertThat(payload.get("purpose")).isEqualTo("Agent 请求执行命令以检查工作区状态");
+        assertThat(payload.get("content")).isEqualTo("git status -s");
+        assertThat(payload.get("content_type")).isEqualTo("powershell");
+        assertThat(payload.get("risk_level")).isEqualTo("HIGH");
+        assertThat(payload.get("clarification_type")).isEqualTo("risk_confirmation");
+        assertThat(payload.get("environment_facts"))
+                .asList()
+                .containsExactly(Map.of("label", "工作目录", "value", "/workspace"));
+        assertThat(payload.get("technical_facts"))
+                .asList()
+                .containsExactly(Map.of("label", "调用摘要", "value", "digest-123"));
+    }
+
+    @Test
+    void requestMessageExtractsFriendlyFallbackFromStructuredSafePrompt() {
+        String structuredPrompt = """
+                Approve host execution
+                Mode: COMMAND
+                Language: powershell
+                Command: git status -s && git log -n 5
+                Purpose: 检查 Git 仓库历史与改动
+                Timeout: 60000 ms
+                Workspace: /project
+                Network: 未请求
+                Invocation digest: sha256:abc12345
+                Risks: HIGH, PROCESS_EXECUTION
+                """;
+        var requestId = new InteractionRequestId("approval-req-fallback");
+        var view = new InteractionView(
+                requestId,
+                new AgentRunId("run-2"),
+                new AgentSessionId("session-2"),
+                1,
+                InteractionKind.APPROVAL,
+                InteractionState.PENDING,
+                "Approval required",
+                structuredPrompt,
+                List.of(InteractionAction.APPROVE, InteractionAction.REJECT),
+                InteractionInputContract.NONE,
+                new InteractionTargetView("tool", "execution_run@3.0.0#haifa-execution#sha256:abc12345", Optional.of("3.0.0"), Optional.of("sha256:abc12345"), "Tool execution_run"),
+                new InteractionRequesterView("human", "Operator"),
+                Instant.now(),
+                Optional.empty(),
+                new InteractionConsequenceView("Approve", "Reject", "Expire"));
+
+        Map<String, Object> message = DeerFlowInteractionHttpProjection.requestMessage(view, "run-2");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> artifact = (Map<String, Object>) message.get("artifact");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = (Map<String, Object>) artifact.get("human_input");
+
+        assertThat(payload.get("title")).isEqualTo("执行宿主命令 (execution_run)");
+        assertThat(payload.get("purpose")).isEqualTo("检查 Git 仓库历史与改动");
+        assertThat(payload.get("content")).isEqualTo("git status -s && git log -n 5");
+        assertThat(payload.get("content_type")).isEqualTo("powershell");
+        assertThat(payload.get("risk_level")).isEqualTo("HIGH");
+        assertThat(payload.get("environment_facts")).asList().isNotEmpty();
+        assertThat(payload.get("technical_facts")).asList().isNotEmpty();
     }
 
     private String ordinaryRunBody(String prompt) {
