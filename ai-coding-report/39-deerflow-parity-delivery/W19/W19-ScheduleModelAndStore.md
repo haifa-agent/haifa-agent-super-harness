@@ -8,6 +8,7 @@
 - 任务：W19-task-1「调度时间语义与持久化契約」（M1）。
 - 分支 / worktree：`feat-w19-schedule-model-store`，本目录。
 - 基线：`a71dd89e7ce31a8c28f1cb691215ae176c3fd3d0`；`sourceTree=1bafc442e98f419e577e3f5ffcc65993ea73b23f`；`javaInputFingerprint=1a0caa585ddc3949b29939aaa9795d595913b4a66ca74614c68d67dbbc7e127d`（`scripts/governance/change_scope.py`）。
+- 源码 + 测试交付提交：`f90fda14a001c41478736374ac6babe778bb0ee7`；本报告为其上的文档更新提交（仅文档，`javaInputFingerprint` 不变）。
 - 槽位 / 端口 / 数据目录：Slot 5，Gateway `21618` / Frontend `26618`；本轮未启动服务，未占用端口。
 - SDK：`local-tmp/sdk-selection.json` ABSENT → 基线 `io.haifa:haifa-agent-bom:0.1.3-SNAPSHOT`（`test-targeted` 报告 `sdkSelection=ABSENT`、`haifaVersion=0.1.3-SNAPSHOT`）。本任务未使用任何 SDK 类型，仅消费 SH 自身与 JDK 公开 API。
 - M0 前置：`local-tmp/slot-5-w19/docrefs/W19-DesignNote.md` 为主控产出的 M0 设计说明（含 §4.1 存储/配置/派发建议）；本任务按该说明的 §4.1「文件型产品 store，不向 SDK SQLite 加表」实施，未引入超出 M0 范围的领域对象/状态机/持久化表。
