@@ -4,7 +4,7 @@ index aaad8e2..16618cf 100644
 +++ b/frontend/src/components/workspace/messages/human-input-card.tsx
 @@ -1,10 +1,14 @@
  "use client";
- 
+
  import {
 +  AlertTriangleIcon,
    CheckCircle2Icon,
@@ -16,7 +16,7 @@ index aaad8e2..16618cf 100644
 +  ShieldAlertIcon,
  } from "lucide-react";
  import { useId, useState, type KeyboardEvent } from "react";
- 
+
 @@ -242,6 +246,37 @@ export function HumanInputCard({
    const titleId = useId();
    const textInputId = useId();
@@ -116,7 +116,7 @@ index aaad8e2..16618cf 100644
 @@ -404,9 +476,110 @@ export function HumanInputCard({
              ) : null}
            </div>
- 
+
 -          <div className="text-foreground text-sm leading-6">
 -            <MarkdownContent content={request.question} isLoading={false} />
 -          </div>
@@ -224,12 +224,12 @@ index aaad8e2..16618cf 100644
 +              ) : null}
 +            </div>
 +          ) : null}
- 
+
            {isForm ? (
              <form className="space-y-4" onSubmit={handleFormSubmit}>
 @@ -502,22 +675,80 @@ export function HumanInputCard({
            ) : null}
- 
+
            {!isForm && options.length > 0 ? (
 -            <div className="grid gap-2">
 -              {options.map((option) => (
@@ -321,12 +321,12 @@ index aaad8e2..16618cf 100644
 +              </div>
 +            )
            ) : null}
- 
+
            {allowText ? (
 @@ -576,7 +807,7 @@ export function HumanInputCard({
              </form>
            ) : null}
- 
+
 -          {!allowText && !isForm && answeredResponse ? (
 +          {!allowText && !isForm && !isRiskConfirmation && answeredResponse ? (
              <p className="text-muted-foreground text-sm" aria-live="polite">
@@ -337,9 +337,9 @@ index 673cdd9..18e9669 100644
 --- a/frontend/src/core/messages/human-input.ts
 +++ b/frontend/src/core/messages/human-input.ts
 @@ -32,6 +32,11 @@ export type HumanInputField = {
- 
+
  export type HumanInputFormValue = string | number | boolean | string[];
- 
+
 +export type HumanInputFact = {
 +  label: string;
 +  value: string;
@@ -359,12 +359,12 @@ index 673cdd9..18e9669 100644
 +  environment_facts?: HumanInputFact[];
 +  technical_facts?: HumanInputFact[];
  };
- 
+
  export type HumanInputResponse =
 @@ -256,6 +267,27 @@ function parseFields(value: unknown): HumanInputField[] | undefined {
    return fields;
  }
- 
+
 +function parseFacts(value: unknown): HumanInputFact[] | undefined {
 +  if (!Array.isArray(value)) {
 +    return undefined;
@@ -413,7 +413,7 @@ index 673cdd9..18e9669 100644
 +      : {}),
    };
  }
- 
+
 diff --git a/frontend/tests/unit/components/workspace/messages/human-input-card.test.ts b/frontend/tests/unit/components/workspace/messages/human-input-card.test.ts
 index 89353c1..cfd1036 100644
 --- a/frontend/tests/unit/components/workspace/messages/human-input-card.test.ts
@@ -498,7 +498,7 @@ index 89353c1..cfd1036 100644
 +    expect(html).toContain("已批准执行 (Approved)");
 +  });
  });
- 
+
  function renderCard(props: Partial<Parameters<typeof HumanInputCard>[0]> = {}) {
 diff --git a/frontend/tests/unit/core/messages/human-input.test.ts b/frontend/tests/unit/core/messages/human-input.test.ts
 index cd9ae75..9c83bc7 100644
