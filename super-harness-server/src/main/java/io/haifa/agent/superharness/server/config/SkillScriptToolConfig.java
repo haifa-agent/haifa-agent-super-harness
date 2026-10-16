@@ -155,8 +155,11 @@ public record SkillScriptToolConfig(
 
     /**
      * Only an absolute path to an existing regular file qualifies; a directory resolves the bun
-     * executable inside it. Anything else keeps the declaration empty, so a typo can never widen the
-     * Tool surface and no host PATH guessing happens here either.
+     * executable inside it. A symbolic link - the layout a packaged bun ships with, for example
+     * {@code /usr/bin/bun -> ../lib/node_modules/bun/bin/bun.exe} - is followed to the file it names,
+     * because the SDK entry requires the declared runtime to be an exact file rather than a link.
+     * Anything else, including a link that does not resolve to a file, keeps the declaration empty,
+     * so a typo can never widen the Tool surface and no host PATH guessing happens here either.
      */
     public static Path bunExecutable(String rawValue) {
         if (rawValue == null || rawValue.isBlank()) {
@@ -166,18 +169,36 @@ public record SkillScriptToolConfig(
         if (!path.isAbsolute()) {
             return null;
         }
-        if (Files.isRegularFile(path)) {
-            return path.toAbsolutePath().normalize();
+        Path declared = Files.isSymbolicLink(path) ? resolvedTarget(path) : path;
+        if (declared == null) {
+            return null;
         }
-        if (Files.isDirectory(path)) {
+        if (Files.isRegularFile(declared)) {
+            return declared.toAbsolutePath().normalize();
+        }
+        if (Files.isDirectory(declared)) {
             for (String candidate : List.of("bun.exe", "bun")) {
-                Path resolved = path.resolve(candidate).toAbsolutePath().normalize();
-                if (Files.isRegularFile(resolved)) {
-                    return resolved;
+                Path entry = declared.resolve(candidate);
+                Path resolved = Files.isSymbolicLink(entry) ? resolvedTarget(entry) : entry;
+                if (resolved != null && Files.isRegularFile(resolved)) {
+                    return resolved.toAbsolutePath().normalize();
                 }
             }
         }
         return null;
+    }
+
+    /**
+     * The file or directory a symbolic link names, or null when the link cannot be resolved. The
+     * declaration follows a link exactly as the operator wrote it; a broken link stays undeclared so
+     * the Tool is off rather than admitted with a runtime the SDK entry would reject.
+     */
+    private static Path resolvedTarget(Path link) {
+        try {
+            return link.toRealPath();
+        } catch (java.io.IOException broken) {
+            return null;
+        }
     }
 
     /** Product title of the Tool as shown on the approval card. */
