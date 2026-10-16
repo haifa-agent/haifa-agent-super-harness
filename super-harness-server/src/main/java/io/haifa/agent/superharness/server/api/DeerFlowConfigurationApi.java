@@ -816,6 +816,21 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                 credentials,
                 allowInsecureHttp,
                 MAX_PROVIDER_RESPONSE_BYTES);
+        boolean supportsVision = config.path("supports_vision").asBoolean(false);
+        Set<ModelCapability> capabilities = new java.util.LinkedHashSet<>();
+        capabilities.add(ModelCapability.TEXT_CHAT);
+        capabilities.add(ModelCapability.TOOL_CALLING);
+        if (deepSeek) {
+            capabilities.add(ModelCapability.REASONING);
+        }
+        if (supportsVision) {
+            capabilities.add(ModelCapability.IMAGE_INPUT);
+            capabilities.add(ModelCapability.IMAGE_UPLOAD_INPUT);
+            capabilities.add(ModelCapability.IMAGE_URL_INPUT);
+        }
+        Map<String, Object> providerOptions = supportsVision
+                ? Map.of("supports_vision", true)
+                : Map.of();
         ResolvedModelSnapshot snapshot = ResolvedModelSnapshot.create(
                 new ModelProviderId(deepSeek ? "deepseek" : "super-harness-managed-openai-compatible"),
                 "0.1.1-SNAPSHOT",
@@ -829,11 +844,10 @@ final class DeerFlowConfigurationApi implements HttpHandler {
                 endpoint,
                 new CredentialRef(credentialReference),
                 true,
-                deepSeek ? Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING, ModelCapability.REASONING)
-                        : Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING),
+                Set.copyOf(capabilities),
                 contextWindow,
                 maxOutputTokens,
-                Map.of(),
+                providerOptions,
                 invocationOptions);
         return new HaifaRunBridge.ModelBinding(name, revision, model, snapshot);
     }

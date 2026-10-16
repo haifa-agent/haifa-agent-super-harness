@@ -71,6 +71,18 @@ public final class ProductionViewImageTool
         this.workspace = Objects.requireNonNull(workspace, "workspace");
     }
 
+    public String threadId() {
+        return threadId;
+    }
+
+    public PersistentProjectWorkspaceService bindings() {
+        return bindings;
+    }
+
+    public RestrictedWorkspaceService workspace() {
+        return workspace;
+    }
+
     @Override
     public JavaToolSpec<Input, Output> spec() {
         return SPEC;
@@ -174,7 +186,7 @@ public final class ProductionViewImageTool
         return filename.substring(dot);
     }
 
-    static String detectImageMime(byte[] data) {
+    public static String detectImageMime(byte[] data) {
         if (data == null) {
             return null;
         }

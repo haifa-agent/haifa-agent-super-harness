@@ -266,6 +266,20 @@ public final class LeadPromptComposer {
         return out.append("</available_subagents>\n</subagent_system>").toString();
     }
 
+    /**
+     * Filters available tool names according to the model's vision capability.
+     * When vision is not supported, {@code view_image} is excluded from the registered tools.
+     */
+    public static Set<String> filterToolsForVision(Set<String> toolNames, boolean supportsVision) {
+        Objects.requireNonNull(toolNames, "toolNames");
+        if (supportsVision) {
+            return toolNames;
+        }
+        Set<String> filtered = new LinkedHashSet<>(toolNames);
+        filtered.remove("view_image");
+        return filtered;
+    }
+
     /** Full instructions/hash, with Tool instruction references excluding generated Agent catalog data. */
     public record Composition(String instructions, String signature, Set<String> mentionedToolNames) {}
 
