@@ -2,13 +2,17 @@ package io.haifa.agent.superharness.server.channels.feishu;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /** Test double that records outbound replies and accepts injected inbound events. */
 public final class RecordingFeishuTransport implements FeishuTransport {
     public record CardReply(String messageId, String text) {}
 
+    public record InteractiveReply(String messageId, Map<String, Object> card) {}
+
     private final CopyOnWriteArrayList<CardReply> replies = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<InteractiveReply> interactiveReplies = new CopyOnWriteArrayList<>();
     private volatile boolean running;
     private volatile InboundHandler handler;
     private volatile String domain;
@@ -42,8 +46,17 @@ public final class RecordingFeishuTransport implements FeishuTransport {
         replies.add(new CardReply(messageId, text));
     }
 
+    @Override
+    public void replyInteractive(String messageId, Map<String, Object> card) {
+        interactiveReplies.add(new InteractiveReply(messageId, card));
+    }
+
     public List<CardReply> replies() {
         return new ArrayList<>(replies);
+    }
+
+    public List<InteractiveReply> interactiveReplies() {
+        return new ArrayList<>(interactiveReplies);
     }
 
     public String domain() {

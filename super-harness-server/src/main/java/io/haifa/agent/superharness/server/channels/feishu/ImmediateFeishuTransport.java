@@ -1,5 +1,7 @@
 package io.haifa.agent.superharness.server.channels.feishu;
 
+import java.util.Map;
+
 /**
  * No-network transport used by {@code createForTests} so runtime-config POST does not open a real
  * Feishu WebSocket. Production uses {@link LarkSdkFeishuTransport}.
@@ -34,6 +36,11 @@ public final class ImmediateFeishuTransport implements FeishuTransport {
     @Override
     public void replyCard(String messageId, String text) {
         // No-op: unit fixtures that need outbound assertions use RecordingFeishuTransport.
+    }
+
+    @Override
+    public void replyInteractive(String messageId, Map<String, Object> card) {
+        // No-op, same as replyCard.
     }
 
     public String domain() {

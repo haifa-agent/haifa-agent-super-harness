@@ -300,6 +300,37 @@ class AskClarificationRunHttpTest {
                 + " reply=" + reply.runId() + " request_id=" + requestId + " answer=MY_ANSWER");
     }
 
+    @Test
+    void secondClarificationReplyDoesNotOpenAnotherTurn() throws Exception {
+        startProvider(request -> {
+            if (!hasClarificationToolResult(request)) {
+                return clarificationToolCall();
+            }
+            if (lastUserText(request).contains("MY_ANSWER")) {
+                return text("CONTINUED_WITH_ANSWER");
+            }
+            return text("SECOND_TURN");
+        });
+        startGateway();
+        String threadId = "clarify-once";
+        createThread(threadId);
+        streamRun(threadId, "please clarify which environment");
+        String requestId = requestId(clarificationCardInState(threadId));
+        streamClarificationReply(threadId, requestId, "MY_ANSWER");
+
+        String duplicate = """
+                {"version":1,"kind":"human_input_response","source":"ask_clarification",
+                "request_id":"%s","response_kind":"text","value":"SECOND_ANSWER"}
+                """.formatted(requestId);
+        HttpResponse<String> rejected = request(
+                "POST",
+                "/api/threads/" + threadId + "/runs/stream",
+                humanMessage("SECOND_ANSWER", "resp-SECOND_ANSWER", duplicate));
+        assertThat(rejected.statusCode()).isEqualTo(409);
+        assertThat(rejected.body()).contains("already accepted");
+        assertThat(state(threadId).toString()).doesNotContain("SECOND_ANSWER").doesNotContain("SECOND_TURN");
+    }
+
     // ---- Oracle #8: bypassing the card starts a normal Turn -------------------------------------
 
     @Test
