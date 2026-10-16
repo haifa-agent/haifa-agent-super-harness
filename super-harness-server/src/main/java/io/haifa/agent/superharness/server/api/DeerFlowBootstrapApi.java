@@ -11,6 +11,15 @@ import io.haifa.agent.superharness.server.api.dto.HealthResponse;
 import io.haifa.agent.superharness.server.api.dto.SetupStatusResponse;
 import java.net.InetAddress;
 import io.haifa.agent.sdk.tool.JavaTool;
+import io.haifa.agent.superharness.server.channels.feishu.FeishuAgentBridge;
+import io.haifa.agent.superharness.server.channels.feishu.FeishuChannelWorker;
+import io.haifa.agent.superharness.server.channels.feishu.FeishuChatThreadStore;
+import io.haifa.agent.superharness.server.channels.feishu.FeishuTransport;
+import io.haifa.agent.superharness.server.channels.feishu.ImmediateFeishuTransport;
+import io.haifa.agent.superharness.server.channels.feishu.InProcessFeishuAgentBridge;
+import io.haifa.agent.superharness.server.channels.feishu.LarkSdkFeishuTransport;
+import io.haifa.agent.superharness.server.config.ChannelConnectionStore;
+import io.haifa.agent.superharness.server.config.ChannelRuntimeConfigStore;
 import io.haifa.agent.superharness.server.config.LocalServerConfiguration;
 import io.haifa.agent.superharness.server.config.McpConfigStore;
 import io.haifa.agent.superharness.server.config.McpRunTools;
@@ -89,6 +98,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final DeerFlowConfigurationApi configurationApi;
     private final SubagentCatalogStore subagentCatalog;
     private final DeerFlowMcpApi mcpApi;
+    private final DeerFlowChannelsApi channelsApi;
+    private final FeishuChannelWorker feishuWorker;
     private final DeerFlowSkillsApi skillsApi;
     private final DeerFlowWorkspaceApi workspaceApi;
     private final DeerFlowProjectApi projectApi;
@@ -142,6 +153,10 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.subagentCatalog = new SubagentCatalogStore(objectMapper, dataDirectory);
         McpConfigStore mcpStore = new McpConfigStore(objectMapper, dataDirectory);
         this.mcpApi = new DeerFlowMcpApi(objectMapper, mcpStore);
+        ChannelRuntimeConfigStore channelRuntimeStore =
+                new ChannelRuntimeConfigStore(objectMapper, dataDirectory);
+        ChannelConnectionStore channelConnectionStore =
+                new ChannelConnectionStore(objectMapper, dataDirectory);
         SkillConfigStore skillStore = testSkillStore == null
                 ? new SkillConfigStore(
                         objectMapper, dataDirectory, SkillConfigStore.repositoryRootFromWorkingDirectory())
@@ -221,6 +236,20 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                             parent, configurationApi::resolveChildModel, delegationSettings);
                 }, new io.haifa.agent.runtime.api.ChildRunCapacity(delegationSettings.runningCapacity()),
                 executionExecutorFactory, parentWallTimeMillisForTests);
+        // createForTests injects a model resolver: use the no-network transport so REST fixtures
+        // never open a real Feishu WebSocket. Production create() uses the official Lark SDK.
+        FeishuTransport.Factory transportFactory = testRunModelResolver != null
+                ? ImmediateFeishuTransport::new
+                : LarkSdkFeishuTransport::new;
+        FeishuAgentBridge feishuAgentBridge =
+                new InProcessFeishuAgentBridge(objectMapper, threadRunApi);
+        this.feishuWorker = new FeishuChannelWorker(
+                channelConnectionStore,
+                new FeishuChatThreadStore(objectMapper, dataDirectory),
+                feishuAgentBridge,
+                transportFactory);
+        this.channelsApi = new DeerFlowChannelsApi(
+                objectMapper, channelRuntimeStore, channelConnectionStore, feishuWorker);
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
         this.skillsApi = new DeerFlowSkillsApi(objectMapper, skillStore, workspaceApi);
@@ -641,6 +670,9 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
 
     public void start() {
         javalin.start(bindHost, bindPort);
+        // Reopen Feishu WS when runtime-config.json still has credentials (DeerFlow ChannelService
+        // merges runtime config at startup). Call after HTTP bind and after test transport overrides.
+        channelsApi.restorePersistedFeishuWorker();
     }
 
     public InetSocketAddress address() {
@@ -653,6 +685,15 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
 
     public DeerFlowThreadRunApi threadRunApi() {
         return threadRunApi;
+    }
+
+    /** Package/test-visible Feishu worker (L1b). */
+    FeishuChannelWorker feishuWorker() {
+        return feishuWorker;
+    }
+
+    DeerFlowChannelsApi channelsApi() {
+        return channelsApi;
     }
 
     /** Read-only product definitions for the public SDK assembly; no execution state. */
@@ -678,6 +719,11 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
 
     @Override
     public void close() {
+        try {
+            feishuWorker.close();
+        } catch (RuntimeException ignored) {
+            // Best-effort worker stop before tearing down the HTTP server.
+        }
         javalin.stop();
         threadRunApi.close();
         executor.close();
@@ -744,6 +790,9 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                         configurationApi::isConfiguredModel,
                         ignored -> io.haifa.agent.superharness.server.auth.AccessOwner.admin()));
         bindPrefix("/api/mcp", mcpApi, true);
+        // Admin is enforced inside DeerFlowChannelsApi for runtime-config only;
+        // ordinary owners must POST connect and DELETE their connections.
+        bindPrefix("/api/channels", channelsApi);
         bindPrefix("/api/skills", skillsApi, true);
         bindPrefix(DeerFlowInputPolishApi.PATH, inputPolishApi);
         bindPrefix("/api/suggestions", suggestionsApi);

@@ -130,7 +130,12 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final int EVENT_PAGE_SIZE = 4;
     /** A stream that has not looped for this long no longer holds the shared projector back. */
     private static final long LIVE_OBSERVER_STALE_NANOS = Duration.ofSeconds(1).toNanos();
-    /** How long a bulk synchronization lets attached streams catch up before it goes ahead. */
+    /**
+     * How long a bulk synchronization waits for attached streams to catch up before it stops
+     * pulling further pages. It must not outrun live observers after the deadline: doing so
+     * slides the shared retention window past their delivered cursor and ends those streams with
+     * {@code stream_replay_gap} while the Run is still active (W08 Steer/join under load).
+     */
     private static final long LIVE_OBSERVER_CATCH_UP_NANOS = Duration.ofSeconds(2).toNanos();
     private static final int DIAGNOSTIC_EVENT_PAGE_SIZE = 100;
     private static final int RUN_DIAGNOSTIC_EVENT_PAGE_BUDGET = 20;
@@ -2177,6 +2182,10 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         exchange.sendResponseHeaders(200, 0);
 
         Object observer = new Object();
+        // Register before the first write/loop so Steer/join synchronizeAllAvailable cannot slide
+        // the shared projector past this cursor while metadata and the opening frames are still
+        // being flushed. observerLeft in finally drops the lease when the connection ends.
+        run.observerDelivered(observer, initialCursor.sequence());
         // Each SSE connection owns its own transient live-values producer buffer and output
         // subscription; reconnects replay from BEFORE_FIRST on a fresh buffer, independently of
         // every other observer, and the connection closes its subscription on stream end.
@@ -2456,6 +2465,11 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             long catchUpDeadline = System.nanoTime() + LIVE_OBSERVER_CATCH_UP_NANOS;
             while (true) {
                 awaitLiveObservers(run, catchUpDeadline);
+                // Prefer leaving unread durable events for attached streams over sliding the
+                // retention window past their delivered cursor after the catch-up wait.
+                if (wouldOutrunLiveObserver(run)) {
+                    return;
+                }
                 var page = run.bridge.events(run.runId, run.sdkCursor, EVENT_PAGE_SIZE);
                 for (AgentRunEvent source : page.items()) {
                     if (source.payload() instanceof RunEventPayloads.MessageCommitted
@@ -2481,6 +2495,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     /**
      * Gives attached streams a bounded chance to deliver what is retained. Waiting on the Run
      * monitor releases it, which lets those streams run their own synchronization step meanwhile.
+     * Callers must not append after this returns while {@link #wouldOutrunLiveObserver} is still
+     * true; the deadline only bounds the wait, not permission to drop undelivered events.
      */
     private void awaitLiveObservers(RunRecord run, long deadlineNanos) {
         while (wouldOutrunLiveObserver(run) && System.nanoTime() < deadlineNanos) {
@@ -5426,10 +5442,18 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
         void observerDelivered(Object observer, long deliveredSequence) {
             liveObservers.put(observer, new long[] {deliveredSequence, System.nanoTime()});
+            // Wake synchronizeAllAvailable waiters so catch-up can resume as soon as the
+            // slowest live stream advances instead of only on the 5ms wait poll.
+            synchronized (this) {
+                notifyAll();
+            }
         }
 
         void observerLeft(Object observer) {
             liveObservers.remove(observer);
+            synchronized (this) {
+                notifyAll();
+            }
         }
 
         java.util.OptionalLong slowestLiveObserver(long nowNanos) {

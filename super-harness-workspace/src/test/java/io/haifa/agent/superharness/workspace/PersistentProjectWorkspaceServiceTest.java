@@ -17,13 +17,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermission;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
+import java.util.Set;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -771,9 +774,21 @@ class PersistentProjectWorkspaceServiceTest {
         assertThat(projects.listTrashDocuments("owner-a", 10, 0).total()).isEqualTo(1);
 
         Path payloadFile = storageRoot.resolve("trash").resolve("payloads").resolve(sha);
-        // Make payloadFile read-only to inject delete failure on Windows
-        payloadFile.toFile().setReadOnly();
+        Path payloadsDir = payloadFile.getParent();
+        // Inject delete failure: Windows denies unlink of a read-only file; POSIX still allows
+        // the owner to unlink a read-only file, so clear write on the payloads directory instead.
+        Set<PosixFilePermission> originalDirPermissions = null;
+        boolean posixLock = false;
         try {
+            try {
+                originalDirPermissions = Files.getPosixFilePermissions(payloadsDir);
+                Files.setPosixFilePermissions(
+                        payloadsDir,
+                        EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_EXECUTE));
+                posixLock = true;
+            } catch (UnsupportedOperationException unsupported) {
+                Assumptions.assumeTrue(payloadFile.toFile().setReadOnly(), "unable to mark payload read-only");
+            }
             // Attempting to purge should fail because payload deletion fails
             assertError(WorkspaceError.IO_FAILURE, () -> projects.purgeTrashDocument("owner-a", docId));
 
@@ -782,7 +797,11 @@ class PersistentProjectWorkspaceServiceTest {
             assertThat(list.total()).isEqualTo(1);
             assertThat(list.documents().get(0).id()).isEqualTo(docId);
         } finally {
-            payloadFile.toFile().setWritable(true);
+            if (posixLock && originalDirPermissions != null) {
+                Files.setPosixFilePermissions(payloadsDir, originalDirPermissions);
+            } else {
+                payloadFile.toFile().setWritable(true);
+            }
         }
 
         // Lock/read-only released: now purge should succeed and row is removed
