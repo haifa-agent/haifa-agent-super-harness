@@ -3,6 +3,7 @@ package io.haifa.agent.superharness.server.config;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -88,8 +89,9 @@ class SkillScriptToolConfigTest {
     }
 
     @Test
-    void mapperFixesProviderImageAndRejectsBounds() {
-        var mapper = new SkillScriptToolConfig.ImageGenArguments();
+    void mapperFixesProviderImageAndRejectsBounds(@TempDir Path temporary) {
+        var mapper = new SkillScriptToolConfig.ImageGenArguments(
+                SkillScriptToolConfig.DEFAULT_PROVIDER, temporary);
         var mapped = mapper.map(Map.of(
                 "prompt", "a lighthouse",
                 "image_name", "w04-artifact.png",
@@ -119,5 +121,112 @@ class SkillScriptToolConfigTest {
                 "prompt", "x", "image_name", "a.png", "sleep_millis", 700_000))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("sleep_millis");
+    }
+
+    /**
+     * The image Provider is a deployment fact: the declared value reaches the fixed argv, blank
+     * falls back to the product default, and any value outside the Skill's bounded Provider set
+     * keeps the whole Tool off instead of routing to an unintended Provider.
+     */
+    @Test
+    void configuredProviderReachesTheArgvAndUnknownValuesFailClosed(@TempDir Path temporary) throws Exception {
+        Path bun = Files.createDirectories(temporary.resolve("bun-home"));
+        Files.writeString(bun.resolve("bun.exe"), "stub");
+        Path workspace = Files.createDirectories(temporary.resolve("workspace"));
+        Path dataRoot = Files.createDirectories(temporary.resolve("data"));
+
+        Map<String, String> configured = environment(bun.toAbsolutePath().toString());
+        configured.put(SkillScriptToolConfig.PROVIDER_ENVIRONMENT_KEY, "DashScope");
+        var config = SkillScriptToolConfig.fromEnvironment(
+                configured, workspace, dataRoot, SkillScriptProjections.projection(true)).orElseThrow();
+        assertThat(config.provider()).isEqualTo("dashscope");
+        assertThat(new SkillScriptToolConfig.ImageGenArguments(config.provider(), workspace).map(Map.of(
+                "prompt", "a lighthouse", "image_name", "w04.png")).argv())
+                .containsExactly("--provider", "dashscope", "--image", "outputs/w04.png",
+                        "--prompt", "a lighthouse");
+
+        // A blank value keeps the product default; an unknown value turns the Tool off.
+        assertThat(SkillScriptToolConfig.provider("  ")).contains(SkillScriptToolConfig.DEFAULT_PROVIDER);
+        assertThat(SkillScriptToolConfig.provider("codex-cli")).contains("codex-cli");
+
+        Map<String, String> unknown = environment(bun.toAbsolutePath().toString());
+        unknown.put(SkillScriptToolConfig.PROVIDER_ENVIRONMENT_KEY, "not-a-provider");
+        assertThat(SkillScriptToolConfig.fromEnvironment(
+                unknown, workspace, dataRoot, SkillScriptProjections.projection(true))).isEmpty();
+        assertThat(SkillScriptToolConfig.toolNames(unknown, SkillScriptProjections.projection(true))).isEmpty();
+    }
+
+    /**
+     * A prompt longer than the SDK's per-argv-item bound is not sent as a {@code --prompt} item (the
+     * SDK rejects items over 1024 characters). It is materialized as a UTF-8 Workspace file the
+     * script reads through {@code --promptfiles}, so the argv stays bounded while the product still
+     * accepts a long prompt, and every argv item keeps within the SDK bound.
+     */
+    @Test
+    void longPromptTravelsAsAWorkspaceFileForPromptfiles(@TempDir Path temporary) throws Exception {
+        Path workspace = Files.createDirectories(temporary.resolve("workspace"));
+        var mapper = new SkillScriptToolConfig.ImageGenArguments(
+                SkillScriptToolConfig.DEFAULT_PROVIDER, workspace);
+        String prompt = "信息图: AI Agent 自主性的 4 个等级。".repeat(60);
+        assertThat(prompt.length()).isGreaterThan(1024);
+
+        var mapped = mapper.map(Map.of("prompt", prompt, "image_name", "info.png"));
+        String relative = mapped.argv().get(mapped.argv().indexOf("--promptfiles") + 1);
+        assertThat(relative).startsWith(SkillScriptToolConfig.PROMPT_INPUT_DIRECTORY + "/").endsWith(".md");
+        assertThat(mapped.argv()).containsExactly("--provider", "codex-cli", "--image", "outputs/info.png",
+                "--promptfiles", relative);
+        assertThat(mapped.argv()).allSatisfy(item -> assertThat(item.length()).isLessThanOrEqualTo(1024));
+        assertThat(new String(Files.readAllBytes(workspace.resolve(relative)), StandardCharsets.UTF_8))
+                .isEqualTo(prompt);
+        // A repeated prompt reuses the same file (the name is the prompt digest).
+        assertThat(mapper.map(Map.of("prompt", prompt, "image_name", "info.png")).argv())
+                .containsExactly("--provider", "codex-cli", "--image", "outputs/info.png",
+                        "--promptfiles", relative);
+    }
+
+    /**
+     * The layout a packaged bun ships with on most hosts: the declared path is a link to the real
+     * runtime. The SDK entry admits the declaration only when it names an exact file, so the
+     * declaration follows the link instead of handing the SDK a path its preflight rejects at Run
+     * admission (which failed every Run while the Tool was declared).
+     */
+    @Test
+    void followsASymlinkedBunToTheExactFile(@TempDir Path temporary) throws Exception {
+        Path home = Files.createDirectories(temporary.resolve("bun-home"));
+        Path executable = home.resolve("bun.exe");
+        Files.writeString(executable, "stub");
+        Path fileLink = SymbolicLinks.create(temporary.resolve("bun"), executable);
+        Path directoryLink = SymbolicLinks.create(temporary.resolve("bun-home-link"), home);
+        Path workspace = Files.createDirectories(temporary.resolve("workspace"));
+        Path dataRoot = Files.createDirectories(temporary.resolve("data"));
+
+        var config = SkillScriptToolConfig.fromEnvironment(
+                environment(fileLink.toAbsolutePath().toString()), workspace, dataRoot,
+                SkillScriptProjections.projection(true)).orElseThrow();
+        assertThat(config.bunExecutable()).isEqualTo(executable.toAbsolutePath().normalize());
+        assertThat(Files.isSymbolicLink(config.bunExecutable())).isFalse();
+        assertThat(SkillScriptToolConfig.toolNames(
+                environment(fileLink.toAbsolutePath().toString()), SkillScriptProjections.projection(true)))
+                .containsExactly(SkillScriptToolConfig.TOOL_NAME);
+
+        // The directory form follows a linked directory the same way.
+        assertThat(SkillScriptToolConfig.bunExecutable(directoryLink.toAbsolutePath().toString()))
+                .isEqualTo(executable.toAbsolutePath().normalize());
+    }
+
+    /** A link that names nothing keeps the Tool off instead of admitting an unusable runtime. */
+    @Test
+    void unresolvedSymbolicLinkKeepsTheRuntimeUndeclared(@TempDir Path temporary) throws Exception {
+        Path link = SymbolicLinks.create(
+                temporary.resolve("broken-bun"), temporary.resolve("missing-bun.exe"));
+        Path workspace = Files.createDirectories(temporary.resolve("workspace"));
+        Path dataRoot = Files.createDirectories(temporary.resolve("data"));
+
+        assertThat(SkillScriptToolConfig.fromEnvironment(
+                environment(link.toAbsolutePath().toString()), workspace, dataRoot,
+                SkillScriptProjections.projection(true))).isEmpty();
+        assertThat(SkillScriptToolConfig.toolNames(
+                environment(link.toAbsolutePath().toString()), SkillScriptProjections.projection(true)))
+                .isEmpty();
     }
 }

@@ -5,12 +5,20 @@ import io.haifa.agent.execution.core.tool.TrustedScriptArguments;
 import io.haifa.agent.skill.api.FrozenSkillBinding;
 import io.haifa.agent.tool.api.ToolName;
 import io.haifa.agent.tool.api.ToolSchema;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -25,10 +33,13 @@ import java.util.regex.Pattern;
  *
  * <p>Everything the model could otherwise choose is a product fact: the runtime (the declared bun
  * executable), the script (the Skill package's frozen entry), the working directory (the current
- * Thread workspace root, so {@code outputs/} is reachable) and the Provider/argv shape (the mapper
- * maps only the bounded business arguments). The SDK entry validates the declaration again when it
- * assembles the platform, and the frozen Tool identity covers the runtime reference, the script
- * timeout and the approval purpose.
+ * Thread workspace root, so {@code outputs/} is reachable) and the argv shape (the mapper maps only
+ * the bounded business arguments). The image Provider is also a deployment fact, not a model choice:
+ * it defaults to {@value #DEFAULT_PROVIDER} and is overridden by {@value #PROVIDER_ENVIRONMENT_KEY}
+ * within the bounded Provider set the packaged Skill entry accepts; a value outside that set keeps
+ * the Tool off. The SDK entry validates the declaration again when it assembles the platform, and
+ * the frozen Tool identity covers the runtime reference, the script timeout and the approval
+ * purpose.
  */
 public record SkillScriptToolConfig(
         Path workspaceRoot,
@@ -37,7 +48,8 @@ public record SkillScriptToolConfig(
         Duration defaultTimeout,
         Duration maximumTimeout,
         int maximumOutputBytes,
-        int maximumOutputLines) {
+        int maximumOutputLines,
+        String provider) {
 
     /** Alias of the seeded Skill whose frozen binding the Tool executes. */
     public static final String SKILL_ALIAS = "baoyu-image-gen";
@@ -54,8 +66,41 @@ public record SkillScriptToolConfig(
     /** Environment variable carrying the absolute bun executable (or its home directory). */
     public static final String BUN_ENVIRONMENT_KEY = "HAIFA_SUPER_HARNESS_BUN_PATH";
 
-    /** Fixed Provider argument; it needs no API key and is not the model's choice. */
-    static final String PROVIDER_ARGUMENT = "codex-cli";
+    /**
+     * Environment variable selecting the image Provider the mapper passes to the Skill script as a
+     * fixed {@code --provider} argument. The Provider is a deployment fact (like the runtime and the
+     * script), never a model choice, so any value outside {@link #SUPPORTED_PROVIDERS} keeps the Tool
+     * off instead of widening or misrouting the execution surface.
+     */
+    public static final String PROVIDER_ENVIRONMENT_KEY = "HAIFA_SUPER_HARNESS_SKILL_PROVIDER";
+
+    /** Product default Provider; the packaged Skill ships codex-cli first. */
+    public static final String DEFAULT_PROVIDER = "codex-cli";
+
+    /**
+     * The bounded Provider set the packaged Skill entry accepts through {@code --provider}. It is a
+     * product fact mirrored from the Skill's own provider list; an unknown value is not passed
+     * through, so an operator typo fails closed rather than reaching the script.
+     */
+    private static final Set<String> SUPPORTED_PROVIDERS = Set.of(
+            "codex-cli", "openai", "azure", "google", "openrouter", "dashscope", "zai",
+            "minimax", "jimeng", "seedream", "replicate", "agnes");
+
+    /**
+     * The SDK's bounded trusted-script argv enforces at most this many characters per argv item
+     * ({@code io.haifa.agent.execution.core.tool.TrustedScriptArguments}). A longer prompt is not
+     * passed as a {@code --prompt} item but materialized as a Workspace file the script reads via
+     * {@code --promptfiles}, so the argv stays bounded while the product may still accept a long
+     * {@code prompt} in the input schema.
+     */
+    static final int MAX_ARGV_ITEM_LENGTH = 1024;
+
+    /**
+     * Workspace-relative directory the mapper writes long prompts into (below the Thread user-data
+     * root, outside {@code outputs/} so the Artifact chain never publishes it) before the skill
+     * script reads it through {@code --promptfiles}.
+     */
+    static final String PROMPT_INPUT_DIRECTORY = ".haifa-skill-inputs";
 
     private static final Set<String> MODEL_ARGUMENTS = Set.of("prompt", "image_name", "help", "sleep_millis");
 
@@ -77,6 +122,22 @@ public record SkillScriptToolConfig(
         if (maximumOutputBytes <= 0 || maximumOutputLines <= 0) {
             throw new IllegalArgumentException("output bounds must be positive");
         }
+        Objects.requireNonNull(provider, "provider must not be null");
+        if (!SUPPORTED_PROVIDERS.contains(provider)) {
+            throw new IllegalArgumentException("unsupported Skill script Provider: " + provider);
+        }
+    }
+
+    /**
+     * Resolves the declared Provider: blank means the product default, a known value is normalized to
+     * lower case and anything else is empty so the caller keeps the Tool off.
+     */
+    public static Optional<String> provider(String rawValue) {
+        if (rawValue == null || rawValue.isBlank()) {
+            return Optional.of(DEFAULT_PROVIDER);
+        }
+        String candidate = rawValue.strip().toLowerCase(Locale.ROOT);
+        return SUPPORTED_PROVIDERS.contains(candidate) ? Optional.of(candidate) : Optional.empty();
     }
 
     /** The Tool name as a public value object, so no caller re-derives the string. */
@@ -103,18 +164,22 @@ public record SkillScriptToolConfig(
         if (bun == null) {
             return Optional.empty();
         }
+        String provider = provider(environment.get(PROVIDER_ENVIRONMENT_KEY)).orElse(null);
+        if (provider == null) {
+            return Optional.empty();
+        }
         return Optional.of(new SkillScriptToolConfig(
                 workspaceRoot,
                 dataRoot,
                 bun,
-                // The real codex-cli generation runs for multiple minutes (the first full round
-                // timed out at 120 s while the wrapper was still generating); the script timeout
-                // therefore carries the product's largest declared bound, matching the host shell
-                // maximum.
+                // The real generation runs for multiple minutes (the first full round timed out at
+                // 120 s while the wrapper was still generating); the script timeout therefore
+                // carries the product's largest declared bound, matching the host shell maximum.
                 HostShellToolConfig.MAXIMUM_TIMEOUT,
                 HostShellToolConfig.MAXIMUM_TIMEOUT,
                 HostShellToolConfig.MAXIMUM_OUTPUT_BYTES,
-                HostShellToolConfig.MAXIMUM_OUTPUT_LINES));
+                HostShellToolConfig.MAXIMUM_OUTPUT_LINES,
+                provider));
     }
 
     /**
@@ -132,6 +197,9 @@ public record SkillScriptToolConfig(
             return Set.of();
         }
         if (bunExecutable(environment.get(BUN_ENVIRONMENT_KEY)) == null) {
+            return Set.of();
+        }
+        if (provider(environment.get(PROVIDER_ENVIRONMENT_KEY)).isEmpty()) {
             return Set.of();
         }
         return Set.of(TOOL_NAME);
@@ -155,8 +223,11 @@ public record SkillScriptToolConfig(
 
     /**
      * Only an absolute path to an existing regular file qualifies; a directory resolves the bun
-     * executable inside it. Anything else keeps the declaration empty, so a typo can never widen the
-     * Tool surface and no host PATH guessing happens here either.
+     * executable inside it. A symbolic link - the layout a packaged bun ships with, for example
+     * {@code /usr/bin/bun -> ../lib/node_modules/bun/bin/bun.exe} - is followed to the file it names,
+     * because the SDK entry requires the declared runtime to be an exact file rather than a link.
+     * Anything else, including a link that does not resolve to a file, keeps the declaration empty,
+     * so a typo can never widen the Tool surface and no host PATH guessing happens here either.
      */
     public static Path bunExecutable(String rawValue) {
         if (rawValue == null || rawValue.isBlank()) {
@@ -166,18 +237,36 @@ public record SkillScriptToolConfig(
         if (!path.isAbsolute()) {
             return null;
         }
-        if (Files.isRegularFile(path)) {
-            return path.toAbsolutePath().normalize();
+        Path declared = Files.isSymbolicLink(path) ? resolvedTarget(path) : path;
+        if (declared == null) {
+            return null;
         }
-        if (Files.isDirectory(path)) {
+        if (Files.isRegularFile(declared)) {
+            return declared.toAbsolutePath().normalize();
+        }
+        if (Files.isDirectory(declared)) {
             for (String candidate : List.of("bun.exe", "bun")) {
-                Path resolved = path.resolve(candidate).toAbsolutePath().normalize();
-                if (Files.isRegularFile(resolved)) {
-                    return resolved;
+                Path entry = declared.resolve(candidate);
+                Path resolved = Files.isSymbolicLink(entry) ? resolvedTarget(entry) : entry;
+                if (resolved != null && Files.isRegularFile(resolved)) {
+                    return resolved.toAbsolutePath().normalize();
                 }
             }
         }
         return null;
+    }
+
+    /**
+     * The file or directory a symbolic link names, or null when the link cannot be resolved. The
+     * declaration follows a link exactly as the operator wrote it; a broken link stays undeclared so
+     * the Tool is off rather than admitted with a runtime the SDK entry would reject.
+     */
+    private static Path resolvedTarget(Path link) {
+        try {
+            return link.toRealPath();
+        } catch (java.io.IOException broken) {
+            return null;
+        }
     }
 
     /** Product title of the Tool as shown on the approval card. */
@@ -232,12 +321,22 @@ public record SkillScriptToolConfig(
     private static final Pattern IMAGE_NAME = Pattern.compile("^[a-z0-9][a-z0-9._-]{0,55}\\.png$");
 
     /**
-     * Product argument mapping: model arguments to fixed argv, with {@code --provider codex-cli} and
-     * {@code --image outputs/<name>} always fixed for generation. Unknown arguments, unsafe output
-     * names and out-of-bound probes fail closed here, before any approval carries weight and before
-     * any process can start.
+     * Product argument mapping: model arguments to fixed argv, with {@code --provider <declared>} and
+     * {@code --image outputs/<name>} always fixed for generation. The Provider is the deployment fact
+     * resolved at declaration time, never a model argument. Unknown arguments, unsafe output names
+     * and out-of-bound probes fail closed here, before any approval carries weight and before any
+     * process can start.
      */
     public static final class ImageGenArguments implements TrustedScriptArgumentMapper {
+
+        private final String provider;
+        private final Path workspaceRoot;
+
+        public ImageGenArguments(String provider, Path workspaceRoot) {
+            this.provider = Objects.requireNonNull(provider, "provider must not be null");
+            this.workspaceRoot = Objects.requireNonNull(workspaceRoot, "workspaceRoot must not be null");
+        }
+
         @Override
         public TrustedScriptArguments map(Map<String, Object> arguments) {
             Objects.requireNonNull(arguments, "arguments must not be null");
@@ -257,11 +356,19 @@ public record SkillScriptToolConfig(
             }
             List<String> argv = new ArrayList<>();
             argv.add("--provider");
-            argv.add(PROVIDER_ARGUMENT);
+            argv.add(provider);
             argv.add("--image");
             argv.add("outputs/" + imageName);
-            argv.add("--prompt");
-            argv.add(prompt);
+            if (prompt.length() <= MAX_ARGV_ITEM_LENGTH) {
+                argv.add("--prompt");
+                argv.add(prompt);
+            } else {
+                // The prompt would exceed the SDK's per-argv-item bound, so it travels as a
+                // Workspace file the script reads through --promptfiles. The argv item is only the
+                // short relative path; the model's prompt bytes are written verbatim as UTF-8.
+                argv.add("--promptfiles");
+                argv.add(materializePrompt(prompt));
+            }
             if (arguments.get("sleep_millis") != null) {
                 if (!(arguments.get("sleep_millis") instanceof Integer sleepMillis)
                         || sleepMillis < 0 || sleepMillis > 600_000) {
@@ -271,6 +378,38 @@ public record SkillScriptToolConfig(
                 argv.add(Integer.toString(sleepMillis));
             }
             return TrustedScriptArguments.atWorkspaceRoot(List.copyOf(argv));
+        }
+
+        /**
+         * Writes the prompt bytes into {@code <workspaceRoot>/<PROMPT_INPUT_DIRECTORY>/} and returns
+         * the short Workspace-relative path for the {@code --promptfiles} argv item. The file name is
+         * the prompt digest, so a repeated prompt is idempotent and never grows the workspace; an
+         * existing file with different bytes is rewritten. A Workspace that cannot hold the file
+         * fails the invocation closed rather than truncating the prompt.
+         */
+        private String materializePrompt(String prompt) {
+            String name = "prompt-" + promptDigest(prompt) + ".md";
+            Path directory = workspaceRoot.resolve(PROMPT_INPUT_DIRECTORY);
+            Path file = directory.resolve(name);
+            byte[] bytes = prompt.getBytes(StandardCharsets.UTF_8);
+            try {
+                Files.createDirectories(directory);
+                if (!Files.isRegularFile(file) || !Arrays.equals(Files.readAllBytes(file), bytes)) {
+                    Files.write(file, bytes);
+                }
+            } catch (IOException failure) {
+                throw new UncheckedIOException("the Skill script prompt could not be materialized", failure);
+            }
+            return PROMPT_INPUT_DIRECTORY + "/" + name;
+        }
+
+        private static String promptDigest(String prompt) {
+            try {
+                byte[] hash = MessageDigest.getInstance("SHA-256").digest(prompt.getBytes(StandardCharsets.UTF_8));
+                return HexFormat.of().formatHex(hash).substring(0, 16);
+            } catch (NoSuchAlgorithmException impossible) {
+                throw new IllegalStateException("SHA-256 is unavailable", impossible);
+            }
         }
 
         private static String boundedText(Object value, String field) {

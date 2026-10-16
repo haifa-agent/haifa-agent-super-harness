@@ -58,7 +58,7 @@ class SkillScriptPlatformTest {
                                 SkillScriptToolConfig.SCRIPT_RUNTIME_REF,
                                 config.defaultTimeout(),
                                 SkillScriptToolConfig.purpose(),
-                                new SkillScriptToolConfig.ImageGenArguments())),
+                                new SkillScriptToolConfig.ImageGenArguments(SkillScriptToolConfig.DEFAULT_PROVIDER, workspace))),
                         config.defaultTimeout(),
                         config.maximumTimeout(),
                         config.maximumOutputBytes(),
@@ -97,6 +97,57 @@ class SkillScriptPlatformTest {
                 caller.tenant(),
                 caller.principal())) {
             assertThat(platform.toolNames()).containsExactly("execution_run");
+        }
+    }
+
+    /**
+     * The reported incident: the declared runtime is a link (the layout a packaged bun ships with),
+     * the SDK entry rejects it - "trusted script runtime executable does not exist as an exact file" -
+     * and every Run admission failed with the frozen generic 500 before this declaration resolved the
+     * link. The platform must assemble from the exact file the link names.
+     */
+    @Test
+    void assemblesTheDeclaredToolWhenTheRuntimeIsDeclaredThroughALink(@TempDir Path temporary) throws Exception {
+        Path runtime = SkillScriptToolConfig.bunExecutable(
+                System.getenv(SkillScriptToolConfig.BUN_ENVIRONMENT_KEY));
+        assumeTrue(runtime != null,
+                "the trusted skill script Tool only assembles with a declared bun runtime; this host keeps the Tool off");
+        Path link = SymbolicLinks.create(temporary.resolve("bun-link"), runtime);
+        Path workspace = Files.createDirectories(temporary.resolve("workspace"));
+        Path dataRoot = Files.createDirectories(temporary.resolve("data"));
+        SkillRunTools.Projection projection = SkillScriptProjections.projection(true);
+        FrozenSkillBinding skillBinding = SkillScriptToolConfig.declaredBinding(projection).orElseThrow();
+        var config = SkillScriptToolConfig.fromEnvironment(
+                environmentFor(link.toAbsolutePath().toString()), workspace, dataRoot, projection).orElseThrow();
+        assertThat(Files.isSymbolicLink(config.bunExecutable())).isFalse();
+        var caller = SdkCaller.defaultPublicUser();
+
+        try (var platform = SkillScriptPlatforms.trusted(
+                new SkillScriptPlatforms.SkillScriptSpec(
+                        config.workspaceRoot(),
+                        config.dataRoot(),
+                        List.of(new SkillScriptPlatforms.SkillScriptRuntime(
+                                SkillScriptToolConfig.SCRIPT_RUNTIME_REF, config.bunExecutable())),
+                        projection.loader(),
+                        List.of(new SkillScriptPlatforms.SkillScriptToolDeclaration(
+                                SkillScriptToolConfig.toolName(),
+                                SkillScriptToolConfig.title(),
+                                SkillScriptToolConfig.description(),
+                                SkillScriptToolConfig.inputSchema(),
+                                config.maximumTimeout(),
+                                skillBinding,
+                                SkillScriptToolConfig.SCRIPT_RELATIVE_PATH,
+                                SkillScriptToolConfig.SCRIPT_RUNTIME_REF,
+                                config.defaultTimeout(),
+                                SkillScriptToolConfig.purpose(),
+                                new SkillScriptToolConfig.ImageGenArguments(SkillScriptToolConfig.DEFAULT_PROVIDER, workspace))),
+                        config.defaultTimeout(),
+                        config.maximumTimeout(),
+                        config.maximumOutputBytes(),
+                        config.maximumOutputLines()),
+                caller.tenant(),
+                caller.principal())) {
+            assertThat(platform.toolNames()).containsExactly(SkillScriptToolConfig.TOOL_NAME);
         }
     }
 

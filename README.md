@@ -72,8 +72,14 @@ Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业�
   `SkillScriptPlatforms.trusted` 注册 `baoyu-image-gen` 的技能脚本 Tool（别名 `baoyu_image_gen`）。
   运行时、脚本、工作目录与 `outputs/` 位置均为产品固定事实：工作目录是当前 Thread 自己的 workspace
   user-data 根，产物写在 `/mnt/user-data/outputs/` 并经既有 Artifact 链下载核验；模型只提供业务参数
-  （prompt、image_name 等，越界 argument 在审批前被稳定错误拒绝）。每次调用 ALWAYS 审批，冻结 Tool
-  身份绑定该包版本与 runtime/timeout/purpose 声明；关闭或缺任一前置时工具面逐字不变。 UI 验收 -W04ImageGen profile 用真实上游包字节（JimLiu/baoyu-skills@1567581 的 skills/baoyu-image-gen，主控暂存在 local-tmp/w04-real-skill/，49 项 SHA-256 清单）逐文件植入 data-root 技能目录并逐项校验；真实出图 Provider 固定 codex-cli（走本机 Codex CLI OAuth），其在途缓存与 JSONL 诊断分别钉进该轮 data-root 与证据目录，不写用户目录。
+   （prompt、image_name 等，越界 argument 在审批前被稳定错误拒绝）。每次调用 ALWAYS 审批，冻结 Tool
+   身份绑定该包版本与 runtime/timeout/purpose 声明；关闭或缺任一前置时工具面逐字不变。
+   图像 Provider 同属产品/部署事实、不是模型选项：进程变量 `HAIFA_SUPER_HARNESS_SKILL_PROVIDER` 指定传给
+   脚本的固定 `--provider`，缺省与空值为 `codex-cli`；取值限于包支持集
+   `codex-cli|openai|azure|google|openrouter|dashscope|zai|minimax|jimeng|seedream|replicate|agnes`，
+   集外值使工具面关闭（fail-closed），避免误路由已审批的执行；对应 Provider 的密钥由脚本自身按
+   `<cwd>/.baoyu-skills/.env`、`~/.baoyu-skills/.env` 等位置读取，不经 Gateway 进程环境注入。
+   测试配置变化后重启 Gateway 生效。 UI 验收 -W04ImageGen profile 用真实上游包字节（JimLiu/baoyu-skills@1567581 的 skills/baoyu-image-gen，主控暂存在 local-tmp/w04-real-skill/，49 项 SHA-256 清单）逐文件植入 data-root 技能目录并逐项校验；默认 `codex-cli` Provider（走本机 Codex CLI OAuth），其在途缓存与 JSONL 诊断分别钉进该轮 data-root 与证据目录，不写用户目录。
 - **模型与思考配置**：通过公开 `ModelReasoningPolicy` 接入思考开关与推理级别；Agent 的 `model_settings`
   冻结到新 Run，同型号参数变化通过配置 digest 重建下一 Turn 的 Bridge。
 - **运行诊断与用量投影**：`GET /api/threads/{thread_id}/runs/{run_id}` 的 `diagnostics` 与
