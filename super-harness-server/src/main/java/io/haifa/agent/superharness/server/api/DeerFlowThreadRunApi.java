@@ -4015,6 +4015,12 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             return;
         }
         String requestId = pending.orElseThrow().requestId().value();
+        if (!requestId.equals(run.interactionRequestId)) {
+            // A new approval supersedes any response already accepted for the previous one. Without
+            // this the responding path would see a stale accepted response and refuse the new
+            // submission as a different response.
+            run.acceptedInteractionResponse = null;
+        }
         boolean saved = thread.interactionDisplays.stream()
                 .anyMatch(display -> display.runId().equals(runId) && display.requestId().equals(requestId));
         if (saved) {
