@@ -54,7 +54,7 @@
       {
         "id": "0003-human-input-approval-presentation",
         "file": "third-party/deerflow/patches/0003-human-input-approval-presentation.patch",
-        "sha256": "1a3ad1c657697bb352c165d4ef35519fc1ce54850284abe447397d2c5ca53009",
+        "sha256": "c25cde64cc72f77c8691deb1aab2d059dcffeb237d651215766fdb546a1dcf68",
         "reason": "Optimize risk confirmation approval presentation with rich metadata, command preview, and folded technical audit drawer.",
         "affectedFiles": [
           "frontend/src/components/workspace/messages/human-input-card.tsx",

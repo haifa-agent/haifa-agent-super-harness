@@ -2,25 +2,14 @@ diff --git a/frontend/src/components/workspace/messages/human-input-card.tsx b/f
 index aaad8e2..16618cf 100644
 --- a/frontend/src/components/workspace/messages/human-input-card.tsx
 +++ b/frontend/src/components/workspace/messages/human-input-card.tsx
-@@ -1,10 +1,14 @@
- "use client";
-
- import {
+@@ -3,0 +4 @@ import {
 +  AlertTriangleIcon,
-   CheckCircle2Icon,
-   CheckIcon,
+@@ -5,0 +7,2 @@ import {
 +  ChevronRightIcon,
 +  CopyIcon,
-   Loader2Icon,
-   MessageCircleQuestionMarkIcon,
+@@ -7,0 +11 @@ import {
 +  ShieldAlertIcon,
- } from "lucide-react";
- import { useId, useState, type KeyboardEvent } from "react";
-
-@@ -242,6 +246,37 @@ export function HumanInputCard({
-   const titleId = useId();
-   const textInputId = useId();
-   const formFieldIdBase = useId();
+@@ -244,0 +249,31 @@ export function HumanInputCard({
 +  const [detailsOpen, setDetailsOpen] = useState(false);
 +  const [copied, setCopied] = useState(false);
 +
@@ -52,13 +41,7 @@ index aaad8e2..16618cf 100644
 +    }
 +  };
 +
-   const formErrorId = `${formFieldIdBase}-error`;
-   const isForm = request.input_mode === "form";
-   const allowText =
-@@ -365,15 +400,52 @@ export function HumanInputCard({
-       data-testid="human-input-card"
-     >
-       <div className="flex items-start gap-3">
+@@ -368,2 +403,19 @@ export function HumanInputCard({
 -        <div className="bg-primary/10 text-primary mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md">
 -          <MessageCircleQuestionMarkIcon className="size-4" />
 +        <div
@@ -80,10 +63,7 @@ index aaad8e2..16618cf 100644
 +          ) : (
 +            <MessageCircleQuestionMarkIcon className="size-4" />
 +          )}
-         </div>
-         <div className="min-w-0 flex-1 space-y-3">
-           <div className="flex flex-wrap items-start justify-between gap-2">
-             <div className="min-w-0 space-y-1">
+@@ -374,3 +426,23 @@ export function HumanInputCard({
 -              <h2 id={titleId} className="text-sm leading-5 font-medium">
 -                {request.title ?? t.toolCalls.needYourHelp}
 -              </h2>
@@ -110,13 +90,7 @@ index aaad8e2..16618cf 100644
 +                  </span>
 +                ) : null}
 +              </div>
-               {request.context ? (
-                 <div className="text-muted-foreground text-sm leading-6">
-                   <MarkdownContent
-@@ -404,9 +476,110 @@ export function HumanInputCard({
-             ) : null}
-           </div>
-
+@@ -407,3 +479,104 @@ export function HumanInputCard({
 -          <div className="text-foreground text-sm leading-6">
 -            <MarkdownContent content={request.question} isLoading={false} />
 -          </div>
@@ -224,13 +198,7 @@ index aaad8e2..16618cf 100644
 +              ) : null}
 +            </div>
 +          ) : null}
-
-           {isForm ? (
-             <form className="space-y-4" onSubmit={handleFormSubmit}>
-@@ -502,22 +675,80 @@ export function HumanInputCard({
-           ) : null}
-
-           {!isForm && options.length > 0 ? (
+@@ -505,12 +678,24 @@ export function HumanInputCard({
 -            <div className="grid gap-2">
 -              {options.map((option) => (
 -                <Button
@@ -267,7 +235,7 @@ index aaad8e2..16618cf 100644
 +                ) : (
 +                  <span className="text-xs text-muted-foreground">
 +                    审批确认后任务将继续执行
-                   </span>
+@@ -518,3 +703,49 @@ export function HumanInputCard({
 -                </Button>
 -              ))}
 -            </div>
@@ -320,51 +288,27 @@ index aaad8e2..16618cf 100644
 +                ))}
 +              </div>
 +            )
-           ) : null}
-
-           {allowText ? (
-@@ -576,7 +807,7 @@ export function HumanInputCard({
-             </form>
-           ) : null}
-
+@@ -579 +810 @@ export function HumanInputCard({
 -          {!allowText && !isForm && answeredResponse ? (
 +          {!allowText && !isForm && !isRiskConfirmation && answeredResponse ? (
-             <p className="text-muted-foreground text-sm" aria-live="polite">
-               {t.humanInput.answeredValue(answeredResponse.value)}
-             </p>
 diff --git a/frontend/src/core/messages/human-input.ts b/frontend/src/core/messages/human-input.ts
 index 673cdd9..18e9669 100644
 --- a/frontend/src/core/messages/human-input.ts
 +++ b/frontend/src/core/messages/human-input.ts
-@@ -32,6 +32,11 @@ export type HumanInputField = {
-
- export type HumanInputFormValue = string | number | boolean | string[];
-
+@@ -34,0 +35,5 @@ export type HumanInputFormValue = string | number | boolean | string[];
 +export type HumanInputFact = {
 +  label: string;
 +  value: string;
 +};
 +
- export type HumanInputRequest = {
-   version: 1 | 2;
-   kind: "human_input_request";
-@@ -45,6 +50,12 @@ export type HumanInputRequest = {
-   input_mode: HumanInputMode;
-   options?: HumanInputOption[];
-   fields?: HumanInputField[];
+@@ -47,0 +53,6 @@ export type HumanInputRequest = {
 +  risk_level?: string;
 +  purpose?: string;
 +  content?: string;
 +  content_type?: string;
 +  environment_facts?: HumanInputFact[];
 +  technical_facts?: HumanInputFact[];
- };
-
- export type HumanInputResponse =
-@@ -256,6 +267,27 @@ function parseFields(value: unknown): HumanInputField[] | undefined {
-   return fields;
- }
-
+@@ -258,0 +270,21 @@ function parseFields(value: unknown): HumanInputField[] | undefined {
 +function parseFacts(value: unknown): HumanInputFact[] | undefined {
 +  if (!Array.isArray(value)) {
 +    return undefined;
@@ -386,13 +330,7 @@ index 673cdd9..18e9669 100644
 +  return facts.length > 0 ? facts : undefined;
 +}
 +
- export function parseHumanInputRequest(
-   value: unknown,
- ): HumanInputRequest | null {
-@@ -326,6 +358,24 @@ export function parseHumanInputRequest(
-     input_mode: value.input_mode,
-     ...(options ? { options } : {}),
-     ...(fields ? { fields } : {}),
+@@ -328,0 +361,18 @@ export function parseHumanInputRequest(
 +    ...(readOptionalString(value.risk_level)
 +      ? { risk_level: readOptionalString(value.risk_level) }
 +      : {}),
@@ -411,22 +349,15 @@ index 673cdd9..18e9669 100644
 +    ...(parseFacts(value.technical_facts)
 +      ? { technical_facts: parseFacts(value.technical_facts) }
 +      : {}),
-   };
- }
-
 diff --git a/frontend/tests/unit/components/workspace/messages/human-input-card.test.ts b/frontend/tests/unit/components/workspace/messages/human-input-card.test.ts
 index 89353c1..cfd1036 100644
 --- a/frontend/tests/unit/components/workspace/messages/human-input-card.test.ts
 +++ b/frontend/tests/unit/components/workspace/messages/human-input-card.test.ts
-@@ -202,11 +202,78 @@ describe("HumanInputCard", () => {
-     expect(
-       shouldSubmitHumanInputTextOnKeyDown(keyEvent({ isComposing: true })),
-     ).toBe(false);
+@@ -205,3 +204,0 @@ describe("HumanInputCard", () => {
 -    expect(
 -      shouldSubmitHumanInputTextOnKeyDown(keyEvent({ keyCode: 229 })),
 -    ).toBe(false);
-     expect(shouldSubmitHumanInputTextOnKeyDown(keyEvent(), true)).toBe(false);
-   });
+@@ -209,0 +207,70 @@ describe("HumanInputCard", () => {
 +
 +  it("renders specialized approval card with risk badge, purpose, code preview, and technical facts", () => {
 +    const approvalReq: HumanInputRequest = {
@@ -497,17 +428,11 @@ index 89353c1..cfd1036 100644
 +    const html = renderCard({ request: approvalReq, answeredResponse: answered });
 +    expect(html).toContain("已批准执行 (Approved)");
 +  });
- });
-
- function renderCard(props: Partial<Parameters<typeof HumanInputCard>[0]> = {}) {
 diff --git a/frontend/tests/unit/core/messages/human-input.test.ts b/frontend/tests/unit/core/messages/human-input.test.ts
 index cd9ae75..9c83bc7 100644
 --- a/frontend/tests/unit/core/messages/human-input.test.ts
 +++ b/frontend/tests/unit/core/messages/human-input.test.ts
-@@ -602,3 +602,42 @@ test("derives answered state for a form request answered by text", () => {
-   );
-   expect(state.latestOpenRequestId).toBeNull();
- });
+@@ -604,0 +605,39 @@ test("derives answered state for a form request answered by text", () => {
 +
 +test("extractHumanInputRequest extracts rich approval presentation fields", () => {
 +  const approvalPayload = {
