@@ -491,7 +491,7 @@ try {
     if ($Interaction) {
         [Environment]::SetEnvironmentVariable('W05_INTERACTION_ACCEPTANCE', '1', 'Process')
         $gatewayFile = (Get-Command mvn.cmd).Source
-        $gatewayArgs = @('-o', '-ntp', '-pl', 'super-harness-server', '-am', '-Dtest=InteractionAcceptanceServerTest', '-Dsurefire.failIfNoSpecifiedTests=false', '-DforkCount=0') + @(@($sdk.MavenArgument) -ne $null) + @('test')
+        $gatewayArgs = @('-o', '-ntp', '-pl', 'super-harness-server', '-am', '-Dtest=InteractionAcceptanceServerTest', '-Dsurefire.failIfNoSpecifiedTests=false', '-DforkCount=1') + @(@($sdk.MavenArgument) -ne $null) + @('test')
     } else {
         $gatewayFile = (Get-Command java.exe).Source
         $gatewayArgs = @('-jar', $jar)

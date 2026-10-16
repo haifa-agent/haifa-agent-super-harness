@@ -676,9 +676,9 @@ export function HumanInputCard({
 
           {!isForm && options.length > 0 ? (
             isRiskConfirmation ? (
-              answeredResponse ? (
-                <div className="pt-3 border-t border-border flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-                  <div className="flex items-center gap-2">
+              <div className="pt-3 border-t border-border flex flex-wrap items-center justify-between gap-3">
+                {answeredResponse ? (
+                  <div className="flex items-center gap-2 text-xs">
                     <span
                       className={cn(
                         "size-2 rounded-full",
@@ -692,45 +692,45 @@ export function HumanInputCard({
                         ? "已批准执行 (Approved)"
                         : "已拒绝执行 (Rejected)"}
                     </span>
+                    <span className="text-muted-foreground ml-1" aria-live="polite">
+                      {t.humanInput.answeredValue(answeredResponse.value)}
+                    </span>
                   </div>
-                  <p className="text-muted-foreground text-xs" aria-live="polite">
-                    {t.humanInput.answeredValue(answeredResponse.value)}
-                  </p>
-                </div>
-              ) : (
-                <div className="pt-3 border-t border-border flex flex-wrap items-center justify-between gap-3">
+                ) : (
                   <span className="text-xs text-muted-foreground">
                     审批确认后任务将继续执行
                   </span>
-                  <div className="flex items-center gap-2">
-                    {options.map((option) => {
-                      const isApprove = option.id.toLowerCase().includes("approve");
-                      return (
-                        <Button
-                          key={option.id}
-                          disabled={isDisabled}
-                          type="button"
-                          variant={isApprove ? "default" : "outline"}
-                          className={cn(
-                            "text-xs font-medium h-8 px-3.5",
-                            isApprove
-                              ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
-                              : "hover:bg-destructive/10 hover:border-destructive/30 hover:text-destructive",
-                          )}
-                          onClick={() => handleOptionClick(option)}
-                        >
-                          {pending ? (
-                            <Loader2Icon className="size-3.5 animate-spin mr-1" />
-                          ) : isApprove ? (
-                            <CheckIcon className="size-3.5 mr-1" />
-                          ) : null}
-                          {option.label}
-                        </Button>
-                      );
-                    })}
-                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  {options.map((option) => {
+                    const isApprove = option.id.toLowerCase().includes("approve");
+                    const isChosen = answeredResponse?.value === option.value;
+                    return (
+                      <Button
+                        key={option.id}
+                        disabled={isDisabled}
+                        type="button"
+                        variant={isApprove ? "default" : "outline"}
+                        className={cn(
+                          "text-xs font-medium h-8 px-3.5",
+                          isApprove
+                            ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs"
+                            : "hover:bg-destructive/10 hover:border-destructive/30 hover:text-destructive",
+                          answeredResponse && !isChosen && "opacity-50",
+                        )}
+                        onClick={() => handleOptionClick(option)}
+                      >
+                        {pending ? (
+                          <Loader2Icon className="size-3.5 animate-spin mr-1" />
+                        ) : isApprove ? (
+                          <CheckIcon className="size-3.5 mr-1" />
+                        ) : null}
+                        {option.label}
+                      </Button>
+                    );
+                  })}
                 </div>
-              )
+              </div>
             ) : (
               <div className="grid gap-2">
                 {options.map((option) => (
