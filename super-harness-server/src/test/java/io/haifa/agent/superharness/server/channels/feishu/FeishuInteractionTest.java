@@ -50,7 +50,13 @@ class FeishuInteractionTest {
         assertThat(pending.options()).extracting(FeishuPendingInput.Option::id).containsExactly("approve", "reject");
         assertThat(pending.options().getFirst().id()).isEqualTo(pending.options().getFirst().value());
 
-        Map<String, Object> card = FeishuInteraction.interactiveCard(pending);
+        messages.add(ai("I'll create a file with one line of content."));
+        FeishuPendingInput followedByAssistant = FeishuInteraction.pendingFromMessages(messages).orElseThrow();
+        assertThat(followedByAssistant.requestId()).isEqualTo("req-1");
+        assertThat(followedByAssistant.preface()).contains("我将把部署脚本写到生产目录。");
+        assertThat(followedByAssistant.preface()).contains("I'll create a file with one line of content.");
+
+        Map<String, Object> card = FeishuInteraction.interactiveCard(followedByAssistant);
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> elements = (List<Map<String, Object>>) card.get("elements");
         assertThat(elements).anyMatch(element -> "action".equals(element.get("tag")));
@@ -80,6 +86,72 @@ class FeishuInteractionTest {
         FeishuHumanResponse other = FeishuInteraction.match(pending, "先出公告").orElseThrow();
         assertThat(other.responseKind()).isEqualTo("text");
         assertThat(other.value()).isEqualTo("先出公告");
+    }
+
+    @Test
+    void choiceWithOtherCardIncludesTheWebFreeTextField() throws Exception {
+        FeishuPendingInput pending = new FeishuPendingInput(
+                "ask_clarification",
+                "clarification:abc",
+                "ambiguous_requirement",
+                "choice_with_other",
+                "请选择一个选项（体验澄清组件）：",
+                "",
+                "请选择一个选项（体验澄清组件）：",
+                List.of(
+                        option("option-1", "A（选项一）", "A（选项一）"),
+                        option("option-2", "B（选项二）", "B（选项二）"),
+                        option("option-3", "C（选项三）", "C（选项三）")),
+                false);
+        Map<String, Object> built = FeishuInteraction.interactiveCard(pending);
+        assertThat(built.get("schema")).isEqualTo("2.0");
+        String card = built.toString();
+        assertThat(card).contains("其他回答").contains("输入其他回答...");
+        assertThat(card).contains("A（选项一）").contains("B（选项二）").contains("C（选项三）");
+
+        P2CardActionTrigger trigger = new P2CardActionTrigger();
+        P2CardActionTriggerData data = new P2CardActionTriggerData();
+        CallBackAction action = new CallBackAction();
+        action.setName("other_submit");
+        action.setValue(Map.of(
+                "action", "other",
+                "request_id", "clarification:abc",
+                "source", "ask_clarification",
+                "card_schema", "2.0"));
+        action.setFormValue(Map.of("other", "自定义答案"));
+        data.setAction(action);
+        CallBackContext context = new CallBackContext();
+        context.setOpenChatId("oc_chat");
+        context.setOpenMessageId("om_other");
+        CallBackOperator operator = new CallBackOperator();
+        operator.setOpenId("ou_owner");
+        data.setContext(context);
+        data.setOperator(operator);
+        trigger.setEvent(data);
+        FeishuInboundMessage message = LarkSdkFeishuTransport.cardMessage(trigger);
+        assertThat(message.cardAction().optionId()).isEqualTo("other");
+        assertThat(message.cardAction().value()).isEqualTo("自定义答案");
+        assertThat(message.cardAction().cardSchema()).isEqualTo("2.0");
+        Map<String, Object> settled = FeishuInteraction.settledCard(message, FeishuInteraction.PROCESSING);
+        assertThat(settled.get("schema")).isEqualTo("2.0");
+        assertThat(settled).doesNotContainKey("elements");
+        assertThat(settled.get("body").toString()).contains("已提交：自定义答案").doesNotContain("button");
+
+        Harness harness = harness();
+        harness.bridge.pending = pending;
+        harness.worker.handleInbound(new FeishuInboundMessage(
+                "oc_chat", "om_other", "ou_owner", "", "p2p", message.cardAction()));
+        assertThat(harness.bridge.responses.get().responseKind()).isEqualTo("text");
+        assertThat(harness.bridge.responses.get().value()).isEqualTo("自定义答案");
+        assertThat(harness.bridge.responses.get().optionId()).isNull();
+
+        harness.bridge.pending = pending;
+        String empty = harness.worker.acceptCardAction(new FeishuInboundMessage(
+                "oc_chat", "om_empty", "ou_owner", "", "p2p",
+                new FeishuInboundMessage.CardAction("ask_clarification", "clarification:abc", "other", "  ")));
+        assertThat(empty).isEqualTo(FeishuInteraction.EMPTY_OTHER);
+        assertThat(harness.bridge.turns.get()).isEqualTo(1);
+        harness.worker.close();
     }
 
     @Test
@@ -157,6 +229,12 @@ class FeishuInteractionTest {
         assertThat(message.cardAction().optionId()).isEqualTo("approve");
         assertThat(LarkSdkFeishuTransport.toastResponse(FeishuInteraction.PROCESSING).getToast().getContent())
                 .isEqualTo(FeishuInteraction.PROCESSING);
+        Map<String, Object> settled = FeishuInteraction.settledCard(message, FeishuInteraction.PROCESSING);
+        assertThat(settled.get("elements").toString()).doesNotContain("button");
+        assertThat(settled.get("elements").toString()).contains("已提交：Approve");
+        var updated = LarkSdkFeishuTransport.callbackResponse(FeishuInteraction.PROCESSING, settled);
+        assertThat(updated.getCard().getType()).isEqualTo("raw");
+        assertThat(updated.getCard().getData()).isSameAs(settled);
 
         Harness harness = harness();
         CountDownLatch entered = new CountDownLatch(1);

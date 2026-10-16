@@ -235,6 +235,10 @@ public final class FeishuChannelWorker implements AutoCloseable {
         if (alreadyClosed(message)) {
             return FeishuInteraction.ALREADY_HANDLED;
         }
+        if (FeishuInteraction.OTHER_OPTION.equals(message.cardAction().optionId())
+                && message.cardAction().value().isBlank()) {
+            return FeishuInteraction.EMPTY_OTHER;
+        }
         enqueueInbound(message);
         return FeishuInteraction.PROCESSING;
     }
@@ -283,6 +287,17 @@ public final class FeishuChannelWorker implements AutoCloseable {
                 || pending.formUnsupported()
                 || !pending.requestId().equals(action.requestId())) {
             reply(message.messageId(), FeishuInteraction.ALREADY_HANDLED);
+            return;
+        }
+        if (FeishuInteraction.OTHER_OPTION.equals(action.optionId())) {
+            String text = action.value() == null ? "" : action.value().trim();
+            if (!"choice_with_other".equals(pending.inputMode()) || text.isEmpty()) {
+                reply(message.messageId(), FeishuInteraction.EMPTY_OTHER);
+                return;
+            }
+            FeishuHumanResponse response = new FeishuHumanResponse(
+                    pending.source(), pending.requestId(), "text", null, text);
+            present(message, runSubmitted(owner, connectionId, message, threadId, response, pending));
             return;
         }
         Optional<FeishuPendingInput.Option> option = FeishuInteraction.optionById(pending, action.optionId());

@@ -7,6 +7,7 @@ import com.lark.oapi.core.utils.Jsons;
 import com.lark.oapi.event.EventDispatcher;
 import com.lark.oapi.event.cardcallback.P2CardActionTriggerHandler;
 import com.lark.oapi.event.cardcallback.model.CallBackAction;
+import com.lark.oapi.event.cardcallback.model.CallBackCard;
 import com.lark.oapi.event.cardcallback.model.CallBackContext;
 import com.lark.oapi.event.cardcallback.model.CallBackOperator;
 import com.lark.oapi.event.cardcallback.model.CallBackToast;
@@ -64,7 +65,7 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                     .onP2CardActionTrigger(new P2CardActionTriggerHandler() {
                         @Override
                         public P2CardActionTriggerResponse handle(P2CardActionTrigger event) {
-                            return toastResponse(deliverCard(event));
+                            return respondToCard(event);
                         }
                     })
                     .build();
@@ -196,17 +197,38 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                 message.getChatType()));
     }
 
-    private String deliverCard(P2CardActionTrigger event) {
+    private P2CardActionTriggerResponse respondToCard(P2CardActionTrigger event) {
+        FeishuInboundMessage message = cardMessage(event);
+        String toast = FeishuInteraction.INVALID;
         CardActionHandler handler = cardActions;
-        if (handler == null) {
-            return FeishuInteraction.INVALID;
+        if (handler != null) {
+            try {
+                toast = handler.toastFor(message);
+            } catch (RuntimeException failure) {
+                LOG.log(System.Logger.Level.WARNING, "Feishu card action was rejected", failure);
+                toast = FeishuInteraction.INVALID;
+            }
         }
-        try {
-            return handler.toastFor(cardMessage(event));
-        } catch (RuntimeException failure) {
-            LOG.log(System.Logger.Level.WARNING, "Feishu card action was rejected", failure);
-            return FeishuInteraction.INVALID;
+        return callbackResponse(toast, FeishuInteraction.settledCard(message, toast));
+    }
+
+    static P2CardActionTriggerResponse toastResponse(String content) {
+        return callbackResponse(content, null);
+    }
+
+    static P2CardActionTriggerResponse callbackResponse(String content, Map<String, Object> card) {
+        CallBackToast toast = new CallBackToast();
+        toast.setType("info");
+        toast.setContent(content == null || content.isBlank() ? FeishuInteraction.PROCESSING : content);
+        P2CardActionTriggerResponse response = new P2CardActionTriggerResponse();
+        response.setToast(toast);
+        if (card != null) {
+            CallBackCard update = new CallBackCard();
+            update.setType("raw");
+            update.setData(card);
+            response.setCard(update);
         }
+        return response;
     }
 
     static FeishuInboundMessage cardMessage(P2CardActionTrigger event) {
@@ -216,7 +238,16 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
         CallBackAction action = data == null ? null : data.getAction();
         Map<String, Object> value = action == null ? null : action.getValue();
         String requestId = textValue(value, "request_id");
-        String optionId = firstText(textValue(value, "option_id"), textValue(value, "action"));
+        String actionName = action == null || action.getName() == null ? "" : action.getName().trim();
+        String typed = firstText(
+                textValue(action == null ? null : action.getFormValue(), "other"),
+                action == null || action.getInputValue() == null ? "" : action.getInputValue().trim());
+        boolean other = FeishuInteraction.OTHER_OPTION.equals(textValue(value, "action"))
+                || "other_submit".equals(actionName);
+        String optionId = other
+                ? FeishuInteraction.OTHER_OPTION
+                : firstText(textValue(value, "option_id"), textValue(value, "action"));
+        String submitted = other ? typed : firstText(textValue(value, "value"), optionId);
         return new FeishuInboundMessage(
                 context == null ? "" : context.getOpenChatId(),
                 context == null ? "" : context.getOpenMessageId(),
@@ -227,16 +258,8 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                         textValue(value, "source"),
                         requestId,
                         optionId,
-                        firstText(textValue(value, "value"), optionId)));
-    }
-
-    static P2CardActionTriggerResponse toastResponse(String content) {
-        CallBackToast toast = new CallBackToast();
-        toast.setType("info");
-        toast.setContent(content == null || content.isBlank() ? FeishuInteraction.PROCESSING : content);
-        P2CardActionTriggerResponse response = new P2CardActionTriggerResponse();
-        response.setToast(toast);
-        return response;
+                        submitted,
+                        textValue(value, "card_schema")));
     }
 
     private static String extractText(String contentJson) {

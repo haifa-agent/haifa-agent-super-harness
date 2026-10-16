@@ -19,12 +19,17 @@ public record FeishuInboundMessage(
     }
 
     /** Button payload copied from a card action. The option value is re-read from thread state. */
-    public record CardAction(String source, String requestId, String optionId, String value) {
+    public record CardAction(String source, String requestId, String optionId, String value, String cardSchema) {
+        public CardAction(String source, String requestId, String optionId, String value) {
+            this(source, requestId, optionId, value, "");
+        }
+
         public CardAction {
             source = source == null ? "" : source;
             requestId = requestId == null ? "" : requestId;
             optionId = optionId == null ? "" : optionId;
             value = value == null ? "" : value;
+            cardSchema = cardSchema == null ? "" : cardSchema;
         }
     }
 }

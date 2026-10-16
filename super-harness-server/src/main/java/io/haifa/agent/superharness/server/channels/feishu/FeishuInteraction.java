@@ -19,6 +19,9 @@ public final class FeishuInteraction {
     static final String PROCESSING = "正在处理操作...";
     static final String FORBIDDEN = "您无权审批该任务";
     static final String INVALID = "操作无效";
+    /** Card-only id for the web "其他回答" field. It is not an option in thread state. */
+    static final String OTHER_OPTION = "other";
+    static final String EMPTY_OTHER = "请输入回答后再提交。";
 
     private FeishuInteraction() {}
 
@@ -26,10 +29,11 @@ public final class FeishuInteraction {
         if (messages == null || !messages.isArray() || messages.isEmpty()) {
             return Optional.empty();
         }
-        JsonNode tail = messages.get(messages.size() - 1);
-        if (!isClarification(tail)) {
+        int cardIndex = unansweredCardIndex(messages);
+        if (cardIndex < 0) {
             return Optional.empty();
         }
+        JsonNode tail = messages.get(cardIndex);
         JsonNode humanInput = tail.path("artifact").path("human_input");
         if (!humanInput.isObject()) {
             return Optional.empty();
@@ -57,7 +61,7 @@ public final class FeishuInteraction {
                 humanInput.path("clarification_type").asText(""),
                 inputMode,
                 question,
-                preface(messages),
+                preface(messages, cardIndex),
                 content,
                 options,
                 form));
@@ -122,6 +126,9 @@ public final class FeishuInteraction {
     }
 
     public static Map<String, Object> interactiveCard(FeishuPendingInput pending) {
+        if ("choice_with_other".equals(pending.inputMode()) && !pending.formUnsupported()) {
+            return choiceWithOtherCard(pending);
+        }
         Map<String, Object> card = new LinkedHashMap<>();
         card.put("config", Map.of("wide_screen_mode", true, "update_multi", true));
         List<Map<String, Object>> elements = new ArrayList<>();
@@ -150,6 +157,54 @@ public final class FeishuInteraction {
     public static String formNotice(FeishuPendingInput pending) {
         String body = pending.content().isBlank() ? pending.question() : pending.content();
         return body + "\n\n请在 Web 端完成该表单。";
+    }
+
+    /** Card shown after a click. No buttons, so the same action cannot be submitted again. */
+    public static Map<String, Object> settledCard(FeishuInboundMessage message, String toast) {
+        if (!PROCESSING.equals(toast) && !ALREADY_HANDLED.equals(toast)) {
+            return null;
+        }
+        String body = ALREADY_HANDLED.equals(toast)
+                ? ALREADY_HANDLED + "\n\n按钮已关闭。"
+                : "已提交：" + choiceLabel(message) + "\n\n按钮已关闭，不能再次点击。";
+        Map<String, Object> markdown = Map.of("tag", "markdown", "content", body);
+        if (schema2(message)) {
+            // Feishu 200830: a JSON 2.0 card cannot be replaced by a JSON 1.0 card.
+            Map<String, Object> card = new LinkedHashMap<>();
+            card.put("schema", "2.0");
+            card.put("config", Map.of("update_multi", true));
+            card.put("body", Map.of("elements", List.of(markdown)));
+            return card;
+        }
+        Map<String, Object> card = new LinkedHashMap<>();
+        card.put("config", Map.of("wide_screen_mode", true, "update_multi", true));
+        card.put("elements", List.of(markdown));
+        return card;
+    }
+
+    private static boolean schema2(FeishuInboundMessage message) {
+        if (message == null || message.cardAction() == null) {
+            return false;
+        }
+        return "2.0".equals(message.cardAction().cardSchema())
+                || OTHER_OPTION.equals(message.cardAction().optionId());
+    }
+
+    private static String choiceLabel(FeishuInboundMessage message) {
+        if (message == null || message.cardAction() == null) {
+            return "";
+        }
+        String value = message.cardAction().value();
+        if (value == null || value.isBlank()) {
+            value = message.cardAction().optionId();
+        }
+        if ("approve".equalsIgnoreCase(value)) {
+            return "Approve";
+        }
+        if ("reject".equalsIgnoreCase(value)) {
+            return "Reject";
+        }
+        return value;
     }
 
     public static Optional<FeishuPendingInput.Option> optionById(FeishuPendingInput pending, String optionId) {
@@ -269,9 +324,72 @@ public final class FeishuInteraction {
             return "也可精确回复 1、2、Approve、Reject、approve、reject、批准、同意、拒绝、否决。";
         }
         if ("choice_with_other".equals(pending.inputMode())) {
-            return "可点按钮，或精确回复序号 / 选项原文。其他原文按 other 文本提交。";
+            return "可点选项，或在「其他回答」中输入后提交。直接回复其他原文也会按自由输入提交。";
         }
         return "可点按钮，或精确回复序号 / 选项原文。";
+    }
+
+    /** Schema 2.0 card: the listed choices plus the same free-text field the web card shows. */
+    private static Map<String, Object> choiceWithOtherCard(FeishuPendingInput pending) {
+        List<Map<String, Object>> elements = new ArrayList<>();
+        elements.add(Map.of("tag", "markdown", "content", markdown(pending)));
+        for (FeishuPendingInput.Option option : pending.options()) {
+            elements.add(callbackButton(pending, option));
+        }
+        elements.add(otherForm(pending));
+        Map<String, Object> card = new LinkedHashMap<>();
+        card.put("schema", "2.0");
+        card.put("config", Map.of("update_multi", true));
+        card.put("body", Map.of("elements", elements));
+        return card;
+    }
+
+    private static Map<String, Object> callbackButton(FeishuPendingInput pending, FeishuPendingInput.Option option) {
+        String label = option.label().isBlank() ? option.id() : option.label();
+        Map<String, Object> value = buttonValue(pending);
+        value.put("option_id", option.id());
+        value.put("value", option.value());
+        Map<String, Object> button = new LinkedHashMap<>();
+        button.put("tag", "button");
+        button.put("text", Map.of("tag", "plain_text", "content", label));
+        button.put("type", "default");
+        button.put("width", "fill");
+        button.put("behaviors", List.of(Map.of("type", "callback", "value", value)));
+        return button;
+    }
+
+    private static Map<String, Object> otherForm(FeishuPendingInput pending) {
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("tag", "input");
+        input.put("name", "other");
+        input.put("required", false);
+        input.put("width", "fill");
+        input.put("label", Map.of("tag", "plain_text", "content", "其他回答"));
+        input.put("label_position", "top");
+        input.put("placeholder", Map.of("tag", "plain_text", "content", "输入其他回答..."));
+        Map<String, Object> value = buttonValue(pending);
+        value.put("action", OTHER_OPTION);
+        Map<String, Object> submit = new LinkedHashMap<>();
+        submit.put("tag", "button");
+        submit.put("name", "other_submit");
+        submit.put("text", Map.of("tag", "plain_text", "content", "提交"));
+        submit.put("type", "primary");
+        submit.put("width", "fill");
+        submit.put("form_action_type", "submit");
+        submit.put("behaviors", List.of(Map.of("type", "callback", "value", value)));
+        Map<String, Object> form = new LinkedHashMap<>();
+        form.put("tag", "form");
+        form.put("name", "other_form");
+        form.put("elements", List.of(input, submit));
+        return form;
+    }
+
+    private static Map<String, Object> buttonValue(FeishuPendingInput pending) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("source", pending.source());
+        value.put("request_id", pending.requestId());
+        value.put("card_schema", "2.0");
+        return value;
     }
 
     private static String buttonType(String optionId) {
@@ -284,17 +402,50 @@ public final class FeishuInteraction {
         return "default";
     }
 
+    /**
+     * The open card is the latest {@code ask_clarification} in this turn. Assistant text projected
+     * after that card does not close it; a human message does.
+     */
+    private static int unansweredCardIndex(JsonNode messages) {
+        for (int index = messages.size() - 1; index >= 0; index--) {
+            JsonNode message = messages.get(index);
+            if (isAssistant(message)) {
+                continue;
+            }
+            if (isClarification(message) && message.path("artifact").path("human_input").isObject()) {
+                return index;
+            }
+            return -1;
+        }
+        return -1;
+    }
+
     private static boolean isClarification(JsonNode message) {
         return "tool".equals(message.path("type").asText())
                 && "ask_clarification".equals(message.path("name").asText());
     }
 
-    private static String preface(JsonNode messages) {
+    private static boolean isAssistant(JsonNode message) {
+        String type = message.path("type").asText(message.path("role").asText());
+        return "ai".equals(type) || "assistant".equals(type);
+    }
+
+    private static String preface(JsonNode messages, int cardIndex) {
         List<String> parts = new ArrayList<>();
-        for (int index = messages.size() - 2; index >= 0; index--) {
+        for (int index = cardIndex - 1; index >= 0; index--) {
             JsonNode message = messages.get(index);
-            String type = message.path("type").asText(message.path("role").asText());
-            if (!"ai".equals(type) && !"assistant".equals(type)) {
+            if (!isAssistant(message)) {
+                break;
+            }
+            String text = messageText(message);
+            if (!text.isBlank()) {
+                parts.add(text);
+            }
+        }
+        java.util.Collections.reverse(parts);
+        for (int index = cardIndex + 1; index < messages.size(); index++) {
+            JsonNode message = messages.get(index);
+            if (!isAssistant(message)) {
                 break;
             }
             String text = messageText(message);
@@ -303,11 +454,11 @@ public final class FeishuInteraction {
             }
         }
         StringBuilder builder = new StringBuilder();
-        for (int index = parts.size() - 1; index >= 0; index--) {
+        for (String part : parts) {
             if (!builder.isEmpty()) {
                 builder.append("\n\n");
             }
-            builder.append(parts.get(index));
+            builder.append(part);
         }
         return builder.toString();
     }
