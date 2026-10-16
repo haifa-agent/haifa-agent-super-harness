@@ -1535,7 +1535,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                     } catch (IOException | IllegalArgumentException unavailablePresentation) {
                         INTERACTION_LOG.log(System.Logger.Level.WARNING,
                                 "Interaction card could not be saved: "
-                                        + unavailablePresentation.getClass().getName());
+                                        + unavailablePresentation.getClass().getName()
+                                        + ": " + boundedReason(unavailablePresentation));
                         sendJson(exchange, 503, Map.of(
                                 "detail", "Interaction card could not be saved; approval was not submitted"));
                         return;
@@ -4049,7 +4050,7 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
         } catch (IOException | IllegalArgumentException unavailable) {
             INTERACTION_LOG.log(System.Logger.Level.WARNING,
                     "Pending Interaction card could not be persisted while reading the Thread: "
-                            + unavailable.getClass().getName());
+                            + unavailable.getClass().getName() + ": " + boundedReason(unavailable));
             run.interactionRequestMessage =
                     DeerFlowInteractionHttpProjection.requestMessage(pending.orElseThrow(), runId);
         }
@@ -4058,6 +4059,21 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private static String interactionMessageToolCallId(Map<String, Object> message) {
         return message.get("tool_call_id") instanceof String value ? value : "";
+    }
+
+    /**
+     * Bounded single-line reason of an Interaction-card failure. The candidate messages are this
+     * class's own invariant names ("invalid interaction display", "interaction display IDs or order
+     * are invalid", "Pending Interaction conflicts with saved presentation"), never client text or a
+     * provider body, so recording them is safe and keeps the failure diagnosable.
+     */
+    private static String boundedReason(Throwable failure) {
+        String message = failure.getMessage();
+        if (message == null) {
+            return "";
+        }
+        String single = message.replace('\n', ' ').replace('\r', ' ');
+        return single.length() > 160 ? single.substring(0, 160) : single;
     }
 
     private List<String> artifactPaths(
