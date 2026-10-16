@@ -106,6 +106,13 @@
       "source_function": "_create_todo_list_middleware",
       "source_lineno": 408,
       "description_sha256": "d23e05e338b031152b2e0289fea622994244347040af6b032c95ba9407b32d63"
+    },
+    {
+      "tool": "view_image",
+      "source_file": "deerflow/tools/builtins/view_image_tool.py",
+      "source_function": "_view_image",
+      "source_lineno": 111,
+      "description_sha256": "848695207346f12dfaedab43fd3d0540964a605f64cf13be027af5af080b42a6"
     }
   ]
 }

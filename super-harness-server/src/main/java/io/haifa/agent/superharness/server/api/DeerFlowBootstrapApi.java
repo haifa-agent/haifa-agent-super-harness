@@ -40,6 +40,7 @@ import io.haifa.agent.superharness.server.tool.file.ProductionLsTool;
 import io.haifa.agent.superharness.server.tool.file.ProductionPresentFilesTool;
 import io.haifa.agent.superharness.server.tool.file.ProductionReadFileTool;
 import io.haifa.agent.superharness.server.tool.file.ProductionStrReplaceTool;
+import io.haifa.agent.superharness.server.tool.file.ProductionViewImageTool;
 import io.haifa.agent.superharness.server.tool.file.ProductionWriteFileTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionImageSearchTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionWebFetchTool;
@@ -344,6 +345,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 new ProductionWriteFileTool(
                         scope.threadId(), scope.artifactProjectRef(), projects, workspace, session),
                 new ProductionReadFileTool(scope.threadId(), projects, workspace, session),
+                new ProductionViewImageTool(scope.threadId(), projects, workspace),
                 new ProductionStrReplaceTool(
                         scope.threadId(), scope.artifactProjectRef(), projects, workspace, session),
                 new ProductionLsTool(scope.threadId(), projects, workspace),
