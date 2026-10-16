@@ -11,8 +11,8 @@ $script:ShpmStageResults = @('PASS', 'FAIL', 'NOT_RUN', 'BLOCKED_EXTERNAL', 'UPS
 # Human scope decision 2026-10-01, superseding 2026-09-28's 8 (mirrors SHPM MAX_DELIVERY_TASKS).
 # Human scope decision 2026-10-09 raised the cap from 16 to 32.
 $script:ShpmMaxDeliveryTasks = 32
-# AGENTS.md port table: slots 1-3 step by +10000; slot 4 is listed, not computed, to stay below the dynamic port range.
-$script:ShpmSlotPorts = @{ 1 = '20618/25618'; 2 = '30618/35618'; 3 = '40618/45618'; 4 = '11618/16618' }
+# AGENTS.md port table: slots 1-3 step by +10000; slots 4-6 are listed, not computed, to stay below the dynamic port range.
+$script:ShpmSlotPorts = @{ 1 = '20618/25618'; 2 = '30618/35618'; 3 = '40618/45618'; 4 = '11618/16618'; 5 = '21618/26618'; 6 = '22618/27618' }
 $script:ShpmRequiredTables = @('work_package', 'task', 'sprint', 'sprint_stage', 'relation', 'assignment', 'verification', 'issue', 'todo', 'event')
 
 function Assert-ShpmCondition {

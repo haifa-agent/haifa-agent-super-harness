@@ -34,9 +34,9 @@ from pathlib import Path
 
 DEFAULT_DB = r"C:\Users\wangr\.shpm\data\project.db"
 
-# Slot -> (Gateway, Frontend), copied from the port table in AGENTS.md. Slot 4 is outside the
+# Slot -> (Gateway, Frontend), copied from the port table in AGENTS.md. Slots 4-6 are outside the
 # +10000 series on purpose, so the ports are listed rather than computed.
-SLOT_PORTS = {1: (20618, 25618), 2: (30618, 35618), 3: (40618, 45618), 4: (11618, 16618)}
+SLOT_PORTS = {1: (20618, 25618), 2: (30618, 35618), 3: (40618, 45618), 4: (11618, 16618), 5: (21618, 26618), 6: (22618, 27618)}
 
 
 class DispatchError(Exception):
