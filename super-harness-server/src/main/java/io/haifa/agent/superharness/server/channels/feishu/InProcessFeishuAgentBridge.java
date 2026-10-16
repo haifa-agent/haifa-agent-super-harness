@@ -2,12 +2,11 @@ package io.haifa.agent.superharness.server.channels.feishu;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.haifa.agent.superharness.server.api.DeerFlowThreadRunApi;
 import io.haifa.agent.superharness.server.auth.AccessOwner;
 import java.util.Map;
-import java.util.UUID;
+import java.util.Optional;
 
 /**
  * Reuses {@link DeerFlowThreadRunApi} in-process under {@link AccessOwner#call} so Feishu-bound
@@ -29,15 +28,45 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
             Map<String, Object> channelMetadata,
             String userText)
             throws Exception {
+        return runTurn(ownerUserId, threadId, channelMetadata, userText, null);
+    }
+
+    @Override
+    public TurnResult runTurn(
+            String ownerUserId,
+            String threadId,
+            Map<String, Object> channelMetadata,
+            String userText,
+            FeishuHumanResponse response)
+            throws Exception {
         String owner = ownerUserId == null || ownerUserId.isBlank() ? AccessOwner.DEFAULT : ownerUserId;
         return AccessOwner.call(owner, () -> {
             try {
                 ensureThread(threadId, channelMetadata);
-                runStream(threadId, userText);
-                String assistant = lastAssistantText(threadId);
-                return new TurnResult(threadId, assistant);
+                String content = userText;
+                if ((content == null || content.isBlank()) && response != null) {
+                    content = FeishuInteraction.responseContent(
+                            currentPendingLocked(threadId).orElse(null), response);
+                }
+                if (content == null || content.isBlank()) {
+                    content = "";
+                }
+                runStream(threadId, content, response);
+                return readTurn(threadId);
             } catch (Exception exception) {
                 throw new IllegalStateException("Feishu channel run failed", exception);
+            }
+        });
+    }
+
+    @Override
+    public Optional<FeishuPendingInput> currentPending(String ownerUserId, String threadId) throws Exception {
+        String owner = ownerUserId == null || ownerUserId.isBlank() ? AccessOwner.DEFAULT : ownerUserId;
+        return AccessOwner.call(owner, () -> {
+            try {
+                return currentPendingLocked(threadId);
+            } catch (Exception exception) {
+                throw new IllegalStateException("Feishu pending read failed", exception);
             }
         });
     }
@@ -61,16 +90,15 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
         }
     }
 
-    private void runStream(String threadId, String userText) throws Exception {
+    private void runStream(String threadId, String userText, FeishuHumanResponse response) throws Exception {
         ObjectNode body = json.createObjectNode();
         body.put("assistant_id", "lead_agent");
         body.put("on_disconnect", "continue");
         ObjectNode input = body.putObject("input");
-        ArrayNode messages = input.putArray("messages");
-        messages.addObject()
-                .put("id", UUID.randomUUID().toString())
-                .put("type", "human")
-                .put("content", userText == null ? "" : userText);
+        FeishuInteraction.writeHumanMessage(
+                input.putArray("messages").addObject(),
+                userText == null ? "" : userText,
+                response);
         body.putArray("stream_mode").add("messages-tuple").add("updates").add("custom");
         body.putObject("context").put("mode", "flash");
         LocalHttpExchange exchange = new LocalHttpExchange(
@@ -79,8 +107,7 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
                 json.writeValueAsBytes(body));
         threads.handle(exchange);
         if (exchange.responseCode() != 200) {
-            throw new IllegalStateException(
-                    "Run stream failed: HTTP " + exchange.responseCode() + " " + exchange.responseText());
+            throw new FeishuRunRejected(exchange.responseCode(), detail(exchange));
         }
         String sse = exchange.responseText();
         if (!sse.contains("event: end") && !sse.contains("event: error")) {
@@ -94,48 +121,58 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
         }
     }
 
-    private String lastAssistantText(String threadId) throws Exception {
-        LocalHttpExchange exchange =
-                new LocalHttpExchange("GET", "/api/threads/" + threadId + "/state", new byte[0]);
-        threads.handle(exchange);
-        if (exchange.responseCode() != 200) {
-            throw new IllegalStateException(
-                    "Thread state failed: HTTP " + exchange.responseCode() + " " + exchange.responseText());
+    private Optional<FeishuPendingInput> currentPendingLocked(String threadId) throws Exception {
+        JsonNode state = threadState(threadId);
+        if (state == null) {
+            return Optional.empty();
         }
-        JsonNode state = json.readTree(exchange.responseBytes());
+        return FeishuInteraction.pendingFromMessages(state.path("values").path("messages"));
+    }
+
+    private TurnResult readTurn(String threadId) throws Exception {
+        JsonNode state = threadState(threadId);
+        if (state == null) {
+            throw new IllegalStateException("Thread state failed: HTTP 404");
+        }
         JsonNode messages = state.path("values").path("messages");
-        String last = "";
+        FeishuPendingInput pending = FeishuInteraction.pendingFromMessages(messages).orElse(null);
+        String assistant = "";
         if (messages.isArray()) {
             for (JsonNode message : messages) {
                 String type = message.path("type").asText();
                 String role = message.path("role").asText();
                 if ("ai".equals(type) || "assistant".equals(type) || "assistant".equals(role) || "ai".equals(role)) {
-                    last = messageText(message);
+                    assistant = FeishuInteraction.messageText(message);
                 }
             }
         }
-        return last;
+        if (pending != null && !pending.preface().isBlank()) {
+            assistant = pending.preface();
+        }
+        return new TurnResult(threadId, assistant, pending);
     }
 
-    private static String messageText(JsonNode message) {
-        JsonNode content = message.get("content");
-        if (content == null || content.isNull()) {
+    private JsonNode threadState(String threadId) throws Exception {
+        LocalHttpExchange exchange =
+                new LocalHttpExchange("GET", "/api/threads/" + threadId + "/state", new byte[0]);
+        threads.handle(exchange);
+        if (exchange.responseCode() == 404) {
+            return null;
+        }
+        if (exchange.responseCode() != 200) {
+            throw new IllegalStateException(
+                    "Thread state failed: HTTP " + exchange.responseCode() + " " + exchange.responseText());
+        }
+        return json.readTree(exchange.responseBytes());
+    }
+
+    private String detail(LocalHttpExchange exchange) {
+        try {
+            JsonNode body = json.readTree(exchange.responseBytes());
+            String detail = body.path("detail").asText("");
+            return detail.length() > 200 ? detail.substring(0, 200) : detail;
+        } catch (Exception ignored) {
             return "";
         }
-        if (content.isTextual()) {
-            return content.asText();
-        }
-        if (content.isArray()) {
-            StringBuilder builder = new StringBuilder();
-            for (JsonNode part : content) {
-                if (part.isTextual()) {
-                    builder.append(part.asText());
-                } else if (part.hasNonNull("text")) {
-                    builder.append(part.get("text").asText());
-                }
-            }
-            return builder.toString();
-        }
-        return content.toString();
     }
 }
