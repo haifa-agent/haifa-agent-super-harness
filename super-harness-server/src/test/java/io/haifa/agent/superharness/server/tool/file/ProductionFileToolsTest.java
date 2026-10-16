@@ -68,6 +68,8 @@ class ProductionFileToolsTest {
                 List.of("include_outline", "max_results", "query", "extensions"), List.of());
         assertSchema(generator, "present_files", ProductionPresentFilesTool.Input.class,
                 List.of("filepaths"), List.of("filepaths"));
+        assertSchema(generator, "view_image", ProductionViewImageTool.Input.class,
+                List.of("image_path"), List.of("image_path"));
     }
 
     @Test
@@ -411,9 +413,11 @@ class ProductionFileToolsTest {
             this.grep = new ProductionGrepTool(threadId, bindings, workspace);
             this.uploads = new ProductionListUploadedFilesTool(threadId, bindings, workspace, currentRunUploads);
             this.present = new ProductionPresentFilesTool(threadId, projectRef, bindings, workspace);
+            this.viewImage = new ProductionViewImageTool(threadId, bindings, workspace);
             this.currentRunUploads = currentRunUploads;
         }
 
+        private final ProductionViewImageTool viewImage;
         private final CurrentRunUploads currentRunUploads;
 
         private void setCurrentRun(java.util.Set<String> names) {
