@@ -348,7 +348,14 @@ try {
     $null = New-Item -ItemType Directory -Force -Path $dataRoot
     foreach ($name in $managedEnvironment.Keys) {
         $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
-        [Environment]::SetEnvironmentVariable($name, $managedEnvironment[$name], 'Process')
+        $managedValue = $managedEnvironment[$name]
+        if ([string]::IsNullOrEmpty($managedValue)) {
+            # SetEnvironmentVariable($null) leaves an already-empty variable set. An empty
+            # continuation-key reference is not env:// or os:// and the Gateway rejects it.
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+        } else {
+            [Environment]::SetEnvironmentVariable($name, $managedValue, 'Process')
+        }
     }
     if ($W04ImageGen -and $w04.bunHome) {
         # Only ever a PATH prefix for this round; the save/restore loop below restores it. The
