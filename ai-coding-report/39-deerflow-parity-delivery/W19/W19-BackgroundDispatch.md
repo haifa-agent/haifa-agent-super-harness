@@ -30,7 +30,7 @@
 修改：
 
 - `schedule/ScheduleStore.java`：新增 `listDueTasks`/`listQueuedRuns`/`listExecutingRuns`（派发读）、`cancelQueuedRun`、`revertLaunchingToQueued`、`pauseTask`、`finishTask`；`deleteTask` 增加取消 `queued` 并拒绝 `launching/running`（保留原 2 参重载）。
-- `api/DeerFlowThreadRunApi.java`：`implements ScheduledRunLauncher`；新增非交互装配（从线程工具中排除 `ask_clarification`）、后台线程 ensure（owner 校验）、`HaifaRunBridge.start` 启动、Run 关联与有界 follower（`watch`）；`inspect` 供恢复读取真实 Run 结果；`close()` 有界中断/join follower。
+- `api/DeerFlowConversationService.java`：`implements ScheduledRunLauncher`；新增非交互装配（从线程工具中排除 `ask_clarification`）、后台线程 ensure（owner 校验）、`HaifaRunBridge.start` 启动、Run 关联与有界 follower（`watch`）；`inspect` 供恢复读取真实 Run 结果；`close()` 有界中断/join follower。（rebase 到 post-W20 前该接缝在 `api/DeerFlowThreadRunApi.java`，W20 抽取后迁至共享会话服务，见 `W19-M2RebaseReconcile.md`。）
 - `api/DeerFlowBootstrapApi.java`：解析 `SchedulerRunConfiguration`（生产从环境）、创建并持有 `ScheduleStore` + `ScheduleDispatchService`、`start()` 启动 worker（`enabled=false` 时 inert）、`close()` 先有界停 worker 再拆 Run API；新增 `scheduler()` 访问器与 `createForSchedulerTests(...)` 测试装配。
 
 新增（测试）：
@@ -87,7 +87,7 @@
 3. **完成跟随**：冻结由 gateway 的 Run 完成回调驱动；本任务用**有界轮询 follower**（`bridge.snapshot`，25ms 起指数退避到 1s，上限 24h，与既有 workspace/title 观察器同层）。`WAITING_APPROVAL` 属非终态：不落终态、保持 `running`（对齐 W05：不静默放行、不因缺订阅者丢失）。跨进程重启后 SDK 无自动恢复，SH 在恢复时对**仍非终态且已关联 Run** 的 occurrence **重新挂上 follower**（幂等）以收敛其结果；`launching` 无 Run 退回 `queued` 的窗口与冻结一致。单次快照读取瞬态失败在既有 deadline 内重试，不再终止唯一 follower。
 4. **队列超时时间基准**：以 occurrence `created_at` 计 `queue_timeout_seconds`（M1 store 无独立 `queued_at`；`created_at` 即入队时间）。
 5. **`running` 无关联 Run 的恢复**：冻结扫描集为 `launching/running`，本任务对“`running` 且无 `run_id`”按 `interrupted` 收敛（无法定位已提交 Run，不重放），对“`launching` 且无 `run_id`”退回 `queued`（对齐冻结 §3.5）。
-6. **REST/HTTP**：本任务不新增公开后台 Run 路由；派发经 `DeerFlowThreadRunApi` 上的**进程内 Java 接缝**（`ScheduledRunLauncher`）完成，不暴露 HTTP 后台 Run。
+6. **REST/HTTP**：本任务不新增公开后台 Run 路由；派发经共享会话服务 `DeerFlowConversationService` 上的**进程内 Java 接缝**（`ScheduledRunLauncher`）完成，不暴露 HTTP 后台 Run。
 
 ## 8. 未运行项
 

@@ -3,6 +3,7 @@
 > 状态：本报告记录 PR #70 的 9 条审查意见（全部采纳）的处置、断言与证据。任务状态、门禁结果与阶段决策以 SHPM 为准，本报告不预填阶段 `PASS`。
 > 里程碑：M2 返工。分支 / worktree：`feat-w19-background-dispatch`（本目录）。前置：先 rebase 到修复后的 M1 `c557b51`（`feat-w19-schedule-model-store`），rebase 后 M2 功能提交为 `b1c76ea`。冻结 DF：`e545c28ac301e6f9feae247c513d8ea8f83df294`（`croniter` 6.2.2）。
 > 只影响 `super-harness-server` 的调度包与后台 Run 接缝；本轮未启动常驻服务，未占用槽位端口。
+> 位置注记（2026-10-17）：本报告表格中的 `DeerFlowThreadRunApi.java:*` 行号对应 W20 抽取前的旧架构；rebase 到 post-W20 后，这些接缝整体迁至 `api/DeerFlowConversationService.java`，迁移对照见 `W19-M2RebaseReconcile.md`。语义与断言不变。
 
 ## 1. 范围与归属
 
