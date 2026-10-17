@@ -18,7 +18,6 @@ import io.haifa.agent.model.api.ModelAdapterCoordinate;
 import io.haifa.agent.model.api.ModelCapability;
 import io.haifa.agent.model.api.ModelReasoningPolicy;
 import io.haifa.agent.model.api.ResolvedModelSnapshot;
-import io.haifa.agent.policy.api.PolicyPresets;
 import io.haifa.agent.policy.core.DefaultPolicyDecisionService;
 import io.haifa.agent.runtime.api.AgentRunSnapshot;
 import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
@@ -65,6 +64,7 @@ import io.haifa.agent.starter.HostExecutionPlatforms;
 import io.haifa.agent.starter.McpServerSpec;
 import io.haifa.agent.starter.McpToolPlatforms;
 import io.haifa.agent.starter.SkillScriptPlatforms;
+import io.haifa.agent.superharness.server.config.ApprovalPolicyConfig;
 import io.haifa.agent.superharness.server.config.HostShellToolConfig;
 import io.haifa.agent.superharness.server.config.McpRunTools;
 import io.haifa.agent.superharness.server.config.SkillRunTools;
@@ -121,6 +121,7 @@ public final class HaifaRunBridge implements AutoCloseable {
     private final String delegationSignature;
     private final Set<String> mcpToolNames;
     private final Set<String> skillScriptToolNames;
+    private final ApprovalPolicyConfig.Mode approvalMode;
     private final AgentPromptContext agentContext;
     private final RestrictedWorkspaceService workspace;
     private final String ownerId;
@@ -141,6 +142,7 @@ public final class HaifaRunBridge implements AutoCloseable {
         this.delegationSignature = "";
         this.mcpToolNames = Set.of();
         this.skillScriptToolNames = Set.of();
+        this.approvalMode = ApprovalPolicyConfig.DEFAULT_MODE;
         this.agentContext = AgentPromptContext.defaults();
         this.workspace = null;
         this.ownerId = AccessOwner.current();
@@ -248,7 +250,22 @@ public final class HaifaRunBridge implements AutoCloseable {
             Long parentWallTimeMillisForTests) {
         this(binding, tools, foundation, mcpProjection, skillProjection, agentContext, delegation,
                 childRunCapacity, isPlanMode, executionExecutorFactory, hostShell, skillScript,
-                parentWallTimeMillisForTests, null, null, null);
+                parentWallTimeMillisForTests, null, null, null, null);
+    }
+
+    /** Product approval-level seam: the level is resolved once per process and applied per Run. */
+    public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
+            boolean isPlanMode, Supplier<? extends ExecutorService> executionExecutorFactory,
+            HostShellToolConfig hostShell,
+            SkillScriptToolConfig skillScript,
+            Long parentWallTimeMillisForTests,
+            ApprovalPolicyConfig.Mode approvalMode) {
+        this(binding, tools, foundation, mcpProjection, skillProjection, agentContext, delegation,
+                childRunCapacity, isPlanMode, executionExecutorFactory, hostShell, skillScript,
+                parentWallTimeMillisForTests, null, null, null, approvalMode);
     }
 
     public HaifaRunBridge(
@@ -261,7 +278,7 @@ public final class HaifaRunBridge implements AutoCloseable {
         this(binding, tools, foundation, McpRunTools.Projection.empty(), null,
                 AgentPromptContext.defaults(), SubagentRunConfiguration.disabled(),
                 new io.haifa.agent.runtime.api.ChildRunCapacity(1), false, null, null, null, null,
-                workspace, ownerId, threadId);
+                workspace, ownerId, threadId, null);
     }
 
     public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools,
@@ -274,8 +291,10 @@ public final class HaifaRunBridge implements AutoCloseable {
             Long parentWallTimeMillisForTests,
             RestrictedWorkspaceService workspace,
             String ownerId,
-            String threadId) {
+            String threadId,
+            ApprovalPolicyConfig.Mode approvalMode) {
         java.util.Objects.requireNonNull(childRunCapacity, "childRunCapacity");
+        this.approvalMode = approvalMode == null ? ApprovalPolicyConfig.DEFAULT_MODE : approvalMode;
         this.agentContext = java.util.Objects.requireNonNull(agentContext, "agent context must not be null");
         this.isPlanMode = isPlanMode;
         List<McpServerSpec> mcpSpecs = mcpProjection.specs();
@@ -394,7 +413,7 @@ public final class HaifaRunBridge implements AutoCloseable {
                     .conversation(foundation.conversation())
                     .tools(registeredTools)
                     .policy(new PolicyPlatformContribution(
-                            PolicyPresets.standardApproval(), new DefaultPolicyDecisionService()));
+                            ApprovalPolicyPresets.rules(approvalMode), new DefaultPolicyDecisionService()));
             if (this.workspace != null && this.threadId != null) {
                 builder.modelImageResolver(new SuperHarnessModelImageResolver(this.workspace, this.ownerId, this.threadId));
             }

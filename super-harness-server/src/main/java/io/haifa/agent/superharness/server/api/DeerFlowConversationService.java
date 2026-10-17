@@ -44,6 +44,7 @@ import io.haifa.agent.superharness.events.ProjectionCursor;
 import io.haifa.agent.superharness.events.ProjectionGap;
 import io.haifa.agent.superharness.events.ReplayResult;
 import io.haifa.agent.superharness.events.RunTerminalKind;
+import io.haifa.agent.superharness.server.config.ApprovalPolicyConfig;
 import io.haifa.agent.superharness.server.config.McpRunTools;
 import io.haifa.agent.superharness.server.config.HostShellToolConfig;
 import io.haifa.agent.superharness.server.config.SkillScriptToolConfig;
@@ -1952,6 +1953,14 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     }
 
     /**
+     * Product approval level. The default keeps today's per-call approval; only an explicit
+     * {@code auto} (or {@code deny}) value changes the policy handed to the SDK.
+     */
+    private ApprovalPolicyConfig.Mode approvalMode() {
+        return ApprovalPolicyConfig.fromEnvironment(System.getenv()).mode();
+    }
+
+    /**
      * The trusted Skill script declaration is a host shell chain: it additionally requires the
      * bounded bun runtime and the admitted Skill binding, and its workspace root is this Thread's
      * own user-data tree (bound here, idempotent) so the executed package writes {@code outputs/}
@@ -1985,7 +1994,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         return AccessOwner.call(thread.ownerId, () -> new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt),
                 foundation, mcpProjection, skillProjection, agentPrompt, delegation, childRunCapacity, isPlanMode,
                 executionExecutorFactory, hostShellConfig(), skillScriptConfig(thread, skillProjection),
-                parentWallTimeMillisForTests));
+                parentWallTimeMillisForTests, approvalMode()));
     }
 
     /** Test-only: the exact bridge currently attached to a Thread, or null when none is. */
@@ -2292,7 +2301,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 McpRunTools.Projection.empty(), null, agentPrompt,
                 io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled(),
                 childRunCapacity, false, executionExecutorFactory, hostShellConfig(), null,
-                parentWallTimeMillisForTests));
+                parentWallTimeMillisForTests, approvalMode()));
     }
 
     static ScheduledRunStatus scheduledTerminal(AgentRunStatus status) {
