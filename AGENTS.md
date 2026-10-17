@@ -274,6 +274,22 @@ try {
 - 调用方设置独立 deadline，保留 stdout/stderr 与 `--log-file` 日志；不能仅依赖 `--print-timeout`。只读任务加 `--mode plan`；交付须核对最终状态、文件改动和真实验收证据，不能只看退出码。
 - 需要续接时，先确认原精确进程已终止并保存原件；只从本任务 `--log-file` 中核对唯一 `Created conversation <ID>`，用 `agy --conversation <ID> --model gemini-3.8-flash-high` 在同一 worktree 续接，写入交接文件时仍须 `--mode accept-edits`。不得默认续接全局最近会话，且每次续接须有独立 deadline、原会话归属和新交付证据。
 
+### SHPM 写入与文件工具
+
+- SHPM 正文含非 ASCII 时不要经命令行参数或 PowerShell 管道传递。症状：`shpm issue add --detail '<中文>'`，
+  或 `shpm ... --json | python -c ...` 回读时出现 `'�\udc80'`、孤立代理字符或乱码，看起来像数据库被写坏；
+  实际是命令行/控制台编码转换。检查：在**一个** Python 进程里
+  `subprocess.run(['shpm','issue','show',ID,'--json'], capture_output=True).stdout.decode('utf-8')`，
+  统计 CJK 字符数与 `0xd800..0xdfff` 代理数，只打印 ASCII 结论（如 `equal True`、`cjk 865`、`surrogates 0`），
+  不要把中文经控制台回显后再比对。最小修复：正文先落 UTF-8 文件，用 `--body-file <路径>` 写入
+  （`issue add` 与 `issue edit` 都支持）；需要非阻断时先 `add` 再 `issue edit --no-blocking`
+  （`issue add --blocking` 只能置真）。
+- 同一轮里并发发起多个文件写入调用时，工具可能只落盘截断占位文本：首行形如
+  `[Code content truncated (N chars); file written to <路径>]`，字节数远小于预期，后续编译/执行会报语法错误。
+  检查：写完立刻核对首行、字节数和 `sha256`（或 `python -c` 断言内容里不含该占位串）。最小修复：一次只写
+  一个文件，命中占位符就整文件重写，不要在其上打补丁；长中文改动优先"UTF-8 片段文件 + Python 拼接，
+  拼接后逐字核对"，不要整段放进 `file_patch`。
+
 # 主控 Agent 规则
 
 ## 授权与客户演示
