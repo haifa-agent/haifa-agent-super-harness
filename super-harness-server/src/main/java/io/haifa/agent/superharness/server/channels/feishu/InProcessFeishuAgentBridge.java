@@ -103,11 +103,26 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
                         filename,
                         content,
                         mediaType == null || mediaType.isBlank() ? "application/octet-stream" : mediaType);
-                return new UploadedFile(receipt.originalFilename(), receipt.logicalPath(), receipt.byteCount());
+                // DeerFlowUploadContext resolves files by filename (ignores path). After a
+                // collision the bytes live under image__<hash>.jpg while originalFilename stays
+                // image.jpg — use the stored basename so the next Run reads this upload.
+                return new UploadedFile(
+                        storedUploadFilename(receipt.logicalPath()),
+                        receipt.logicalPath(),
+                        receipt.byteCount());
             } catch (Exception exception) {
                 throw new IllegalStateException("Feishu upload store failed", exception);
             }
         });
+    }
+
+    /** Basename of the logical upload path (same rule as {@code DeerFlowWorkspaceApi.uploadInfo}). */
+    public static String storedUploadFilename(String logicalPath) {
+        if (logicalPath == null || logicalPath.isBlank()) {
+            return "";
+        }
+        int slash = logicalPath.lastIndexOf('/');
+        return slash < 0 ? logicalPath : logicalPath.substring(slash + 1);
     }
 
     @Override

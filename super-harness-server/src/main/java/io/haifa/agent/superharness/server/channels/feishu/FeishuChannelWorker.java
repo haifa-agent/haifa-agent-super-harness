@@ -138,6 +138,13 @@ public final class FeishuChannelWorker implements AutoCloseable {
             connectExecutor.execute(() -> runSafely(message, () -> handleInbound(message)));
             return;
         }
+        // Busy acknowledgement must not wait for a free Turn worker. When the pool is saturated
+        // with long Runs, a chatBusy chat would otherwise sit in LinkedBlockingQueue and start a
+        // later Turn after the original busy flag clears (no BUSY card).
+        if (Boolean.TRUE.equals(chatBusy.get(message.chatId()))) {
+            runSafely(message, () -> reply(message.messageId(), FeishuInteraction.BUSY));
+            return;
+        }
         chatExecutor.execute(() -> runSafely(message, () -> handleInbound(message)));
     }
 

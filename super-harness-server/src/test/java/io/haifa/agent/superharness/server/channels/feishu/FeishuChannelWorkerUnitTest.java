@@ -289,4 +289,80 @@ class FeishuChannelWorkerUnitTest {
         assertThat(transport.replies()).anyMatch(reply -> reply.text().startsWith("done:"));
         worker.close();
     }
+
+    @Test
+    void busyAckDoesNotWaitBehindSaturatedChatWorkers() throws Exception {
+        ChannelConnectionStore connections = new ChannelConnectionStore(json, dataDirectory);
+        FeishuChatThreadStore threads = new FeishuChatThreadStore(json, dataDirectory);
+        AtomicReference<RecordingFeishuTransport> transportRef = new AtomicReference<>();
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(4);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        FeishuChannelWorker worker = new FeishuChannelWorker(
+                connections,
+                threads,
+                new FeishuAgentBridge() {
+                    @Override
+                    public TurnResult runTurn(
+                            String ownerUserId,
+                            String threadId,
+                            Map<String, Object> channelMetadata,
+                            String userText)
+                            throws Exception {
+                        entered.countDown();
+                        if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("release timed out");
+                        }
+                        return new TurnResult(threadId, "done:" + userText);
+                    }
+                },
+                () -> {
+                    RecordingFeishuTransport transport = new RecordingFeishuTransport();
+                    transportRef.set(transport);
+                    return transport;
+                });
+        worker.startOrRestart("cli_x", "secret_x", FeishuOpenDomain.DEFAULT);
+
+        RecordingFeishuTransport transport = transportRef.get();
+        for (int index = 0; index < 4; index++) {
+            String openId = "ou_sat_" + index;
+            String chatId = "oc_sat_" + index;
+            String code = ChannelConnectionStore.newBindingCode();
+            connections.createOauthStateWithinCap(
+                    "owner-" + index,
+                    "feishu",
+                    code,
+                    java.time.Instant.now().plusSeconds(60),
+                    ChannelConnectionStore.MAX_PENDING_CONNECT_CODES_PER_PROVIDER);
+            connections.bindFeishuFromConnectCode(code, openId, chatId, Map.of());
+            transport.deliver(new FeishuInboundMessage(
+                    chatId, "om_long_" + index, openId, "long-" + index, "p2p"));
+        }
+        assertThat(entered.await(3, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+        long busyStarted = System.nanoTime();
+        transport.deliver(new FeishuInboundMessage("oc_sat_0", "om_busy_again", "ou_sat_0", "again", "p2p"));
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+        while (transport.replies().stream().noneMatch(r -> FeishuInteraction.BUSY.equals(r.text()))
+                && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
+        long busyMillis = (System.nanoTime() - busyStarted) / 1_000_000L;
+        assertThat(transport.replies())
+                .as("replies under saturation: %s", transport.replies())
+                .anyMatch(reply -> "om_busy_again".equals(reply.messageId())
+                        && FeishuInteraction.BUSY.equals(reply.text()));
+        assertThat(busyMillis).as("BUSY must not wait for a free Turn worker").isLessThan(1_500L);
+
+        release.countDown();
+        worker.close();
+    }
+
+    @Test
+    void storedUploadFilenameUsesLogicalPathBasename() {
+        assertThat(InProcessFeishuAgentBridge.storedUploadFilename("/mnt/user-data/uploads/image.jpg"))
+                .isEqualTo("image.jpg");
+        assertThat(InProcessFeishuAgentBridge.storedUploadFilename(
+                        "/mnt/user-data/uploads/image__abcdef012345.jpg"))
+                .isEqualTo("image__abcdef012345.jpg");
+    }
 }
