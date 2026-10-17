@@ -41,6 +41,18 @@ public interface FeishuTransport extends AutoCloseable {
     /** Reply with a simple interactive card (final assistant text or bind status). */
     void replyCard(String messageId, String text) throws Exception;
 
+    /** Reply and expose the platform message ID for historical reply routing. */
+    default Optional<String> replyCardId(String messageId, String text) throws Exception {
+        replyCard(messageId, text);
+        return Optional.empty();
+    }
+
+    default Optional<String> replyInteractiveId(String messageId, Map<String, Object> card)
+            throws Exception {
+        replyInteractive(messageId, card);
+        return Optional.empty();
+    }
+
     /** Reply with a card 1.0 payload that may include an {@code action} button row. */
     void replyInteractive(String messageId, Map<String, Object> card) throws Exception;
 
