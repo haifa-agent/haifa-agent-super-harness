@@ -16,50 +16,50 @@ import org.junit.jupiter.api.Test;
 class DeerFlowThreadTitleApiTest extends AbstractDeerFlowThreadRunApiTest {
     @Test
     void fallbackTitleMatchesTheFrozenLocalRule() {
-        assertThat(DeerFlowThreadRunApi.fallbackTitle(null)).isEqualTo("New Conversation");
-        assertThat(DeerFlowThreadRunApi.fallbackTitle("   ")).isEqualTo("New Conversation");
+        assertThat(DeerFlowConversationService.fallbackTitle(null)).isEqualTo("New Conversation");
+        assertThat(DeerFlowConversationService.fallbackTitle("   ")).isEqualTo("New Conversation");
         String fifty = "t".repeat(50);
-        assertThat(DeerFlowThreadRunApi.fallbackTitle(fifty)).isEqualTo(fifty);
+        assertThat(DeerFlowConversationService.fallbackTitle(fifty)).isEqualTo(fifty);
         // The bound includes the ellipsis: 47 body characters plus "...".
-        assertThat(DeerFlowThreadRunApi.fallbackTitle("t".repeat(51)))
+        assertThat(DeerFlowConversationService.fallbackTitle("t".repeat(51)))
                 .isEqualTo("t".repeat(47) + "...");
-        assertThat(DeerFlowThreadRunApi.fallbackTitle("t".repeat(47) + "..."))
+        assertThat(DeerFlowConversationService.fallbackTitle("t".repeat(47) + "..."))
                 .hasSize(50);
         // A configured max_chars below the frozen ceiling truncates earlier but still includes
         // the ellipsis inside the bound.
-        assertThat(DeerFlowThreadRunApi.fallbackTitle("t".repeat(40), 10))
+        assertThat(DeerFlowConversationService.fallbackTitle("t".repeat(40), 10))
                 .isEqualTo("t".repeat(7) + "...");
-        assertThat(DeerFlowThreadRunApi.fallbackTitle("  short question  "))
+        assertThat(DeerFlowConversationService.fallbackTitle("  short question  "))
                 .isEqualTo("short question");
         // Frozen Python counts Unicode code points. An emoji is one code point but two UTF-16
         // code units, so a naive String.length bound would cut it in half.
         String emoji = "\uD83D\uDE00";
-        assertThat(DeerFlowThreadRunApi.fallbackTitle(emoji.repeat(50))).isEqualTo(emoji.repeat(50));
-        assertThat(DeerFlowThreadRunApi.fallbackTitle(emoji.repeat(51)))
+        assertThat(DeerFlowConversationService.fallbackTitle(emoji.repeat(50))).isEqualTo(emoji.repeat(50));
+        assertThat(DeerFlowConversationService.fallbackTitle(emoji.repeat(51)))
                 .isEqualTo(emoji.repeat(47) + "...");
-        assertThat(DeerFlowThreadRunApi.fallbackTitle(emoji.repeat(51)))
+        assertThat(DeerFlowConversationService.fallbackTitle(emoji.repeat(51)))
                 .hasSize(47 * 2 + 3);
         // Mixed astral + BMP text counts each code point once.
         String mixed = emoji.repeat(30) + "abcdefghijklmnopqrstuvwxyz";
-        assertThat(DeerFlowThreadRunApi.fallbackTitle(mixed))
+        assertThat(DeerFlowConversationService.fallbackTitle(mixed))
                 .isEqualTo(emoji.repeat(30) + "abcdefghijklmnopq" + "...");
     }
 
     @Test
     void shouldGenerateFallbackTitleMatchesFrozenTitleMiddleware() {
-        assertThat(DeerFlowThreadRunApi.shouldGenerateFallbackTitle(
+        assertThat(DeerFlowConversationService.shouldGenerateFallbackTitle(
                         AgentRunStatus.COMPLETED, true))
                 .isTrue();
-        assertThat(DeerFlowThreadRunApi.shouldGenerateFallbackTitle(
+        assertThat(DeerFlowConversationService.shouldGenerateFallbackTitle(
                         AgentRunStatus.COMPLETED, false))
                 .isFalse();
         // allow_partial_exchange=True accepts a lone first user message on cancellation.
-        assertThat(DeerFlowThreadRunApi.shouldGenerateFallbackTitle(
+        assertThat(DeerFlowConversationService.shouldGenerateFallbackTitle(
                         AgentRunStatus.CANCELLED, false))
                 .isTrue();
-        assertThat(DeerFlowThreadRunApi.shouldGenerateFallbackTitle(AgentRunStatus.FAILED, true))
+        assertThat(DeerFlowConversationService.shouldGenerateFallbackTitle(AgentRunStatus.FAILED, true))
                 .isFalse();
-        assertThat(DeerFlowThreadRunApi.shouldGenerateFallbackTitle(AgentRunStatus.TIMEOUT, true))
+        assertThat(DeerFlowConversationService.shouldGenerateFallbackTitle(AgentRunStatus.TIMEOUT, true))
                 .isFalse();
     }
 
@@ -70,7 +70,7 @@ class DeerFlowThreadTitleApiTest extends AbstractDeerFlowThreadRunApiTest {
         System.setErr(new java.io.PrintStream(captured, true, StandardCharsets.UTF_8));
         boolean ok;
         try {
-            ok = DeerFlowThreadRunApi.runBestEffort("run-y", () -> {
+            ok = DeerFlowConversationService.runBestEffort("run-y", () -> {
                 throw new java.io.IOException(
                         "sensitive request text from the user\r\nW03_INJECTED_LINE");
             });
@@ -89,7 +89,7 @@ class DeerFlowThreadTitleApiTest extends AbstractDeerFlowThreadRunApiTest {
     void firstCompletedExchangeStreamsAndPersistsTheLocalFallbackTitle() throws Exception {
         createThread("thread-title-first");
         var releaseObserver = new java.util.concurrent.CountDownLatch(1);
-        api.threadRunApi().setDurableTurnScannerForTests(threadId -> {
+        api.threadRunApi().conversations().setDurableTurnScannerForTests(threadId -> {
             if (Thread.currentThread().getName().startsWith("super-harness-title-completion-")) {
                 try {
                     if (!releaseObserver.await(10, java.util.concurrent.TimeUnit.SECONDS)) {
@@ -124,7 +124,7 @@ class DeerFlowThreadTitleApiTest extends AbstractDeerFlowThreadRunApiTest {
                     .isEqualTo("How do I page through results?");
         } finally {
             releaseObserver.countDown();
-            api.threadRunApi().setDurableTurnScannerForTests(null);
+            api.threadRunApi().conversations().setDurableTurnScannerForTests(null);
         }
         awaitTitleObserversIdle();
     }
@@ -192,7 +192,7 @@ class DeerFlowThreadTitleApiTest extends AbstractDeerFlowThreadRunApiTest {
     @Test
     void titleDurableReadFailureDoesNotBlockTheRunOrPersistATitle() throws Exception {
         createThread("thread-title-read-failure");
-        api.threadRunApi().setDurableTurnScannerForTests(threadId -> {
+        api.threadRunApi().conversations().setDurableTurnScannerForTests(threadId -> {
             throw new IllegalStateException(
                     "injected SQLite read failure\r\nW03_INJECTED_LINE for sensitive prompt text");
         });
@@ -207,7 +207,7 @@ class DeerFlowThreadTitleApiTest extends AbstractDeerFlowThreadRunApiTest {
             awaitTitleObserversIdle();
         } finally {
             System.setErr(original);
-            api.threadRunApi().setDurableTurnScannerForTests(null);
+            api.threadRunApi().conversations().setDurableTurnScannerForTests(null);
         }
 
         // The auxiliary durable read failing must never block admission or fail the main Run.

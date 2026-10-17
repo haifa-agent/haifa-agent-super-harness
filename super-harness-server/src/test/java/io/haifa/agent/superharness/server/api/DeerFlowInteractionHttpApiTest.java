@@ -381,13 +381,13 @@ class DeerFlowInteractionHttpApiTest {
 
         // Exercise the adapter's missing-human read input using a real waiting SDK Run.
         // This is a projection branch test; it does not manufacture or alter Runtime state.
-        var projection = java.util.Arrays.stream(DeerFlowThreadRunApi.class.getDeclaredMethods())
+        var projection = java.util.Arrays.stream(DeerFlowConversationService.class.getDeclaredMethods())
                 .filter(method -> method.getName().equals("paginatedMessageRows")).findFirst().orElseThrow();
         projection.setAccessible(true);
-        var threadsField = DeerFlowThreadRunApi.class.getDeclaredField("threads");
+        var threadsField = DeerFlowConversationService.class.getDeclaredField("threads");
         threadsField.setAccessible(true);
-        Object thread = ((Map<?, ?>) threadsField.get(api.threadRunApi())).get("in-flight-page");
-        JsonNode inFlightPage = json.valueToTree(projection.invoke(api.threadRunApi(), thread, List.of(), Map.of()));
+        Object thread = ((Map<?, ?>) threadsField.get(api.threadRunApi().conversations())).get("in-flight-page");
+        JsonNode inFlightPage = json.valueToTree(projection.invoke(api.threadRunApi().conversations(), thread, List.of(), Map.of()));
         assertThat(inFlightPage).hasSize(2);
         for (int index = 0; index < 2; index++) {
             assertThat(inFlightPage.get(index).path("seq").asLong()).isEqualTo(durablePage.get(index).path("seq").asLong());
@@ -557,33 +557,33 @@ class DeerFlowInteractionHttpApiTest {
     void interactionFailureClassificationKeepsUnexpectedSdkFailuresOutOfConflictResponsesAndLogs() {
         RuntimeContractException stale = new RuntimeContractException(
                 RuntimeApiErrorCode.INTERACTION_REVISION_CONFLICT, "safe conflict");
-        assertThat(DeerFlowThreadRunApi.interactionFailureStatus(stale)).isEqualTo(409);
-        assertThat(DeerFlowThreadRunApi.interactionFailureReason(stale))
+        assertThat(DeerFlowConversationService.interactionFailureStatus(stale)).isEqualTo(409);
+        assertThat(DeerFlowConversationService.interactionFailureReason(stale))
                 .isEqualTo("INTERACTION_REVISION_CONFLICT");
 
         RuntimeContractException denied = new RuntimeContractException(
                 RuntimeApiErrorCode.APPROVAL_AUTHORITY_DENIED, "safe denial");
-        assertThat(DeerFlowThreadRunApi.interactionFailureStatus(denied)).isEqualTo(403);
+        assertThat(DeerFlowConversationService.interactionFailureStatus(denied)).isEqualTo(403);
 
         IllegalStateException stillActive = new IllegalStateException(
                 "previous execution attempt did not pause before resume");
-        assertThat(DeerFlowThreadRunApi.interactionFailureStatus(stillActive)).isEqualTo(500);
-        assertThat(DeerFlowThreadRunApi.interactionFailureReason(stillActive))
+        assertThat(DeerFlowConversationService.interactionFailureStatus(stillActive)).isEqualTo(500);
+        assertThat(DeerFlowConversationService.interactionFailureReason(stillActive))
                 .isEqualTo("PREVIOUS_ATTEMPT_NOT_PAUSED");
 
         IllegalStateException unexpected = new IllegalStateException("provider response: sensitive content");
-        assertThat(DeerFlowThreadRunApi.interactionFailureStatus(unexpected)).isEqualTo(500);
-        assertThat(DeerFlowThreadRunApi.interactionFailureReason(unexpected))
+        assertThat(DeerFlowConversationService.interactionFailureStatus(unexpected)).isEqualTo(500);
+        assertThat(DeerFlowConversationService.interactionFailureReason(unexpected))
                 .isEqualTo("IllegalStateException");
 
         SqliteStoreException sqliteBusy = new SqliteStoreException(
                 SqliteStoreFailure.DATABASE_BUSY,
                 "private SQL and user content",
                 new SQLException("private SQL and user content", "SQLITE_BUSY", 5));
-        assertThat(DeerFlowThreadRunApi.interactionFailureStatus(sqliteBusy)).isEqualTo(500);
-        assertThat(DeerFlowThreadRunApi.interactionFailureReason(sqliteBusy))
+        assertThat(DeerFlowConversationService.interactionFailureStatus(sqliteBusy)).isEqualTo(500);
+        assertThat(DeerFlowConversationService.interactionFailureReason(sqliteBusy))
                 .isEqualTo("SQLITE_DATABASE_BUSY");
-        assertThat(DeerFlowThreadRunApi.interactionFailureCauses(sqliteBusy))
+        assertThat(DeerFlowConversationService.interactionFailureCauses(sqliteBusy))
                 .isEqualTo("SqliteStoreException[DATABASE_BUSY]>SQLException[primary=5,extended=5]");
     }
 

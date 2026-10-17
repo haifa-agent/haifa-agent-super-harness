@@ -1,5 +1,7 @@
 package io.haifa.agent.superharness.server.prompt;
 
+import io.haifa.agent.superharness.server.api.DeerFlowConversationService;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -87,7 +89,7 @@ class LeadPromptLiveAcceptanceTest {
                             support.request(base, "POST", streamPath, body, "run-initial.sse"));
                     JsonNode admittedThread = support.get(base, "/api/threads/" + threadId, "admitted-thread.json");
                     JsonNode admittedSkills = admittedThread.path("metadata")
-                            .path(DeerFlowThreadRunApi.SKILL_SELECTION_METADATA_KEY);
+                            .path(DeerFlowConversationService.SKILL_SELECTION_METADATA_KEY);
                     assertThat(admittedSkills.isArray()).as("Server records the selected Agent's empty declaration").isTrue();
                     assertThat(admittedSkills).isEmpty();
                     String runId = location.substring(location.lastIndexOf('/') + 1);

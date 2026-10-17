@@ -139,7 +139,7 @@ class FeishuChannelWorkerTest {
         assertThat(map.path("mappings").size()).isGreaterThan(0);
         String threadId = map.path("mappings").elements().next().path("thread_id").asText();
         assertThat(threadId).isNotBlank();
-        assertThat(api.threadRunApi().hasThread(threadId)).isTrue();
+        assertThat(api.threadRunApi().conversations().hasThread(threadId)).isTrue();
     }
 
     @Test

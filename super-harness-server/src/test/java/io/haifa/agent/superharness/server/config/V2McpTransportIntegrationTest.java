@@ -255,10 +255,10 @@ class V2McpTransportIntegrationTest {
         configureBothServers();
         createThread("mcp-signature");
         assertThat(run("mcp-signature", null, "list tools")).contains("get_reporting_policy");
-        long afterFirst = api.threadRunApi().bridgeBuildCount();
+        long afterFirst = api.threadRunApi().conversations().bridgeBuildCount();
 
         assertThat(run("mcp-signature", null, "list tools")).contains("get_reporting_policy");
-        assertThat(api.threadRunApi().bridgeBuildCount())
+        assertThat(api.threadRunApi().conversations().bridgeBuildCount())
                 .as("an identical MCP projection must not rebuild the bridge")
                 .isEqualTo(afterFirst);
 
@@ -268,7 +268,7 @@ class V2McpTransportIntegrationTest {
                  "tools":{"get_reporting_policy":{},"get_status":{}}}
                 """.formatted(REPORTING_URL));
         assertThat(run("mcp-signature", null, "list tools")).contains("get_reporting_policy");
-        assertThat(api.threadRunApi().bridgeBuildCount())
+        assertThat(api.threadRunApi().conversations().bridgeBuildCount())
                 .as("a tool_call_timeout change must rebuild with the new declaration")
                 .isEqualTo(afterFirst + 1);
 
@@ -279,7 +279,7 @@ class V2McpTransportIntegrationTest {
                  "tools":{"get_reporting_policy":{},"get_status":{}}}
                 """.formatted(REPORTING_URL));
         assertThat(run("mcp-signature", null, "list tools")).contains("get_reporting_policy");
-        assertThat(api.threadRunApi().bridgeBuildCount())
+        assertThat(api.threadRunApi().conversations().bridgeBuildCount())
                 .as("a header change must rebuild with the new declaration")
                 .isEqualTo(afterFirst + 2);
     }
@@ -294,7 +294,7 @@ class V2McpTransportIntegrationTest {
         HttpResponse<java.io.InputStream> started = postStream(
                 "/api/threads/mcp-reuse/runs/stream", buildRunBody("list tools", null), null, null);
         assertThat(started.statusCode()).isEqualTo(200);
-        long mounted = api.threadRunApi().bridgeBuildCount();
+        long mounted = api.threadRunApi().conversations().bridgeBuildCount();
         assertThat(model.awaitEntered()).as("model must enter its first call").isTrue();
 
         HttpResponse<java.io.InputStream> steer = postStream(
@@ -303,7 +303,7 @@ class V2McpTransportIntegrationTest {
                 "X-Haifa-Run-Input",
                 "steer");
         assertThat(steer.statusCode()).as("an active steer must be accepted").isEqualTo(200);
-        assertThat(api.threadRunApi().bridgeBuildCount())
+        assertThat(api.threadRunApi().conversations().bridgeBuildCount())
                 .as("a steer must never rebuild the mounted bridge")
                 .isEqualTo(mounted);
 
@@ -311,7 +311,7 @@ class V2McpTransportIntegrationTest {
         drain(started.body());
         drain(steer.body());
         assertThat(run("mcp-reuse", null, "list tools")).contains("get_reporting_policy");
-        assertThat(api.threadRunApi().bridgeBuildCount())
+        assertThat(api.threadRunApi().conversations().bridgeBuildCount())
                 .as("the MCP tool stays mounted after a steer")
                 .isEqualTo(mounted);
 
@@ -321,7 +321,7 @@ class V2McpTransportIntegrationTest {
                 "/api/threads/mcp-reuse/runs/stream", buildRunBody("call get_reporting_policy {}", null));
         assertThat(pending.statusCode()).as(pending.body()).isEqualTo(200);
         String requestId = humanInputRequestId(pending.body()).orElseThrow();
-        assertThat(api.threadRunApi().bridgeBuildCount())
+        assertThat(api.threadRunApi().conversations().bridgeBuildCount())
                 .as("a pending approval must not rebuild the bridge")
                 .isEqualTo(mounted);
 
@@ -330,7 +330,7 @@ class V2McpTransportIntegrationTest {
         assertThat(approved.statusCode()).as(approved.body()).isEqualTo(200);
         assertThat(approved.body()).contains("v2-pilot-reporting-001");
         assertThat(countToolResults(approved.body(), "get_reporting_policy")).isEqualTo(1);
-        assertThat(api.threadRunApi().bridgeBuildCount())
+        assertThat(api.threadRunApi().conversations().bridgeBuildCount())
                 .as("approval must reuse the mounted bridge")
                 .isEqualTo(mounted);
     }
