@@ -244,7 +244,7 @@ try {
 `- Windows 下 Python `subprocess` 不通过 `opencode.cmd` 传递多行提示词：`.cmd` 的 `%*` 转发可截断换行后的正文，使模型仅收到首段但仍退出 0。使用已安装 shim 指向的原生 `opencode.exe`，以参数数组、明确 `cwd` 和单个完整正文参数调用，不拼接 shell 命令、不改全局配置。首次使用派单封装时，用该任务的 `opencode export <sessionId>` 保存首条 user text 的原始字节数和 SHA-256；若 CLI 使用带外层引号的参数包裹格式，先按该格式解码，再核对正文与提示词字节数和 SHA-256 完全一致；导出仅存本任务外置证据目录，不能只凭 CLI 0 或模型自行描述判断提示词完整。忽略目录中的上下文文件须提供准确绝对路径直接读取，不能因 glob 默认过滤 `local-tmp` 就越界搜索或放宽权限。
 - 继承的 `PWD`：OpenCode 以环境变量 `PWD` 为工作目录，优先于进程 `cwd`。从 Git Bash 等会导出 `PWD` 的 shell 用 `subprocess.Popen(..., cwd=worktree)` 启动时，子进程仍带着调用方的 `PWD`。症状：执行者把调用方所在仓库当成当前目录，访问已分配 worktree 时 stderr 报 `permission requested: external_directory (...); auto-rejecting`，十几秒内以退出码 0 结束且没有任何改动。检查：stdout 里第一条 `pwd` 的输出。修复：启动前从子进程环境中移除 `PWD` 和 `OLDPWD`，或按上面的示例在 PowerShell 7 会话里用 `Push-Location` 启动。修复后用同一提示词重新启动，并核对 `pwd` 输出为已分配的 worktree。
 
-- OpenCode 提示词传输保真：Windows 原生 executable 的位置参数曾在会话导出中比传入正文多出两个外层双引号。以本轮日志中唯一的 `sessionID` 执行 `opencode export <sessionID>`，从该会话的 user/text part 对照实际正文 UTF-8 字节数和 SHA-256；正文不相同就记保真 `FAIL`，外层引号归一化只能作诊断，不能冒充精确通过。不得读取无关会话，不使用 `--continue`，不以退出码或保真检查替代源码交付和运行验收；传输修复须在新的有界轮次独立验证。
+- OpenCode 提示词传输保真：Windows 原生 executable 的位置参数在会话导出中**始终**比传入正文多出两个外层双引号；正文内的双引号还会被转义为 `\"`（2026-10-17 用原生 `.exe` + Python `subprocess` 参数数组复现，排除 PowerShell 绑定因素）。因此长提示词不要走位置参数：把精确提示词原样放到该 worktree 的 `local-tmp/<slot>/prompt.md`，位置参数只传一句不含引号的短指令指向该文件（已用有界探针验证模型会读取文件并输出文件中的标记）。仍须以 `sessionID` 执行 `opencode export <sessionID>`，对照 user/text part；位置参数正文不相同就记保真 `FAIL`，外层引号/转义归一化只能作诊断，不能冒充精确通过；提示词文件的字节数和 SHA-256 作为正文保真证据。不得读取无关会话，不使用 `--continue`，不以退出码或保真检查替代源码交付和运行验收。
 
 ### agy CLI（Antigravity）
 
