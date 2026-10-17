@@ -656,4 +656,3 @@ class W19ScheduleRestApiHttpTest {
         }
     }
 }
-
