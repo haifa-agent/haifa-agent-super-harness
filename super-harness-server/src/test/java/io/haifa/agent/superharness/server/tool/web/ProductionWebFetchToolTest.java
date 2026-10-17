@@ -93,10 +93,67 @@ class ProductionWebFetchToolTest {
     void apiKeyIsSentButNeverAppearsInTheResult() {
         var output = new ProductionWebFetchTool(WebToolTestSupport.config(server, "/reader"))
                 .invoke(new ProductionWebFetchTool.Input("https://example.com/ok"),
-                        WebToolTestSupport.context(Map.of(ProductionWebFetchTool.API_KEY_CREDENTIAL, API_KEY)));
+                        WebToolTestSupport.context(Map.of(ProductionWebFetchTool.JINA_API_KEY_CREDENTIAL, API_KEY)));
         assertThat(requests.get(0).get("authorization")).isEqualTo("Bearer " + API_KEY);
         assertThat(tool.summarize(output)).doesNotContain(API_KEY);
         assertThat(output.toString()).doesNotContain(API_KEY);
+    }
+
+    @Test
+    void deepseekFetchSuccessTruncatesTo4096() {
+        server.createContext("/v1/tools/fetch", exchange -> {
+            String resp = "{\"title\": \"Long Page\", \"content\": \"" + "x".repeat(5000) + "\"}";
+            byte[] bytes = resp.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+
+        WebToolConfig dsConfig = WebToolTestSupport.deepseekConfig(server, "/v1/tools/search", "/v1/tools/fetch");
+        ProductionWebFetchTool dsTool = new ProductionWebFetchTool(dsConfig);
+
+        var output = dsTool.invoke(
+                new ProductionWebFetchTool.Input("https://example.com/deepseek-page"),
+                WebToolTestSupport.context(Map.of(WebToolConfig.DEEPSEEK_TOOL_API_KEY_CREDENTIAL, "sk-tool-key-999")));
+
+        assertThat(output.content()).hasSize(ProductionWebFetchTool.MAX_CONTENT_CHARACTERS);
+        assertThat(output.error()).isEmpty();
+        assertThat(dsTool.summarize(output)).hasSize(4096);
+        assertThat(output.toString()).doesNotContain("sk-tool-key-999");
+    }
+
+    @Test
+    void deepseekFetchMissingKeyReturnsConfiguredError() {
+        WebToolConfig dsConfig = WebToolTestSupport.deepseekConfig(server, "/v1/tools/search", "/v1/tools/fetch-missing");
+        ProductionWebFetchTool dsTool = new ProductionWebFetchTool(dsConfig);
+
+        var output = dsTool.invoke(
+                new ProductionWebFetchTool.Input("https://example.com/page"),
+                WebToolTestSupport.context(Map.of()));
+
+        assertThat(output.error()).isEqualTo("Error: DEEPSEEK_TOOL_API_KEY is not configured");
+        assertThat(output.content()).isEmpty();
+    }
+
+    @Test
+    void deepseekFetchErrorStatusReturnsCleanErrorMessage() {
+        server.createContext("/v1/tools/fetch-422", exchange -> {
+            byte[] bytes = "{\"error\": \"cannot_fetch\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(422, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+
+        WebToolConfig dsConfig = WebToolTestSupport.deepseekConfig(server, "/v1/tools/search", "/v1/tools/fetch-422");
+        ProductionWebFetchTool dsTool = new ProductionWebFetchTool(dsConfig);
+
+        var output = dsTool.invoke(
+                new ProductionWebFetchTool.Input("https://example.com/page"),
+                WebToolTestSupport.context(Map.of(WebToolConfig.DEEPSEEK_TOOL_API_KEY_CREDENTIAL, "sk-tool-key-999")));
+
+        assertThat(output.error()).startsWith("Error: DeepSeek API returned status 422:");
+        assertThat(output.content()).isEmpty();
     }
 
     @Test

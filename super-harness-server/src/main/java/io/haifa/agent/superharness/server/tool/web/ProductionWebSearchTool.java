@@ -14,16 +14,14 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Frozen DeerFlow default {@code web_search} (frozen
- * {@code community/ddg_search/tools.py:web_search_tool}) backed by DuckDuckGo.
+ * Frozen DeerFlow default {@code web_search} tool backed by DuckDuckGo (frozen
+ * {@code community/ddg_search/tools.py:web_search_tool}) or DeepSeek standalone Search API.
  *
- * <p>The frozen provider aggregates several ddgs backends ({@code backend=auto}, including Wikipedia
- * region inference); SH deliberately implements only the {@code duckduckgo} engine, a registered
- * known difference. The model-facing contract is identical: parameters {@code query},
- * {@code max_results=5} and {@code time_range∈{day,week,month,year}}, and the result JSON carries
- * {@code query}, {@code total_results} and {@code results[]} with {@code title}/{@code url}/
- * {@code content}. Any transport, rate-limit or parse failure is reported as the frozen
- * {@code {"error":"No results found",...}} payload rather than an exception.
+ * <p>The model-facing contract is identical regardless of the underlying provider: parameters
+ * {@code query}, {@code max_results=5} and {@code time_range∈{day,week,month,year}}, and the result
+ * JSON carries {@code query}, {@code total_results} and {@code results[]} with {@code title}/{@code url}/
+ * {@code content}. Any transport, rate-limit, missing key, or parse failure is reported as the frozen
+ * error JSON payload rather than throwing an unhandled exception.
  */
 public final class ProductionWebSearchTool
         implements JavaTool<ProductionWebSearchTool.Input, ProductionWebSearchTool.Output> {
@@ -32,23 +30,39 @@ public final class ProductionWebSearchTool
     private final JavaToolSpec<Input, Output> spec;
 
     private final WebToolConfig config;
-    private final DuckDuckGoClient client;
+    private final DuckDuckGoClient duckDuckGoClient;
+    private final DeepSeekWebClient deepSeekClient;
 
     public ProductionWebSearchTool(WebToolConfig config) {
         this(config, DuckDuckGoClient.defaultLog());
     }
 
     public ProductionWebSearchTool(WebToolConfig config, System.Logger webLog) {
-        this(config, new DuckDuckGoClient(config, webLog));
+        this(config, new DuckDuckGoClient(config, webLog), new DeepSeekWebClient(config));
     }
 
     public ProductionWebSearchTool(WebToolConfig config, DuckDuckGoClient client) {
+        this(config, client, new DeepSeekWebClient(config));
+    }
+
+    public ProductionWebSearchTool(WebToolConfig config, DeepSeekWebClient deepSeekClient) {
+        this(config, new DuckDuckGoClient(config, DuckDuckGoClient.defaultLog()), deepSeekClient);
+    }
+
+    public ProductionWebSearchTool(
+            WebToolConfig config,
+            DuckDuckGoClient duckDuckGoClient,
+            DeepSeekWebClient deepSeekClient) {
         this.config = Objects.requireNonNull(config, "config");
-        this.client = Objects.requireNonNull(client, "client");
+        this.duckDuckGoClient = Objects.requireNonNull(duckDuckGoClient, "duckDuckGoClient");
+        this.deepSeekClient = Objects.requireNonNull(deepSeekClient, "deepSeekClient");
+        String networkHost = config.searchProvider() == WebToolConfig.WebSearchProvider.DEEPSEEK
+                ? WebToolConfig.endpointHost(config.deepseekSearchUrl())
+                : WebToolConfig.endpointHost(config.duckduckgoHtmlUrl());
         this.spec = JavaToolSpec.builder("web_search", Input.class, Output.class)
                 .title("Search the web")
                 .description(ToolDescriptions.load("web_search"))
-                .networkAccess(WebToolConfig.endpointHost(config.duckduckgoHtmlUrl()))
+                .networkAccess(networkHost)
                 .build();
     }
 
@@ -69,11 +83,32 @@ public final class ProductionWebSearchTool
         if (!Instant.now().isBefore(context.deadline())) {
             throw new IllegalStateException("web_search deadline has expired");
         }
+
         int maxResults = input.max_results().orElse(config.maxResults());
         Optional<String> timeRange = input.time_range().map(TimeRange::code);
+
+        if (config.searchProvider() == WebToolConfig.WebSearchProvider.DEEPSEEK) {
+            String apiKey = context.credentials().get(WebToolConfig.DEEPSEEK_TOOL_API_KEY_CREDENTIAL);
+            if (apiKey == null || apiKey.isBlank()) {
+                return new Output(errorPayload("DEEPSEEK_TOOL_API_KEY is not configured", input.query()));
+            }
+            List<DeepSeekWebClient.SearchResultItem> deepSeekResults;
+            try {
+                deepSeekResults = deepSeekClient.search(input.query(), maxResults, timeRange, apiKey);
+            } catch (DeepSeekWebClient.DeepSeekWebException failure) {
+                return new Output(errorPayload("DeepSeek Search API error: HTTP " + failure.statusCode(), input.query()));
+            } catch (Exception failure) {
+                return new Output(errorPayload("DeepSeek Search request failed: " + failure.getMessage(), input.query()));
+            }
+            if (deepSeekResults.isEmpty()) {
+                return new Output(noResults(input.query()));
+            }
+            return new Output(deepSeekResults(input.query(), deepSeekResults));
+        }
+
         List<DuckDuckGoClient.TextResult> results;
         try {
-            results = client.search(input.query(), maxResults, timeRange);
+            results = duckDuckGoClient.search(input.query(), maxResults, timeRange);
         } catch (DuckDuckGoClient.WebToolException failure) {
             return new Output(noResults(input.query()));
         }
@@ -89,8 +124,12 @@ public final class ProductionWebSearchTool
     }
 
     private static String noResults(String query) {
+        return errorPayload("No results found", query);
+    }
+
+    private static String errorPayload(String message, String query) {
         ObjectNode node = JSON.createObjectNode();
-        node.put("error", "No results found");
+        node.put("error", message);
         node.put("query", query);
         return write(node);
     }
@@ -109,6 +148,20 @@ public final class ProductionWebSearchTool
         return write(root);
     }
 
+    private static String deepSeekResults(String query, List<DeepSeekWebClient.SearchResultItem> results) {
+        ObjectNode root = JSON.createObjectNode();
+        root.put("query", query);
+        root.put("total_results", results.size());
+        ArrayNode items = root.putArray("results");
+        for (DeepSeekWebClient.SearchResultItem result : results) {
+            ObjectNode item = items.addObject();
+            item.put("title", result.title());
+            item.put("url", result.url());
+            item.put("content", result.content());
+        }
+        return write(root);
+    }
+
     private static String write(ObjectNode node) {
         try {
             return JSON.writeValueAsString(node);
@@ -117,7 +170,7 @@ public final class ProductionWebSearchTool
         }
     }
 
-    /** Frozen {@code SearchTimeRange} literal values mapped to the ddgs {@code df} parameter. */
+    /** Frozen {@code SearchTimeRange} literal values mapped to provider parameters. */
     public enum TimeRange {
         day("d"),
         week("w"),

@@ -18,40 +18,55 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Frozen DeerFlow default {@code web_fetch} (frozen {@code community/jina_ai/tools.py:web_fetch_tool})
- * backed by the Jina Reader.
+ * Frozen DeerFlow default {@code web_fetch} tool backed by Jina Reader (frozen
+ * {@code community/jina_ai/tools.py:web_fetch_tool}) or DeepSeek standalone Fetch API.
  *
- * <p>The frozen tool requests HTML from Jina and then runs its own readability extraction, truncating
- * the Markdown to 4096 characters. SH asks Jina for Markdown directly and performs no readability
- * pass (registered known difference); the truncation to 4096 characters is preserved. Only absolute
- * {@code http}/{@code https} URLs are accepted. A non-200 response, an empty body, a transport
- * failure or an invalid URL produces the frozen-style {@code Error: ...} text, never a partial page.
+ * <p>The model-facing contract is identical: only absolute {@code http}/{@code https} URLs are
+ * accepted, results are formatted as clean Markdown truncated to 4096 characters, and any transport,
+ * non-200, missing key, or parse failure is reported as the frozen-style {@code Error: ...} text.
  *
- * <p>The optional {@code JINA_API_KEY} is read only from the SDK credential map and is never written
- * to a result, event or log line.
+ * <p>API keys ({@code JINA_API_KEY} or {@code DEEPSEEK_TOOL_API_KEY}) are read only dynamically from
+ * the SDK credential map and are never written to a result, event or log line.
  */
 public final class ProductionWebFetchTool
         implements JavaTool<ProductionWebFetchTool.Input, ProductionWebFetchTool.Output> {
     static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
     static final int MAX_CONTENT_CHARACTERS = 4096;
-    static final String API_KEY_CREDENTIAL = "JINA_API_KEY";
+    static final String JINA_API_KEY_CREDENTIAL = "JINA_API_KEY";
+    static final String DEEPSEEK_TOOL_API_KEY_CREDENTIAL = WebToolConfig.DEEPSEEK_TOOL_API_KEY_CREDENTIAL;
     static final String INVALID_URL_ERROR = "Error: URL must be an absolute http(s) URL";
     private final JavaToolSpec<Input, Output> spec;
 
     private final WebToolConfig config;
     private final HttpClient http;
+    private final DeepSeekWebClient deepSeekClient;
 
     public ProductionWebFetchTool(WebToolConfig config) {
-        this(config, WebHttpClients.shared(config));
+        this(config, WebHttpClients.shared(config), new DeepSeekWebClient(config));
     }
 
     public ProductionWebFetchTool(WebToolConfig config, HttpClient http) {
+        this(config, http, new DeepSeekWebClient(config, http));
+    }
+
+    public ProductionWebFetchTool(WebToolConfig config, DeepSeekWebClient deepSeekClient) {
+        this(config, WebHttpClients.shared(config), deepSeekClient);
+    }
+
+    public ProductionWebFetchTool(
+            WebToolConfig config,
+            HttpClient http,
+            DeepSeekWebClient deepSeekClient) {
         this.config = Objects.requireNonNull(config, "config");
         this.http = Objects.requireNonNull(http, "http");
+        this.deepSeekClient = Objects.requireNonNull(deepSeekClient, "deepSeekClient");
+        String networkHost = config.fetchProvider() == WebToolConfig.WebFetchProvider.DEEPSEEK
+                ? WebToolConfig.endpointHost(config.deepseekFetchUrl())
+                : WebToolConfig.endpointHost(config.jinaReaderUrl());
         this.spec = JavaToolSpec.builder("web_fetch", Input.class, Output.class)
                 .title("Fetch a web page")
                 .description(ToolDescriptions.load("web_fetch"))
-                .networkAccess(WebToolConfig.endpointHost(config.jinaReaderUrl()))
+                .networkAccess(networkHost)
                 .build();
     }
 
@@ -76,6 +91,31 @@ public final class ProductionWebFetchTool
         if (!isAbsoluteHttpUrl(url)) {
             return Output.failure(url, INVALID_URL_ERROR);
         }
+
+        if (config.fetchProvider() == WebToolConfig.WebFetchProvider.DEEPSEEK) {
+            String apiKey = context.credentials().get(DEEPSEEK_TOOL_API_KEY_CREDENTIAL);
+            if (apiKey == null || apiKey.isBlank()) {
+                return Output.failure(url, "Error: " + DEEPSEEK_TOOL_API_KEY_CREDENTIAL + " is not configured");
+            }
+            String content;
+            try {
+                content = deepSeekClient.fetch(url, apiKey);
+            } catch (DeepSeekWebClient.DeepSeekWebException exception) {
+                return Output.failure(url, "Error: DeepSeek API returned status " + exception.statusCode()
+                        + ": " + exception.getMessage());
+            } catch (IOException exception) {
+                return Output.failure(url, "Error: Request to DeepSeek API failed: "
+                        + exception.getClass().getSimpleName() + ": " + exception.getMessage());
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return Output.failure(url, "Error: Request to DeepSeek API failed: interrupted");
+            }
+            if (content == null || content.strip().isEmpty()) {
+                return Output.failure(url, "Error: DeepSeek API returned empty response");
+            }
+            return Output.success(url, truncate(content));
+        }
+
         Map<String, String> body = new LinkedHashMap<>();
         body.put("url", url);
         String payload;
@@ -90,7 +130,7 @@ public final class ProductionWebFetchTool
                 .header("X-Return-Format", "markdown")
                 .header("X-Timeout", Long.toString(config.timeout().toSeconds()))
                 .POST(HttpRequest.BodyPublishers.ofString(payload, UTF_8));
-        String apiKey = context.credentials().get(API_KEY_CREDENTIAL);
+        String apiKey = context.credentials().get(JINA_API_KEY_CREDENTIAL);
         if (apiKey != null && !apiKey.isBlank()) {
             request.header("Authorization", "Bearer " + apiKey);
         }
