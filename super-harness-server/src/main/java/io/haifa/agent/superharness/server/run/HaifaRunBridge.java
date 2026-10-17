@@ -600,7 +600,7 @@ public final class HaifaRunBridge implements AutoCloseable {
     public static String promptSignatureFor(List<? extends JavaTool<?, ?>> tools,
             SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
             SubagentRunConfiguration delegation, Set<String> platformToolNames) {
-        return promptSignatureFor(tools, skillProjection, agentContext, delegation, platformToolNames, false);
+        return promptSignatureFor(tools, skillProjection, agentContext, delegation, platformToolNames, true);
     }
 
     static Set<String> childToolsFor(SubagentRunConfiguration.Child child, Set<String> parentAvailableTools) {
