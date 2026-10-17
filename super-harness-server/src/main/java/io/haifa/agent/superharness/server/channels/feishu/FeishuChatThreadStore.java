@@ -145,7 +145,7 @@ public final class FeishuChatThreadStore {
             }
             return data;
         } catch (IOException exception) {
-            return new LinkedHashMap<>();
+            throw new IllegalStateException("Cannot read existing Feishu thread mappings", exception);
         }
     }
 
