@@ -17,9 +17,52 @@ public interface FeishuAgentBridge {
         }
     }
 
-    record TurnResult(String threadId, String assistantText, FeishuPendingInput pending) {
+    record TurnResult(
+            String threadId,
+            String assistantText,
+            FeishuPendingInput pending,
+            List<String> artifacts,
+            List<String> todoLines,
+            List<String> progressLog) {
         public TurnResult(String threadId, String assistantText) {
-            this(threadId, assistantText, null);
+            this(threadId, assistantText, null, List.of(), List.of(), List.of());
+        }
+
+        public TurnResult(String threadId, String assistantText, FeishuPendingInput pending) {
+            this(threadId, assistantText, pending, List.of(), List.of(), List.of());
+        }
+
+        public TurnResult {
+            artifacts = artifacts == null ? List.of() : List.copyOf(artifacts);
+            todoLines = todoLines == null ? List.of() : List.copyOf(todoLines);
+            progressLog = progressLog == null ? List.of() : List.copyOf(progressLog);
+        }
+    }
+
+    /**
+     * Optional Phase 2 controls for one Turn: mode, progress listener, and whether this admission is
+     * a mid-run steer.
+     */
+    record TurnOptions(
+            String mode, FeishuRunProjector.ProgressListener progress, boolean steer) {
+        public static TurnOptions defaults() {
+            return new TurnOptions("flash", null, false);
+        }
+
+        public TurnOptions {
+            mode = mode == null || mode.isBlank() ? "flash" : mode.trim();
+        }
+
+        public TurnOptions withMode(String nextMode) {
+            return new TurnOptions(nextMode, progress, steer);
+        }
+
+        public TurnOptions withProgress(FeishuRunProjector.ProgressListener next) {
+            return new TurnOptions(mode, next, steer);
+        }
+
+        public TurnOptions asSteer() {
+            return new TurnOptions(mode, progress, true);
         }
     }
 
@@ -64,6 +107,22 @@ public interface FeishuAgentBridge {
     }
 
     /**
+     * Full Phase 2 turn (mode / progress / steer). Default falls back to the files overload and
+     * ignores options so test doubles keep compiling.
+     */
+    default TurnResult runTurn(
+            String ownerUserId,
+            String threadId,
+            Map<String, Object> channelMetadata,
+            String userText,
+            FeishuHumanResponse response,
+            List<UploadedFile> files,
+            TurnOptions options)
+            throws Exception {
+        return runTurn(ownerUserId, threadId, channelMetadata, userText, response, files);
+    }
+
+    /**
      * Materialize bytes into the Thread uploads area (same product store the web upload API uses).
      * Default rejects so production must wire a real implementation.
      */
@@ -75,5 +134,15 @@ public interface FeishuAgentBridge {
     /** Tail unanswered human-input card, if thread state currently ends on one. */
     default Optional<FeishuPendingInput> currentPending(String ownerUserId, String threadId) throws Exception {
         return Optional.empty();
+    }
+
+    /** Cancel the thread's active Run (Stop). Default reports no active run. */
+    default boolean cancelActiveRun(String ownerUserId, String threadId) throws Exception {
+        return false;
+    }
+
+    /** Whether the thread currently has a non-terminal active Run. */
+    default boolean hasActiveRun(String ownerUserId, String threadId) throws Exception {
+        return false;
     }
 }
