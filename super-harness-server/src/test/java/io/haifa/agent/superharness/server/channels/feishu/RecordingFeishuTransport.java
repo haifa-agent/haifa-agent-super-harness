@@ -3,6 +3,7 @@ package io.haifa.agent.superharness.server.channels.feishu;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /** Test double that records outbound replies and accepts injected inbound events. */
@@ -13,6 +14,7 @@ public final class RecordingFeishuTransport implements FeishuTransport {
 
     private final CopyOnWriteArrayList<CardReply> replies = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<InteractiveReply> interactiveReplies = new CopyOnWriteArrayList<>();
+    private final ConcurrentHashMap<String, byte[]> resources = new ConcurrentHashMap<>();
     private volatile boolean running;
     private volatile InboundHandler handler;
     private volatile String domain;
@@ -49,6 +51,20 @@ public final class RecordingFeishuTransport implements FeishuTransport {
     @Override
     public void replyInteractive(String messageId, Map<String, Object> card) {
         interactiveReplies.add(new InteractiveReply(messageId, card));
+    }
+
+    /** Fixture bytes for {@link #downloadResource}; keyed by {@code messageId + ":" + resourceKey}. */
+    public void putResource(String messageId, String resourceKey, byte[] bytes) {
+        resources.put(messageId + ":" + resourceKey, bytes == null ? new byte[0] : bytes.clone());
+    }
+
+    @Override
+    public byte[] downloadResource(String messageId, String resourceKey, String resourceType) {
+        byte[] bytes = resources.get(messageId + ":" + resourceKey);
+        if (bytes == null) {
+            return new byte[0];
+        }
+        return bytes.clone();
     }
 
     public List<CardReply> replies() {

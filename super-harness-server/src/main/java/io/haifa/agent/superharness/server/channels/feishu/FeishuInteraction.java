@@ -22,6 +22,11 @@ public final class FeishuInteraction {
     /** Card-only id for the web "其他回答" field. It is not an option in thread state. */
     static final String OTHER_OPTION = "other";
     static final String EMPTY_OTHER = "请输入回答后再提交。";
+    static final String PROGRESS = "正在处理您的请求…";
+    static final String BUSY = "当前对话仍在处理上一轮请求，请稍后再试。";
+    static final String UNSUPPORTED_MEDIA =
+            "暂不支持该类型的飞书消息。请发送文字，或发送图片 / 文件。";
+    static final String MEDIA_FAILED = "无法读取您发送的图片或文件，请重试或改用网页端上传。";
 
     private FeishuInteraction() {}
 
@@ -105,13 +110,35 @@ public final class FeishuInteraction {
     }
 
     public static void writeHumanMessage(ObjectNode message, String content, FeishuHumanResponse response) {
+        writeHumanMessage(message, content, response, List.of());
+    }
+
+    public static void writeHumanMessage(
+            ObjectNode message,
+            String content,
+            FeishuHumanResponse response,
+            List<FeishuAgentBridge.UploadedFile> files) {
         message.put("id", UUID.randomUUID().toString());
         message.put("type", "human");
         message.put("content", content == null ? "" : content);
-        if (response == null) {
+        boolean hasFiles = files != null && !files.isEmpty();
+        if (response == null && !hasFiles) {
             return;
         }
         ObjectNode additional = message.putObject("additional_kwargs");
+        if (hasFiles) {
+            var array = additional.putArray("files");
+            for (FeishuAgentBridge.UploadedFile file : files) {
+                ObjectNode entry = array.addObject();
+                entry.put("filename", file.filename());
+                entry.put("path", file.path());
+                entry.put("size", file.size());
+                entry.put("status", "uploaded");
+            }
+        }
+        if (response == null) {
+            return;
+        }
         additional.put("hide_from_ui", true);
         ObjectNode human = additional.putObject("human_input_response");
         human.put("version", 1);
@@ -155,8 +182,24 @@ public final class FeishuInteraction {
     }
 
     public static String formNotice(FeishuPendingInput pending) {
-        String body = pending.content().isBlank() ? pending.question() : pending.content();
-        return body + "\n\n请在 Web 端完成该表单。";
+        return formNotice(pending, "");
+    }
+
+    /** Web handoff for form cards; includes thread id when known so the operator can open the chat. */
+    public static String formNotice(FeishuPendingInput pending, String threadId) {
+        String body = pending == null || pending.content().isBlank()
+                ? (pending == null ? "" : pending.question())
+                : pending.content();
+        StringBuilder notice = new StringBuilder();
+        if (body != null && !body.isBlank()) {
+            notice.append(body.strip()).append("\n\n");
+        }
+        notice.append("请在 Web 端完成该表单。");
+        if (threadId != null && !threadId.isBlank()) {
+            notice.append("\n对话 ID：").append(threadId.trim());
+            notice.append("\n打开路径：/workspace/chats/").append(threadId.trim());
+        }
+        return notice.toString();
     }
 
     /** Card shown after a click. No buttons, so the same action cannot be submitted again. */
