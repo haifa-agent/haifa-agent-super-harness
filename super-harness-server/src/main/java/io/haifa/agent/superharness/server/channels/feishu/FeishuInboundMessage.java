@@ -15,18 +15,30 @@ public record FeishuInboundMessage(
         String chatType,
         String messageType,
         List<Attachment> attachments,
-        CardAction cardAction) {
+        CardAction cardAction,
+        String rootId,
+        String parentId,
+        String feishuThreadId) {
 
     public FeishuInboundMessage(String chatId, String messageId, String openId, String text, String chatType) {
-        this(chatId, messageId, openId, text, chatType, "text", List.of(), null);
+        this(chatId, messageId, openId, text, chatType, "text", List.of(), null, "", "", "");
     }
 
     public FeishuInboundMessage(
             String chatId, String messageId, String openId, String text, String chatType, CardAction cardAction) {
-        this(chatId, messageId, openId, text, chatType, "text", List.of(), cardAction);
+        this(chatId, messageId, openId, text, chatType, "text", List.of(), cardAction, "", "", "");
+    }
+
+    /** Binary compatible construction for existing channels and tests. */
+    public FeishuInboundMessage(String chatId, String messageId, String openId, String text,
+            String chatType, String messageType, List<Attachment> attachments, CardAction cardAction) {
+        this(chatId, messageId, openId, text, chatType, messageType, attachments, cardAction, "", "", "");
     }
 
     public FeishuInboundMessage {
+        rootId = rootId == null ? "" : rootId;
+        parentId = parentId == null ? "" : parentId;
+        feishuThreadId = feishuThreadId == null ? "" : feishuThreadId;
         chatId = chatId == null ? "" : chatId;
         messageId = messageId == null ? "" : messageId;
         openId = openId == null ? "" : openId;
