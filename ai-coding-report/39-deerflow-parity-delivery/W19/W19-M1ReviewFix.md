@@ -49,9 +49,8 @@
 - 文档/管道回归：`python -m unittest discover -s tests/checks/build -p "test_pipeline_tools.py"` → `OK`（101 tests）。
 - 全仓门禁（`docs-check` 归类见 §6）：
   `$env:HAIFA_SUPER_HARNESS_SKILL_PYTHON='D:/agents/deer-flow/backend/.venv/Scripts/python.exe'; pwsh -NoProfile -File scripts/verify-full.ps1`
-  - **最终 PASS**：814 通过 / 0 失败 / 0 错误 / 21 跳过，`elapsedMs≈362212`，`sourceSha=c5fa1bd`。
-  - 日志：`local-tmp/verify-full/verify-full-20261017-161644-344.log`；摘要：`local-tmp/verify-full/verify-full-20261017-161644-344.json`。
-  - 说明：该摘要产生于提交前的脏工作树（`sourceTree`/`javaInputFingerprint` 为空）；提交后按 AGENTS 需在干净候选上复跑并绑定指纹，见 §7 与交接。
+  - **PASS**：814 通过 / 0 失败 / 0 错误 / 21 跳过（`elapsedMs≈300480`）。
+  - 绑定候选的 `sourceSha` / `sourceTree` / `javaInputFingerprint`、日志与摘要路径见 `local-tmp/acceptance-handoff.md`。因 `ai-coding-report/**` 不在 `source_fingerprint` 排除列表，本报告的文字提交会改变 Java 输入指纹，故最终指纹以 handoff 登记的**最后一次**绑定运行（提交后干净树）为准。
 
 ## 5. 首个 FAIL（保留）
 
@@ -73,6 +72,7 @@
 
 ## 8. 交接
 
-- 变更文件（相对 `c5fa1bd`）：`CronExpression.java`、`ScheduleCalculator.java`、`ScheduleStore.java`（产品）；`CronDifferentialTest.java`、`ScheduleCalculatorTest.java`、`ScheduleStoreTest.java`（测试）；本报告 + `W19-ScheduleModelAndStore.md`（文档）。
+- 最终候选 SHA、`sourceTree`、`javaInputFingerprint` 与绑定本候选的 `verify-full` PASS 摘要路径登记在 `local-tmp/acceptance-handoff.md`；工作树 clean。
+- 变更文件（相对基线上游）：`CronExpression.java`、`ScheduleCalculator.java`、`ScheduleStore.java`（产品）；`CronDifferentialTest.java`、`ScheduleCalculatorTest.java`、`ScheduleStoreTest.java`（测试）；本报告 + `W19-ScheduleModelAndStore.md`（文档）。
 - 计算器签名与 store 接口未变，M2 消费面不变；`ScheduleStore` 新增有界保留（每任务最近 200 条终态）与删除清理语义。
-- 提交后须在**干净候选**上复跑 `verify-full` 取得带 `javaInputFingerprint` 的 PASS，并核对候选 SHA。
+- 未推送、未开 PR、未写 SHPM；待主控裁决 `ui-live-round-x1` 并推送更新 PR #69。
