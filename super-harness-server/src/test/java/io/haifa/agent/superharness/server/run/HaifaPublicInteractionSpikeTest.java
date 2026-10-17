@@ -142,7 +142,7 @@ public class HaifaPublicInteractionSpikeTest {
                 URI.create("https://model.invalid"),
                 new CredentialRef("env://SUPER_HARNESS_INTERACTION_PROBE"),
                 false,
-                Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING),
+                Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING, ModelCapability.IMAGE_INPUT),
                 // Shared controlled fixture also exercises Bootstrap's full Lead/default catalog.
                 32_768,
                 1_024,

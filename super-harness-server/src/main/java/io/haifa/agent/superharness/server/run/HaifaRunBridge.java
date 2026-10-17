@@ -12,6 +12,7 @@ import io.haifa.agent.core.run.AgentRunStatus;
 import io.haifa.agent.core.run.AgentRunType;
 import io.haifa.agent.core.session.AgentSessionId;
 import io.haifa.agent.model.api.AgentChatModel;
+import io.haifa.agent.model.api.AgentChatRequest;
 import io.haifa.agent.model.api.EffectiveModelParameters;
 import io.haifa.agent.model.api.ModelAdapterCoordinate;
 import io.haifa.agent.model.api.ModelCapability;
@@ -76,20 +77,33 @@ import io.haifa.agent.superharness.server.tool.agent.ProductionUpdateAgentTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionImageSearchTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionWebFetchTool;
 import io.haifa.agent.superharness.server.tool.web.ProductionWebSearchTool;
+import io.haifa.agent.core.tool.ProviderToolCallCorrelationId;
+import io.haifa.agent.model.api.ImageDataPart;
+import io.haifa.agent.model.api.ModelMessage;
+import io.haifa.agent.model.api.ModelMessageRole;
+import io.haifa.agent.model.api.ModelToolCall;
+import io.haifa.agent.superharness.server.tool.file.ProductionViewImageTool;
+import io.haifa.agent.superharness.workspace.RestrictedWorkspaceService;
+import io.haifa.agent.superharness.workspace.WorkspaceBinding;
 import io.haifa.agent.tool.api.ToolName;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 /** Adapter that exposes only public Haifa Agent SDK types to the HTTP boundary. */
 public final class HaifaRunBridge implements AutoCloseable {
@@ -107,6 +121,9 @@ public final class HaifaRunBridge implements AutoCloseable {
     private final Set<String> mcpToolNames;
     private final Set<String> skillScriptToolNames;
     private final AgentPromptContext agentContext;
+    private final RestrictedWorkspaceService workspace;
+    private final String ownerId;
+    private final String threadId;
     private final AtomicLong turnPageReads = new AtomicLong();
 
     public HaifaRunBridge(ModelBinding binding) {
@@ -124,6 +141,9 @@ public final class HaifaRunBridge implements AutoCloseable {
         this.mcpToolNames = Set.of();
         this.skillScriptToolNames = Set.of();
         this.agentContext = AgentPromptContext.defaults();
+        this.workspace = null;
+        this.ownerId = AccessOwner.current();
+        this.threadId = null;
         this.agent = HaifaAgentStarter.builder()
                 .name("Super Harness local compatibility agent")
                 .instructions(STARTER_INSTRUCTIONS)
@@ -225,11 +245,52 @@ public final class HaifaRunBridge implements AutoCloseable {
             HostShellToolConfig hostShell,
             SkillScriptToolConfig skillScript,
             Long parentWallTimeMillisForTests) {
+        this(binding, tools, foundation, mcpProjection, skillProjection, agentContext, delegation,
+                childRunCapacity, isPlanMode, executionExecutorFactory, hostShell, skillScript,
+                parentWallTimeMillisForTests, null, null, null);
+    }
+
+    public HaifaRunBridge(
+            ModelBinding binding,
+            List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation,
+            RestrictedWorkspaceService workspace,
+            String ownerId,
+            String threadId) {
+        this(binding, tools, foundation, McpRunTools.Projection.empty(), null,
+                AgentPromptContext.defaults(), SubagentRunConfiguration.disabled(),
+                new io.haifa.agent.runtime.api.ChildRunCapacity(1), false, null, null, null, null,
+                workspace, ownerId, threadId);
+    }
+
+    public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
+            boolean isPlanMode, Supplier<? extends ExecutorService> executionExecutorFactory,
+            HostShellToolConfig hostShell,
+            SkillScriptToolConfig skillScript,
+            Long parentWallTimeMillisForTests,
+            RestrictedWorkspaceService workspace,
+            String ownerId,
+            String threadId) {
         java.util.Objects.requireNonNull(childRunCapacity, "childRunCapacity");
         this.agentContext = java.util.Objects.requireNonNull(agentContext, "agent context must not be null");
         this.isPlanMode = isPlanMode;
         List<McpServerSpec> mcpSpecs = mcpProjection.specs();
         this.binding = binding;
+
+        ProductionViewImageTool detectedImageTool = tools.stream()
+                .filter(ProductionViewImageTool.class::isInstance)
+                .map(ProductionViewImageTool.class::cast)
+                .findFirst()
+                .orElse(null);
+        this.workspace = workspace != null ? workspace : (detectedImageTool != null ? detectedImageTool.workspace() : null);
+        this.threadId = threadId != null ? threadId : (detectedImageTool != null ? detectedImageTool.threadId() : null);
+        this.ownerId = ownerId != null ? ownerId : AccessOwner.current();
+
+        boolean visionSupported = supportsVision(binding.snapshot());
+
         // MCP ToolLifecycle events are projected by the frozen transcript only when the
         // bridge advertises tools; a bridge whose only tools come from MCP still does.
         this.hasTools = isPlanMode || delegation.enabled() || !tools.isEmpty() || !mcpSpecs.isEmpty()
@@ -277,18 +338,18 @@ public final class HaifaRunBridge implements AutoCloseable {
                     return selected.model();
                 }
                 @Override public io.haifa.agent.model.api.AgentChatResponse invoke(io.haifa.agent.model.api.AgentChatRequest request) {
-                    return delegate(request).invoke(request);
+                    return delegate(request).invoke(injectVision(request));
                 }
                 @Override public io.haifa.agent.model.api.AgentChatResponse invokeStreaming(
                         io.haifa.agent.model.api.AgentChatRequest request, io.haifa.agent.model.api.ModelStreamSink sink) {
-                    return delegate(request).invokeStreaming(request, sink);
+                    return delegate(request).invokeStreaming(injectVision(request), sink);
                 }
             };
             admittedModels.values().forEach(model -> adapters.put(ModelAdapterCoordinate.from(model.snapshot()), configuredModels));
             ModelContribution models = new ModelContribution(adapters, binding.snapshot(), snapshots);
-            Set<String> allowedTools = registeredToolNames(tools, skillProjection);
-            allowedTools.addAll(this.mcpToolNames);
-            allowedTools.remove("task");
+            Set<String> allAllowedTools = registeredToolNames(tools, skillProjection);
+            allAllowedTools.addAll(this.mcpToolNames);
+            allAllowedTools.remove("task");
             // The host shell Tool is a product switch: off keeps the Tool surface and the frozen
             // lead prompt exactly as before, on adds the SDK's own execution_run alias that the
             // bridge registers below through the public SDK assembly entry.
@@ -298,19 +359,31 @@ public final class HaifaRunBridge implements AutoCloseable {
             // declared alias through the public SDK skill script entry below.
             boolean hostShellEnabled = hostShell != null && hostShell.enabled();
             if (hostShellEnabled) {
-                allowedTools.add("execution_run");
+                allAllowedTools.add("execution_run");
             }
-            allowedTools.addAll(this.skillScriptToolNames);
+            allAllowedTools.addAll(this.skillScriptToolNames);
+
+            Set<String> leadAllowedTools = new LinkedHashSet<>(allAllowedTools);
+            if (!visionSupported) {
+                leadAllowedTools.remove("view_image");
+            }
+
             // Runtime adds its built-in task Tool from the Child authorization. It is not
             // a ToolPlatform catalog alias and must not enter ProductProfile.allowedTools.
-            Set<String> promptTools = new LinkedHashSet<>(allowedTools);
+            Set<String> promptTools = new LinkedHashSet<>(leadAllowedTools);
             if (delegation.enabled()) promptTools.add("task");
             // The frozen lead prompt is rendered once per Bridge; its signature drives the later-Run
-            // rebuild criterion in DeerFlowThreadRunApi, exactly like the MCP/Skill fingerprints.
             LeadPromptComposer.Composition prompt = composePrompt(promptTools, skillProjection, agentContext, delegation);
             this.promptSignature = prompt.signature();
+            boolean anyVisionSupported = visionSupported
+                    || delegation.children().stream().anyMatch(c -> supportsVision(c.model().snapshot()));
+            List<? extends JavaTool<?, ?>> registeredTools = anyVisionSupported
+                    ? tools
+                    : tools.stream()
+                            .filter(tool -> !"view_image".equals(tool.spec().name().value()))
+                            .toList();
             HaifaAgentBuilder builder = HaifaAgents.builder(profile(
-                            binding.snapshot(), prompt.instructions(), allowedTools,
+                            binding.snapshot(), prompt.instructions(), leadAllowedTools,
                             skillProjection == null ? Set.of() : skillProjection.allowedSkills(), delegation,
                             parentWallTimeMillisForTests))
                     .metadata(new AgentMetadata("Super Harness local compatibility agent"))
@@ -318,13 +391,16 @@ public final class HaifaRunBridge implements AutoCloseable {
                     .model(models)
                     .persistence(foundation.persistence())
                     .conversation(foundation.conversation())
-                    .tools(tools)
+                    .tools(registeredTools)
                     .policy(new PolicyPlatformContribution(
                             PolicyPresets.standardApproval(), new DefaultPolicyDecisionService()));
+            if (this.workspace != null && this.threadId != null) {
+                builder.modelImageResolver(new SuperHarnessModelImageResolver(this.workspace, this.ownerId, this.threadId));
+            }
             if (delegation.enabled()) {
                 builder.childRunCapacity(childRunCapacity).nonInteractiveChildTools();
                 for (var child : delegation.children()) {
-                    Set<String> childTools = child.allowedTools(allowedTools);
+                    Set<String> childTools = childToolsFor(child, allAllowedTools);
                     Optional<EffectiveModelParameters> effectiveModelParameters = Optional.empty();
                     if (isReasoningCapableOrEnabled(child.model().snapshot())) {
                         ResolvedModelSnapshot snapshot = child.model().snapshot();
@@ -513,11 +589,28 @@ public final class HaifaRunBridge implements AutoCloseable {
 
     public static String promptSignatureFor(List<? extends JavaTool<?, ?>> tools,
             SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
-            SubagentRunConfiguration delegation, Set<String> platformToolNames) {
+            SubagentRunConfiguration delegation, Set<String> platformToolNames,
+            boolean supportsVision) {
         Set<String> names = registeredToolNames(tools, skillProjection);
         names.addAll(platformToolNames);
         if (delegation.enabled()) names.add("task");
+        names = LeadPromptComposer.filterToolsForVision(names, supportsVision);
         return composePrompt(names, skillProjection, agentContext, delegation).signature();
+    }
+
+    public static String promptSignatureFor(List<? extends JavaTool<?, ?>> tools,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation, Set<String> platformToolNames) {
+        return promptSignatureFor(tools, skillProjection, agentContext, delegation, platformToolNames, true);
+    }
+
+    static Set<String> childToolsFor(SubagentRunConfiguration.Child child, Set<String> parentAvailableTools) {
+        boolean childVisionSupported = supportsVision(child.model().snapshot());
+        Set<String> childTools = new LinkedHashSet<>(child.allowedTools(parentAvailableTools));
+        if (!childVisionSupported) {
+            childTools.remove("view_image");
+        }
+        return Set.copyOf(childTools);
     }
 
     private static Set<String> registeredToolNames(
@@ -750,6 +843,278 @@ public final class HaifaRunBridge implements AutoCloseable {
     @Override
     public void close() {
         agent.close();
+    }
+
+    public RestrictedWorkspaceService workspace() {
+        return workspace;
+    }
+
+    public String ownerId() {
+        return ownerId;
+    }
+
+    public String threadId() {
+        return threadId;
+    }
+
+    public static boolean supportsVision(ResolvedModelSnapshot snapshot) {
+        if (snapshot == null) {
+            return false;
+        }
+        if (snapshot.capabilities().contains(ModelCapability.IMAGE_INPUT)
+                || snapshot.capabilities().contains(ModelCapability.IMAGE_UPLOAD_INPUT)) {
+            return true;
+        }
+        if (snapshot.imageInput().isPresent()) {
+            return true;
+        }
+        Object opt = snapshot.providerOptions().get("supports_vision");
+        if (opt instanceof Boolean b) {
+            return b;
+        }
+        if (opt instanceof String s) {
+            return Boolean.parseBoolean(s);
+        }
+        return false;
+    }
+
+    public AgentChatRequest injectVision(AgentChatRequest request) {
+        if (!supportsVision(request.model())) {
+            return request;
+        }
+        if (this.workspace == null || this.threadId == null) {
+            return request;
+        }
+        List<ModelMessage> messages = request.messages();
+        if (messages == null || messages.isEmpty()) {
+            return request;
+        }
+
+        // Idempotency check: don't inject if the last message is already a vision injection
+        ModelMessage lastMsg = messages.get(messages.size() - 1);
+        if (lastMsg.role() == ModelMessageRole.USER) {
+            String content = lastMsg.content();
+            if (content != null && (
+                    content.startsWith("Here are the images you've viewed:")
+                    || content.startsWith("[Image viewing skipped: image size")
+                    || content.startsWith("(file unavailable or changed:")
+                    || !lastMsg.images().isEmpty())) {
+                return request;
+            }
+        }
+
+        // Find the last ASSISTANT message
+        ModelMessage lastAssistant = null;
+        int lastAssistantIndex = -1;
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            if (messages.get(i).role() == ModelMessageRole.ASSISTANT) {
+                lastAssistant = messages.get(i);
+                lastAssistantIndex = i;
+                break;
+            }
+        }
+
+        if (lastAssistant == null || lastAssistant.toolCalls().isEmpty()) {
+            return request;
+        }
+
+        List<ModelToolCall> viewImageCalls = lastAssistant.toolCalls().stream()
+                .filter(call -> "view_image".equals(call.name()))
+                .toList();
+        if (viewImageCalls.isEmpty()) {
+            return request;
+        }
+
+        List<ImageDataPart> parts = new ArrayList<>();
+        StringBuilder textBuilder = new StringBuilder("Here are the images you've viewed:");
+        List<String> degradationMessages = new ArrayList<>();
+        boolean hadValidCall = false;
+
+        for (ModelToolCall call : viewImageCalls) {
+            ModelMessage toolMsg = findMatchingToolMessage(messages, lastAssistantIndex, call);
+            if (!isSuccessfulViewImage(toolMsg)) {
+                continue;
+            }
+
+            hadValidCall = true;
+            String imagePath = extractImagePath(call, toolMsg);
+            if (imagePath == null) {
+                continue;
+            }
+
+            String expectedSha256 = extractSha256(toolMsg);
+
+            byte[] bytes = null;
+            try {
+                WorkspaceBinding binding = this.workspace.bind(this.ownerId, this.threadId);
+                bytes = this.workspace.readVerifiedBytes(this.ownerId, binding.workspaceId(), imagePath);
+            } catch (Exception ignored) {
+                bytes = null;
+            }
+
+            if (bytes == null || bytes.length == 0) {
+                degradationMessages.add("(file unavailable or changed: " + imagePath + ")");
+                continue;
+            }
+
+            String actualSha256 = sha256Bytes(bytes);
+            if (expectedSha256 != null && !expectedSha256.isBlank()) {
+                String cleanExpected = expectedSha256.startsWith("sha256:")
+                        ? expectedSha256.substring(7)
+                        : expectedSha256;
+                if (!cleanExpected.equalsIgnoreCase(actualSha256)) {
+                    degradationMessages.add("(file unavailable or changed: " + imagePath + ")");
+                    continue;
+                }
+            }
+
+            if (bytes.length > ImageDataPart.MAXIMUM_BYTES) {
+                degradationMessages.add(
+                        "[Image viewing skipped: image size (" + bytes.length
+                                + " bytes) exceeds runtime capacity limit (10 MiB). Upstream SDK limit bump required.]");
+                continue;
+            }
+
+            String mimeType = extractMimeType(toolMsg, imagePath, bytes);
+            parts.add(new ImageDataPart(mimeType, bytes));
+            textBuilder.append("\n- **").append(imagePath).append("** (").append(mimeType).append(")");
+        }
+
+        if (!hadValidCall) {
+            return request;
+        }
+
+        ModelMessage injectedMessage;
+        if (!parts.isEmpty()) {
+            String content = textBuilder.toString();
+            if (!degradationMessages.isEmpty()) {
+                content = content + "\n" + String.join("\n", degradationMessages);
+            }
+            injectedMessage = ModelMessage.user(content, parts);
+        } else if (!degradationMessages.isEmpty()) {
+            injectedMessage = ModelMessage.text(ModelMessageRole.USER, String.join("\n", degradationMessages));
+        } else {
+            return request;
+        }
+
+        List<ModelMessage> newMessages = new ArrayList<>(messages);
+        newMessages.add(injectedMessage);
+        return replaceMessages(request, newMessages);
+    }
+
+    private static ModelMessage findMatchingToolMessage(List<ModelMessage> messages, int afterIndex, ModelToolCall call) {
+        for (int i = afterIndex + 1; i < messages.size(); i++) {
+            ModelMessage msg = messages.get(i);
+            if (msg.role() == ModelMessageRole.TOOL) {
+                if (call.providerCorrelationId() != null
+                        && msg.providerCorrelationId().isPresent()
+                        && call.providerCorrelationId().equals(msg.providerCorrelationId().get())) {
+                    return msg;
+                }
+            }
+        }
+        for (int i = afterIndex + 1; i < messages.size(); i++) {
+            ModelMessage msg = messages.get(i);
+            if (msg.role() == ModelMessageRole.TOOL) {
+                String content = msg.content();
+                if (content != null && content.contains("Successfully read image")) {
+                    return msg;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static boolean isSuccessfulViewImage(ModelMessage toolMsg) {
+        if (toolMsg == null) {
+            return false;
+        }
+        if (toolMsg.toolResultData() != null) {
+            Object status = toolMsg.toolResultData().get("status");
+            if ("success".equals(status)) {
+                return true;
+            }
+        }
+        String content = toolMsg.content();
+        return content != null && content.contains("Successfully read image");
+    }
+
+    private static String extractImagePath(ModelToolCall call, ModelMessage toolMsg) {
+        if (toolMsg != null && toolMsg.toolResultData() != null) {
+            Object p = toolMsg.toolResultData().get("path");
+            if (p instanceof String s && !s.isBlank()) {
+                return s;
+            }
+            Object ip = toolMsg.toolResultData().get("image_path");
+            if (ip instanceof String s && !s.isBlank()) {
+                return s;
+            }
+        }
+        if (call != null && call.arguments() != null) {
+            Object arg = call.arguments().get("image_path");
+            if (arg instanceof String s && !s.isBlank()) {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    private static String extractMimeType(ModelMessage toolMsg, String imagePath, byte[] bytes) {
+        if (toolMsg != null && toolMsg.toolResultData() != null) {
+            Object m = toolMsg.toolResultData().get("mime_type");
+            if (m instanceof String s && !s.isBlank()) {
+                return s;
+            }
+        }
+        if (bytes != null && bytes.length > 0) {
+            String detected = ProductionViewImageTool.detectImageMime(bytes);
+            if (detected != null) {
+                return detected;
+            }
+        }
+        if (imagePath != null) {
+            String lower = imagePath.toLowerCase(Locale.ROOT);
+            if (lower.endsWith(".png")) return "image/png";
+            if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+            if (lower.endsWith(".webp")) return "image/webp";
+            if (lower.endsWith(".gif")) return "image/gif";
+        }
+        return "application/octet-stream";
+    }
+
+    private static String extractSha256(ModelMessage toolMsg) {
+        if (toolMsg != null && toolMsg.toolResultData() != null) {
+            Object s = toolMsg.toolResultData().get("sha256");
+            if (s instanceof String str && !str.isBlank()) {
+                return str;
+            }
+        }
+        return null;
+    }
+
+    private static AgentChatRequest replaceMessages(AgentChatRequest request, List<ModelMessage> newMessages) {
+        return new AgentChatRequest(
+                request.callId(),
+                request.requestId(),
+                request.runId(),
+                request.iteration(),
+                request.attempt(),
+                request.model(),
+                newMessages,
+                request.tools(),
+                request.maxOutputTokens(),
+                request.timeout(),
+                request.options(),
+                request.structuredOutput()
+        );
+    }
+
+    private static String sha256Bytes(byte[] bytes) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
     }
 
     public record SessionState(AgentSessionId sessionId, long revision) {}

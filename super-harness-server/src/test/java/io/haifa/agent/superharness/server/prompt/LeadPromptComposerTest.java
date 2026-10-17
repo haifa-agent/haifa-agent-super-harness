@@ -184,6 +184,16 @@ class LeadPromptComposerTest {
                 .isEqualTo("a {b} c X");
     }
 
+    @Test
+    void soulMentioningViewImageOnTextOnlyModelDoesNotFailComposition() {
+        Set<String> textOnlyTools = new java.util.LinkedHashSet<>(BASE_TOOLS);
+        textOnlyTools.remove("view_image");
+        LeadPromptInputs inputs = new LeadPromptInputs("test-agent", "I inspect charts using view_image when possible", false, List.of());
+        var composition = composer.compose(inputs, textOnlyTools);
+        assertThat(composition).isNotNull();
+        assertThat(composition.instructions()).contains("view_image");
+    }
+
     private static LeadPromptInputs emptyInputs() {
         return new LeadPromptInputs(null, null, false, List.of());
     }

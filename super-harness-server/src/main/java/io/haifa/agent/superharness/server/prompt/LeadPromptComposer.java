@@ -136,6 +136,8 @@ public final class LeadPromptComposer {
         Set<String> mentioned = mentionedTools(format(template.adaptedTemplate(), toolInstructionValues));
         Set<String> unregistered = new LinkedHashSet<>(mentioned);
         unregistered.removeAll(registeredToolNames);
+        // view_image is an optional capability-gated tool; referencing it in soul on a text-only model must not crash bridge construction
+        unregistered.remove("view_image");
         if (!unregistered.isEmpty()) {
             throw new IllegalStateException(
                     "composed lead-agent instructions reference unregistered tools: " + unregistered);
@@ -264,6 +266,20 @@ public final class LeadPromptComposer {
                     .append(escape(description)).append("</description></subagent>\n");
         }
         return out.append("</available_subagents>\n</subagent_system>").toString();
+    }
+
+    /**
+     * Filters available tool names according to the model's vision capability.
+     * When vision is not supported, {@code view_image} is excluded from the registered tools.
+     */
+    public static Set<String> filterToolsForVision(Set<String> toolNames, boolean supportsVision) {
+        Objects.requireNonNull(toolNames, "toolNames");
+        if (supportsVision) {
+            return toolNames;
+        }
+        Set<String> filtered = new LinkedHashSet<>(toolNames);
+        filtered.remove("view_image");
+        return filtered;
     }
 
     /** Full instructions/hash, with Tool instruction references excluding generated Agent catalog data. */
