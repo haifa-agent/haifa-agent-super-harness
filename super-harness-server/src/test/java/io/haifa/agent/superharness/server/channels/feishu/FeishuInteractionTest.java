@@ -182,14 +182,39 @@ class FeishuInteractionTest {
         assertThat(FeishuInteraction.match(pending, "1.0.0")).isEmpty();
         assertThat(FeishuInteraction.interactiveCard(pending).get("elements").toString()).doesNotContain("button");
         assertThat(FeishuInteraction.formNotice(pending)).contains("请在 Web 端完成该表单");
+        assertThat(FeishuInteraction.formNotice(pending, "thread-form-1"))
+                .contains("请在 Web 端完成该表单")
+                .contains("对话 ID：thread-form-1")
+                .contains("/workspace/chats/thread-form-1");
 
         Harness harness = harness();
         harness.bridge.pending = pending;
         harness.worker.handleInbound(new FeishuInboundMessage(
                 "oc_chat", "om_form", "ou_owner", "1.0.0", "p2p"));
         assertThat(harness.bridge.turns.get()).isZero();
-        assertThat(harness.transport.replies().getLast().text()).contains("请在 Web 端完成该表单");
+        String formReply = harness.transport.replies().getLast().text();
+        assertThat(formReply).contains("请在 Web 端完成该表单");
+        assertThat(formReply).contains("对话 ID：");
+        assertThat(formReply).contains("/workspace/chats/");
         harness.worker.close();
+    }
+
+    @Test
+    void writeHumanMessageCarriesUploadedFilesLikeWebComposer() throws Exception {
+        ObjectNode message = json.createObjectNode();
+        FeishuInteraction.writeHumanMessage(
+                message,
+                "请查看附件",
+                null,
+                List.of(new FeishuAgentBridge.UploadedFile(
+                        "shot.png", "/mnt/user-data/uploads/shot.png", 12L)));
+        assertThat(message.path("content").asText()).isEqualTo("请查看附件");
+        JsonNode files = message.path("additional_kwargs").path("files");
+        assertThat(files).hasSize(1);
+        assertThat(files.get(0).path("filename").asText()).isEqualTo("shot.png");
+        assertThat(files.get(0).path("path").asText()).isEqualTo("/mnt/user-data/uploads/shot.png");
+        assertThat(files.get(0).path("size").asLong()).isEqualTo(12L);
+        assertThat(files.get(0).path("status").asText()).isEqualTo("uploaded");
     }
 
     @Test

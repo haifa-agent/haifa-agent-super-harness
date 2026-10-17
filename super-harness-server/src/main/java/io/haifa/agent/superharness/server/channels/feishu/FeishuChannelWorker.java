@@ -3,9 +3,12 @@ package io.haifa.agent.superharness.server.channels.feishu;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.haifa.agent.superharness.server.auth.AccessOwner;
 import io.haifa.agent.superharness.server.config.ChannelConnectionStore;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -16,9 +19,9 @@ import java.util.regex.Pattern;
  * Thin Feishu IM adapter: transport lifecycle + {@code /connect} bind + bound chat → DeerFlow
  * thread/Run. Does not port ChannelManager/MessageBus.
  *
- * <p>Inbound events share one daemon thread today (DeerFlow also serializes per-chat work). Decoupling
- * fast {@code /connect} replies from long {@code runTurn} waits is a follow-up concurrency slice,
- * not part of L1b parity.
+ * <p>Phase 1 essential: connect/card-fast paths are not blocked by other chats' long {@code
+ * runTurn}; per-chat work is serialized; unsupported media is acknowledged; image/file uploads
+ * enter the shared Thread uploads store.
  */
 public final class FeishuChannelWorker implements AutoCloseable {
     private static final System.Logger LOG = System.getLogger(FeishuChannelWorker.class.getName());
@@ -32,9 +35,23 @@ public final class FeishuChannelWorker implements AutoCloseable {
     private final FeishuAgentBridge agentBridge;
     private final Object lock = new Object();
     private final AtomicBoolean requireBoundIdentity = new AtomicBoolean(true);
-    private final ExecutorService inboundExecutor =
-            Executors.newSingleThreadExecutor(r -> {
-                Thread thread = new Thread(r, "feishu-inbound");
+    /**
+     * Per-chat Run mutual exclusion. Held only for the duration of {@code runTurn}; a second inbound
+     * on the same chat gets {@link FeishuInteraction#BUSY} instead of silently queuing behind the
+     * chat lock (Phase 1).
+     */
+    private final ConcurrentHashMap<String, Boolean> chatBusy = new ConcurrentHashMap<>();
+    /** Fast path for /connect so other chats' long Runs cannot starve binding. */
+    private final ExecutorService connectExecutor =
+            Executors.newCachedThreadPool(r -> {
+                Thread thread = new Thread(r, "feishu-connect");
+                thread.setDaemon(true);
+                return thread;
+            });
+    /** Bounded pool for chat Turns; busy map rejects overlapping Runs on the same chat. */
+    private final ExecutorService chatExecutor =
+            Executors.newFixedThreadPool(4, r -> {
+                Thread thread = new Thread(r, "feishu-chat");
                 thread.setDaemon(true);
                 return thread;
             });
@@ -114,28 +131,41 @@ public final class FeishuChannelWorker implements AutoCloseable {
     }
 
     private void enqueueInbound(FeishuInboundMessage message) {
-        inboundExecutor.execute(() -> {
+        if (message == null) {
+            return;
+        }
+        if (isConnectCommand(message)) {
+            connectExecutor.execute(() -> runSafely(message, () -> handleInbound(message)));
+            return;
+        }
+        chatExecutor.execute(() -> runSafely(message, () -> handleInbound(message)));
+    }
+
+    private void runSafely(FeishuInboundMessage message, InboundTask task) {
+        try {
+            task.run();
+        } catch (Exception failure) {
+            LOG.log(System.Logger.Level.WARNING, "Feishu inbound handling failed", failure);
+            FeishuRunRejected rejected = FeishuRunRejected.find(failure);
+            String notice = rejected != null && rejected.detail().contains("already accepted")
+                    ? FeishuInteraction.ALREADY_HANDLED
+                    : INBOUND_FAILURE_REPLY;
             try {
-                handleInbound(message);
-            } catch (Exception failure) {
-                LOG.log(System.Logger.Level.WARNING, "Feishu inbound handling failed", failure);
-                FeishuRunRejected rejected = FeishuRunRejected.find(failure);
-                String notice = rejected != null && rejected.detail().contains("already accepted")
-                        ? FeishuInteraction.ALREADY_HANDLED
-                        : INBOUND_FAILURE_REPLY;
-                // Surface a card to the user; silent log-only failures look like a hung bot.
-                try {
-                    if (message != null && message.messageId() != null && !message.messageId().isBlank()) {
-                        reply(message.messageId(), notice);
-                    }
-                } catch (Exception replyFailure) {
-                    LOG.log(
-                            System.Logger.Level.WARNING,
-                            "Feishu inbound failure reply also failed",
-                            replyFailure);
+                if (message != null && message.messageId() != null && !message.messageId().isBlank()) {
+                    reply(message.messageId(), notice);
                 }
+            } catch (Exception replyFailure) {
+                LOG.log(
+                        System.Logger.Level.WARNING,
+                        "Feishu inbound failure reply also failed",
+                        replyFailure);
             }
-        });
+        }
+    }
+
+    @FunctionalInterface
+    private interface InboundTask {
+        void run() throws Exception;
     }
 
     /** Processes one inbound message on the caller thread (also used by the inbound executor). */
@@ -147,14 +177,14 @@ public final class FeishuChannelWorker implements AutoCloseable {
             continueCardAction(message);
             return;
         }
-        if (message.text().isBlank()) {
-            return;
-        }
-        // Group chats leave "@bot /connect <code>" with the mention in the text (DeerFlow
-        // strip_leading_mentions). Strip only for the command match; ordinary chat keeps mentions.
         Matcher connect = CONNECT_CODE.matcher(stripLeadingMentions(message.text().trim()));
         if (connect.matches()) {
             handleConnect(message, connect.group(1));
+            return;
+        }
+        if (!message.isRunnableInbound()) {
+            // Unsupported sticker/audio/etc. or blank text: never silent (Phase 1).
+            reply(message.messageId(), FeishuInteraction.UNSUPPORTED_MEDIA);
             return;
         }
         Optional<ObjectNode> bound = connections.findConnectionByExternalIdentity(
@@ -171,6 +201,13 @@ public final class FeishuChannelWorker implements AutoCloseable {
         String owner = connection.path("owner_user_id").asText(AccessOwner.DEFAULT);
         String connectionId = connection.path("id").asText("");
         runChat(owner, connectionId, message);
+    }
+
+    private static boolean isConnectCommand(FeishuInboundMessage message) {
+        if (message == null || message.cardAction() != null) {
+            return false;
+        }
+        return CONNECT_CODE.matcher(stripLeadingMentions(message.text().trim())).matches();
     }
 
     /**
@@ -297,7 +334,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
             }
             FeishuHumanResponse response = new FeishuHumanResponse(
                     pending.source(), pending.requestId(), "text", null, text);
-            present(message, runSubmitted(owner, connectionId, message, threadId, response, pending));
+            present(message, runSubmitted(owner, connectionId, message, threadId, response, pending), threadId);
             return;
         }
         Optional<FeishuPendingInput.Option> option = FeishuInteraction.optionById(pending, action.optionId());
@@ -308,7 +345,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
         FeishuPendingInput.Option selected = option.get();
         FeishuHumanResponse response = new FeishuHumanResponse(
                 pending.source(), pending.requestId(), "option", selected.id(), selected.value());
-        present(message, runSubmitted(owner, connectionId, message, threadId, response, pending));
+        present(message, runSubmitted(owner, connectionId, message, threadId, response, pending), threadId);
     }
 
     private void runChat(String ownerUserId, String connectionId, FeishuInboundMessage message)
@@ -316,13 +353,13 @@ public final class FeishuChannelWorker implements AutoCloseable {
         String threadId = threadMap.getOrCreate(connectionId, message.chatId());
         FeishuPendingInput pending = agentBridge.currentPending(ownerUserId, threadId).orElse(null);
         if (pending != null && pending.formUnsupported()) {
-            reply(message.messageId(), FeishuInteraction.formNotice(pending));
+            reply(message.messageId(), FeishuInteraction.formNotice(pending, threadId));
             return;
         }
         if (pending != null) {
             Optional<FeishuHumanResponse> matched = FeishuInteraction.match(pending, message.text());
             if (matched.isPresent()) {
-                present(message, runSubmitted(ownerUserId, connectionId, message, threadId, matched.get(), pending));
+                present(message, runSubmitted(ownerUserId, connectionId, message, threadId, matched.get(), pending), threadId);
                 return;
             }
             if (pending.singleChoice()) {
@@ -332,10 +369,55 @@ public final class FeishuChannelWorker implements AutoCloseable {
                 return;
             }
         }
-        Map<String, Object> metadata = channelMetadata(connectionId, message);
-        FeishuAgentBridge.TurnResult result =
-                agentBridge.runTurn(ownerUserId, threadId, metadata, message.text());
-        present(message, result);
+        if (Boolean.TRUE.equals(chatBusy.putIfAbsent(message.chatId(), Boolean.TRUE))) {
+            reply(message.messageId(), FeishuInteraction.BUSY);
+            return;
+        }
+        try {
+            List<FeishuAgentBridge.UploadedFile> files = materializeUploads(ownerUserId, threadId, message);
+            String userText = message.text();
+            if (userText.isBlank() && !files.isEmpty()) {
+                userText = "请查看我发送的附件。";
+            }
+            reply(message.messageId(), FeishuInteraction.PROGRESS);
+            Map<String, Object> metadata = channelMetadata(connectionId, message);
+            FeishuAgentBridge.TurnResult result =
+                    agentBridge.runTurn(ownerUserId, threadId, metadata, userText, null, files);
+            present(message, result, threadId);
+        } finally {
+            chatBusy.remove(message.chatId());
+        }
+    }
+
+    private List<FeishuAgentBridge.UploadedFile> materializeUploads(
+            String ownerUserId, String threadId, FeishuInboundMessage message) throws Exception {
+        if (!message.hasDownloadableAttachments()) {
+            return List.of();
+        }
+        FeishuTransport active;
+        synchronized (lock) {
+            active = transport;
+        }
+        if (active == null) {
+            reply(message.messageId(), FeishuInteraction.MEDIA_FAILED);
+            throw new IllegalStateException("Feishu transport unavailable for media download");
+        }
+        List<FeishuAgentBridge.UploadedFile> uploaded = new ArrayList<>();
+        for (FeishuInboundMessage.Attachment attachment : message.attachments()) {
+            if (!attachment.downloadable()) {
+                continue;
+            }
+            byte[] bytes = active.downloadResource(
+                    message.messageId(), attachment.resourceKey(), attachment.kind());
+            if (bytes == null || bytes.length == 0) {
+                reply(message.messageId(), FeishuInteraction.MEDIA_FAILED);
+                throw new IllegalStateException("Feishu media download returned empty bytes");
+            }
+            String mediaType = "image".equals(attachment.kind()) ? "image/jpeg" : "application/octet-stream";
+            uploaded.add(agentBridge.storeUpload(
+                    ownerUserId, threadId, attachment.filename(), bytes, mediaType));
+        }
+        return uploaded;
     }
 
     private FeishuAgentBridge.TurnResult runSubmitted(
@@ -346,8 +428,23 @@ public final class FeishuChannelWorker implements AutoCloseable {
             FeishuHumanResponse response,
             FeishuPendingInput pending)
             throws Exception {
-        String content = FeishuInteraction.responseContent(pending, response);
-        return agentBridge.runTurn(ownerUserId, threadId, channelMetadata(connectionId, message), content, response);
+        if (Boolean.TRUE.equals(chatBusy.putIfAbsent(message.chatId(), Boolean.TRUE))) {
+            reply(message.messageId(), FeishuInteraction.BUSY);
+            return new FeishuAgentBridge.TurnResult(threadId, FeishuInteraction.BUSY, pending);
+        }
+        try {
+            String content = FeishuInteraction.responseContent(pending, response);
+            reply(message.messageId(), FeishuInteraction.PROGRESS);
+            return agentBridge.runTurn(
+                    ownerUserId,
+                    threadId,
+                    channelMetadata(connectionId, message),
+                    content,
+                    response,
+                    List.of());
+        } finally {
+            chatBusy.remove(message.chatId());
+        }
     }
 
     private static Map<String, Object> channelMetadata(String connectionId, FeishuInboundMessage message) {
@@ -359,10 +456,11 @@ public final class FeishuChannelWorker implements AutoCloseable {
         return metadata;
     }
 
-    private void present(FeishuInboundMessage message, FeishuAgentBridge.TurnResult result) throws Exception {
+    private void present(FeishuInboundMessage message, FeishuAgentBridge.TurnResult result, String threadId)
+            throws Exception {
         FeishuPendingInput pending = result.pending();
         if (pending != null && pending.formUnsupported()) {
-            reply(message.messageId(), FeishuInteraction.formNotice(pending));
+            reply(message.messageId(), FeishuInteraction.formNotice(pending, threadId));
             return;
         }
         if (pending != null) {
@@ -372,6 +470,9 @@ public final class FeishuChannelWorker implements AutoCloseable {
         String text = result.assistantText();
         if (text == null || text.isBlank()) {
             text = "(no assistant response)";
+        }
+        if (FeishuInteraction.BUSY.equals(text)) {
+            return;
         }
         reply(message.messageId(), text);
     }
@@ -407,6 +508,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
     @Override
     public void close() {
         stop();
-        inboundExecutor.shutdownNow();
+        connectExecutor.shutdownNow();
+        chatExecutor.shutdownNow();
     }
 }

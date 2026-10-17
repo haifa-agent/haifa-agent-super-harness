@@ -43,6 +43,15 @@ public interface FeishuTransport extends AutoCloseable {
     /** Reply with a card 1.0 payload that may include an {@code action} button row. */
     void replyInteractive(String messageId, Map<String, Object> card) throws Exception;
 
+    /**
+     * Download an inbound image/file resource. {@code resourceType} is the Feishu resource type
+     * ({@code image} or {@code file}). Test doubles may return fixture bytes.
+     */
+    default byte[] downloadResource(String messageId, String resourceKey, String resourceType)
+            throws Exception {
+        throw new UnsupportedOperationException("Feishu media download is not available on this transport");
+    }
+
     @Override
     default void close() {
         stop();

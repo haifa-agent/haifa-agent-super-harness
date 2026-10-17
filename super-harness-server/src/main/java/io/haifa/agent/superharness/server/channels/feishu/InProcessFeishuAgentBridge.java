@@ -6,6 +6,10 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.haifa.agent.superharness.server.api.DeerFlowConversationService;
 import io.haifa.agent.superharness.server.auth.AccessOwner;
+import io.haifa.agent.superharness.workspace.RestrictedWorkspaceService;
+import io.haifa.agent.superharness.workspace.UploadReceipt;
+import io.haifa.agent.superharness.workspace.WorkspaceBinding;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -18,10 +22,17 @@ import java.util.Optional;
 public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
     private final ObjectMapper json;
     private final DeerFlowConversationService threads;
+    private final RestrictedWorkspaceService workspace;
 
     public InProcessFeishuAgentBridge(ObjectMapper json, DeerFlowConversationService threads) {
+        this(json, threads, null);
+    }
+
+    public InProcessFeishuAgentBridge(
+            ObjectMapper json, DeerFlowConversationService threads, RestrictedWorkspaceService workspace) {
         this.json = json;
         this.threads = threads;
+        this.workspace = workspace;
     }
 
     @Override
@@ -31,7 +42,7 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
             Map<String, Object> channelMetadata,
             String userText)
             throws Exception {
-        return runTurn(ownerUserId, threadId, channelMetadata, userText, null);
+        return runTurn(ownerUserId, threadId, channelMetadata, userText, null, List.of());
     }
 
     @Override
@@ -41,6 +52,18 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
             Map<String, Object> channelMetadata,
             String userText,
             FeishuHumanResponse response)
+            throws Exception {
+        return runTurn(ownerUserId, threadId, channelMetadata, userText, response, List.of());
+    }
+
+    @Override
+    public TurnResult runTurn(
+            String ownerUserId,
+            String threadId,
+            Map<String, Object> channelMetadata,
+            String userText,
+            FeishuHumanResponse response,
+            List<UploadedFile> files)
             throws Exception {
         String owner = ownerUserId == null || ownerUserId.isBlank() ? AccessOwner.DEFAULT : ownerUserId;
         return AccessOwner.call(owner, () -> {
@@ -54,10 +77,35 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
                 if (content == null || content.isBlank()) {
                     content = "";
                 }
-                runStream(threadId, content, response);
+                runStream(threadId, content, response, files == null ? List.of() : files);
                 return readTurn(threadId);
             } catch (Exception exception) {
                 throw new IllegalStateException("Feishu channel run failed", exception);
+            }
+        });
+    }
+
+    @Override
+    public UploadedFile storeUpload(
+            String ownerUserId, String threadId, String filename, byte[] content, String mediaType)
+            throws Exception {
+        if (workspace == null) {
+            throw new UnsupportedOperationException("Feishu upload store is not configured");
+        }
+        String owner = ownerUserId == null || ownerUserId.isBlank() ? AccessOwner.DEFAULT : ownerUserId;
+        return AccessOwner.call(owner, () -> {
+            try {
+                ensureThread(threadId, Map.of("channel", "feishu"));
+                WorkspaceBinding binding = workspace.bind(owner, threadId);
+                UploadReceipt receipt = workspace.upload(
+                        owner,
+                        binding.workspaceId(),
+                        filename,
+                        content,
+                        mediaType == null || mediaType.isBlank() ? "application/octet-stream" : mediaType);
+                return new UploadedFile(receipt.originalFilename(), receipt.logicalPath(), receipt.byteCount());
+            } catch (Exception exception) {
+                throw new IllegalStateException("Feishu upload store failed", exception);
             }
         });
     }
@@ -92,7 +140,9 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
         }
     }
 
-    private void runStream(String threadId, String userText, FeishuHumanResponse response) throws Exception {
+    private void runStream(
+            String threadId, String userText, FeishuHumanResponse response, List<UploadedFile> files)
+            throws Exception {
         ObjectNode body = json.createObjectNode();
         body.put("assistant_id", "lead_agent");
         body.put("on_disconnect", "continue");
@@ -100,7 +150,8 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
         FeishuInteraction.writeHumanMessage(
                 input.putArray("messages").addObject(),
                 userText == null ? "" : userText,
-                response);
+                response,
+                files);
         body.putArray("stream_mode").add("messages-tuple").add("updates").add("custom");
         body.putObject("context").put("mode", "flash");
         DeerFlowConversationService.AdmittedTurn turn;

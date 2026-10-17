@@ -131,6 +131,8 @@ class FeishuChannelWorkerTest {
         assertThat(transport.replies())
                 .as("outbound replies: %s", transport.replies())
                 .isNotEmpty();
+        assertThat(transport.replies())
+                .anyMatch(reply -> "正在处理您的请求…".equals(reply.text()));
         assertThat(transport.replies().getLast().messageId()).isEqualTo("om_chat");
         assertThat(transport.replies().getLast().text()).contains("Haifa Agent SDK: hello feishu");
         assertThat(dataDirectory.resolve("channels").resolve("feishu-thread-map.json")).exists();
@@ -140,6 +142,46 @@ class FeishuChannelWorkerTest {
         String threadId = map.path("mappings").elements().next().path("thread_id").asText();
         assertThat(threadId).isNotBlank();
         assertThat(api.threadRunApi().conversations().hasThread(threadId)).isTrue();
+    }
+
+    @Test
+    void boundImageUploadsIntoThreadAndCompletesRun() throws Exception {
+        postJson(
+                "/api/channels/feishu/runtime-config",
+                "{\"values\":{\"app_id\":\"cli_a\",\"app_secret\":\"secret-a\"}}");
+        String code = postJson("/api/channels/feishu/connect", "").path("code").asText();
+        RecordingFeishuTransport transport = transportRef.get();
+        api.feishuWorker()
+                .handleInbound(new FeishuInboundMessage(
+                        "oc_chat_img", "om_bind_img", "ou_img", "/connect " + code, "p2p"));
+        transport.replies().clear();
+
+        byte[] jpeg = new byte[] {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 0x01, 0x02, 0x03};
+        transport.putResource("om_img", "img_key_live", jpeg);
+        api.feishuWorker()
+                .handleInbound(new FeishuInboundMessage(
+                        "oc_chat_img",
+                        "om_img",
+                        "ou_img",
+                        "",
+                        "p2p",
+                        "image",
+                        java.util.List.of(
+                                new FeishuInboundMessage.Attachment("image", "img_key_live", "image.jpg")),
+                        null));
+
+        assertThat(transport.replies())
+                .as("outbound replies: %s", transport.replies())
+                .anyMatch(reply -> "正在处理您的请求…".equals(reply.text()));
+        assertThat(transport.replies().getLast().text()).contains("Haifa Agent SDK:");
+        assertThat(dataDirectory.resolve("channels").resolve("feishu-thread-map.json")).exists();
+        boolean found;
+        try (var walk = java.nio.file.Files.walk(dataDirectory.resolve("workspace"))) {
+            found = walk.filter(path -> path.getFileName().toString().equals("image.jpg"))
+                    .anyMatch(path -> path.toString().contains("user-data")
+                            && path.toString().contains("uploads"));
+        }
+        assertThat(found).as("uploaded image.jpg under workspace uploads").isTrue();
     }
 
     @Test
