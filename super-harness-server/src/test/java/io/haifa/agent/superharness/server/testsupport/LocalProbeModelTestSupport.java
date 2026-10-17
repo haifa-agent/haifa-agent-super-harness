@@ -49,7 +49,7 @@ public final class LocalProbeModelTestSupport {
                 URI.create("https://model.invalid"),
                 new CredentialRef("env://SUPER_HARNESS_LOCAL_PROBE"),
                 false,
-                Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING),
+                Set.of(ModelCapability.TEXT_CHAT, ModelCapability.TOOL_CALLING, ModelCapability.IMAGE_INPUT),
                 // The full frozen Lead prompt plus M1's default catalog must fit the fixture.
                 // This does not change the production managed-model default or Run budget.
                 32_768,
