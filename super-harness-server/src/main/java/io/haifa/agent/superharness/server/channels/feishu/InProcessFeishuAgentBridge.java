@@ -2,6 +2,7 @@ package io.haifa.agent.superharness.server.channels.feishu;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.haifa.agent.superharness.server.api.DeerFlowConversationService;
 import io.haifa.agent.superharness.server.auth.AccessOwner;
@@ -142,6 +143,15 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
     }
 
     private Optional<FeishuPendingInput> currentPendingLocked(String threadId) throws Exception {
+        // The projected transcript orders cards by Tool-call round, so a waiting card is not
+        // necessarily its last message. Ask the Run that owns the pending Interaction instead
+        // (W04-BUG-010); the transcript scan stays as the fallback for legacy threads.
+        Optional<JsonNode> authoritative = threads.pendingInteractionMessage(threadId);
+        if (authoritative.isPresent()) {
+            ArrayNode single = json.createArrayNode();
+            single.add(authoritative.orElseThrow());
+            return FeishuInteraction.pendingFromMessages(single);
+        }
         JsonNode state = threadState(threadId);
         if (state == null) {
             return Optional.empty();
