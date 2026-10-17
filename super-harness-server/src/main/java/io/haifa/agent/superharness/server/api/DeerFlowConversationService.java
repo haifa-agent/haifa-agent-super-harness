@@ -648,6 +648,65 @@ public class DeerFlowConversationService implements AutoCloseable {
         return threadResponse(record);
     }
 
+    /**
+     * Bounded wait for this Thread's active Run to reach a terminal status, keeping its projection
+     * caught up while waiting. A channel adapter whose live observation ended early (replay gap,
+     * transport hiccup) needs the finished Run before it projects the durable answer; otherwise it
+     * replies with an intermediate step instead of the final message (W20-BUG-001 review).
+     *
+     * @return true when the Run is terminal, the Thread has no Run, or the deadline already passed
+     */
+    public boolean awaitRunTerminal(String threadId, java.time.Duration timeout) {
+        ThreadRecord thread = threads.get(threadId);
+        if (thread == null || !AccessOwner.current().equals(thread.ownerId)) {
+            return false;
+        }
+        RunRecord run;
+        try {
+            synchronized (thread) {
+                restoreDurableAdmission(thread);
+                String runId = thread.activeRunId != null ? thread.activeRunId : thread.latestRunId;
+                if (runId == null) {
+                    return true;
+                }
+                run = runs.get(runId);
+                if (run == null) {
+                    run = findOrRestoreRun(thread, runId).orElse(null);
+                }
+            }
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+        if (run == null) {
+            return true;
+        }
+        long deadline = System.nanoTime() + Math.max(0L, timeout.toNanos());
+        while (true) {
+            boolean terminal = run.bridge.snapshot(run.runId).status().isTerminal();
+            try {
+                // Pulling keeps the durable transcript current, so the caller reads the final step
+                // instead of whatever the gap left behind.
+                synchronizeAllAvailable(run);
+            } catch (RuntimeException projection) {
+                if (terminal) {
+                    return true;
+                }
+            }
+            if (terminal) {
+                return true;
+            }
+            if (System.nanoTime() >= deadline) {
+                return false;
+            }
+            try {
+                Thread.sleep(200L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+    }
+
     /** Owner-isolated frozen thread-state read shared by the Web route and the Feishu bridge. */
     public JsonNode readThreadState(String threadId) throws ConversationException {
         ThreadRecord thread = threads.get(threadId);

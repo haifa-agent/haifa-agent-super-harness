@@ -30,6 +30,8 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
     private static final Set<String> MODES = Set.of("flash", "thinking", "pro", "ultra");
 
     /** Turns materialized by one Feishu state read; enough for the newest card and answer. */
+    /** Upper bound for waiting on a Run whose live observation ended before its terminal frame. */
+    static final java.time.Duration RUN_SETTLE_TIMEOUT = java.time.Duration.ofSeconds(60);
     static final int STATE_TAIL_TURNS = 24;
     /** Threads that keep a cross-Turn tool-card dedupe scope before the oldest is evicted. */
     static final int TOOL_DEDUPE_THREADS = 64;
@@ -282,6 +284,14 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
                 // Nothing was observed and no gap explained it: keep failing fast on this
                 // genuinely empty observation instead of replying with an empty answer.
                 throw new IllegalStateException("Run stream ended without completion marker");
+            }
+            // A gap can happen while the Run is still executing. Wait for its terminal status
+            // before the durable read, otherwise the reply would carry an intermediate step.
+            if (!threads.awaitRunTerminal(threadId, RUN_SETTLE_TIMEOUT)) {
+                LOG.log(
+                        System.Logger.Level.WARNING,
+                        "Feishu run did not settle within {0} ms; projecting the current durable state",
+                        RUN_SETTLE_TIMEOUT.toMillis());
             }
         }
         return projector;
