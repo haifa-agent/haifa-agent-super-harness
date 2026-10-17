@@ -53,6 +53,8 @@ import io.haifa.agent.superharness.server.prompt.InputTrustBoundary;
 import io.haifa.agent.superharness.server.run.DurableHaifaFoundation;
 import io.haifa.agent.superharness.server.run.HaifaRunBridge;
 import io.haifa.agent.superharness.server.run.PersistentThreadCatalog;
+import io.haifa.agent.superharness.server.schedule.ScheduledRunLauncher;
+import io.haifa.agent.superharness.server.schedule.ScheduledRunStatus;
 import io.haifa.agent.superharness.server.tool.clarification.ClarificationBoundaryRegistry;
 import io.haifa.agent.superharness.server.tool.file.CurrentRunUploads;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
@@ -84,6 +86,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -92,7 +95,7 @@ import java.util.regex.Pattern;
 import javax.crypto.SecretKey;
 
 /** Frozen DeerFlow thread/run compatibility routes backed by the public Haifa Agent SDK. */
-public class DeerFlowConversationService implements AutoCloseable {
+public class DeerFlowConversationService implements AutoCloseable, ScheduledRunLauncher {
     private static final System.Logger INTERACTION_LOG =
             System.getLogger(DeerFlowConversationService.class.getName() + ".interaction");
     /** Frozen route an admission failure belongs to; a server constant, never the client path. */
@@ -141,6 +144,9 @@ public class DeerFlowConversationService implements AutoCloseable {
     static final Duration WORKSPACE_COMPLETION_OBSERVER_INITIAL_POLL = Duration.ofMillis(25);
     static final Duration WORKSPACE_COMPLETION_OBSERVER_MAX_POLL = Duration.ofSeconds(1);
     static final Duration TITLE_DURABILITY_GRACE = Duration.ofSeconds(2);
+    /** Bounded observation window for a scheduled Run with no SSE client. */
+    static final Duration BACKGROUND_FOLLOWER_MAX_WAIT = WORKSPACE_COMPLETION_OBSERVER_MAX_WAIT;
+    static final Duration BACKGROUND_FOLLOWER_INITIAL_POLL = WORKSPACE_COMPLETION_OBSERVER_INITIAL_POLL;
     private static final Set<String> BINARY_EXTENSIONS = Set.of(
             ".7z", ".avif", ".bmp", ".class", ".db", ".dll", ".dmg", ".doc", ".docx", ".exe",
             ".gif", ".gz", ".ico", ".jar", ".jpeg", ".jpg", ".mov", ".mp3", ".mp4", ".o",
@@ -213,6 +219,9 @@ public class DeerFlowConversationService implements AutoCloseable {
             new java.util.concurrent.atomic.AtomicLong();
     private final Set<Thread> workspaceCompletionObservers = ConcurrentHashMap.newKeySet();
     private final Set<Thread> titleCompletionObservers = ConcurrentHashMap.newKeySet();
+    // Scheduled-Run bridges retained for the bounded follower; the bridge itself keeps the Run alive.
+    private final Map<String, HaifaRunBridge> backgroundBridges = new ConcurrentHashMap<>();
+    private final Set<Thread> backgroundFollowers = ConcurrentHashMap.newKeySet();
     private volatile DurableTurnScanner durableTurnScanner = this::scanPersistedUserTurns;
     private volatile boolean closed;
 
@@ -1907,6 +1916,196 @@ public class DeerFlowConversationService implements AutoCloseable {
         synchronized (thread) {
             return thread.bridge;
         }
+    }
+
+    // -------------------------------------------------- scheduled background launch
+
+    /**
+     * Starts one non-interactive background Run in-process. No public HTTP background-Run route is
+     * added and no Run engine is created: this only ensures the Thread, builds the same public SDK
+     * bridge with {@code ask_clarification} excluded (the narrow frozen {@code non_interactive}
+     * assembly), starts the Run without blocking, and records the thread/Run association.
+     */
+    @Override
+    public LaunchedRun launch(LaunchRequest request) {
+        return AccessOwner.call(request.ownerId(), () -> {
+            ThreadRecord thread = ensureBackgroundThread(request.ownerId(), request.threadId(),
+                    request.createThreadIfMissing());
+            HaifaRunBridge.ModelBinding binding;
+            AgentPromptContext agentPrompt;
+            try {
+                binding = runModelResolver.apply(json.createObjectNode());
+                agentPrompt = agentPromptResolver.apply(json.createObjectNode());
+            } catch (RuntimeException unavailable) {
+                throw new IllegalStateException("Scheduled Run model is unavailable", unavailable);
+            }
+            List<? extends JavaTool<?, ?>> tools = nonInteractiveTools(thread, agentPrompt);
+            HaifaRunBridge bridge = newBackgroundBridge(binding, thread, tools, agentPrompt);
+            HaifaRunBridge.StartedRun started;
+            RunRecord run;
+            synchronized (thread) {
+                try {
+                    started = bridge.start(thread.threadId, request.message(),
+                            Optional.ofNullable(thread.session));
+                } catch (RuntimeException failure) {
+                    bridge.close();
+                    throw new IllegalStateException("Scheduled Run could not start", failure);
+                }
+                thread.session = started.session();
+                thread.persistedSessionId = started.session().sessionId();
+                thread.bridge = bridge;
+                thread.modelBindingIdentity = bridge.bindingIdentity();
+                thread.activeRunId = started.runId().value();
+                thread.latestRunId = started.runId().value();
+                thread.updatedAt = Instant.now();
+                long humanSequence = thread.nextMessageSequence;
+                thread.nextMessageSequence += 2;
+                run = new RunRecord(started.runId(), thread.threadId, request.assistantId(),
+                        request.message(), null, false, bridge, Instant.now(), humanSequence, false,
+                        Set.of("messages-tuple"), false);
+                runs.put(run.runId.value(), run);
+                try {
+                    persistThread(thread);
+                } catch (IOException persistenceFailure) {
+                    ADMISSION_LOG.log(System.Logger.Level.WARNING,
+                            "scheduled Run thread could not be persisted");
+                }
+            }
+            ownedBridges.add(bridge);
+            backgroundBridges.put(started.runId().value(), bridge);
+            return new LaunchedRun(thread.threadId, started.runId().value());
+        });
+    }
+
+    @Override
+    public void watch(String runId, Consumer<ScheduledRunOutcome> onTerminal) {
+        HaifaRunBridge bridge = backgroundBridges.get(runId);
+        if (bridge == null) {
+            throw new IllegalStateException("Background Run is unknown");
+        }
+        AgentRunId id = new AgentRunId(runId);
+        Thread follower = Thread.ofVirtual()
+                .name("super-harness-scheduled-follower-" + runId)
+                .unstarted(() -> {
+                    try {
+                        long startedNanos = System.nanoTime();
+                        long maxWaitNanos = BACKGROUND_FOLLOWER_MAX_WAIT.toNanos();
+                        long pollMillis = BACKGROUND_FOLLOWER_INITIAL_POLL.toMillis();
+                        while (!closed && System.nanoTime() - startedNanos < maxWaitNanos) {
+                            AgentRunSnapshot snapshot;
+                            try {
+                                snapshot = bridge.snapshot(id);
+                            } catch (RuntimeException unavailable) {
+                                return;
+                            }
+                            if (snapshot.status().isTerminal()) {
+                                onTerminal.accept(new ScheduledRunOutcome(runId,
+                                        scheduledTerminal(snapshot.status()),
+                                        scheduledTerminalError(snapshot.status())));
+                                return;
+                            }
+                            Thread.sleep(pollMillis);
+                            pollMillis = nextWorkspaceCompletionPollMillis(pollMillis);
+                        }
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    } catch (RuntimeException failure) {
+                        ADMISSION_LOG.log(System.Logger.Level.WARNING,
+                                "scheduled Run follower stopped: " + failure.getClass().getName());
+                    } finally {
+                        backgroundFollowers.remove(Thread.currentThread());
+                        backgroundBridges.remove(runId);
+                    }
+                });
+        backgroundFollowers.add(follower);
+        follower.start();
+    }
+
+    @Override
+    public Optional<ScheduledRunInspection> inspect(String ownerId, String threadId, String runId) {
+        return AccessOwner.call(ownerId, () -> {
+            HaifaRunBridge bridge = backgroundBridges.get(runId);
+            if (bridge == null) {
+                ThreadRecord thread = threads.get(threadId);
+                if (thread == null || !ownerId.equals(thread.ownerId)) {
+                    return Optional.<ScheduledRunInspection>empty();
+                }
+                try {
+                    bridge = bridgeForPersistedThread(thread);
+                } catch (RuntimeException unavailable) {
+                    return Optional.<ScheduledRunInspection>empty();
+                }
+            }
+            try {
+                AgentRunSnapshot snapshot = bridge.snapshot(new AgentRunId(runId));
+                boolean terminal = snapshot.status().isTerminal();
+                return Optional.of(new ScheduledRunInspection(terminal,
+                        terminal ? scheduledTerminal(snapshot.status()) : null,
+                        scheduledTerminalError(snapshot.status())));
+            } catch (RuntimeException unavailable) {
+                return Optional.<ScheduledRunInspection>empty();
+            }
+        });
+    }
+
+    private ThreadRecord ensureBackgroundThread(String ownerId, String threadId, boolean createIfMissing) {
+        ThreadRecord thread = threads.get(threadId);
+        if (thread == null) {
+            if (!createIfMissing) {
+                throw new IllegalStateException("Scheduled Run thread is unavailable");
+            }
+            ThreadRecord created = new ThreadRecord(threadId, Map.of(), Instant.now(), ownerId);
+            ThreadRecord prior = threads.putIfAbsent(threadId, created);
+            thread = prior != null ? prior : created;
+            if (prior == null) {
+                try {
+                    persistThread(created);
+                } catch (IOException persistenceFailure) {
+                    ADMISSION_LOG.log(System.Logger.Level.WARNING,
+                            "scheduled Run thread could not be persisted");
+                }
+            }
+        }
+        if (!ownerId.equals(thread.ownerId)) {
+            throw new IllegalStateException("Scheduled Run thread belongs to another owner");
+        }
+        return thread;
+    }
+
+    private List<? extends JavaTool<?, ?>> nonInteractiveTools(ThreadRecord thread, AgentPromptContext agentPrompt) {
+        // Frozen context.non_interactive: the lead tool set excludes ask_clarification. The frozen
+        // prompt composer switches to non-interactive text purely from tool presence.
+        return toolsForThread(thread, agentPrompt).stream()
+                .filter(tool -> !"ask_clarification".equals(tool.spec().name().value()))
+                .toList();
+    }
+
+    private HaifaRunBridge newBackgroundBridge(HaifaRunBridge.ModelBinding binding, ThreadRecord thread,
+            List<? extends JavaTool<?, ?>> tools, AgentPromptContext agentPrompt) {
+        bridgeBuilds.incrementAndGet();
+        return AccessOwner.call(thread.ownerId, () -> new HaifaRunBridge(binding, tools, foundation,
+                McpRunTools.Projection.empty(), null, agentPrompt,
+                io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled(),
+                childRunCapacity, false, executionExecutorFactory, hostShellConfig(), null,
+                parentWallTimeMillisForTests));
+    }
+
+    static ScheduledRunStatus scheduledTerminal(AgentRunStatus status) {
+        return switch (status) {
+            case COMPLETED -> ScheduledRunStatus.SUCCESS;
+            case FAILED, TIMEOUT -> ScheduledRunStatus.FAILED;
+            case CANCELLED -> ScheduledRunStatus.INTERRUPTED;
+            default -> ScheduledRunStatus.INTERRUPTED;
+        };
+    }
+
+    static String scheduledTerminalError(AgentRunStatus status) {
+        return switch (status) {
+            case FAILED -> "run failed";
+            case TIMEOUT -> "run timed out";
+            case CANCELLED -> "run interrupted";
+            default -> null;
+        };
     }
 
     private List<? extends JavaTool<?, ?>> toolsForThread(ThreadRecord thread, AgentPromptContext agentPrompt) {
@@ -5122,10 +5321,12 @@ public class DeerFlowConversationService implements AutoCloseable {
         closed = true;
         workspaceCompletionObservers.forEach(Thread::interrupt);
         titleCompletionObservers.forEach(Thread::interrupt);
+        backgroundFollowers.forEach(Thread::interrupt);
         ownedBridges.forEach(HaifaRunBridge::close);
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
         List<Thread> observers = new ArrayList<>(workspaceCompletionObservers);
         observers.addAll(titleCompletionObservers);
+        observers.addAll(backgroundFollowers);
         for (Thread observer : observers) {
             long remaining = deadline - System.nanoTime();
             if (remaining <= 0) break;

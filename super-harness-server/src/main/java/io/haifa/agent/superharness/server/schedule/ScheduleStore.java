@@ -130,11 +130,21 @@ public class ScheduleStore {
         }
     }
 
-    public boolean deleteTask(String taskId, String ownerId) {
+    /**
+     * Deletes an owner's task, cancelling any waiting {@code queued} occurrence first. A
+     * launching/running occurrence makes the delete conflict ({@link ActiveOccurrenceConflict}) so a
+     * deleting task never strands an executing Run.
+     */
+    public boolean deleteTask(String taskId, String ownerId, Instant now) {
+        Objects.requireNonNull(now, "now");
         synchronized (lock) {
             ScheduledTask current = tasks.get(taskId);
             if (current == null || !current.userId().equals(ownerId)) {
                 return false;
+            }
+            ScheduledTaskRun active = findActive(taskId).orElse(null);
+            if (active != null && active.status() != ScheduledRunStatus.QUEUED) {
+                throw new ActiveOccurrenceConflict(taskId, active.status().wire());
             }
             mutate(() -> {
                 tasks.remove(taskId);
@@ -142,6 +152,11 @@ public class ScheduleStore {
             });
             return true;
         }
+    }
+
+    /** Legacy delete without a clock; preserved for read-only checks and existing callers. */
+    public boolean deleteTask(String taskId, String ownerId) {
+        return deleteTask(taskId, ownerId, Instant.now());
     }
 
     // ----------------------------------------------------------- occurrences
@@ -376,6 +391,164 @@ public class ScheduleStore {
             ScheduledTask task = tasks.get(run.taskId());
             return task == null ? Optional.empty() : Optional.of(task.userId());
         }
+    }
+
+    // ------------------------------------------------------------- dispatch reads
+
+    /**
+     * Enabled tasks whose authoritative {@code next_run_at} is due at {@code now}. A task may have a
+     * due time and still not be admissible when it already holds its single active occurrence; the
+     * dispatch worker checks that separately so repeated due times merge instead of queuing twice.
+     */
+    public List<ScheduledTask> listDueTasks(Instant now) {
+        Objects.requireNonNull(now, "now");
+        synchronized (lock) {
+            return tasks.values().stream()
+                    .filter(task -> task.status() == ScheduledTaskStatus.ENABLED)
+                    .filter(task -> task.nextRunAt() != null && !task.nextRunAt().isAfter(now))
+                    .sorted(Comparator.comparing(ScheduledTask::nextRunAt)
+                            .thenComparing(ScheduledTask::id))
+                    .toList();
+        }
+    }
+
+    /** Persisted waiting items, oldest first. These survive a restart and are never converged. */
+    public List<ScheduledTaskRun> listQueuedRuns() {
+        synchronized (lock) {
+            return runs.values().stream()
+                    .filter(run -> run.status() == ScheduledRunStatus.QUEUED)
+                    .sorted(Comparator.comparing(ScheduledTaskRun::createdAt)
+                            .thenComparing(ScheduledTaskRun::id))
+                    .toList();
+        }
+    }
+
+    /** Occurrences whose Run is (or is expected to be) executing: {@code launching} and {@code running}. */
+    public List<ScheduledTaskRun> listExecutingRuns() {
+        synchronized (lock) {
+            return runs.values().stream()
+                    .filter(run -> run.status() == ScheduledRunStatus.LAUNCHING
+                            || run.status() == ScheduledRunStatus.RUNNING)
+                    .sorted(Comparator.comparing(ScheduledTaskRun::createdAt)
+                            .thenComparing(ScheduledTaskRun::id))
+                    .toList();
+        }
+    }
+
+    // --------------------------------------------------------- dispatch mutations
+
+    /**
+     * Cancels one waiting {@code queued} occurrence atomically, marking it {@code skipped}. Used when
+     * a task is paused/deleted: the active slot is released without touching a launching/running Run.
+     */
+    public boolean cancelQueuedRun(String runRecordId, Instant now) {
+        Objects.requireNonNull(now, "now");
+        synchronized (lock) {
+            ScheduledTaskRun run = runs.get(runRecordId);
+            if (run == null || run.status() != ScheduledRunStatus.QUEUED) {
+                return false;
+            }
+            ScheduledTaskRun cancelled = new ScheduledTaskRun(run.id(), run.taskId(), run.occurrenceSeq(),
+                    run.threadId(), run.runId(), run.scheduledFor(), run.trigger(),
+                    ScheduledRunStatus.SKIPPED, run.error(), run.startedAt(), now, run.attemptCount(),
+                    run.launchAccounted(), run.createdAt());
+            mutate(() -> runs.put(cancelled.id(), cancelled));
+            return true;
+        }
+    }
+
+    /**
+     * Restart recovery: a {@code launching} occurrence with no committed Run safely returns to
+     * {@code queued} so the next poll can launch it again. A {@code running} occurrence or one that
+     * already names a Run is left untouched (it owns an active slot and must be converged from the
+     * Run's real result instead).
+     */
+    public boolean revertLaunchingToQueued(String runRecordId, Instant now) {
+        Objects.requireNonNull(now, "now");
+        synchronized (lock) {
+            ScheduledTaskRun run = runs.get(runRecordId);
+            if (run == null || run.status() != ScheduledRunStatus.LAUNCHING || run.runId() != null) {
+                return false;
+            }
+            ScheduledTaskRun queued = new ScheduledTaskRun(run.id(), run.taskId(), run.occurrenceSeq(),
+                    run.threadId(), null, run.scheduledFor(), run.trigger(), ScheduledRunStatus.QUEUED,
+                    null, null, null, run.attemptCount(), run.launchAccounted(), run.createdAt());
+            mutate(() -> runs.put(queued.id(), queued));
+            return true;
+        }
+    }
+
+    /**
+     * Pauses an owner's task. A launching/running occurrence makes the pause conflict
+     * ({@link ActiveOccurrenceConflict}); a waiting {@code queued} occurrence is cancelled first so
+     * the pause is atomic and no orphaned waiting item survives.
+     */
+    public boolean pauseTask(String taskId, String ownerId, Instant now) {
+        Objects.requireNonNull(ownerId, "ownerId");
+        Objects.requireNonNull(now, "now");
+        synchronized (lock) {
+            ScheduledTask task = tasks.get(taskId);
+            if (task == null || !task.userId().equals(ownerId)) {
+                return false;
+            }
+            ScheduledTaskRun active = findActive(taskId).orElse(null);
+            if (active != null && active.status() != ScheduledRunStatus.QUEUED) {
+                throw new ActiveOccurrenceConflict(taskId, active.status().wire());
+            }
+            ScheduledTask paused = withStatus(task, ScheduledTaskStatus.PAUSED, now);
+            mutate(() -> {
+                if (active != null) {
+                    runs.put(active.id(), withRunStatus(active, ScheduledRunStatus.SKIPPED, now));
+                }
+                tasks.put(taskId, paused);
+            });
+            return true;
+        }
+    }
+
+    /**
+     * Completion/expiry bookkeeping for the parent task: writes the task/occurrence terminal status,
+     * the recomputed {@code next_run_at} for a recurring plan, the last-run association and the
+     * error. Terminal-protected when {@code protectTerminal} is set (a late write never overwrites a
+     * task that is already terminal). {@code nextRunAt} null keeps the existing value.
+     */
+    public boolean finishTask(String taskId, ScheduledTaskStatus status, Instant nextRunAt,
+            Instant lastRunAt, String lastRunId, String lastThreadId, String lastError,
+            boolean protectTerminal, Instant now) {
+        Objects.requireNonNull(status, "status");
+        Objects.requireNonNull(now, "now");
+        synchronized (lock) {
+            ScheduledTask task = tasks.get(taskId);
+            if (task == null) {
+                return false;
+            }
+            boolean protectedTerminal = protectTerminal && task.status().terminal();
+            ScheduledTask updated = new ScheduledTask(task.id(), task.userId(), task.threadId(),
+                    task.contextMode(), task.assistantId(), task.title(), task.prompt(),
+                    task.scheduleType(), task.scheduleSpec(), task.timezone(),
+                    protectedTerminal ? task.status() : status,
+                    nextRunAt == null ? task.nextRunAt() : nextRunAt,
+                    lastRunAt == null ? task.lastRunAt() : lastRunAt,
+                    lastRunId == null ? task.lastRunId() : lastRunId,
+                    lastThreadId == null ? task.lastThreadId() : lastThreadId,
+                    lastError, task.runCount(), task.lastOccurrenceSeq(), task.createdAt(), now);
+            mutate(() -> tasks.put(taskId, updated));
+            return true;
+        }
+    }
+
+    private static ScheduledTask withStatus(ScheduledTask task, ScheduledTaskStatus status, Instant now) {
+        return new ScheduledTask(task.id(), task.userId(), task.threadId(), task.contextMode(),
+                task.assistantId(), task.title(), task.prompt(), task.scheduleType(), task.scheduleSpec(),
+                task.timezone(), status, task.nextRunAt(), task.lastRunAt(), task.lastRunId(),
+                task.lastThreadId(), task.lastError(), task.runCount(), task.lastOccurrenceSeq(),
+                task.createdAt(), now);
+    }
+
+    private static ScheduledTaskRun withRunStatus(ScheduledTaskRun run, ScheduledRunStatus status, Instant now) {
+        return new ScheduledTaskRun(run.id(), run.taskId(), run.occurrenceSeq(), run.threadId(),
+                run.runId(), run.scheduledFor(), run.trigger(), status, run.error(), run.startedAt(),
+                now, run.attemptCount(), run.launchAccounted(), run.createdAt());
     }
 
     // ---------------------------------------------------------------- storage
