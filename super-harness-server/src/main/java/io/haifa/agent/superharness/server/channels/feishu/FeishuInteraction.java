@@ -31,7 +31,15 @@ public final class FeishuInteraction {
     public static final String FORM_SUBMIT = "form_submit";
     public static final String EMPTY_OTHER = "请输入回答后再提交。";
     public static final String EMPTY_FORM = "请填写必填字段后再提交。";
+    /**
+     * Legacy text ACK when reactions are disabled ({@code HAIFA_SUPER_HARNESS_FEISHU_REACTIONS=false})
+     * or the reaction API is unavailable. Hermes-aligned default uses {@link #REACTION_IN_PROGRESS}.
+     */
     public static final String PROGRESS = "正在处理您的请求…";
+    /** Hermes: Typing badge while the Turn is in flight. */
+    public static final String REACTION_IN_PROGRESS = "Typing";
+    /** Hermes: CrossMark when processing fails (only after Typing was cleared). */
+    public static final String REACTION_FAILURE = "CrossMark";
     public static final String BUSY = "当前对话仍在处理上一轮请求，请稍后再试。";
     public static final String STOPPED = "已停止当前任务。";
     public static final String STOP_FAILED = "当前没有可停止的任务，或停止失败。";

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.haifa.agent.superharness.server.channels.feishu.FeishuInboundMessage;
+import io.haifa.agent.superharness.server.channels.feishu.FeishuInteraction;
 import io.haifa.agent.superharness.server.channels.feishu.FeishuOpenDomain;
 import io.haifa.agent.superharness.server.channels.feishu.RecordingFeishuTransport;
 import io.haifa.agent.superharness.server.config.LocalServerConfiguration;
@@ -131,8 +132,15 @@ class FeishuChannelWorkerTest {
         assertThat(transport.replies())
                 .as("outbound replies: %s", transport.replies())
                 .isNotEmpty();
+        assertThat(transport.reactionAdds())
+                .as("Hermes Typing reaction while processing")
+                .anyMatch(add -> "om_chat".equals(add.messageId())
+                        && FeishuInteraction.REACTION_IN_PROGRESS.equals(add.emojiType()));
+        assertThat(transport.reactionDeletes())
+                .as("Typing cleared on success")
+                .anyMatch(del -> "om_chat".equals(del.messageId()) && del.success());
         assertThat(transport.replies())
-                .anyMatch(reply -> "正在处理您的请求…".equals(reply.text()));
+                .noneMatch(reply -> FeishuInteraction.PROGRESS.equals(reply.text()));
         assertThat(transport.replies().getLast().messageId()).isEqualTo("om_chat");
         assertThat(transport.replies().getLast().text()).contains("Haifa Agent SDK: hello feishu");
         assertThat(dataDirectory.resolve("channels").resolve("feishu-thread-map.json")).exists();
@@ -170,9 +178,9 @@ class FeishuChannelWorkerTest {
                                 new FeishuInboundMessage.Attachment("image", "img_key_live", "image.jpg")),
                         null));
 
-        assertThat(transport.replies())
-                .as("outbound replies: %s", transport.replies())
-                .anyMatch(reply -> "正在处理您的请求…".equals(reply.text()));
+        assertThat(transport.reactionAdds())
+                .anyMatch(add -> FeishuInteraction.REACTION_IN_PROGRESS.equals(add.emojiType()));
+        assertThat(transport.reactionDeletes()).isNotEmpty();
         assertThat(transport.replies().getLast().text()).contains("Haifa Agent SDK:");
         assertThat(dataDirectory.resolve("channels").resolve("feishu-thread-map.json")).exists();
         boolean found;
