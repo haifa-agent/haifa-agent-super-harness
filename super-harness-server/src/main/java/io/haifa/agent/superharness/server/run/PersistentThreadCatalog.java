@@ -317,6 +317,20 @@ public final class PersistentThreadCatalog {
      */
     public static List<InteractionDisplay> retainDisplaysWithinCapacity(
             List<InteractionDisplay> displays) {
+        return retainDisplaysWithinCapacity(displays, null);
+    }
+
+    /**
+     * Capacity retention that also knows which Runs of the Thread are still live.
+     *
+     * <p>Cards belonging to a Run that is no longer live can never be answered again, so after the
+     * answered cards they are the next thing to drop. Without this pass a long-lived Feishu Thread
+     * accumulates cancelled or superseded cards until the 65th save is rejected
+     * ("too many interaction displays"), and the waiting approval can neither be persisted nor
+     * answered. The SDK pending view stays authoritative for the single live card.
+     */
+    public static List<InteractionDisplay> retainDisplaysWithinCapacity(
+            List<InteractionDisplay> displays, java.util.Set<String> liveRunIds) {
         if (displays.size() <= MAX_INTERACTION_DISPLAYS_PER_THREAD) {
             return List.copyOf(displays);
         }
@@ -329,6 +343,17 @@ public final class PersistentThreadCatalog {
             }
             kept.add(display);
         }
+        if (overflow > 0 && liveRunIds != null) {
+            List<InteractionDisplay> pruned = new ArrayList<>(kept.size());
+            for (InteractionDisplay display : kept) {
+                if (overflow > 0 && !liveRunIds.contains(display.runId())) {
+                    overflow--;
+                    continue;
+                }
+                pruned.add(display);
+            }
+            kept = pruned;
+        }
         if (overflow > 0) {
             throw new IllegalArgumentException("too many interaction displays");
         }
@@ -338,6 +363,12 @@ public final class PersistentThreadCatalog {
     /** Clarification counterpart of {@link #retainDisplaysWithinCapacity(List)}. */
     public static List<ClarificationDisplay> retainClarificationsWithinCapacity(
             List<ClarificationDisplay> displays) {
+        return retainClarificationsWithinCapacity(displays, null);
+    }
+
+    /** Clarification counterpart of {@link #retainDisplaysWithinCapacity(List, java.util.Set)}. */
+    public static List<ClarificationDisplay> retainClarificationsWithinCapacity(
+            List<ClarificationDisplay> displays, java.util.Set<String> liveRunIds) {
         if (displays.size() <= MAX_CLARIFICATION_DISPLAYS_PER_THREAD) {
             return List.copyOf(displays);
         }
@@ -349,6 +380,17 @@ public final class PersistentThreadCatalog {
                 continue;
             }
             kept.add(display);
+        }
+        if (overflow > 0 && liveRunIds != null) {
+            List<ClarificationDisplay> pruned = new ArrayList<>(kept.size());
+            for (ClarificationDisplay display : kept) {
+                if (overflow > 0 && !liveRunIds.contains(display.runId())) {
+                    overflow--;
+                    continue;
+                }
+                pruned.add(display);
+            }
+            kept = pruned;
         }
         if (overflow > 0) {
             throw new IllegalArgumentException("too many clarification displays");

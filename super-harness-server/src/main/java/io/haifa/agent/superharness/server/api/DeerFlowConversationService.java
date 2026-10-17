@@ -2501,7 +2501,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         List<PersistentThreadCatalog.ClarificationDisplay> updated =
                 new ArrayList<>(thread.clarificationDisplays);
         updated.add(display);
-        updated = new ArrayList<>(PersistentThreadCatalog.retainClarificationsWithinCapacity(updated));
+        updated = new ArrayList<>(
+                PersistentThreadCatalog.retainClarificationsWithinCapacity(updated, liveRunIds(thread)));
         PersistentThreadCatalog.validateClarificationDisplays(updated);
         List<PersistentThreadCatalog.ClarificationDisplay> previous = thread.clarificationDisplays;
         thread.clarificationDisplays = List.copyOf(updated);
@@ -4605,6 +4606,13 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         return message;
     }
 
+    /** Cards of any other Run can never be answered again, so they are stale presentation. */
+    private static java.util.Set<String> liveRunIds(ThreadRecord thread) {
+        return thread.activeRunId == null
+                ? java.util.Set.of()
+                : java.util.Set.of(thread.activeRunId);
+    }
+
     private Map<String, Object> requestMessage(PersistentThreadCatalog.InteractionDisplay display) {
         return DeerFlowInteractionHttpProjection.requestMessage(
                 display.runId(), display.requestId(), display.toolCallId(), display.title(),
@@ -4644,7 +4652,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         updated.add(display);
         // A long-lived Thread keeps every card it ever raised; drop the oldest answered ones so the
         // waiting card can always become durable (W04-BUG-010).
-        updated = new ArrayList<>(PersistentThreadCatalog.retainDisplaysWithinCapacity(updated));
+        updated = new ArrayList<>(
+                PersistentThreadCatalog.retainDisplaysWithinCapacity(updated, liveRunIds(thread)));
         PersistentThreadCatalog.validateDisplays(updated);
         List<PersistentThreadCatalog.InteractionDisplay> previous = thread.interactionDisplays;
         thread.interactionDisplays = List.copyOf(updated);
