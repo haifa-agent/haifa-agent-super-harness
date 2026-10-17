@@ -104,11 +104,13 @@ public final class ProductionWebFetchTool
             try {
                 content = deepSeekClient.fetch(url, apiKey);
             } catch (DeepSeekWebClient.DeepSeekWebException exception) {
-                return Output.failure(url, "Error: DeepSeek API returned status " + exception.statusCode()
-                        + ": " + exception.getMessage());
+                return Output.failure(url, ToolSecretRedactor.redact(
+                        "Error: DeepSeek API returned status " + exception.statusCode()
+                                + ": " + exception.getMessage(), apiKey));
             } catch (IOException exception) {
-                return Output.failure(url, "Error: Request to DeepSeek API failed: "
-                        + exception.getClass().getSimpleName() + ": " + exception.getMessage());
+                return Output.failure(url, ToolSecretRedactor.redact(
+                        "Error: Request to DeepSeek API failed: "
+                                + exception.getClass().getSimpleName() + ": " + exception.getMessage(), apiKey));
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 return Output.failure(url, "Error: Request to DeepSeek API failed: interrupted");
@@ -144,15 +146,16 @@ public final class ProductionWebFetchTool
         try {
             response = http.send(request.build(), HttpResponse.BodyHandlers.ofString(UTF_8));
         } catch (IOException exception) {
-            return Output.failure(url, "Error: Request to Jina API failed: "
-                    + exception.getClass().getSimpleName() + ": " + exception.getMessage());
+            return Output.failure(url, ToolSecretRedactor.redact(
+                    "Error: Request to Jina API failed: "
+                            + exception.getClass().getSimpleName() + ": " + exception.getMessage(), apiKey));
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             return Output.failure(url, "Error: Request to Jina API failed: interrupted");
         }
         if (response.statusCode() != 200) {
-            return Output.failure(url, "Error: Jina API returned status " + response.statusCode()
-                    + ": " + response.body());
+            return Output.failure(url, ToolSecretRedactor.redact(
+                    "Error: Jina API returned status " + response.statusCode() + ": " + response.body(), apiKey));
         }
         String content = response.body();
         if (content == null || content.strip().isEmpty()) {

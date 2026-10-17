@@ -131,7 +131,8 @@ public class DeepSeekWebClient {
         HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(UTF_8));
         int statusCode = response.statusCode();
         if (statusCode != 200) {
-            throw new DeepSeekWebException(statusCode, "DeepSeek Search API returned HTTP " + statusCode + ": " + response.body());
+            throw new DeepSeekWebException(
+                    statusCode, errorMessage("DeepSeek Search API", statusCode, response.body(), apiKey));
         }
 
         String responseBody = response.body();
@@ -188,7 +189,8 @@ public class DeepSeekWebClient {
         HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(UTF_8));
         int statusCode = response.statusCode();
         if (statusCode != 200) {
-            throw new DeepSeekWebException(statusCode, "DeepSeek Fetch API returned HTTP " + statusCode + ": " + response.body());
+            throw new DeepSeekWebException(
+                    statusCode, errorMessage("DeepSeek Fetch API", statusCode, response.body(), apiKey));
         }
 
         String responseBody = response.body();
@@ -198,5 +200,11 @@ public class DeepSeekWebClient {
 
         JsonNode root = JSON.readTree(responseBody);
         return root.path("content").asText("");
+    }
+
+    /** Error text kept diagnostic without echoing the credential a provider may reflect back. */
+    private static String errorMessage(String api, int statusCode, String body, String apiKey) {
+        String redacted = ToolSecretRedactor.redact(body, apiKey);
+        return api + " returned HTTP " + statusCode + (redacted.isEmpty() ? "" : ": " + redacted);
     }
 }

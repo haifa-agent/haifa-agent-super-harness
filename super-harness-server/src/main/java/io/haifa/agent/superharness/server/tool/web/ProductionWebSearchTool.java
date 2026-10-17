@@ -104,7 +104,8 @@ public final class ProductionWebSearchTool
                 Thread.currentThread().interrupt();
                 return new Output(errorPayload("DeepSeek Search request failed: interrupted", input.query()));
             } catch (Exception failure) {
-                return new Output(errorPayload("DeepSeek Search request failed: " + failure.getMessage(), input.query()));
+                return new Output(errorPayload(ToolSecretRedactor.redact(
+                        "DeepSeek Search request failed: " + failure.getMessage(), apiKey), input.query()));
             }
             if (deepSeekResults.isEmpty()) {
                 return new Output(noResults(input.query()));
