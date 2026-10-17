@@ -87,9 +87,9 @@ abstract class AbstractDeerFlowThreadRunApiTest {
     }
 
     int ownedBridgeCount() throws ReflectiveOperationException {
-        var field = DeerFlowThreadRunApi.class.getDeclaredField("ownedBridges");
+        var field = DeerFlowConversationService.class.getDeclaredField("ownedBridges");
         field.setAccessible(true);
-        return ((java.util.Set<?>) field.get(api.threadRunApi())).size();
+        return ((java.util.Set<?>) field.get(api.threadRunApi().conversations())).size();
     }
 
     void createThread(String threadId) throws Exception {
@@ -184,7 +184,7 @@ abstract class AbstractDeerFlowThreadRunApiTest {
     void awaitTitleObserversIdle() throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
         while (System.nanoTime() < deadline) {
-            if (api.threadRunApi().titleCompletionObserverCount() == 0) {
+            if (api.threadRunApi().conversations().titleCompletionObserverCount() == 0) {
                 return;
             }
             Thread.sleep(10);

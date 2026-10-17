@@ -50,13 +50,13 @@ final class DeerFlowProjectApi implements HttpHandler {
 
     private final ObjectMapper json;
     private final PersistentProjectWorkspaceService projects;
-    private final DeerFlowThreadRunApi threads;
+    private final DeerFlowConversationService threads;
     private final DeerFlowWorkspaceApi workspace;
 
     DeerFlowProjectApi(
             ObjectMapper json,
             PersistentProjectWorkspaceService projects,
-            DeerFlowThreadRunApi threads,
+            DeerFlowConversationService threads,
             DeerFlowWorkspaceApi workspace) {
         this.json = java.util.Objects.requireNonNull(json, "json");
         this.projects = java.util.Objects.requireNonNull(projects, "projects");

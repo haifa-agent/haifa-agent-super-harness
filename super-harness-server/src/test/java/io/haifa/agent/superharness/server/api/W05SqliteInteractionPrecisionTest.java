@@ -188,8 +188,8 @@ class W05SqliteInteractionPrecisionTest {
             assertThat(sqliteFailure.getCause()).isInstanceOf(SQLException.class);
             int sqliteCode = ((SQLException) sqliteFailure.getCause()).getErrorCode();
             assertThat(sqliteCode & 0xff).isEqualTo(5);
-            assertThat(DeerFlowThreadRunApi.interactionFailureStatus(sqliteFailure)).isEqualTo(500);
-            assertThat(DeerFlowThreadRunApi.interactionFailureReason(sqliteFailure))
+            assertThat(DeerFlowConversationService.interactionFailureStatus(sqliteFailure)).isEqualTo(500);
+            assertThat(DeerFlowConversationService.interactionFailureReason(sqliteFailure))
                     .isEqualTo("SQLITE_DATABASE_BUSY");
             assertThat(fixture.agent().runs().find(waiting.runId()).orElseThrow().status())
                     .isEqualTo(AgentRunStatus.WAITING_APPROVAL);
@@ -234,7 +234,7 @@ class W05SqliteInteractionPrecisionTest {
             assertThat(sqliteFailure.getCause()).isInstanceOf(RuntimeContractException.class);
             assertThat(((RuntimeContractException) sqliteFailure.getCause()).code())
                     .isEqualTo(RuntimeApiErrorCode.INTERACTION_REVISION_CONFLICT);
-            assertThat(DeerFlowThreadRunApi.interactionFailureStatus(sqliteFailure)).isEqualTo(500);
+            assertThat(DeerFlowConversationService.interactionFailureStatus(sqliteFailure)).isEqualTo(500);
             assertThat(fixture.agent().runs().find(waiting.runId()).orElseThrow().status())
                     .isEqualTo(AgentRunStatus.WAITING_APPROVAL);
             assertThat(fixture.agent().runs().pendingInteraction(waiting.runId())).contains(waiting.pending());

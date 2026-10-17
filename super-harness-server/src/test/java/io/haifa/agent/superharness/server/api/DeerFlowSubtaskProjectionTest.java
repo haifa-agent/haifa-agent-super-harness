@@ -69,13 +69,13 @@ class DeerFlowSubtaskProjectionTest {
     @Test
     void transportParametersRejectNegativeFractionalOverflowAndOutOfRangeLimits() {
         for (String invalid : List.of("-1", "1.5", "1e2", " ", "9223372036854775808", "9007199254740992")) {
-            assertThatThrownBy(() -> DeerFlowThreadRunApi.subtaskQueryNumber(invalid, 0, DeerFlowSubtaskProjection.MAX_SAFE_INTEGER))
+            assertThatThrownBy(() -> DeerFlowConversationService.subtaskQueryNumber(invalid, 0, DeerFlowSubtaskProjection.MAX_SAFE_INTEGER))
                     .isInstanceOf(IllegalArgumentException.class);
         }
-        assertThat(DeerFlowThreadRunApi.subtaskQueryNumber("9007199254740991", 0, DeerFlowSubtaskProjection.MAX_SAFE_INTEGER))
+        assertThat(DeerFlowConversationService.subtaskQueryNumber("9007199254740991", 0, DeerFlowSubtaskProjection.MAX_SAFE_INTEGER))
                 .isEqualTo(DeerFlowSubtaskProjection.MAX_SAFE_INTEGER);
         for (String invalid : List.of("0", "501")) {
-            assertThatThrownBy(() -> DeerFlowThreadRunApi.subtaskQueryNumber(invalid, 1, 500))
+            assertThatThrownBy(() -> DeerFlowConversationService.subtaskQueryNumber(invalid, 1, 500))
                     .isInstanceOf(IllegalArgumentException.class);
         }
     }

@@ -267,7 +267,7 @@ class DeerFlowWorkspaceChangesApiTest {
         response.body().close();
 
         api.close();
-        assertThat(api.threadRunApi().workspaceCompletionObserverCount()).isZero();
+        assertThat(api.threadRunApi().conversations().workspaceCompletionObserverCount()).isZero();
     }
 
     private void startWithBinding(HaifaRunBridge.ModelBinding binding) throws Exception {
@@ -312,7 +312,7 @@ class DeerFlowWorkspaceChangesApiTest {
         }
         throw new AssertionError("workspace completion observer did not persist run " + runId
                 + "; run_status=" + status + "; observer_count="
-                + api.threadRunApi().workspaceCompletionObserverCount()
+                + api.threadRunApi().conversations().workspaceCompletionObserverCount()
                 + "; baseline_files=" + baselines);
     }
 

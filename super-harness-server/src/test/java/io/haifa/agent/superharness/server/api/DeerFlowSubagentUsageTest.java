@@ -6,16 +6,16 @@ import org.junit.jupiter.api.Test;
 
 class DeerFlowSubagentUsageTest {
     @Test void knownZeroAndExactBrowserIntegerBoundaryArePreserved() {
-        assertThat(DeerFlowThreadRunApi.sumUsageTokens(0, 0)).hasValue(0);
-        assertThat(DeerFlowThreadRunApi.sumUsageTokens(17, 24)).hasValue(41);
-        assertThat(DeerFlowThreadRunApi.sumUsageTokens(9_007_199_254_740_990L, 1))
+        assertThat(DeerFlowConversationService.sumUsageTokens(0, 0)).hasValue(0);
+        assertThat(DeerFlowConversationService.sumUsageTokens(17, 24)).hasValue(41);
+        assertThat(DeerFlowConversationService.sumUsageTokens(9_007_199_254_740_990L, 1))
                 .hasValue(9_007_199_254_740_991L);
     }
 
     @Test void invalidSourceAndUnrepresentableSumsStayUnknown() {
-        assertThat(DeerFlowThreadRunApi.sumUsageTokens(-1, 1)).isEmpty();
-        assertThat(DeerFlowThreadRunApi.sumUsageTokens(9_007_199_254_740_992L, 0)).isEmpty();
-        assertThat(DeerFlowThreadRunApi.sumUsageTokens(9_007_199_254_740_991L, 1)).isEmpty();
-        assertThat(DeerFlowThreadRunApi.sumUsageTokens(Long.MAX_VALUE, Long.MAX_VALUE)).isEmpty();
+        assertThat(DeerFlowConversationService.sumUsageTokens(-1, 1)).isEmpty();
+        assertThat(DeerFlowConversationService.sumUsageTokens(9_007_199_254_740_992L, 0)).isEmpty();
+        assertThat(DeerFlowConversationService.sumUsageTokens(9_007_199_254_740_991L, 1)).isEmpty();
+        assertThat(DeerFlowConversationService.sumUsageTokens(Long.MAX_VALUE, Long.MAX_VALUE)).isEmpty();
     }
 }

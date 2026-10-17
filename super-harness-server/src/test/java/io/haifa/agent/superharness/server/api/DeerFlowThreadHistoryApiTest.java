@@ -105,23 +105,23 @@ class DeerFlowThreadHistoryApiTest extends AbstractDeerFlowThreadRunApiTest {
 
     @Test
     void historyAccumulatorFindsOneHundredCheckpointsAcrossMoreThanTwoHundredMessages() {
-        DeerFlowThreadRunApi.HistoryAccumulator accumulator =
-                new DeerFlowThreadRunApi.HistoryAccumulator(100, null);
+        DeerFlowConversationService.HistoryAccumulator accumulator =
+                new DeerFlowConversationService.HistoryAccumulator(100, null);
         for (int sequence = 1; sequence <= 250; sequence++) {
             accumulator.accept(turn(
                     sequence,
                     sequence % 2 == 0 ? MessageRole.ASSISTANT : MessageRole.USER));
         }
 
-        List<DeerFlowThreadRunApi.HistoryProjection> projections = accumulator.newestFirst();
+        List<DeerFlowConversationService.HistoryProjection> projections = accumulator.newestFirst();
         assertThat(projections).hasSize(100);
         assertThat(projections.getFirst().checkpoint().sequence()).isEqualTo(250);
         assertThat(projections.getLast().checkpoint().sequence()).isEqualTo(52);
         assertThat(projections).allSatisfy(
                 projection -> assertThat(projection.messages()).hasSizeLessThanOrEqualTo(200));
 
-        DeerFlowThreadRunApi.HistoryAccumulator before =
-                new DeerFlowThreadRunApi.HistoryAccumulator(3, 202L);
+        DeerFlowConversationService.HistoryAccumulator before =
+                new DeerFlowConversationService.HistoryAccumulator(3, 202L);
         for (int sequence = 1; sequence <= 250; sequence++) {
             before.accept(turn(
                     sequence,
@@ -134,9 +134,9 @@ class DeerFlowThreadHistoryApiTest extends AbstractDeerFlowThreadRunApiTest {
 
     @Test
     void transcriptForwardScanFailsClosedAtOneHundredSdkPages() {
-        DeerFlowThreadRunApi.requireAnotherScanPage(99);
-        assertThatThrownBy(() -> DeerFlowThreadRunApi.requireAnotherScanPage(100))
-                .isInstanceOf(DeerFlowThreadRunApi.TranscriptScanLimitException.class);
+        DeerFlowConversationService.requireAnotherScanPage(99);
+        assertThatThrownBy(() -> DeerFlowConversationService.requireAnotherScanPage(100))
+                .isInstanceOf(DeerFlowConversationService.TranscriptScanLimitException.class);
     }
 
     @Test

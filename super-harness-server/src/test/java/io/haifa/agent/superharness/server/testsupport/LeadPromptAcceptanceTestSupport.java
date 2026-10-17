@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.haifa.agent.core.run.AgentRunId;
 import io.haifa.agent.superharness.server.api.DeerFlowBootstrapApi;
+import io.haifa.agent.superharness.server.api.DeerFlowConversationService;
 import io.haifa.agent.superharness.server.api.DeerFlowThreadRunApi;
 import io.haifa.agent.superharness.server.run.HaifaRunBridge;
 import java.lang.reflect.Field;
@@ -14,9 +15,9 @@ import java.util.Map;
 /** Read-only Lead prompt assertions on the existing product bridge. */
 public final class LeadPromptAcceptanceTestSupport {
     public static HaifaRunBridge bridge(DeerFlowBootstrapApi api, String threadId) throws Exception {
-        Field threads = DeerFlowThreadRunApi.class.getDeclaredField("threads");
+        Field threads = DeerFlowConversationService.class.getDeclaredField("threads");
         threads.setAccessible(true);
-        Object record = ((Map<?, ?>) threads.get(api.threadRunApi())).get(threadId);
+        Object record = ((Map<?, ?>) threads.get(api.threadRunApi().conversations())).get(threadId);
         assertThat(record).as("real SH ThreadRecord").isNotNull();
         Field field = record.getClass().getDeclaredField("bridge");
         field.setAccessible(true);

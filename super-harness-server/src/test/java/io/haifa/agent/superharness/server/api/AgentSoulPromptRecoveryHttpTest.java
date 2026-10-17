@@ -135,7 +135,7 @@ public class AgentSoulPromptRecoveryHttpTest {
             try (var routes = new DeerFlowThreadRunApi(fixture.json, ignored -> binding, ignored -> true,
                     projects, fixture.data, new SecretKeySpec(new byte[32], "AES"),
                     scope -> DeerFlowBootstrapApi.fileTools(scope, projects, workspace),
-                    DeerFlowThreadRunApi.McpProjectionProvider.none(), DeerFlowThreadRunApi.SkillProjectionProvider.none(),
+                    DeerFlowConversationService.McpProjectionProvider.none(), DeerFlowConversationService.SkillProjectionProvider.none(),
                     new DeerFlowUploadContext(workspace), diagnostic)) {
                 HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
                 var executor = Executors.newVirtualThreadPerTaskExecutor();

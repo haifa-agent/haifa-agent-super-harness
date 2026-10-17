@@ -24,24 +24,24 @@ import org.junit.jupiter.api.Test;
 class DeerFlowThreadRunApiTest extends AbstractDeerFlowThreadRunApiTest {
     @Test
     void unknownRunStateCannotClearAdmissionOrEvictHotCache() {
-        assertThat(DeerFlowThreadRunApi.isKnownTerminal(Optional::<io.haifa.agent.runtime.api.AgentRunSnapshot>empty))
+        assertThat(DeerFlowConversationService.isKnownTerminal(Optional::<io.haifa.agent.runtime.api.AgentRunSnapshot>empty))
                 .isFalse();
-        assertThat(DeerFlowThreadRunApi.isKnownTerminal(() -> {
+        assertThat(DeerFlowConversationService.isKnownTerminal(() -> {
             throw new IllegalStateException("transient durable lookup failure");
         })).isFalse();
     }
 
     @Test
     void workspaceCompletionObservationHasAFiniteWallClockBound() {
-        assertThat(DeerFlowThreadRunApi.WORKSPACE_COMPLETION_OBSERVER_MAX_WAIT)
+        assertThat(DeerFlowConversationService.WORKSPACE_COMPLETION_OBSERVER_MAX_WAIT)
                 .isEqualTo(Duration.ofHours(24));
-        assertThat(DeerFlowThreadRunApi.WORKSPACE_COMPLETION_OBSERVER_INITIAL_POLL)
+        assertThat(DeerFlowConversationService.WORKSPACE_COMPLETION_OBSERVER_INITIAL_POLL)
                 .isEqualTo(Duration.ofMillis(25));
-        assertThat(DeerFlowThreadRunApi.WORKSPACE_COMPLETION_OBSERVER_MAX_POLL)
+        assertThat(DeerFlowConversationService.WORKSPACE_COMPLETION_OBSERVER_MAX_POLL)
                 .isEqualTo(Duration.ofSeconds(1));
-        assertThat(DeerFlowThreadRunApi.nextWorkspaceCompletionPollMillis(25)).isEqualTo(50);
-        assertThat(DeerFlowThreadRunApi.nextWorkspaceCompletionPollMillis(800)).isEqualTo(1_000);
-        assertThat(DeerFlowThreadRunApi.nextWorkspaceCompletionPollMillis(1_000)).isEqualTo(1_000);
+        assertThat(DeerFlowConversationService.nextWorkspaceCompletionPollMillis(25)).isEqualTo(50);
+        assertThat(DeerFlowConversationService.nextWorkspaceCompletionPollMillis(800)).isEqualTo(1_000);
+        assertThat(DeerFlowConversationService.nextWorkspaceCompletionPollMillis(1_000)).isEqualTo(1_000);
     }
 
     @Test
@@ -60,7 +60,7 @@ class DeerFlowThreadRunApiTest extends AbstractDeerFlowThreadRunApiTest {
         assertThat(body.path("thread_id").asText()).isEqualTo("thread-one");
         assertThat(body.path("status").asText()).isEqualTo("idle");
         assertThat(body.path("metadata").path("label").asText()).isEqualTo("kept");
-        assertThat(body.path("metadata").has(DeerFlowThreadRunApi.MODEL_CONFIGURATION_DIGEST_METADATA_KEY)).isFalse();
+        assertThat(body.path("metadata").has(DeerFlowConversationService.MODEL_CONFIGURATION_DIGEST_METADATA_KEY)).isFalse();
         assertThat(body.path("metadata").has("owner")).isFalse();
         assertThat(body.path("metadata").has("user_id")).isFalse();
         assertThat(json.readTree(second.body()).path("metadata").path("label").asText())
@@ -90,6 +90,7 @@ class DeerFlowThreadRunApiTest extends AbstractDeerFlowThreadRunApiTest {
                 .hasValueSatisfying(value -> assertThat(value).contains("text/event-stream"));
         // The Next.js rewrite proxy compresses, and so buffers, a stream that lacks no-transform.
         assertThat(response.headers().firstValue("cache-control")).hasValue("no-cache, no-transform");
+        assertThat(response.headers().firstValue("X-Haifa-Interaction-Presentation")).isEmpty();
         String location = response.headers().firstValue("content-location").orElseThrow();
         String runId = location.substring(location.lastIndexOf('/') + 1);
         assertThat(response.body()).contains("event: metadata");
