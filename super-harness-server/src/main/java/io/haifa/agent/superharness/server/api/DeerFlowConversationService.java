@@ -1332,10 +1332,11 @@ public class DeerFlowConversationService implements AutoCloseable {
                 // fresh so a later enable/disable or bun change rebuilds the disclosure consistently.
                 Set<String> platformToolNames = new java.util.LinkedHashSet<>(selectedBridge.mcpToolNames());
                 platformToolNames.addAll(SkillScriptToolConfig.toolNames(System.getenv(), skillProjection));
+                boolean visionSupported = HaifaRunBridge.supportsVision(binding.snapshot());
                 switchingPrompt = !selectedBridge.matchesAgentIdentity(agentPrompt)
                         || !selectedBridge.promptSignature().equals(
                                 HaifaRunBridge.promptSignatureFor(toolsForThread(thread, agentPrompt), skillProjection, agentPrompt, delegation,
-                                        platformToolNames));
+                                        platformToolNames, visionSupported));
                 switchingDelegation = !selectedBridge.delegationSignature().equals(
                         delegation.signature(toolsForThread(thread, agentPrompt), mcpProjection.fingerprint(),
                                 skillProjection == null ? "" : skillProjection.fingerprint(), selectedBridge.mcpToolNames()));

@@ -71,6 +71,18 @@ public final class ProductionViewImageTool
         this.workspace = Objects.requireNonNull(workspace, "workspace");
     }
 
+    public String threadId() {
+        return threadId;
+    }
+
+    public PersistentProjectWorkspaceService bindings() {
+        return bindings;
+    }
+
+    public RestrictedWorkspaceService workspace() {
+        return workspace;
+    }
+
     @Override
     public JavaToolSpec<Input, Output> spec() {
         return SPEC;
@@ -150,7 +162,7 @@ public final class ProductionViewImageTool
     }
 
     private static boolean isAllowedImageVirtualPath(String path) {
-        if (path == null) {
+        if (path == null || path.contains("..") || path.contains("\\")) {
             return false;
         }
         for (String root : ALLOWED_ROOTS) {
@@ -174,7 +186,7 @@ public final class ProductionViewImageTool
         return filename.substring(dot);
     }
 
-    static String detectImageMime(byte[] data) {
+    public static String detectImageMime(byte[] data) {
         if (data == null) {
             return null;
         }
@@ -256,6 +268,15 @@ public final class ProductionViewImageTool
                     "",
                     "",
                     0L);
+        }
+
+        public Map<String, Object> structuredData() {
+            return Map.of(
+                    "status", status,
+                    "path", path,
+                    "sha256", sha256,
+                    "mime_type", mime_type,
+                    "size", size);
         }
     }
 }
