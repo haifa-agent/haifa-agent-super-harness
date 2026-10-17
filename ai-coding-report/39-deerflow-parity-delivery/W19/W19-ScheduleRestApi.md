@@ -7,7 +7,7 @@
 
 - 任务：W19-task-3「调度 REST 兼容层」（M3）。
 - 分支 / worktree：`feat-w19-schedule-rest-api`，本目录（base `main` `ccaec0d`，已含 #68 契约、#69 M1、#70 M2）。
-- 交付提交：`e7f9fe843b91c6507ac319c3b66f99862c1ab061`（源码 + 测试；其后的提交仅本报告文字）。
+- 交付提交：`5f35676fcef0a9a7c170e7a5ce91d223a7a16ddd`（源码 + 测试；`sourceTree=fdfdfd248fbb4e040d4bfdc00433d45fa0e482b8`，`javaInputFingerprint=6bbf8492833048ae5e5122477267b499ee541307abe5fde3913bae97b166680c`；其后的提交仅本报告文字）。首个功能提交 `e7f9fe8`，尾随空行修正提交 `5f35676`。
 - 槽位 / 端口 / 数据目录：Slot 5，Gateway `21618` / Frontend `26618`；本任务**未启动固定端口服务**，未占用槽位端口。测试使用进程内 Gateway（ephemeral 端口）+ 受控 loopback Provider，data-root 落在 `local-tmp/acceptance-fixtures/data/case-*`。
 - SDK：`local-tmp/sdk-selection.json` ABSENT → 基线 `io.haifa:haifa-agent-bom:0.1.3-SNAPSHOT`（`test-targeted` 报告 `sdkSelection=ABSENT`、`haifaVersion=0.1.3-SNAPSHOT`）。未使用带 worktree 标识的版本；未向被跟踪文件写入版本覆盖。
 - 复用 M1/M2：只新增 REST 映射、校验与投影，直接调用 `ScheduleStore` 与 `ScheduleDispatchService`，未复制调度计算、未复制 Run 启动逻辑、未新增第二套状态。
@@ -85,8 +85,8 @@
   - 结果：`status=PASS`，60 通过 / 0 失败 / 0 错误 / 0 跳过，`elapsedMs=24502`。
   - 原始日志：`local-tmp/test-targeted/test-targeted-20261018-012711-501.log`（副本同上）。
 - 全仓门禁：`pwsh -NoProfile -File scripts/verify-full.ps1`（进程内设 `HAIFA_SUPER_HARNESS_SKILL_PYTHON=D:/agents/deer-flow/backend/.venv/Scripts/python.exe`）
-  - 结果：`status=PASS`，`tests=937`、failures 0、errors 0、skipped 21，`elapsedMs=300540`，`sourceSha=ccaec0d`（未提交时跑）。
-  - 原始日志 / 摘要：`local-tmp/verify-full/verify-full-20261018-012809-180.log`、`.json`（副本同上）。
+  - 结果：`status=PASS`，`tests=937`、failures 0、errors 0、skipped 21，`elapsedMs=292423`，绑定 `sourceSha=5f35676`、`sourceTree=fdfdfd2`、`javaInputFingerprint=6bbf849`。
+  - 原始日志 / 摘要：`local-tmp/verify-full/verify-full-20261018-013538-615.log`、`.json`（副本 `local-tmp/slot-5-w19-m3/evidence/`）。首次（未提交树）全仓 PASS 摘要为 `verify-full-20261018-012809-180.*`，仅作过程记录，正式门禁以 `5f35676` 的摘要为准。
 - 真实 HTTP/Provider 原始证据：`local-tmp/acceptance-fixtures/evidence/case-*`（`http-*.summary.json`、`model.json`、`fixture.summary.json`）。
 - 契约：`contracts/upstream/deerflow/schemas/scheduled-task*.schema.json`、`fixtures/core-protocol-fixtures.json`（`schedules.*` 12 项，未改写）。
 
@@ -119,7 +119,7 @@
 ## 11. 交接 M4
 
 - 路由与权限矩阵：见 §3；错误矩阵见 §4；响应形状见 §5。
-- 实际 SH SHA：`e7f9fe843b91c6507ac319c3b66f99862c1ab061`（base `ccaec0d`）。
+- 实际 SH SHA：`5f35676fcef0a9a7c170e7a5ce91d223a7a16ddd`（base `ccaec0d`；`sourceTree=fdfdfd2`、`javaInputFingerprint=6bbf849`）。
 - 通过/失败/未运行：§6 PASS 8/8；§10 NOT_RUN 项如上。
 - 剩余限制：§9（单实例、preview-cron、多用户 Agent 目录、权限粒度）。
 - 原始证据路径：`local-tmp/slot-5-w19-m3/evidence/`（定向/回归/verify-full 日志与摘要）、`local-tmp/acceptance-fixtures/evidence/case-*`（HTTP/Provider 原始件）。
