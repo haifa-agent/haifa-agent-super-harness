@@ -9,6 +9,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -64,6 +65,35 @@ class DeepSeekWebClientTest {
         assertThat(sentBody.path("query").asText()).isEqualTo("haifa agent");
         assertThat(sentBody.path("count").asInt()).isEqualTo(5);
         assertThat(sentBody.path("need_content").asBoolean()).isFalse();
+    }
+
+    @Test
+    void searchPreservesRequestedTimeRangeInQuery() throws Exception {
+        client.search("haifa agent", 5, Optional.of("day"), MOCK_CREDENTIAL);
+        JsonNode sentBody = JSON.readTree(recordedBodies.get(0));
+        assertThat(sentBody.path("query").asText()).matches("^haifa agent after:\\d{4}-\\d{2}-\\d{2}$");
+    }
+
+    @Test
+    void appendTimeRangeFilterCalculatesExpectedDates() {
+        LocalDate today = LocalDate.of(2026, 10, 17);
+        assertThat(DeepSeekWebClient.appendTimeRangeFilter("query", "day", today)).isEqualTo("query after:2026-10-16");
+        assertThat(DeepSeekWebClient.appendTimeRangeFilter("query", "d", today)).isEqualTo("query after:2026-10-16");
+        assertThat(DeepSeekWebClient.appendTimeRangeFilter("query", "week", today)).isEqualTo("query after:2026-10-10");
+        assertThat(DeepSeekWebClient.appendTimeRangeFilter("query", "w", today)).isEqualTo("query after:2026-10-10");
+        assertThat(DeepSeekWebClient.appendTimeRangeFilter("query", "month", today)).isEqualTo("query after:2026-09-17");
+        assertThat(DeepSeekWebClient.appendTimeRangeFilter("query", "m", today)).isEqualTo("query after:2026-09-17");
+        assertThat(DeepSeekWebClient.appendTimeRangeFilter("query", "year", today)).isEqualTo("query after:2025-10-17");
+        assertThat(DeepSeekWebClient.appendTimeRangeFilter("query", "y", today)).isEqualTo("query after:2025-10-17");
+
+        // Preserves existing after: query operator without duplicate
+        assertThat(DeepSeekWebClient.appendTimeRangeFilter("query after:2026-01-01", "day", today))
+                .isEqualTo("query after:2026-01-01");
+
+        // Unknown or empty range leaves query unchanged
+        assertThat(DeepSeekWebClient.appendTimeRangeFilter("query", null, today)).isEqualTo("query");
+        assertThat(DeepSeekWebClient.appendTimeRangeFilter("query", "", today)).isEqualTo("query");
+        assertThat(DeepSeekWebClient.appendTimeRangeFilter("query", "all", today)).isEqualTo("query");
     }
 
     @Test

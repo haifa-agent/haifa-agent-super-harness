@@ -157,6 +157,29 @@ class ProductionWebFetchToolTest {
     }
 
     @Test
+    void deepseekFetchResolvesCredentialFromConfigFallback() {
+        server.createContext("/v1/tools/fetch-fallback", exchange -> {
+            String resp = "{\"title\": \"Fallback Page\", \"content\": \"Fallback markdown text\"}";
+            byte[] bytes = resp.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+
+        WebToolConfig dsConfig = WebToolTestSupport.deepseekConfig(
+                server, "/v1/tools/search", "/v1/tools/fetch-fallback", "sk-tool-key-fallback");
+        ProductionWebFetchTool dsTool = new ProductionWebFetchTool(dsConfig);
+
+        var output = dsTool.invoke(
+                new ProductionWebFetchTool.Input("https://example.com/deepseek-page"),
+                WebToolTestSupport.context(Map.of()));
+
+        assertThat(output.error()).isEmpty();
+        assertThat(output.content()).isEqualTo("Fallback markdown text");
+    }
+
+    @Test
     void schemaAndDescriptionMatchTheFrozenContract() throws Exception {
         Map<String, Object> document = new JavaRecordSchemaGenerator()
                 .generate("web_fetch", "1.0.0", ProductionWebFetchTool.Input.class)

@@ -90,6 +90,9 @@ public final class ProductionWebSearchTool
         if (config.searchProvider() == WebToolConfig.WebSearchProvider.DEEPSEEK) {
             String apiKey = context.credentials().get(WebToolConfig.DEEPSEEK_TOOL_API_KEY_CREDENTIAL);
             if (apiKey == null || apiKey.isBlank()) {
+                apiKey = config.deepseekToolApiKey().orElse(null);
+            }
+            if (apiKey == null || apiKey.isBlank()) {
                 return new Output(errorPayload("DEEPSEEK_TOOL_API_KEY is not configured", input.query()));
             }
             List<DeepSeekWebClient.SearchResultItem> deepSeekResults;
@@ -97,6 +100,9 @@ public final class ProductionWebSearchTool
                 deepSeekResults = deepSeekClient.search(input.query(), maxResults, timeRange, apiKey);
             } catch (DeepSeekWebClient.DeepSeekWebException failure) {
                 return new Output(errorPayload("DeepSeek Search API error: HTTP " + failure.statusCode(), input.query()));
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return new Output(errorPayload("DeepSeek Search request failed: interrupted", input.query()));
             } catch (Exception failure) {
                 return new Output(errorPayload("DeepSeek Search request failed: " + failure.getMessage(), input.query()));
             }

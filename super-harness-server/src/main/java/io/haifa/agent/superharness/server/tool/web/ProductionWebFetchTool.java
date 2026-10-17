@@ -95,6 +95,9 @@ public final class ProductionWebFetchTool
         if (config.fetchProvider() == WebToolConfig.WebFetchProvider.DEEPSEEK) {
             String apiKey = context.credentials().get(DEEPSEEK_TOOL_API_KEY_CREDENTIAL);
             if (apiKey == null || apiKey.isBlank()) {
+                apiKey = config.deepseekToolApiKey().orElse(null);
+            }
+            if (apiKey == null || apiKey.isBlank()) {
                 return Output.failure(url, "Error: " + DEEPSEEK_TOOL_API_KEY_CREDENTIAL + " is not configured");
             }
             String content;
@@ -131,6 +134,9 @@ public final class ProductionWebFetchTool
                 .header("X-Timeout", Long.toString(config.timeout().toSeconds()))
                 .POST(HttpRequest.BodyPublishers.ofString(payload, UTF_8));
         String apiKey = context.credentials().get(JINA_API_KEY_CREDENTIAL);
+        if (apiKey == null || apiKey.isBlank()) {
+            apiKey = config.jinaApiKey().orElse(null);
+        }
         if (apiKey != null && !apiKey.isBlank()) {
             request.header("Authorization", "Bearer " + apiKey);
         }

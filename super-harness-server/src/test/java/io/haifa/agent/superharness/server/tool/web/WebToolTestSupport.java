@@ -48,6 +48,10 @@ final class WebToolTestSupport {
     }
 
     static WebToolConfig deepseekConfig(com.sun.net.httpserver.HttpServer server, String searchPath, String fetchPath) {
+        return deepseekConfig(server, searchPath, fetchPath, null);
+    }
+
+    static WebToolConfig deepseekConfig(com.sun.net.httpserver.HttpServer server, String searchPath, String fetchPath, String apiKey) {
         String base = "http://" + InetAddress.getLoopbackAddress().getHostAddress() + ":" + server.getAddress().getPort();
         return new WebToolConfig(
                 WebToolConfig.WebSearchProvider.DEEPSEEK,
@@ -61,7 +65,9 @@ final class WebToolTestSupport {
                 Duration.ofMillis(400),
                 WebToolConfig.DEFAULT_MAX_RESULTS,
                 WebToolConfig.DEFAULT_REGION,
-                WebToolConfig.DEFAULT_SAFE_SEARCH);
+                WebToolConfig.DEFAULT_SAFE_SEARCH,
+                Optional.ofNullable(apiKey),
+                Optional.empty());
     }
 
     static com.sun.net.httpserver.HttpServer loopbackServer() throws java.io.IOException {

@@ -41,6 +41,7 @@ import io.haifa.agent.sdk.product.ChildAgentSpec;
 import io.haifa.agent.sdk.api.RunInputCommand;
 import io.haifa.agent.sdk.api.RunInputResult;
 import io.haifa.agent.sdk.api.SdkCallerProvider;
+import io.haifa.agent.sdk.contribution.CredentialPlatformContribution;
 import io.haifa.agent.sdk.contribution.ModelContribution;
 import io.haifa.agent.sdk.contribution.PolicyPlatformContribution;
 import io.haifa.agent.sdk.contribution.SkillPlatformContribution;
@@ -520,6 +521,9 @@ public final class HaifaRunBridge implements AutoCloseable {
                 // and release; SH only declares the projections. applyTo sets the builder's
                 // credentials contribution, so SH must not set another one.
                 platform.applyTo(builder);
+            } else {
+                builder.credentials(new CredentialPlatformContribution(
+                        id -> Optional.ofNullable(System.getenv(id))));
             }
             // Optional host bootstrap: the default SDK virtual-thread executor stays in place
             // when no factory is supplied; the SDK owns the fresh executor and its closing.

@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Endpoint, provider selection, and default-value configuration shared by the default web tools
@@ -29,7 +30,9 @@ public record WebToolConfig(
         Duration timeout,
         int maxResults,
         String region,
-        String safeSearch) {
+        String safeSearch,
+        Optional<String> deepseekToolApiKey,
+        Optional<String> jinaApiKey) {
 
     public enum WebSearchProvider {
         DUCKDUCKGO,
@@ -58,6 +61,7 @@ public record WebToolConfig(
     }
 
     public static final String DEEPSEEK_TOOL_API_KEY_CREDENTIAL = "DEEPSEEK_TOOL_API_KEY";
+    public static final String JINA_API_KEY_CREDENTIAL = "JINA_API_KEY";
 
     static final String HTML_URL_ENVIRONMENT = "HAIFA_SUPER_HARNESS_DDG_HTML_URL";
     static final String HOME_URL_ENVIRONMENT = "HAIFA_SUPER_HARNESS_DDG_HOME_URL";
@@ -94,7 +98,40 @@ public record WebToolConfig(
         Objects.requireNonNull(timeout, "timeout");
         Objects.requireNonNull(region, "region");
         Objects.requireNonNull(safeSearch, "safeSearch");
+        deepseekToolApiKey = deepseekToolApiKey == null ? Optional.empty() : deepseekToolApiKey;
+        jinaApiKey = jinaApiKey == null ? Optional.empty() : jinaApiKey;
         if (maxResults < 1) throw new IllegalArgumentException("maxResults must be >= 1");
+    }
+
+    /** 12-argument constructor defaulting optional API keys to empty. */
+    public WebToolConfig(
+            WebSearchProvider searchProvider,
+            WebFetchProvider fetchProvider,
+            String deepseekSearchUrl,
+            String deepseekFetchUrl,
+            String duckduckgoHtmlUrl,
+            String duckduckgoHomeUrl,
+            String duckduckgoImagesUrl,
+            String jinaReaderUrl,
+            Duration timeout,
+            int maxResults,
+            String region,
+            String safeSearch) {
+        this(
+                searchProvider,
+                fetchProvider,
+                deepseekSearchUrl,
+                deepseekFetchUrl,
+                duckduckgoHtmlUrl,
+                duckduckgoHomeUrl,
+                duckduckgoImagesUrl,
+                jinaReaderUrl,
+                timeout,
+                maxResults,
+                region,
+                safeSearch,
+                Optional.empty(),
+                Optional.empty());
     }
 
     /** Backward-compatible constructor for existing tests and call sites. */
@@ -119,7 +156,9 @@ public record WebToolConfig(
                 timeout,
                 maxResults,
                 region,
-                safeSearch);
+                safeSearch,
+                Optional.empty(),
+                Optional.empty());
     }
 
     public static WebToolConfig defaults() {
@@ -135,7 +174,9 @@ public record WebToolConfig(
                 DEFAULT_TIMEOUT,
                 DEFAULT_MAX_RESULTS,
                 DEFAULT_REGION,
-                DEFAULT_SAFE_SEARCH);
+                DEFAULT_SAFE_SEARCH,
+                Optional.empty(),
+                Optional.empty());
     }
 
     /** Logical service host for catalog metadata; a transport proxy is not the service host. */
@@ -154,6 +195,8 @@ public record WebToolConfig(
         WebToolConfig defaults = defaults();
         WebSearchProvider searchProvider = WebSearchProvider.fromString(environment.get(SEARCH_PROVIDER_ENVIRONMENT));
         WebFetchProvider fetchProvider = WebFetchProvider.fromString(environment.get(FETCH_PROVIDER_ENVIRONMENT));
+        String deepseekKey = environment.get(DEEPSEEK_TOOL_API_KEY_CREDENTIAL);
+        String jinaKey = environment.get(JINA_API_KEY_CREDENTIAL);
         return new WebToolConfig(
                 searchProvider,
                 fetchProvider,
@@ -166,7 +209,9 @@ public record WebToolConfig(
                 Duration.ofSeconds(positiveLong(environment, TIMEOUT_ENVIRONMENT, defaults.timeout().toSeconds())),
                 positiveInt(environment, MAX_RESULTS_ENVIRONMENT, defaults.maxResults()),
                 defaults.region(),
-                defaults.safeSearch());
+                defaults.safeSearch(),
+                Optional.ofNullable(deepseekKey).filter(k -> !k.isBlank()),
+                Optional.ofNullable(jinaKey).filter(k -> !k.isBlank()));
     }
 
     private static String value(Map<String, String> environment, String key, String fallback) {

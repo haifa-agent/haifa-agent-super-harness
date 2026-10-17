@@ -11,8 +11,11 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Clock;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -26,10 +29,11 @@ import java.util.Optional;
  * <p>Authentication is handled via Bearer tokens ({@code Authorization: Bearer <key>}) using
  * {@code DEEPSEEK_TOOL_API_KEY} dynamically supplied from the SDK credential map.
  */
-public final class DeepSeekWebClient {
+public class DeepSeekWebClient {
     private static final ObjectMapper JSON = new ObjectMapper();
     private final WebToolConfig config;
     private final HttpClient http;
+    private final Clock clock;
 
     public record SearchResultItem(String title, String url, String content) {
         public SearchResultItem {
@@ -53,12 +57,38 @@ public final class DeepSeekWebClient {
     }
 
     public DeepSeekWebClient(WebToolConfig config) {
-        this(config, WebHttpClients.shared(config));
+        this(config, WebHttpClients.shared(config), Clock.systemUTC());
     }
 
     public DeepSeekWebClient(WebToolConfig config, HttpClient http) {
+        this(config, http, Clock.systemUTC());
+    }
+
+    public DeepSeekWebClient(WebToolConfig config, HttpClient http, Clock clock) {
         this.config = Objects.requireNonNull(config, "config");
         this.http = Objects.requireNonNull(http, "http");
+        this.clock = Objects.requireNonNull(clock, "clock");
+    }
+
+    /**
+     * Translates a relative time range (day, week, month, year) into DeepSeek's {@code after:YYYY-MM-DD}
+     * query filter operator if not already present.
+     */
+    static String appendTimeRangeFilter(String query, String range, LocalDate today) {
+        if (range == null || range.isBlank() || query.contains("after:")) {
+            return query;
+        }
+        LocalDate afterDate = switch (range.toLowerCase(Locale.ROOT)) {
+            case "d", "day" -> today.minusDays(1);
+            case "w", "week" -> today.minusWeeks(1);
+            case "m", "month" -> today.minusMonths(1);
+            case "y", "year" -> today.minusYears(1);
+            default -> null;
+        };
+        if (afterDate != null) {
+            return query + " after:" + afterDate;
+        }
+        return query;
     }
 
     /**
@@ -75,8 +105,12 @@ public final class DeepSeekWebClient {
         Objects.requireNonNull(query, "query");
         Objects.requireNonNull(apiKey, "apiKey");
 
+        String effectiveQuery = timeRange
+                .map(r -> appendTimeRangeFilter(query, r, LocalDate.now(clock)))
+                .orElse(query);
+
         ObjectNode body = JSON.createObjectNode();
-        body.put("query", query);
+        body.put("query", effectiveQuery);
         body.put("count", Math.max(1, Math.min(count, 50)));
         body.put("need_content", false);
 
