@@ -247,14 +247,12 @@ public final class FeishuChannelWorker implements AutoCloseable {
         ObjectNode connection = bound.get();
         String owner = connection.path("owner_user_id").asText(AccessOwner.DEFAULT);
         String connectionId = connection.path("id").asText("");
-        String threadId = threadMap.getOrCreate(connectionId, message.chatId());
-        if (STOP_COMMAND.matcher(stripped).matches()) {
-            boolean cancelled = agentBridge.cancelActiveRun(owner, threadId);
-            reply(message.messageId(), cancelled ? FeishuInteraction.STOPPED : FeishuInteraction.STOP_FAILED);
+        // Mode / web-only / stop / explicit /steer must not fall through as steer text.
+        if (handleChannelCommands(owner, connectionId, message, stripped, connection, false)) {
             return;
         }
-        Matcher steer = STEER_COMMAND.matcher(stripped);
-        String steerText = steer.matches() ? steer.group(1).trim() : stripped;
+        String threadId = threadMap.getOrCreate(connectionId, message.chatId());
+        String steerText = stripped;
         if (steerText.isBlank()) {
             reply(message.messageId(), FeishuInteraction.BUSY);
             return;
@@ -290,6 +288,21 @@ public final class FeishuChannelWorker implements AutoCloseable {
             String stripped,
             ObjectNode connection)
             throws Exception {
+        return handleChannelCommands(owner, connectionId, message, stripped, connection, true);
+    }
+
+    /**
+     * @param allowNewTurn when false (busy path), {@code /steer} without an active Run is BUSY
+     *     instead of opening a new Turn behind the busy lock.
+     */
+    private boolean handleChannelCommands(
+            String owner,
+            String connectionId,
+            FeishuInboundMessage message,
+            String stripped,
+            ObjectNode connection,
+            boolean allowNewTurn)
+            throws Exception {
         if (STOP_COMMAND.matcher(stripped).matches()) {
             String threadId = threadMap.getOrCreate(connectionId, message.chatId());
             boolean cancelled = agentBridge.cancelActiveRun(owner, threadId);
@@ -320,6 +333,10 @@ public final class FeishuChannelWorker implements AutoCloseable {
         if (steer.matches()) {
             String threadId = threadMap.getOrCreate(connectionId, message.chatId());
             if (!agentBridge.hasActiveRun(owner, threadId)) {
+                if (!allowNewTurn) {
+                    reply(message.messageId(), FeishuInteraction.BUSY);
+                    return true;
+                }
                 // No active run: treat as a normal new turn with the steer body.
                 FeishuInboundMessage rewritten = new FeishuInboundMessage(
                         message.chatId(),
@@ -426,10 +443,8 @@ public final class FeishuChannelWorker implements AutoCloseable {
                 && message.cardAction().value().isBlank()) {
             return FeishuInteraction.EMPTY_OTHER;
         }
-        if (FeishuInteraction.FORM_SUBMIT.equals(message.cardAction().optionId())
-                && message.cardAction().formValues().isEmpty()) {
-            return FeishuInteraction.EMPTY_FORM;
-        }
+        // Form v2: do not reject an empty form_values map here — optional-only forms may submit
+        // {} when untouched controls are omitted. Required-field checks run in continueCardAction.
         enqueueInbound(message);
         return FeishuInteraction.PROCESSING;
     }

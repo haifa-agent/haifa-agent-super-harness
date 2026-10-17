@@ -2,10 +2,13 @@ package io.haifa.agent.superharness.server.channels.feishu;
 
 import io.haifa.agent.superharness.server.api.DeerFlowConversationService;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -304,7 +307,10 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
             if (path == null || path.isBlank()) {
                 continue;
             }
-            String encoded = path.startsWith("/") ? path : "/" + path;
+            String normalized = path.startsWith("/") ? path : "/" + path;
+            // Display keeps the raw logical path; the open hint URL-encodes each segment so
+            // reserved characters (#, ?, %) cannot become fragments or query separators.
+            String encoded = encodeArtifactPath(normalized);
             builder.append("\n- `").append(path).append("`");
             if (threadId != null && !threadId.isBlank()) {
                 builder.append("\n  打开：`/api/threads/")
@@ -315,6 +321,39 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
             }
         }
         return builder.toString();
+    }
+
+    /**
+     * Same per-segment UTF-8 encoding as {@code DeerFlowWorkspaceApi.encodeArtifactPath}: preserve
+     * {@code /}, percent-encode everything else that is not unreserved.
+     */
+    static String encodeArtifactPath(String value) {
+        if (value == null || value.isEmpty()) {
+            return "";
+        }
+        return Arrays.stream(value.split("/", -1))
+                .map(FeishuRunProjector::encodePathSegment)
+                .reduce((left, right) -> left + "/" + right)
+                .orElse("");
+    }
+
+    private static String encodePathSegment(String value) {
+        StringBuilder result = new StringBuilder();
+        for (byte item : value.getBytes(StandardCharsets.UTF_8)) {
+            int octet = item & 0xff;
+            if ((octet >= 'a' && octet <= 'z')
+                    || (octet >= 'A' && octet <= 'Z')
+                    || (octet >= '0' && octet <= '9')
+                    || octet == '-'
+                    || octet == '_'
+                    || octet == '.'
+                    || octet == '~') {
+                result.append((char) octet);
+            } else {
+                result.append('%').append(String.format(Locale.ROOT, "%02X", octet));
+            }
+        }
+        return result.toString();
     }
 
     public static String todoAppendix(List<String> lines) {

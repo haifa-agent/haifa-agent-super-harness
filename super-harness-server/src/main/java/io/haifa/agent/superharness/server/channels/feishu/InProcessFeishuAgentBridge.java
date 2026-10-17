@@ -101,6 +101,11 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
                         response,
                         files == null ? List.of() : files,
                         resolved);
+                // Steer acknowledgement is admission-only: observing the shared Run would block
+                // until terminal and mis-report an already-accepted steer if the Run later errors.
+                if (resolved.steer()) {
+                    return new TurnResult(threadId, "", null, List.of(), List.of(), List.of());
+                }
                 return readTurn(threadId, projector);
             } catch (Exception exception) {
                 throw new IllegalStateException("Feishu channel run failed", exception);
@@ -227,6 +232,10 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
             turn = threads.admitTurn(threadId, body, runInput, null);
         } catch (DeerFlowConversationService.ConversationException rejected) {
             throw new FeishuRunRejected(rejected.kind().status(), boundedDetail(rejected.detail()));
+        }
+        if (options.steer()) {
+            // Creator/observer already owns observation; steer only needs admission success.
+            return new FeishuRunProjector(options.progress());
         }
         FeishuRunProjector projector = new FeishuRunProjector(options.progress());
         threads.observeTurn(turn, projector);

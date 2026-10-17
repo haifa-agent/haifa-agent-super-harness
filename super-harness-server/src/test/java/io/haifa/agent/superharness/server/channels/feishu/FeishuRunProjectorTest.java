@@ -47,4 +47,16 @@ class FeishuRunProjectorTest {
                 .contains("/api/threads/thread-1/artifacts/mnt/user-data/outputs/a.txt");
         assertThat(FeishuRunProjector.todoAppendix(projector.todoLines())).contains("待办清单");
     }
+
+    @Test
+    void artifactHintsUrlEncodeReservedPathSegments() {
+        String hints = FeishuRunProjector.artifactHints(
+                "thread-1", List.of("/mnt/user-data/outputs/report#1.txt"));
+        assertThat(hints).contains("`/mnt/user-data/outputs/report#1.txt`");
+        assertThat(hints)
+                .contains("/api/threads/thread-1/artifacts/mnt/user-data/outputs/report%231.txt")
+                .doesNotContain("/artifacts/mnt/user-data/outputs/report#1.txt");
+        assertThat(FeishuRunProjector.encodeArtifactPath("/mnt/user-data/outputs/a?b=%c.txt"))
+                .isEqualTo("/mnt/user-data/outputs/a%3Fb%3D%25c.txt");
+    }
 }

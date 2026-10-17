@@ -152,6 +152,84 @@ class FeishuPhase2InteractionTest {
     }
 
     @Test
+    void busyPathRoutesModeAndWebOnlyBeforeSteerFallback() throws Exception {
+        Harness harness = harness();
+        harness.bridge.activeRun.set(true);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        harness.bridge.blockEnter = entered;
+        harness.bridge.blockRelease = release;
+
+        Thread longTurn = new Thread(() -> {
+            try {
+                harness.worker.handleInbound(new FeishuInboundMessage(
+                        "oc_chat", "om_long", "ou_owner", "long run", "p2p"));
+            } catch (Exception ignored) {
+            }
+        });
+        longTurn.start();
+        assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
+
+        harness.worker.handleInbound(new FeishuInboundMessage(
+                "oc_chat", "om_mode", "ou_owner", "/mode thinking", "p2p"));
+        assertThat(harness.bridge.steerCalls.get()).isZero();
+        assertThat(harness.transport.replies())
+                .anyMatch(reply -> reply.text().contains(FeishuInteraction.MODE_UPDATED)
+                        && reply.text().contains("thinking"));
+        assertThat(harness.connections
+                        .findConnectionByExternalIdentity("feishu", "ou_owner", "oc_chat")
+                        .orElseThrow()
+                        .path("metadata")
+                        .path("run_mode")
+                        .asText())
+                .isEqualTo("thinking");
+
+        harness.worker.handleInbound(new FeishuInboundMessage(
+                "oc_chat", "om_skill", "ou_owner", "/skill demo", "p2p"));
+        assertThat(harness.bridge.steerCalls.get()).isZero();
+        assertThat(harness.transport.replies())
+                .anyMatch(reply -> FeishuInteraction.COMMAND_WEB_ONLY.equals(reply.text()));
+
+        release.countDown();
+        longTurn.join(3_000);
+        harness.worker.close();
+    }
+
+    @Test
+    void optionalOnlyFormAcceptsEmptyFormValues() throws Exception {
+        ArrayNode messages = json.createArrayNode();
+        messages.add(toolForm(
+                "req-opt",
+                List.of(field("notes", "备注", "text", false))));
+        FeishuPendingInput pending = FeishuInteraction.pendingFromMessages(messages).orElseThrow();
+        assertThat(pending.formSupported()).isTrue();
+        assertThat(FeishuInteraction.formMissingRequired(pending, Map.of())).isFalse();
+
+        Harness harness = harness();
+        harness.bridge.pending = pending;
+        String toast = harness.worker.acceptCardAction(new FeishuInboundMessage(
+                "oc_chat",
+                "om_opt",
+                "ou_owner",
+                "",
+                "p2p",
+                new FeishuInboundMessage.CardAction(
+                        "ask_clarification",
+                        "req-opt",
+                        FeishuInteraction.FORM_SUBMIT,
+                        "",
+                        "2.0",
+                        Map.of())));
+        assertThat(toast).isEqualTo(FeishuInteraction.PROCESSING);
+        // Drain the enqueued card action on the chat executor.
+        Thread.sleep(400);
+        assertThat(harness.bridge.turns.get()).isEqualTo(1);
+        assertThat(harness.bridge.responses.get()).isNotNull();
+        assertThat(harness.bridge.responses.get().value()).contains("[values: {}]");
+        harness.worker.close();
+    }
+
+    @Test
     void runTurnReceivesConfiguredMode() throws Exception {
         Harness harness = harness();
         harness.connections.mergeConnectionMetadata(
