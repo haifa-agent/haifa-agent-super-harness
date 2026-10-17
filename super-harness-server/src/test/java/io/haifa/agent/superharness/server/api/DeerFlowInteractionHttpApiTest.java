@@ -40,6 +40,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.crypto.SecretKey;
@@ -728,6 +731,96 @@ class DeerFlowInteractionHttpApiTest {
                 .formatted(prompt);
     }
 
+    @Test
+    void waitingCardStillPersistsWhenTheThreadIsAtTheDisplayCapacity() throws Exception {
+        String threadId = "capacity-thread";
+        api.close();
+        seedCatalogAtCapacity(threadId, 64);
+        startServer();
+        createThread(threadId);
+
+        HttpResponse<String> requested = postJson(
+                "/api/threads/" + threadId + "/runs/stream",
+                ordinaryRunBody("request approval at capacity"));
+        assertThat(requested.statusCode()).isEqualTo(200);
+        String requestId = humanInputCard(requested.body())
+                .path("artifact").path("human_input").path("request_id").asText();
+
+        JsonNode displays = json.readTree(catalogPath().toFile())
+                .path("threads").get(0).path("interaction_displays");
+        assertThat(displays.size()).isEqualTo(64);
+        assertThat(displays.findValuesAsText("requestId")).contains(requestId);
+        assertThat(displays.get(0).path("requestSequence").asLong()).isGreaterThan(1L);
+        assertThat(displays.get(displays.size() - 1).path("requestId").asText()).isEqualTo(requestId);
+        assertThat(displays.get(displays.size() - 1).path("answeredOption").isNull()).isTrue();
+    }
+
+    @Test
+    void concurrentDuplicateApprovalsAcceptExactlyOneSubmission() throws Exception {
+        String threadId = "concurrent-thread";
+        createThread(threadId);
+        HttpResponse<String> requested = postJson(
+                "/api/threads/" + threadId + "/runs/stream",
+                ordinaryRunBody("request approval"));
+        assertThat(requested.statusCode()).isEqualTo(200);
+        String requestId = humanInputCard(requested.body())
+                .path("artifact").path("human_input").path("request_id").asText();
+        String body = hiddenResponseBody(requestId, "approve", "approve");
+
+        CountDownLatch start = new CountDownLatch(1);
+        var pool = Executors.newFixedThreadPool(2);
+        try {
+            Callable<HttpResponse<String>> submit = () -> {
+                start.await();
+                return postJson("/api/threads/" + threadId + "/runs/stream", body);
+            };
+            var first = pool.submit(submit);
+            var second = pool.submit(submit);
+            start.countDown();
+            List<HttpResponse<String>> responses = List.of(first.get(), second.get());
+            assertThat(responses.stream().filter(response -> response.statusCode() == 200)).hasSize(1);
+            assertThat(responses.stream().filter(response -> response.statusCode() == 409)).hasSize(1);
+            assertThat(responses.stream().filter(response -> response.statusCode() == 409)
+                    .findFirst().orElseThrow().body()).contains("Interaction response already accepted");
+            assertThat(toolInvocations).hasValue(1);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private Path catalogPath() {
+        return dataDirectory.resolve("owners").resolve("default").resolve("threads.json");
+    }
+
+    private void seedCatalogAtCapacity(String threadId, int answeredDisplays) throws Exception {
+        Path catalog = catalogPath();
+        Files.createDirectories(catalog.getParent());
+        ObjectNode root = json.createObjectNode();
+        root.put("version", 1);
+        ObjectNode thread = root.putArray("threads").addObject();
+        thread.put("thread_id", threadId);
+        thread.set("metadata", json.createObjectNode());
+        thread.put("created_at", "2026-10-16T16:00:00Z");
+        thread.put("updated_at", "2026-10-16T16:00:00Z");
+        thread.putNull("session_id");
+        thread.putNull("model_binding");
+        var displays = thread.putArray("interaction_displays");
+        for (int index = 1; index <= answeredDisplays; index++) {
+            ObjectNode display = displays.addObject();
+            display.put("runId", "seeded-run-" + index);
+            display.put("requestId", "seeded-request-" + index);
+            display.put("requestSequence", index);
+            display.put("createdAt", "2026-10-16T16:00:00Z");
+            display.put("toolCallId", "seeded-tool-call-" + index);
+            display.put("title", "Approval required");
+            display.put("question", "Approve seeded tool " + index);
+            display.put("context", "seeded");
+            display.putArray("options").add("approve").add("reject");
+            display.put("answeredOption", "approve");
+        }
+        thread.putArray("clarification_displays");
+        Files.write(catalog, json.writerWithDefaultPrettyPrinter().writeValueAsBytes(root));
+    }
     private String hiddenResponseBody(String requestId, String optionId, String value) {
         return """
                 {"assistant_id":"lead_agent","input":{"messages":[{"id":"hidden-response","type":"human","content":[{"type":"text","text":"For your clarification, my answer is: %s"}],"additional_kwargs":{"hide_from_ui":true,"human_input_response":{"version":1,"kind":"human_input_response","source":"haifa_interaction","request_id":"%s","response_kind":"option","option_id":"%s","value":"%s"}}}]},"stream_mode":["messages-tuple","updates","custom"],"on_disconnect":"continue","multitask_strategy":"reject"}

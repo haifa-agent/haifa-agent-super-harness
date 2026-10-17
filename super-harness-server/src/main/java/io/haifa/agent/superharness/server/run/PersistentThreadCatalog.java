@@ -305,6 +305,57 @@ public final class PersistentThreadCatalog {
         }
     }
 
+    /**
+     * Bounded retention for the saved Interaction presentation of a long-lived Thread.
+     *
+     * <p>A Feishu (or any other reused) Thread keeps every Interaction card it ever raised, so before
+     * this helper existed the 65th card could never be persisted and, because admission refuses to
+     * answer an Interaction whose card is not durable, the waiting Run could never be answered
+     * again. The oldest <em>answered</em> cards are therefore dropped first; a still-unanswered card
+     * is never dropped. When only unanswered cards remain and they already exceed the capacity the
+     * list is rejected exactly like {@link #validateDisplays(List)} so the invariant stays visible.
+     */
+    public static List<InteractionDisplay> retainDisplaysWithinCapacity(
+            List<InteractionDisplay> displays) {
+        if (displays.size() <= MAX_INTERACTION_DISPLAYS_PER_THREAD) {
+            return List.copyOf(displays);
+        }
+        int overflow = displays.size() - MAX_INTERACTION_DISPLAYS_PER_THREAD;
+        List<InteractionDisplay> kept = new ArrayList<>(displays.size());
+        for (InteractionDisplay display : displays) {
+            if (overflow > 0 && display.answeredOption() != null) {
+                overflow--;
+                continue;
+            }
+            kept.add(display);
+        }
+        if (overflow > 0) {
+            throw new IllegalArgumentException("too many interaction displays");
+        }
+        return List.copyOf(kept);
+    }
+
+    /** Clarification counterpart of {@link #retainDisplaysWithinCapacity(List)}. */
+    public static List<ClarificationDisplay> retainClarificationsWithinCapacity(
+            List<ClarificationDisplay> displays) {
+        if (displays.size() <= MAX_CLARIFICATION_DISPLAYS_PER_THREAD) {
+            return List.copyOf(displays);
+        }
+        int overflow = displays.size() - MAX_CLARIFICATION_DISPLAYS_PER_THREAD;
+        List<ClarificationDisplay> kept = new ArrayList<>(displays.size());
+        for (ClarificationDisplay display : displays) {
+            if (overflow > 0 && display.answeredKind() != null) {
+                overflow--;
+                continue;
+            }
+            kept.add(display);
+        }
+        if (overflow > 0) {
+            throw new IllegalArgumentException("too many clarification displays");
+        }
+        return List.copyOf(kept);
+    }
+
     public record InteractionDisplay(
             String runId,
             String requestId,

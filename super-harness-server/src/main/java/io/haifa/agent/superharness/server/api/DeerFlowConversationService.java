@@ -18,6 +18,7 @@ import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
 import io.haifa.agent.runtime.api.FrozenInstructionDiagnostic;
 import io.haifa.agent.runtime.api.InteractionResponseReceiptStatus;
 import io.haifa.agent.runtime.api.InteractionResponseSubmission;
+import io.haifa.agent.runtime.api.InteractionResponseReceipt;
 import io.haifa.agent.runtime.api.InteractionState;
 import io.haifa.agent.runtime.api.InteractionView;
 import io.haifa.agent.runtime.api.RunEventCursor;
@@ -188,6 +189,14 @@ public class DeerFlowConversationService implements AutoCloseable {
     private final DelegationProjectionProvider delegationProjections;
     // One public SDK capacity owner per Gateway, shared by all Thread and recovery Bridges.
     private final io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity;
+    /**
+     * Single-flight claim of the accepted Interaction response per Run. Two channels (Feishu and the
+     * Web/API) can submit the same card within the same second; without this claim both submissions
+     * could enter {@code bridge.respond} and race the SDK's resume transaction, which is how Run
+     * 01a14594 was left with a recorded response but no progress (W04-BUG-011).
+     */
+    private final java.util.concurrent.ConcurrentHashMap<String, DeerFlowInteractionHttpProjection.FrozenResponse>
+            claimedInteractionResponses = new java.util.concurrent.ConcurrentHashMap<>();
     private final DeerFlowUploadContext uploadContext;
     private final PersistentThreadCatalog threadCatalog;
     private final DurableHaifaFoundation foundation;
@@ -640,6 +649,50 @@ public class DeerFlowConversationService implements AutoCloseable {
             throw ConversationException.notFound("Thread not found");
         }
         return json.valueToTree(threadStateResponse(thread));
+    }
+
+    /**
+     * Owner-isolated authoritative card of the active Run's pending Interaction, if any.
+     *
+     * <p>The projected transcript orders cards by Tool-call round, so an unanswered card is not
+     * necessarily its last message; channel adapters that infer the pending card from message order
+     * therefore miss it and treat the operator's answer as a brand-new turn (W04-BUG-010). Asking the
+     * SDK pending view keeps that decision with the Run that owns it.
+     */
+    public Optional<JsonNode> pendingInteractionMessage(String threadId) throws ConversationException {
+        ThreadRecord thread = threads.get(threadId);
+        if (thread == null || !AccessOwner.current().equals(thread.ownerId)) {
+            return Optional.empty();
+        }
+        RunRecord run;
+        try {
+            synchronized (thread) {
+                restoreDurableAdmission(thread);
+                String activeRunId = thread.activeRunId;
+                if (activeRunId == null) {
+                    return Optional.empty();
+                }
+                run = runs.get(activeRunId);
+                if (run == null) {
+                    run = findOrRestoreRun(thread, activeRunId).orElse(null);
+                }
+            }
+        } catch (RuntimeException unavailable) {
+            return Optional.empty();
+        }
+        if (run == null || !run.threadId.equals(thread.threadId)) {
+            return Optional.empty();
+        }
+        if (run.bridge.snapshot(run.runId).status().isTerminal()) {
+            return Optional.empty();
+        }
+        Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
+        if (pending.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(json.valueToTree(
+                DeerFlowInteractionHttpProjection.requestMessage(pending.orElseThrow(),
+                        run.runId.value())));
     }
 
     /**
@@ -1523,14 +1576,26 @@ public class DeerFlowConversationService implements AutoCloseable {
                     } catch (IllegalArgumentException invalid) {
                         throw ConversationException.conflict("Thread has no matching Interaction");
                     }
+                    // Single-flight per Run: two channels (Feishu and Web/API) can submit the same
+                    // card in the same second. Only one may enter the SDK resume path, otherwise the
+                    // second submission races the resume transaction and the Run is left with a
+                    // recorded response but no progress (W04-BUG-011).
+                    var claimed = claimedInteractionResponses.putIfAbsent(run.runId.value(), response);
+                    if (claimed != null) {
+                        throw ConversationException.conflict(claimed.equals(response)
+                                ? "Interaction response already accepted"
+                                : "Interaction already has a different response");
+                    }
+                    InteractionResponseReceipt receipt;
                     try {
-                        var receipt = run.bridge.respond(submission);
-                        if (receipt.status() == InteractionResponseReceiptStatus.DUPLICATE) {
-                            throw ConversationException.conflict("Interaction response projection is unavailable");
-                        }
+                        receipt = respondWithRetry(run, submission);
                     } catch (RuntimeException rejected) {
+                        claimedInteractionResponses.remove(run.runId.value(), response);
                         sendInteractionFailure(run, "first-response", rejected);
                         throw ConversationException.conflict("Interaction response was rejected");
+                    }
+                    if (receipt.status() == InteractionResponseReceiptStatus.DUPLICATE) {
+                        throw ConversationException.conflict("Interaction response already accepted");
                     }
                     Map<String, Object> responseMessage =
                             DeerFlowInteractionHttpProjection.responseMessage(
@@ -1580,6 +1645,42 @@ public class DeerFlowConversationService implements AutoCloseable {
                 true,
                 false,
                 presentationDegraded);
+    }
+
+    private InteractionResponseReceipt respondWithRetry(
+            RunRecord run, InteractionResponseSubmission submission) {
+        RuntimeException failure = null;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                return run.bridge.respond(submission);
+            } catch (RuntimeException rejected) {
+                failure = rejected;
+                if (attempt > 0 || !isTransientStoreFailure(rejected)) {
+                    break;
+                }
+                try {
+                    Thread.sleep(50L);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        throw failure;
+    }
+
+    private static boolean isTransientStoreFailure(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof SqliteStoreException) {
+                return true;
+            }
+            if (current == current.getCause()) {
+                break;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private void sendInteractionFailure(
@@ -1991,6 +2092,7 @@ public class DeerFlowConversationService implements AutoCloseable {
         List<PersistentThreadCatalog.ClarificationDisplay> updated =
                 new ArrayList<>(thread.clarificationDisplays);
         updated.add(display);
+        updated = new ArrayList<>(PersistentThreadCatalog.retainClarificationsWithinCapacity(updated));
         PersistentThreadCatalog.validateClarificationDisplays(updated);
         List<PersistentThreadCatalog.ClarificationDisplay> previous = thread.clarificationDisplays;
         thread.clarificationDisplays = List.copyOf(updated);
@@ -4108,6 +4210,9 @@ public class DeerFlowConversationService implements AutoCloseable {
         List<PersistentThreadCatalog.InteractionDisplay> updated =
                 new ArrayList<>(thread.interactionDisplays);
         updated.add(display);
+        // A long-lived Thread keeps every card it ever raised; drop the oldest answered ones so the
+        // waiting card can always become durable (W04-BUG-010).
+        updated = new ArrayList<>(PersistentThreadCatalog.retainDisplaysWithinCapacity(updated));
         PersistentThreadCatalog.validateDisplays(updated);
         List<PersistentThreadCatalog.InteractionDisplay> previous = thread.interactionDisplays;
         thread.interactionDisplays = List.copyOf(updated);
