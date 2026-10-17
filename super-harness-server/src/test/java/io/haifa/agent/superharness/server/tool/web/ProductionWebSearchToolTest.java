@@ -145,6 +145,142 @@ class ProductionWebSearchToolTest {
     }
 
     @Test
+    void deepseekSearchSuccessReturnsStructuredJson() throws Exception {
+        server.createContext("/v1/tools/search", exchange -> {
+            String resp = """
+                    {
+                      "results": [
+                        {
+                          "title": "DeepSeek Doc",
+                          "url": "https://api-docs.deepseek.com",
+                          "summary": "DeepSeek API documentation summary",
+                          "snippet": "Short snippet"
+                        }
+                      ]
+                    }
+                    """;
+            byte[] bytes = resp.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+
+        WebToolConfig dsConfig = WebToolTestSupport.deepseekConfig(server, "/v1/tools/search", "/v1/tools/fetch");
+        ProductionWebSearchTool dsTool = new ProductionWebSearchTool(dsConfig);
+
+        var output = dsTool.invoke(
+                new ProductionWebSearchTool.Input("deepseek", Optional.of(5), Optional.empty()),
+                WebToolTestSupport.context(Map.of(WebToolConfig.DEEPSEEK_TOOL_API_KEY_CREDENTIAL, "sk-secret-123")));
+
+        JsonNode root = JSON.readTree(output.result());
+        assertThat(root.path("query").asText()).isEqualTo("deepseek");
+        assertThat(root.path("total_results").asInt()).isEqualTo(1);
+        assertThat(root.path("results").get(0).path("title").asText()).isEqualTo("DeepSeek Doc");
+        assertThat(root.path("results").get(0).path("url").asText()).isEqualTo("https://api-docs.deepseek.com");
+        assertThat(root.path("results").get(0).path("content").asText()).isEqualTo("DeepSeek API documentation summary");
+        assertThat(output.result()).doesNotContain("sk-secret-123");
+    }
+
+    @Test
+    void deepseekMissingKeyReturnsConfiguredError() throws Exception {
+        WebToolConfig dsConfig = WebToolTestSupport.deepseekConfig(server, "/v1/tools/search-missing-key", "/v1/tools/fetch");
+        ProductionWebSearchTool dsTool = new ProductionWebSearchTool(dsConfig);
+
+        var output = dsTool.invoke(
+                new ProductionWebSearchTool.Input("deepseek", Optional.empty(), Optional.empty()),
+                WebToolTestSupport.context(Map.of()));
+
+        JsonNode root = JSON.readTree(output.result());
+        assertThat(root.path("error").asText()).isEqualTo("DEEPSEEK_TOOL_API_KEY is not configured");
+        assertThat(root.path("query").asText()).isEqualTo("deepseek");
+    }
+
+    @Test
+    void deepseekApiErrorReturnsErrorJsonWithoutException() throws Exception {
+        server.createContext("/v1/tools/search-402", exchange -> {
+            byte[] bytes = "{\"error\": \"payment_required\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(402, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+
+        WebToolConfig dsConfig = WebToolTestSupport.deepseekConfig(server, "/v1/tools/search-402", "/v1/tools/fetch");
+        ProductionWebSearchTool dsTool = new ProductionWebSearchTool(dsConfig);
+
+        var output = dsTool.invoke(
+                new ProductionWebSearchTool.Input("deepseek", Optional.empty(), Optional.empty()),
+                WebToolTestSupport.context(Map.of(WebToolConfig.DEEPSEEK_TOOL_API_KEY_CREDENTIAL, "sk-secret-123")));
+
+        JsonNode root = JSON.readTree(output.result());
+        assertThat(root.path("error").asText()).contains("DeepSeek Search API error: HTTP 402");
+        assertThat(root.path("query").asText()).isEqualTo("deepseek");
+    }
+
+    @Test
+    void deepseekSearchResolvesCredentialFromConfigFallback() throws Exception {
+        server.createContext("/v1/tools/search-fallback", exchange -> {
+            String resp = """
+                    {
+                      "results": [
+                        {
+                          "title": "Fallback Result",
+                          "url": "https://example.com/fallback",
+                          "snippet": "Fallback snippet",
+                          "summary": "Fallback summary"
+                        }
+                      ]
+                    }
+                    """;
+            byte[] bytes = resp.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+
+        WebToolConfig dsConfig = WebToolTestSupport.deepseekConfig(
+                server, "/v1/tools/search-fallback", "/v1/tools/fetch", "sk-secret-fallback");
+        ProductionWebSearchTool dsTool = new ProductionWebSearchTool(dsConfig);
+
+        var output = dsTool.invoke(
+                new ProductionWebSearchTool.Input("deepseek", Optional.of(5), Optional.empty()),
+                WebToolTestSupport.context(Map.of()));
+
+        JsonNode root = JSON.readTree(output.result());
+        assertThat(root.path("query").asText()).isEqualTo("deepseek");
+        assertThat(root.path("total_results").asInt()).isEqualTo(1);
+        assertThat(root.path("results").get(0).path("title").asText()).isEqualTo("Fallback Result");
+    }
+
+    @Test
+    void deepseekSearchInterruptedRestoresInterruptFlagAndReturnsErrorPayload() throws Exception {
+        WebToolConfig dsConfig = WebToolTestSupport.deepseekConfig(server, "/v1/tools/search-deepseek", "/v1/tools/fetch");
+        DeepSeekWebClient mockClient = new DeepSeekWebClient(dsConfig) {
+            @Override
+            public List<SearchResultItem> search(String query, int count, Optional<String> timeRange, String apiKey)
+                    throws InterruptedException {
+                throw new InterruptedException("simulated interrupt");
+            }
+        };
+        ProductionWebSearchTool dsTool = new ProductionWebSearchTool(dsConfig, mockClient);
+
+        // Clear any existing interrupt flag
+        Thread.interrupted();
+
+        var output = dsTool.invoke(
+                new ProductionWebSearchTool.Input("deepseek", Optional.empty(), Optional.empty()),
+                WebToolTestSupport.context(Map.of(WebToolConfig.DEEPSEEK_TOOL_API_KEY_CREDENTIAL, "sk-123")));
+
+        assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        // Clear flag after asserting
+        Thread.interrupted();
+
+        JsonNode root = JSON.readTree(output.result());
+        assertThat(root.path("error").asText()).contains("interrupted");
+    }
+
+    @Test
     void descriptionMatchesTheImportedFrozenDocstring() throws Exception {
         String resource;
         try (var stream = getClass().getClassLoader()
