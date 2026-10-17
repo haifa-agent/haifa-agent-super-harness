@@ -23,6 +23,8 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
     static final long MIN_PROGRESS_GAP_MS = 800L;
     static final int MAX_PROGRESS_EVENTS = 24;
     static final int TOOL_RESULT_TRUNCATE = 160;
+    static final int MAX_GAP_DIAGNOSTICS = 4;
+    static final int MAX_SHARED_TOOL_KEYS = 2048;
 
     @FunctionalInterface
     public interface ProgressListener {
@@ -30,6 +32,7 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
     }
 
     private final ProgressListener progress;
+    private final Set<String> sharedToolKeys;
     private final long minGapMs;
     private final int maxProgressEvents;
 
@@ -37,6 +40,7 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
     private boolean sawError;
     private boolean sawValues;
     private boolean sawMessages;
+    private boolean sawGap;
     private long lastProgressAtMs;
     private final AtomicInteger progressCount = new AtomicInteger();
     private final Set<String> toolStarted = new LinkedHashSet<>();
@@ -44,6 +48,7 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
     private final List<String> artifacts = new ArrayList<>();
     private final List<String> todoLines = new ArrayList<>();
     private final List<String> progressLog = new ArrayList<>();
+    private final List<String> gapDiagnostics = new ArrayList<>();
     private int subagentStarts;
     private int subagentEnds;
 
@@ -52,6 +57,17 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
     }
 
     FeishuRunProjector(ProgressListener progress, long minGapMs, int maxProgressEvents) {
+        this(progress, minGapMs, maxProgressEvents, null);
+    }
+
+    /**
+     * {@code sharedToolKeys} is an optional Thread-scoped gate owned by the bridge: a pending-card
+     * replay re-sends historical tool messages to every observer, so a tool card must be posted
+     * once per Thread instead of once per Turn.
+     */
+    FeishuRunProjector(
+            ProgressListener progress, long minGapMs, int maxProgressEvents, Set<String> sharedToolKeys) {
+        this.sharedToolKeys = sharedToolKeys;
         this.progress = progress == null ? summary -> {} : progress;
         this.minGapMs = Math.max(0L, minGapMs);
         this.maxProgressEvents = Math.max(1, maxProgressEvents);
@@ -64,6 +80,7 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
                 case "end" -> sawEnd = true;
                 case "error" -> sawError = true;
                 case "values" -> sawValues = true;
+                case "gap" -> onGap(data);
                 case "messages" -> {
                     sawMessages = true;
                     onMessages(data);
@@ -86,6 +103,20 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
 
     public boolean sawError() {
         return sawError;
+    }
+
+    /**
+     * True when the shared projection reported a replay gap. A gap terminates the observation
+     * without an {@code end} frame, so the caller must fall back to the durable thread state
+     * instead of treating the turn as finished (W20-BUG-001).
+     */
+    public boolean sawGap() {
+        return sawGap;
+    }
+
+    /** Bounded gap diagnostics (never the reply text). */
+    public List<String> gapDiagnostics() {
+        return List.copyOf(gapDiagnostics);
     }
 
     public boolean sawValues() {
@@ -143,7 +174,7 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
                             continue;
                         }
                         String key = callId.isBlank() ? name : callId;
-                        if (toolStarted.add(key)) {
+                        if (toolStarted.add(key) && claimToolCard("start:" + key)) {
                             emit("🔧 工具开始：`" + name + "`");
                         }
                     }
@@ -158,7 +189,7 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
                 return;
             }
             String key = callId.isBlank() ? name : callId;
-            if (toolFinished.add(key)) {
+            if (toolFinished.add(key) && claimToolCard("finish:" + key)) {
                 String result = truncate(messageText(message.get("content")), TOOL_RESULT_TRUNCATE);
                 if (result.isBlank()) {
                     emit("✅ 工具完成：`" + name + "`");
@@ -231,6 +262,47 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
                 || "task_failed".equals(type)) {
             subagentEnds++;
             emit("🧩 子任务结束");
+        }
+    }
+
+    /**
+     * A replay gap ends this observation: the shared Run projector can no longer replay the
+     * frames this turn missed. Feishu never streams assistant text, so the durable thread state
+     * (readTurn) stays the recovery source; record a bounded diagnostic instead of swallowing the
+     * frame silently (W20-BUG-001).
+     */
+    private void onGap(Object data) {
+        sawGap = true;
+        if (gapDiagnostics.size() >= MAX_GAP_DIAGNOSTICS) {
+            return;
+        }
+        String reason = data instanceof Map<?, ?> map
+                ? firstNonBlank(string(map.get("code")), truncate(string(map.get("run_id")), 80))
+                : truncate(string(data), 120);
+        gapDiagnostics.add(reason);
+    }
+
+    /**
+     * Cross-Turn gate: a pending-card replay re-sends historical tool messages to every observer,
+     * so the Thread-scoped set keeps one card per Tool call instead of one per Turn. The set is
+     * bounded by the owner; eviction simply allows a late replay to post once more.
+     */
+    private boolean claimToolCard(String key) {
+        if (sharedToolKeys == null) {
+            return true;
+        }
+        synchronized (sharedToolKeys) {
+            if (!sharedToolKeys.add(key)) {
+                return false;
+            }
+            if (sharedToolKeys.size() > MAX_SHARED_TOOL_KEYS) {
+                var oldest = sharedToolKeys.iterator();
+                if (oldest.hasNext()) {
+                    oldest.next();
+                    oldest.remove();
+                }
+            }
+            return true;
         }
     }
 

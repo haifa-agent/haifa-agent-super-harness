@@ -9,7 +9,11 @@ import io.haifa.agent.superharness.server.auth.AccessOwner;
 import io.haifa.agent.superharness.workspace.RestrictedWorkspaceService;
 import io.haifa.agent.superharness.workspace.UploadReceipt;
 import io.haifa.agent.superharness.workspace.WorkspaceBinding;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -21,7 +25,24 @@ import java.util.Set;
  * the Web compatibility adapter serves, so both channels share one Runtime truth.
  */
 public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
+    private static final System.Logger LOG = System.getLogger(InProcessFeishuAgentBridge.class.getName());
+
     private static final Set<String> MODES = Set.of("flash", "thinking", "pro", "ultra");
+
+    /** Turns materialized by one Feishu state read; enough for the newest card and answer. */
+    /** Upper bound for waiting on a Run whose live observation ended before its terminal frame. */
+    static final java.time.Duration RUN_SETTLE_TIMEOUT = java.time.Duration.ofSeconds(60);
+    static final int STATE_TAIL_TURNS = 24;
+    /** Threads that keep a cross-Turn tool-card dedupe scope before the oldest is evicted. */
+    static final int TOOL_DEDUPE_THREADS = 64;
+
+    private final Map<String, Set<String>> toolCardScopes = Collections.synchronizedMap(
+            new LinkedHashMap<String, Set<String>>(16, 0.75f, false) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Set<String>> eldest) {
+                    return size() > TOOL_DEDUPE_THREADS;
+                }
+            });
 
     private final ObjectMapper json;
     private final DeerFlowConversationService threads;
@@ -237,19 +258,102 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
             // Creator/observer already owns observation; steer only needs admission success.
             return new FeishuRunProjector(options.progress());
         }
-        FeishuRunProjector projector = new FeishuRunProjector(options.progress());
+        FeishuRunProjector projector = new FeishuRunProjector(
+                options.progress(),
+                FeishuRunProjector.MIN_PROGRESS_GAP_MS,
+                FeishuRunProjector.MAX_PROGRESS_EVENTS,
+                toolCardScope(threadId));
         threads.observeTurn(turn, projector);
-        if (!projector.sawEnd()
-                && !projector.sawError()
-                && !projector.sawValues()
-                && !projector.sawMessages()) {
-            // streamRunEvents normally emits end on completion; tolerate values-only fixtures.
-            throw new IllegalStateException("Run stream ended without completion marker");
-        }
         if (projector.sawError()) {
             throw new IllegalStateException("Run stream reported error");
         }
+        if (!projector.sawEnd()) {
+            // The Feishu reply is projected from the durable thread state (readTurn), so an
+            // observation that ended without a terminal frame (replay gap, transport hiccup,
+            // reconnect) must not drop the final assistant message. Log a bounded diagnostic and
+            // let the caller project the durable answer instead (W20-BUG-001).
+            LOG.log(
+                    System.Logger.Level.WARNING,
+                    "Feishu run observation ended without a terminal frame (gap={0}, values={1}, "
+                            + "messages={2}, diagnostics={3}); projecting the durable thread state",
+                    projector.sawGap(),
+                    projector.sawValues(),
+                    projector.sawMessages(),
+                    projector.gapDiagnostics());
+            if (!projector.sawGap() && !projector.sawValues() && !projector.sawMessages()) {
+                // Nothing was observed and no gap explained it: keep failing fast on this
+                // genuinely empty observation instead of replying with an empty answer.
+                throw new IllegalStateException("Run stream ended without completion marker");
+            }
+            // A gap can happen while the Run is still executing. Wait for its terminal status
+            // before the durable read, otherwise the reply would carry an intermediate step.
+            if (!threads.awaitRunTerminal(threadId, RUN_SETTLE_TIMEOUT)) {
+                LOG.log(
+                        System.Logger.Level.WARNING,
+                        "Feishu run did not settle within {0} ms; projecting the current durable state",
+                        RUN_SETTLE_TIMEOUT.toMillis());
+            }
+        }
         return projector;
+    }
+
+    @Override
+    public Optional<ArtifactBytes> readArtifact(String ownerUserId, String threadId, String virtualPath) {
+        if (workspace == null || virtualPath == null || !virtualPath.startsWith("/mnt/user-data/")) {
+            return Optional.empty();
+        }
+        String owner = ownerUserId == null || ownerUserId.isBlank() ? AccessOwner.DEFAULT : ownerUserId;
+        return AccessOwner.call(owner, () -> {
+            try {
+                WorkspaceBinding binding = workspace.bind(owner, threadId);
+                byte[] bytes = workspace.readVerifiedBytes(owner, binding.workspaceId(), virtualPath);
+                if (bytes == null || bytes.length == 0) {
+                    return Optional.<ArtifactBytes>empty();
+                }
+                return Optional.of(new ArtifactBytes(
+                        filenameOf(virtualPath), mediaTypeOf(virtualPath), bytes));
+            } catch (Exception unavailable) {
+                return Optional.<ArtifactBytes>empty();
+            }
+        });
+    }
+
+    private static String filenameOf(String virtualPath) {
+        int slash = virtualPath.lastIndexOf('/');
+        return slash < 0 ? virtualPath : virtualPath.substring(slash + 1);
+    }
+
+    static String mediaTypeOf(String path) {
+        String lower = path == null ? "" : path.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".png")) {
+            return "image/png";
+        }
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+            return "image/jpeg";
+        }
+        if (lower.endsWith(".webp")) {
+            return "image/webp";
+        }
+        if (lower.endsWith(".gif")) {
+            return "image/gif";
+        }
+        if (lower.endsWith(".bmp")) {
+            return "image/bmp";
+        }
+        return "application/octet-stream";
+    }
+
+    /** Bounded, Thread-scoped gate so a pending-card replay cannot re-post a tool card. */
+    Set<String> toolCardScope(String threadId) {
+        String scope = AccessOwner.current() + "|" + threadId;
+        synchronized (toolCardScopes) {
+            Set<String> keys = toolCardScopes.get(scope);
+            if (keys == null) {
+                keys = Collections.synchronizedSet(new LinkedHashSet<>());
+                toolCardScopes.put(scope, keys);
+            }
+            return keys;
+        }
     }
 
     static String normalizeMode(String mode) {
@@ -314,7 +418,8 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
 
     private JsonNode threadState(String threadId) throws Exception {
         try {
-            return threads.readThreadState(threadId);
+            // Bounded tail: a long Thread must not be materialized end-to-start for one reply.
+            return threads.readThreadStateTail(threadId, STATE_TAIL_TURNS);
         } catch (DeerFlowConversationService.ConversationException rejected) {
             if (rejected.kind() == DeerFlowConversationService.ConversationException.Kind.NOT_FOUND) {
                 return null;

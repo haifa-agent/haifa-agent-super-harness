@@ -115,6 +115,39 @@ public final class RecordingFeishuTransport implements FeishuTransport {
         return new ArrayList<>(reactionDeletes);
     }
 
+    public record ImageReply(String messageId, String imageKey) {}
+
+    private final CopyOnWriteArrayList<ImageReply> imageReplies = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<String> uploadedImages = new CopyOnWriteArrayList<>();
+    private final AtomicBoolean failImages = new AtomicBoolean(false);
+
+    /** When set, {@link #uploadImage} reports failure so the fallback path can be checked. */
+    public void failImageUpload() {
+        failImages.set(true);
+    }
+
+    public List<ImageReply> imageReplies() {
+        return new ArrayList<>(imageReplies);
+    }
+
+    public List<String> uploadedImages() {
+        return new ArrayList<>(uploadedImages);
+    }
+
+    @Override
+    public Optional<String> uploadImage(byte[] bytes, String filename) {
+        if (failImages.get() || bytes == null || bytes.length == 0) {
+            return Optional.empty();
+        }
+        uploadedImages.add(filename == null ? "" : filename);
+        return Optional.of("img-key-" + uploadedImages.size());
+    }
+
+    @Override
+    public void replyImage(String messageId, String imageKey) {
+        imageReplies.add(new ImageReply(messageId, imageKey));
+    }
+
     public String domain() {
         return domain;
     }
