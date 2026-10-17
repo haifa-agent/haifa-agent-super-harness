@@ -21,6 +21,12 @@ import com.lark.oapi.service.im.v1.model.P2MessageReceiveV1;
 import com.lark.oapi.service.im.v1.model.ReplyMessageReq;
 import com.lark.oapi.service.im.v1.model.ReplyMessageReqBody;
 import com.lark.oapi.service.im.v1.model.UserId;
+import com.lark.oapi.service.im.v1.model.CreateMessageReactionReq;
+import com.lark.oapi.service.im.v1.model.CreateMessageReactionReqBody;
+import com.lark.oapi.service.im.v1.model.CreateMessageReactionResp;
+import com.lark.oapi.service.im.v1.model.DeleteMessageReactionReq;
+import com.lark.oapi.service.im.v1.model.DeleteMessageReactionResp;
+import com.lark.oapi.service.im.v1.model.Emoji;
 import com.lark.oapi.service.im.v1.model.GetMessageResourceReq;
 import com.lark.oapi.service.im.v1.model.GetMessageResourceResp;
 import java.io.ByteArrayOutputStream;
@@ -28,6 +34,7 @@ import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -158,6 +165,90 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                         .build())
                 .build();
         api.im().message().reply(request);
+    }
+
+    @Override
+    public Optional<String> addReaction(String messageId, String emojiType) {
+        Client api;
+        synchronized (lock) {
+            api = apiClient;
+        }
+        if (api == null
+                || messageId == null
+                || messageId.isBlank()
+                || emojiType == null
+                || emojiType.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            CreateMessageReactionResp response = api.im()
+                    .messageReaction()
+                    .create(CreateMessageReactionReq.newBuilder()
+                            .messageId(messageId)
+                            .createMessageReactionReqBody(CreateMessageReactionReqBody.newBuilder()
+                                    .reactionType(Emoji.newBuilder().emojiType(emojiType).build())
+                                    .build())
+                            .build());
+            if (response == null || !response.success() || response.getData() == null) {
+                LOG.log(
+                        System.Logger.Level.WARNING,
+                        "Feishu add reaction failed messageId={0} emoji={1} code={2}",
+                        messageId,
+                        emojiType,
+                        response == null ? -1 : response.getCode());
+                return Optional.empty();
+            }
+            String reactionId = response.getData().getReactionId();
+            if (reactionId == null || reactionId.isBlank()) {
+                return Optional.empty();
+            }
+            return Optional.of(reactionId);
+        } catch (Exception failure) {
+            LOG.log(
+                    System.Logger.Level.WARNING,
+                    "Feishu add reaction raised messageId=" + messageId + " emoji=" + emojiType,
+                    failure);
+            return Optional.empty();
+        }
+    }
+
+    @Override
+    public boolean deleteReaction(String messageId, String reactionId) {
+        Client api;
+        synchronized (lock) {
+            api = apiClient;
+        }
+        if (api == null
+                || messageId == null
+                || messageId.isBlank()
+                || reactionId == null
+                || reactionId.isBlank()) {
+            return false;
+        }
+        try {
+            DeleteMessageReactionResp response = api.im()
+                    .messageReaction()
+                    .delete(DeleteMessageReactionReq.newBuilder()
+                            .messageId(messageId)
+                            .reactionId(reactionId)
+                            .build());
+            if (response == null || !response.success()) {
+                LOG.log(
+                        System.Logger.Level.WARNING,
+                        "Feishu delete reaction failed messageId={0} reactionId={1} code={2}",
+                        messageId,
+                        reactionId,
+                        response == null ? -1 : response.getCode());
+                return false;
+            }
+            return true;
+        } catch (Exception failure) {
+            LOG.log(
+                    System.Logger.Level.WARNING,
+                    "Feishu delete reaction raised messageId=" + messageId,
+                    failure);
+            return false;
+        }
     }
 
     @Override

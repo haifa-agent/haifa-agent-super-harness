@@ -3,8 +3,11 @@ package io.haifa.agent.superharness.server.channels.feishu;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Test double that records outbound replies and accepts injected inbound events. */
 public final class RecordingFeishuTransport implements FeishuTransport {
@@ -12,9 +15,16 @@ public final class RecordingFeishuTransport implements FeishuTransport {
 
     public record InteractiveReply(String messageId, Map<String, Object> card) {}
 
+    public record ReactionAdd(String messageId, String emojiType, String reactionId) {}
+
+    public record ReactionDelete(String messageId, String reactionId, boolean success) {}
+
     private final CopyOnWriteArrayList<CardReply> replies = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<InteractiveReply> interactiveReplies = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<ReactionAdd> reactionAdds = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<ReactionDelete> reactionDeletes = new CopyOnWriteArrayList<>();
     private final ConcurrentHashMap<String, byte[]> resources = new ConcurrentHashMap<>();
+    private final AtomicBoolean failNextDelete = new AtomicBoolean(false);
     private volatile boolean running;
     private volatile InboundHandler handler;
     private volatile String domain;
@@ -67,12 +77,42 @@ public final class RecordingFeishuTransport implements FeishuTransport {
         return bytes.clone();
     }
 
+    @Override
+    public Optional<String> addReaction(String messageId, String emojiType) {
+        if (messageId == null || messageId.isBlank() || emojiType == null || emojiType.isBlank()) {
+            return Optional.empty();
+        }
+        String reactionId = "react_" + UUID.randomUUID();
+        reactionAdds.add(new ReactionAdd(messageId, emojiType, reactionId));
+        return Optional.of(reactionId);
+    }
+
+    @Override
+    public boolean deleteReaction(String messageId, String reactionId) {
+        boolean success = !failNextDelete.getAndSet(false);
+        reactionDeletes.add(new ReactionDelete(messageId, reactionId, success));
+        return success;
+    }
+
+    /** Next {@link #deleteReaction} returns false once (Hermes delete-failure safety). */
+    public void failNextDelete() {
+        failNextDelete.set(true);
+    }
+
     public List<CardReply> replies() {
         return new ArrayList<>(replies);
     }
 
     public List<InteractiveReply> interactiveReplies() {
         return new ArrayList<>(interactiveReplies);
+    }
+
+    public List<ReactionAdd> reactionAdds() {
+        return new ArrayList<>(reactionAdds);
+    }
+
+    public List<ReactionDelete> reactionDeletes() {
+        return new ArrayList<>(reactionDeletes);
     }
 
     public String domain() {
