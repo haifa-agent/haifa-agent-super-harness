@@ -64,13 +64,9 @@ public class HostShellToolApprovalTest {
             assertThat(pending.state()).isEqualTo(InteractionState.PENDING);
             assertThat(pending.allowedActions()).contains(InteractionAction.APPROVE, InteractionAction.REJECT);
 
-            // respondedAt must not precede the store's receivedAt. Under full-suite LowMemory
-            // forks Instant.now() can briefly lag the interaction stamp (SqliteStoreException:
-            // "receivedAt must not precede respondedAt").
-            Instant respondedAt = Instant.now();
-            if (!respondedAt.isAfter(pending.createdAt())) {
-                respondedAt = pending.createdAt().plusMillis(1);
-            }
+            // Store requires receivedAt (runtime clock at respond) >= respondedAt. Instant.now()
+            // can briefly lead the runtime clock under full-suite LowMemory forks; stamp the
+            // rejection at the interaction's createdAt so it cannot be in the future.
             var receipt = bridge.respond(new InteractionResponseSubmission(
                     new InteractionResponseId("host-shell-denial"),
                     pending.requestId(),
@@ -79,7 +75,7 @@ public class HostShellToolApprovalTest {
                     InteractionAction.REJECT,
                     List.of(),
                     "host-shell-denial-idempotency",
-                    respondedAt));
+                    pending.createdAt()));
 
             assertThat(receipt.runId()).isEqualTo(started.runId());
             AgentRunStatus terminal = awaitTerminal(bridge, started.runId());
