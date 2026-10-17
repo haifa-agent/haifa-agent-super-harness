@@ -166,6 +166,16 @@ public final class FeishuChannelWorker implements AutoCloseable {
     /** Resolve explicit reply/topic aliases before the current P2P chat pointer. */
     private String resolveThread(String connectionId, FeishuInboundMessage message) {
         String chat = message.chatId();
+        if (message.cardAction() != null) {
+            Optional<String> requestThread = threadMap.findAlias(connectionId, chat,
+                    "request:" + message.cardAction().requestId());
+            if (requestThread.isPresent()) {
+                return requestThread.get();
+            }
+            // Legacy card without an alias: keep old behavior, but never create a new group topic.
+            return threadMap.find(connectionId, chat)
+                    .orElseThrow(() -> new IllegalStateException("Unroutable Feishu card callback"));
+        }
         for (String alias : List.of(message.rootId(), message.parentId(), message.feishuThreadId())) {
             if (alias != null && !alias.isBlank()) {
                 Optional<String> stored = threadMap.findAlias(connectionId, chat, alias);
@@ -785,7 +795,8 @@ public final class FeishuChannelWorker implements AutoCloseable {
             return;
         }
         if (pending != null) {
-            replyInteractive(message.messageId(), FeishuInteraction.interactiveCard(pending));
+            bindPendingRequest(message, pending, threadId);
+            replyAndBind(message, threadId, FeishuInteraction.interactiveCard(pending));
             return;
         }
         String text = result.assistantText();
@@ -795,7 +806,42 @@ public final class FeishuChannelWorker implements AutoCloseable {
         if (FeishuInteraction.BUSY.equals(text)) {
             return;
         }
-        reply(message.messageId(), text);
+        replyAndBind(message, threadId, text);
+    }
+
+    private void bindPendingRequest(FeishuInboundMessage message, FeishuPendingInput pending, String threadId) {
+        connections.findConnectionByExternalIdentity("feishu", message.openId(), message.chatId())
+                .ifPresent(connection -> threadMap.bindAlias(connection.path("id").asText(""),
+                        message.chatId(), "request:" + pending.requestId(), threadId));
+    }
+
+    /** Retain the platform reply ID so replying to old bot messages survives /new. */
+    private void replyAndBind(FeishuInboundMessage source, String threadId, String text) throws Exception {
+        replyAndBind(source, threadId, text, null);
+    }
+
+    private void replyAndBind(FeishuInboundMessage source, String threadId, Map<String, Object> card)
+            throws Exception {
+        replyAndBind(source, threadId, null, card);
+    }
+
+    private void replyAndBind(FeishuInboundMessage source, String threadId, String text,
+            Map<String, Object> card) throws Exception {
+        FeishuTransport active;
+        synchronized (lock) {
+            active = transport;
+        }
+        if (active == null) {
+            return;
+        }
+        Optional<String> replyId = card == null ? active.replyCardId(source.messageId(), text)
+                : active.replyInteractiveId(source.messageId(), card);
+        if (replyId.isEmpty() || replyId.get().isBlank()) {
+            return;
+        }
+        connections.findConnectionByExternalIdentity("feishu", source.openId(), source.chatId())
+                .ifPresent(connection -> threadMap.bindAlias(connection.path("id").asText(""),
+                        source.chatId(), replyId.get(), threadId));
     }
 
     private boolean authorized(FeishuInboundMessage message) {
