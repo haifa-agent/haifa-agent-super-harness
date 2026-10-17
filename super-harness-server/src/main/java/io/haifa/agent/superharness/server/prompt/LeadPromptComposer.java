@@ -136,6 +136,8 @@ public final class LeadPromptComposer {
         Set<String> mentioned = mentionedTools(format(template.adaptedTemplate(), toolInstructionValues));
         Set<String> unregistered = new LinkedHashSet<>(mentioned);
         unregistered.removeAll(registeredToolNames);
+        // view_image is an optional capability-gated tool; referencing it in soul on a text-only model must not crash bridge construction
+        unregistered.remove("view_image");
         if (!unregistered.isEmpty()) {
             throw new IllegalStateException(
                     "composed lead-agent instructions reference unregistered tools: " + unregistered);
