@@ -356,6 +356,100 @@ try {
         throw "Unavailable SDK inference gate did not fail for the expected reason:`n$($sdkInferenceHookEntryResult.Output)"
     }
 
+    $scheduleStatusPath = Join-Path $TempRoot 'schedule-unknown-status.json'
+    $scheduleStatus = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $scheduleStatusFixture = @($scheduleStatus.fixtures | Where-Object id -eq 'schedules.create.once')[0]
+    $scheduleStatusFixture.response.status = 'snoozed'
+    $scheduleStatus | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $scheduleStatusPath -Encoding utf8NoBOM
+    $scheduleStatusResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleFixtures $scheduleStatusPath
+    if ($scheduleStatusResult.ExitCode -eq 0 -or $scheduleStatusResult.Output -notmatch 'failed schema validation') {
+        throw "Scheduled-task task status drift gate did not fail for the expected reason:`n$($scheduleStatusResult.Output)"
+    }
+
+    $scheduleSpecPath = Join-Path $TempRoot 'schedule-missing-spec.json'
+    $scheduleSpec = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $scheduleSpecFixture = @($scheduleSpec.fixtures | Where-Object id -eq 'schedules.create.cron')[0]
+    $scheduleSpecFixture.request.PSObject.Properties.Remove('schedule_spec')
+    $scheduleSpec | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $scheduleSpecPath -Encoding utf8NoBOM
+    $scheduleSpecResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleFixtures $scheduleSpecPath
+    if ($scheduleSpecResult.ExitCode -eq 0 -or $scheduleSpecResult.Output -notmatch 'failed schema validation') {
+        throw "Scheduled-task required schedule_spec gate did not fail for the expected reason:`n$($scheduleSpecResult.Output)"
+    }
+
+    $scheduleRunStatusPath = Join-Path $TempRoot 'schedule-run-unknown-status.json'
+    $scheduleRunStatus = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $scheduleRunFixture = @($scheduleRunStatus.fixtures | Where-Object id -eq 'schedules.runs.paged')[0]
+    $scheduleRunFixture.response[0].trigger = 'cron'
+    $scheduleRunStatus | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $scheduleRunStatusPath -Encoding utf8NoBOM
+    $scheduleRunStatusResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleFixtures $scheduleRunStatusPath
+    if ($scheduleRunStatusResult.ExitCode -eq 0 -or $scheduleRunStatusResult.Output -notmatch 'failed schema validation') {
+        throw "Scheduled-task run trigger drift gate did not fail for the expected reason:`n$($scheduleRunStatusResult.Output)"
+    }
+
+    $scheduleNullablePath = Join-Path $TempRoot 'schedule-nullable-type.json'
+    $scheduleNullable = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $scheduleNullableFixture = @($scheduleNullable.fixtures | Where-Object id -eq 'schedules.list.enabled')[0]
+    $scheduleNullableFixture.response[0].next_run_at = 42
+    $scheduleNullable | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $scheduleNullablePath -Encoding utf8NoBOM
+    $scheduleNullableResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleFixtures $scheduleNullablePath
+    if ($scheduleNullableResult.ExitCode -eq 0 -or $scheduleNullableResult.Output -notmatch 'failed schema validation') {
+        throw "Scheduled-task nullable timestamp type gate did not fail for the expected reason:`n$($scheduleNullableResult.Output)"
+    }
+
+    $scheduleLeakPath = Join-Path $TempRoot 'schedule-undeclared-field.json'
+    $scheduleLeak = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $scheduleLeakFixture = @($scheduleLeak.fixtures | Where-Object id -eq 'schedules.pause.enabled')[0]
+    $scheduleLeakFixture.response | Add-Member -NotePropertyName assistant_name -NotePropertyValue 'must-not-leak'
+    $scheduleLeak | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $scheduleLeakPath -Encoding utf8NoBOM
+    $scheduleLeakResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleFixtures $scheduleLeakPath
+    if ($scheduleLeakResult.ExitCode -eq 0 -or $scheduleLeakResult.Output -notmatch 'failed schema validation') {
+        throw "Scheduled-task undeclared field gate did not fail for the expected reason:`n$($scheduleLeakResult.Output)"
+    }
+
+    $missingScheduleContractPath = Join-Path $TempRoot 'missing-schedule-contract.json'
+    $missingScheduleContract = Get-Content -LiteralPath $OracleManifest -Raw | ConvertFrom-Json -Depth 100
+    $missingScheduleContract.contracts = @($missingScheduleContract.contracts | Where-Object id -ne 'rest.schedules.trigger.exchange')
+    $missingScheduleContract | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $missingScheduleContractPath -Encoding utf8NoBOM
+    $missingScheduleContractResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleManifest $missingScheduleContractPath
+    if ($missingScheduleContractResult.ExitCode -eq 0 -or $missingScheduleContractResult.Output -notmatch 'Required core protocol contract is missing') {
+        throw "Missing scheduled-task contract gate did not fail for the expected reason:`n$($missingScheduleContractResult.Output)"
+    }
+
+    $scheduleCoRemovalPath = Join-Path $TempRoot 'schedule-contract-co-removal.json'
+    $scheduleCoRemoval = Get-Content -LiteralPath $OracleManifest -Raw | ConvertFrom-Json -Depth 100
+    $scheduleCoRemoval.contracts = @($scheduleCoRemoval.contracts | Where-Object id -ne 'rest.schedules.trigger.exchange')
+    $scheduleCoRemoval.required_contract_ids = @($scheduleCoRemoval.required_contract_ids | Where-Object { $_ -ne 'rest.schedules.trigger.exchange' })
+    $scheduleCoRemoval | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $scheduleCoRemovalPath -Encoding utf8NoBOM
+    $scheduleCoRemovalFixturesPath = Join-Path $TempRoot 'schedule-contract-co-removal-fixtures.json'
+    $scheduleCoRemovalFixtures = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $scheduleCoRemovalFixtures.fixtures = @($scheduleCoRemovalFixtures.fixtures | Where-Object id -ne 'schedules.trigger.manual')
+    $scheduleCoRemovalFixtures | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $scheduleCoRemovalFixturesPath -Encoding utf8NoBOM
+    $scheduleCoRemovalResult = Invoke-Verifier -ContractManifest $Manifest `
+        -CoreOracleManifest $scheduleCoRemovalPath -CoreOracleFixtures $scheduleCoRemovalFixturesPath
+    if ($scheduleCoRemovalResult.ExitCode -eq 0 -or $scheduleCoRemovalResult.Output -notmatch 'independent verifier baseline') {
+        throw "Schedule contract/manifest-id/fixture co-removal gate did not fail for the expected reason:`n$($scheduleCoRemovalResult.Output)"
+    }
+
+    $cronKeyDriftPath = Join-Path $TempRoot 'cron-key-drift-fixtures.json'
+    $cronKeyDrift = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $cronKeyDriftFixture = @($cronKeyDrift.fixtures | Where-Object id -eq 'schedules.create.cron')[0]
+    $cronKeyDriftFixture.request.schedule_spec = @{ expression = '0 9 * * *' }
+    $cronKeyDrift | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $cronKeyDriftPath -Encoding utf8NoBOM
+    $cronKeyDriftResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleFixtures $cronKeyDriftPath
+    if ($cronKeyDriftResult.ExitCode -eq 0 -or $cronKeyDriftResult.Output -notmatch 'Frozen schedule semantics check failed') {
+        throw "Cron key drift gate did not fail for the expected reason:`n$($cronKeyDriftResult.Output)"
+    }
+
+    $noQueryRunsPath = Join-Path $TempRoot 'runs-request-without-query.json'
+    $noQueryRuns = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $noQueryRunsPaged = @($noQueryRuns.fixtures | Where-Object id -eq 'schedules.runs.paged')[0]
+    $noQueryRunsPaged.request.PSObject.Properties.Remove('query')
+    $noQueryRuns | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $noQueryRunsPath -Encoding utf8NoBOM
+    $noQueryRunsResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleFixtures $noQueryRunsPath
+    if ($noQueryRunsResult.ExitCode -ne 0) {
+        throw "Run-history request without a query page was rejected:`n$($noQueryRunsResult.Output)"
+    }
+
     Write-Host 'PASS valid manifest'
     Write-Host 'PASS frozen SHA mismatch is rejected'
     Write-Host 'PASS missing critical SSE surface is rejected'
@@ -390,6 +484,15 @@ try {
     Write-Host 'PASS conflicting hook consumption mapping is rejected'
     Write-Host 'PASS unknown hook consumption surface is rejected'
     Write-Host 'PASS unavailable SDK inference cannot be claimed'
+    Write-Host 'PASS scheduled-task status drift is rejected'
+    Write-Host 'PASS scheduled-task create request requires schedule_spec'
+    Write-Host 'PASS scheduled-task run trigger drift is rejected'
+    Write-Host 'PASS scheduled-task nullable timestamp cannot hold a number'
+    Write-Host 'PASS scheduled-task responses cannot leak undeclared fields'
+    Write-Host 'PASS missing scheduled-task contract is rejected'
+    Write-Host 'PASS schedule contract/manifest-id/fixture co-removal is rejected by the independent baseline'
+    Write-Host 'PASS a cron schedule_spec that drifts off the frozen cron key is rejected'
+    Write-Host 'PASS run history request without a query page is accepted'
 }
 finally {
     if (Test-Path -LiteralPath $TempRoot) {
