@@ -326,7 +326,10 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                 message.getChatType(),
                 messageType,
                 parsed.attachments(),
-                null));
+                null,
+                message.getRootId(),
+                message.getParentId(),
+                message.getThreadId()));
     }
 
     private P2CardActionTriggerResponse respondToCard(P2CardActionTrigger event) {
