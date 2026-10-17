@@ -59,4 +59,31 @@ class FeishuRunProjectorTest {
         assertThat(FeishuRunProjector.encodeArtifactPath("/mnt/user-data/outputs/a?b=%c.txt"))
                 .isEqualTo("/mnt/user-data/outputs/a%3Fb%3D%25c.txt");
     }
+
+    @Test
+    void recordsReplayGapSoTheTurnCanFallBackToTheDurableState() throws Exception {
+        FeishuRunProjector projector = new FeishuRunProjector(summary -> {}, 0L, 24);
+
+        projector.event(
+                "gap",
+                Map.of("code", "stream_replay_gap", "run_id", "run-1", "recovery", "reload_durable_state"),
+                null);
+
+        assertThat(projector.sawGap()).isTrue();
+        assertThat(projector.sawEnd()).isFalse();
+        assertThat(projector.sawError()).isFalse();
+        assertThat(projector.gapDiagnostics()).containsExactly("stream_replay_gap");
+    }
+
+    @Test
+    void keepsGapDiagnosticsBounded() throws Exception {
+        FeishuRunProjector projector = new FeishuRunProjector(summary -> {}, 0L, 24);
+
+        for (int index = 0; index < FeishuRunProjector.MAX_GAP_DIAGNOSTICS + 3; index++) {
+            projector.event("gap", Map.of("code", "stream_replay_gap", "attempt", index), null);
+        }
+
+        assertThat(projector.gapDiagnostics()).hasSize(FeishuRunProjector.MAX_GAP_DIAGNOSTICS);
+        assertThat(projector.sawGap()).isTrue();
+    }
 }

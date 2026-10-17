@@ -23,6 +23,7 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
     static final long MIN_PROGRESS_GAP_MS = 800L;
     static final int MAX_PROGRESS_EVENTS = 24;
     static final int TOOL_RESULT_TRUNCATE = 160;
+    static final int MAX_GAP_DIAGNOSTICS = 4;
 
     @FunctionalInterface
     public interface ProgressListener {
@@ -37,6 +38,7 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
     private boolean sawError;
     private boolean sawValues;
     private boolean sawMessages;
+    private boolean sawGap;
     private long lastProgressAtMs;
     private final AtomicInteger progressCount = new AtomicInteger();
     private final Set<String> toolStarted = new LinkedHashSet<>();
@@ -44,6 +46,7 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
     private final List<String> artifacts = new ArrayList<>();
     private final List<String> todoLines = new ArrayList<>();
     private final List<String> progressLog = new ArrayList<>();
+    private final List<String> gapDiagnostics = new ArrayList<>();
     private int subagentStarts;
     private int subagentEnds;
 
@@ -64,6 +67,7 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
                 case "end" -> sawEnd = true;
                 case "error" -> sawError = true;
                 case "values" -> sawValues = true;
+                case "gap" -> onGap(data);
                 case "messages" -> {
                     sawMessages = true;
                     onMessages(data);
@@ -86,6 +90,20 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
 
     public boolean sawError() {
         return sawError;
+    }
+
+    /**
+     * True when the shared projection reported a replay gap. A gap terminates the observation
+     * without an {@code end} frame, so the caller must fall back to the durable thread state
+     * instead of treating the turn as finished (W20-BUG-001).
+     */
+    public boolean sawGap() {
+        return sawGap;
+    }
+
+    /** Bounded gap diagnostics (never the reply text). */
+    public List<String> gapDiagnostics() {
+        return List.copyOf(gapDiagnostics);
     }
 
     public boolean sawValues() {
@@ -232,6 +250,23 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
             subagentEnds++;
             emit("🧩 子任务结束");
         }
+    }
+
+    /**
+     * A replay gap ends this observation: the shared Run projector can no longer replay the
+     * frames this turn missed. Feishu never streams assistant text, so the durable thread state
+     * (readTurn) stays the recovery source; record a bounded diagnostic instead of swallowing the
+     * frame silently (W20-BUG-001).
+     */
+    private void onGap(Object data) {
+        sawGap = true;
+        if (gapDiagnostics.size() >= MAX_GAP_DIAGNOSTICS) {
+            return;
+        }
+        String reason = data instanceof Map<?, ?> map
+                ? firstNonBlank(string(map.get("code")), truncate(string(map.get("run_id")), 80))
+                : truncate(string(data), 120);
+        gapDiagnostics.add(reason);
     }
 
     private void emit(String summary) {

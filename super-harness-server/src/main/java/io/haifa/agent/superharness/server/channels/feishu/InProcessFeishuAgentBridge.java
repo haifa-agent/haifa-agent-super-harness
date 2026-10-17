@@ -21,6 +21,8 @@ import java.util.Set;
  * the Web compatibility adapter serves, so both channels share one Runtime truth.
  */
 public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
+    private static final System.Logger LOG = System.getLogger(InProcessFeishuAgentBridge.class.getName());
+
     private static final Set<String> MODES = Set.of("flash", "thinking", "pro", "ultra");
 
     private final ObjectMapper json;
@@ -239,15 +241,27 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
         }
         FeishuRunProjector projector = new FeishuRunProjector(options.progress());
         threads.observeTurn(turn, projector);
-        if (!projector.sawEnd()
-                && !projector.sawError()
-                && !projector.sawValues()
-                && !projector.sawMessages()) {
-            // streamRunEvents normally emits end on completion; tolerate values-only fixtures.
-            throw new IllegalStateException("Run stream ended without completion marker");
-        }
         if (projector.sawError()) {
             throw new IllegalStateException("Run stream reported error");
+        }
+        if (!projector.sawEnd()) {
+            // The Feishu reply is projected from the durable thread state (readTurn), so an
+            // observation that ended without a terminal frame (replay gap, transport hiccup,
+            // reconnect) must not drop the final assistant message. Log a bounded diagnostic and
+            // let the caller project the durable answer instead (W20-BUG-001).
+            LOG.log(
+                    System.Logger.Level.WARNING,
+                    "Feishu run observation ended without a terminal frame (gap={0}, values={1}, "
+                            + "messages={2}, diagnostics={3}); projecting the durable thread state",
+                    projector.sawGap(),
+                    projector.sawValues(),
+                    projector.sawMessages(),
+                    projector.gapDiagnostics());
+            if (!projector.sawGap() && !projector.sawValues() && !projector.sawMessages()) {
+                // Nothing was observed and no gap explained it: keep failing fast on this
+                // genuinely empty observation instead of replying with an empty answer.
+                throw new IllegalStateException("Run stream ended without completion marker");
+            }
         }
         return projector;
     }
