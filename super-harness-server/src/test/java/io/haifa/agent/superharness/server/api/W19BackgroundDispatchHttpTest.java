@@ -126,8 +126,79 @@ class W19BackgroundDispatchHttpTest {
         }
     }
 
-    private void configureModel(GatewayFixture fixture, int providerPort) throws Exception {
-        String model = """
+    // W19-M2-19 (AarenWang P1): the scheduled task's assistant identity reaches the prompt/tool
+    // composition, so a non-default Agent's Soul appears in the real Provider request.
+    @Test
+    void scheduledRunAppliesNonDefaultAssistantSoul() throws Exception {
+        String key = Base64.getEncoder().encodeToString(new byte[32]);
+        Map<String, String> environment = schedulerEnvironment(key, "3600");
+        String soul = "review-agent soul marker & <review> synthetic.";
+        try (var provider = new ControlledProvider(evidence, true, (request, call) ->
+                ControlledProvider.stop("sched-soul-" + call, "demo-provider-id", "done"))) {
+            try (var fixture = GatewayFixture.production(dataRoot, 0, environment, evidence)) {
+                configureModel(fixture, provider.port());
+                fixture.seed("review-agent", soul);
+                ScheduleStore store = fixture.api.scheduler().store();
+                Instant now = Instant.now();
+                ScheduledTask task = store.createTask(new ScheduleStore.NewTask(null, "default", null,
+                        ScheduledTask.FRESH_THREAD_PER_RUN, "review-agent", "Scheduled identity", "say hello",
+                        "once", Map.of("run_at", now.minusSeconds(60).toString()), "UTC",
+                        now.minusSeconds(1)), now);
+
+                fixture.api.scheduler().pollOnce();
+
+                ScheduledTaskRun occurrence = awaitTerminal(store, task.id());
+                assertThat(occurrence.status()).isEqualTo(ScheduledRunStatus.SUCCESS);
+                assertThat(provider.calls).hasValue(1);
+                io.haifa.agent.superharness.server.testsupport.AgentSoulTestSupport
+                        .soulEquals(providerInstructions(1), soul);
+            }
+        }
+    }
+
+    // W19-M2-20 (AarenWang P1): the Thread active-Run guard defers an overlapping scheduled Run; a
+    // second task bound to the same Thread keeps its occurrence queued while the first is pending.
+    @Test
+    void overlappingReuseThreadRunStaysQueued() throws Exception {
+        String key = Base64.getEncoder().encodeToString(new byte[32]);
+        Map<String, String> environment = schedulerEnvironment(key, "3600");
+        try (var provider = new ControlledProvider(evidence, true, (request, call) ->
+                ControlledProvider.call("sched-overlap-" + call, "demo-provider-id",
+                        "call-sched-overlap-" + call, "write_file",
+                        Map.of("path", "/mnt/user-data/outputs/overlap.txt", "content", "x")))) {
+            try (var fixture = GatewayFixture.production(dataRoot, 0, environment, evidence)) {
+                configureModel(fixture, provider.port());
+                fixture.thread("shared-sched-thread");
+                ScheduleStore store = fixture.api.scheduler().store();
+                Instant now = Instant.now();
+                ScheduledTask first = store.createTask(new ScheduleStore.NewTask("task-first", "default",
+                        "shared-sched-thread", ScheduledTask.REUSE_THREAD, "lead_agent", "First", "write a file",
+                        "once", Map.of("run_at", now.minusSeconds(60).toString()), "UTC",
+                        now.minusSeconds(1)), now);
+                ScheduledTask second = store.createTask(new ScheduleStore.NewTask("task-second", "default",
+                        "shared-sched-thread", ScheduledTask.REUSE_THREAD, "lead_agent", "Second", "write a file",
+                        "once", Map.of("run_at", now.minusSeconds(60).toString()), "UTC",
+                        now.minusSeconds(1)), now);
+
+                fixture.api.scheduler().pollOnce();
+
+                ScheduledTaskRun firstRun = store.findActiveRun(first.id()).orElseThrow();
+                ScheduledTaskRun secondRun = store.findActiveRun(second.id()).orElseThrow();
+                ScheduledTaskRun launched = firstRun.runId() != null ? firstRun : secondRun;
+                ScheduledTaskRun waiting = launched == firstRun ? secondRun : firstRun;
+                assertThat(launched.status()).isEqualTo(ScheduledRunStatus.RUNNING);
+                assertThat(waiting.status()).as("overlapping occurrence stays queued")
+                        .isEqualTo(ScheduledRunStatus.QUEUED);
+                assertThat(waiting.runId()).isNull();
+                JsonNode run = awaitRunStatus(fixture, launched);
+                assertThat(run.path("diagnostics").path("sdk_status").asText())
+                        .as(run.toString()).isEqualTo("WAITING_APPROVAL");
+                assertThat(provider.calls).hasValue(1);
+            }
+        }
+    }
+
+    private void configureModel(GatewayFixture fixture, int providerPort) throws Exception {        String model = """
                 {"config":{"name":"demo-model","display_name":"Demo Model",
                 "provider":"openai-compatible","model":"demo-provider-id",
                 "base_url":"http://127.0.0.1:%d/v1","enabled":true,"supports_vision":false,
@@ -148,8 +219,18 @@ class W19BackgroundDispatchHttpTest {
                 "HAIFA_SUPER_HARNESS_SCHEDULER_QUEUE_TIMEOUT_SECONDS", queueTimeout);
     }
 
-    private java.util.List<String> providerRequestToolNames(int call) throws Exception {
+    private String providerInstructions(int call) throws Exception {
         JsonNode request = json.readTree(Files.readString(evidence.resolve("provider-request-" + call + ".json")));
+        for (JsonNode message : request.path("messages")) {
+            if ("system".equals(message.path("role").asText())
+                    && message.path("content").asText().contains("open-source super agent")) {
+                return message.path("content").asText();
+            }
+        }
+        throw new AssertionError("provider request has no Lead system instructions");
+    }
+
+    private java.util.List<String> providerRequestToolNames(int call) throws Exception {        JsonNode request = json.readTree(Files.readString(evidence.resolve("provider-request-" + call + ".json")));
         java.util.List<String> names = new java.util.ArrayList<>();
         request.path("tools").forEach(tool -> names.add(tool.path("function").path("name").asText()));
         return names;

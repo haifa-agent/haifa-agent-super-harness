@@ -3,6 +3,7 @@ package io.haifa.agent.superharness.server.schedule;
 import io.haifa.agent.superharness.server.config.SchedulerRunConfiguration;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -135,18 +136,17 @@ public final class ScheduleDispatchService implements AutoCloseable {
     // ------------------------------------------------------------------ poll rounds
 
     private void runLoop() {
-        try {
-            pollOnce();
-            while (running) {
-                awaitNextPoll();
-                if (!running) {
-                    return;
-                }
+        while (running) {
+            // One transient round failure (recovery, expiry, admission or persistence) must not
+            // terminate the single worker; isolate the round, keep the diagnostic and continue
+            // polling at the configured interval while still honouring shutdown.
+            try {
                 pollOnce();
+            } catch (RuntimeException failure) {
+                LOG.log(System.Logger.Level.WARNING,
+                        "scheduler poll round failed: " + failure.getClass().getName());
             }
-        } catch (RuntimeException failure) {
-            LOG.log(System.Logger.Level.WARNING,
-                    "scheduler poll loop stopped: " + failure.getClass().getName());
+            awaitNextPoll();
         }
     }
 
@@ -162,20 +162,29 @@ public final class ScheduleDispatchService implements AutoCloseable {
      * Graded startup recovery, matching the frozen {@code mark_stale_active_runs}: {@code queued} is
      * a durable waiting item and is never converged; a {@code launching} occurrence without a
      * committed Run returns to {@code queued}; an executing occurrence with a committed Run is
-     * converged from that Run's real result. A still-active Run keeps its slot.
+     * converged from that Run's real result. A still-active Run keeps its slot and gets a
+     * replacement follower, so a Run that outlived the previous process still records its terminal
+     * state. An inspection read that is temporarily unavailable stays fail-closed and is retried on
+     * a later round instead of releasing the slot.
      */
     private void recoverIfNeeded(Instant now) {
-        if (!recovered.compareAndSet(false, true)) {
-            return;
-        }
-        for (ScheduledTaskRun occurrence : store.listExecutingRuns()) {
-            if (occurrence.runId() == null) {
+        if (recovered.compareAndSet(false, true)) {
+            for (ScheduledTaskRun occurrence : store.listExecutingRuns()) {
+                if (occurrence.runId() != null) {
+                    continue;
+                }
                 if (occurrence.status() == ScheduledRunStatus.LAUNCHING) {
                     store.revertLaunchingToQueued(occurrence.id(), now);
                 } else {
                     recordTerminal(occurrence.id(), ScheduledRunStatus.INTERRUPTED,
                             "run association unavailable", now);
                 }
+            }
+        }
+        List<ScheduledTaskRun> executing = store.listExecutingRuns();
+        for (ScheduledTaskRun occurrence : executing) {
+            String runId = occurrence.runId();
+            if (runId == null) {
                 continue;
             }
             String owner = store.ownerOfRun(occurrence.id()).orElse(null);
@@ -183,17 +192,39 @@ public final class ScheduleDispatchService implements AutoCloseable {
                 recordTerminal(occurrence.id(), ScheduledRunStatus.INTERRUPTED, "task unavailable", now);
                 continue;
             }
-            Optional<ScheduledRunLauncher.ScheduledRunInspection> inspection =
-                    launcher.inspect(owner, occurrence.threadId(), occurrence.runId());
-            if (inspection.isPresent() && !inspection.orElseThrow().terminal()) {
-                // The Run still owns its active slot; recovery must not release it or start a second.
+            Optional<ScheduledRunLauncher.ScheduledRunInspection> inspection;
+            try {
+                inspection = launcher.inspect(owner, occurrence.threadId(), runId);
+            } catch (ScheduledRunLauncher.InspectionUnavailableException unavailable) {
+                // Keep the active slot and retry the inspection on a later round.
+                LOG.log(System.Logger.Level.WARNING,
+                        "scheduled Run inspection unavailable for run " + runId);
                 continue;
             }
-            ScheduledRunStatus status = inspection.map(ScheduledRunLauncher.ScheduledRunInspection::terminalStatus)
-                    .orElse(ScheduledRunStatus.INTERRUPTED);
-            String error = inspection.map(ScheduledRunLauncher.ScheduledRunInspection::error).orElse(null);
-            recordTerminal(occurrence.id(),
-                    status == null || !status.terminal() ? ScheduledRunStatus.INTERRUPTED : status, error, now);
+            if (inspection.isEmpty()) {
+                recordTerminal(occurrence.id(), ScheduledRunStatus.INTERRUPTED,
+                        "run association unavailable", now);
+                continue;
+            }
+            ScheduledRunLauncher.ScheduledRunInspection found = inspection.orElseThrow();
+            if (found.terminal()) {
+                ScheduledRunStatus status = found.terminalStatus();
+                recordTerminal(occurrence.id(),
+                        status == null || !status.terminal() ? ScheduledRunStatus.INTERRUPTED : status,
+                        found.error(), now);
+                continue;
+            }
+            // The Run still owns its active slot; ensure a follower is observing it so its
+            // completion converges the occurrence instead of leaving it running and consuming
+            // capacity. Reattaching is idempotent, so a Run already observed here is a no-op.
+            try {
+                launcher.watch(owner, occurrence.threadId(), runId,
+                        outcome -> recordTerminal(occurrence.id(), outcome.terminal(), outcome.error()));
+            } catch (RuntimeException watchFailure) {
+                LOG.log(System.Logger.Level.WARNING,
+                        "scheduled Run follower could not be reattached: "
+                                + watchFailure.getClass().getName());
+            }
         }
     }
 
@@ -271,30 +302,46 @@ public final class ScheduleDispatchService implements AutoCloseable {
             launched = launcher.launch(new ScheduledRunLauncher.LaunchRequest(task.userId(),
                     occurrence.threadId(), task.prompt(), task.assistantId(),
                     ScheduledTask.FRESH_THREAD_PER_RUN.equals(task.contextMode())));
+        } catch (ScheduledRunLauncher.ActiveRunConflict conflict) {
+            // Another Run still owns the target Thread: keep this occurrence waiting instead of
+            // starting a second Run or failing it. The queue timeout still bounds the wait.
+            store.revertLaunchingToQueued(occurrence.id(), now);
+            return false;
         } catch (RuntimeException failure) {
             releaseFailedLaunch(occurrence, task, now);
             return false;
         }
+        boolean associated = true;
         try {
             // Association write happens before the follower starts, so a fast-completing Run can
-            // never be overwritten back to running by late launch bookkeeping. A paused task or a
-            // manual trigger keeps the task's own status instead of borrowing the automatic "running".
-            String launchStatus = task.status() == ScheduledTaskStatus.PAUSED
-                    || occurrence.trigger() == ScheduledRunTrigger.MANUAL ? null : "running";
+            // never be overwritten back to running by late launch bookkeeping.
             store.updateRunStatus(occurrence.id(), ScheduledRunStatus.RUNNING, launched.runId(), null, now,
                     null, true);
-            store.updateTaskAfterLaunch(task.id(), new ScheduleStore.TaskLaunchUpdate(launchStatus, null, now,
-                    launched.runId(), launched.threadId(), null, true, true, occurrence.id()), now);
-        } catch (RuntimeException bookkeepingFailure) {
-            // The launch is committed: keep the active slot, do not release it, and never re-launch.
+        } catch (RuntimeException associationFailure) {
+            associated = false;
             LOG.log(System.Logger.Level.WARNING,
-                    "scheduled launch bookkeeping failed for run " + launched.runId());
-            return true;
+                    "scheduled launch association failed for run " + launched.runId());
+        }
+        if (associated) {
+            try {
+                // A paused task or a manual trigger keeps the task's own status instead of borrowing
+                // the automatic "running". This is secondary bookkeeping: its failure must not stop
+                // the terminal follower from observing the committed Run.
+                String launchStatus = task.status() == ScheduledTaskStatus.PAUSED
+                        || occurrence.trigger() == ScheduledRunTrigger.MANUAL ? null : "running";
+                store.updateTaskAfterLaunch(task.id(), new ScheduleStore.TaskLaunchUpdate(launchStatus, null,
+                        now, launched.runId(), launched.threadId(), null, true, true, occurrence.id()), now);
+            } catch (RuntimeException bookkeepingFailure) {
+                LOG.log(System.Logger.Level.WARNING,
+                        "scheduled launch bookkeeping failed for run " + launched.runId());
+            }
         }
         try {
-            launcher.watch(launched.runId(),
+            launcher.watch(task.userId(), launched.threadId(), launched.runId(),
                     outcome -> recordTerminal(occurrence.id(), outcome.terminal(), outcome.error()));
         } catch (RuntimeException watchFailure) {
+            // A follower that could not start leaves the Run unobserved here; recovery retries the
+            // observation on a later round rather than releasing the active slot.
             LOG.log(System.Logger.Level.WARNING, "scheduled Run follower could not start: "
                     + watchFailure.getClass().getName());
         }

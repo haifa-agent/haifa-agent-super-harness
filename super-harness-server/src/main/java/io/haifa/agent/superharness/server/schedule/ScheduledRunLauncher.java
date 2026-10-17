@@ -20,18 +20,23 @@ public interface ScheduledRunLauncher {
     LaunchedRun launch(LaunchRequest request);
 
     /**
-     * Starts the bounded follower for a successfully started Run. The callback runs at most once,
-     * on a follower thread, when the Run reaches a terminal SDK status; it is never called for a Run
-     * that stays pending (for example {@code WAITING_APPROVAL}).
+     * Starts the bounded terminal observation for a Run. {@code ownerId}/{@code threadId} identify
+     * the Run's Thread so a follower can be reattached to a Run that outlived the process that
+     * started it. The callback runs at most once, on a follower thread, when the Run reaches a
+     * terminal SDK status; it is never called for a Run that stays pending (for example
+     * {@code WAITING_APPROVAL}).
      */
-    void watch(String runId, Consumer<ScheduledRunOutcome> onTerminal);
+    void watch(String ownerId, String threadId, String runId, Consumer<ScheduledRunOutcome> onTerminal);
 
     /**
      * Read-only inspection of an already submitted Run for startup recovery. Empty when the Run
      * cannot be located for the owner; a present, non-terminal inspection means the Run still owns
-     * its active slot and must not be converged by recovery.
+     * its active slot and must not be converged by recovery. A transient read failure raises
+     * {@link InspectionUnavailableException} so recovery keeps the slot fail-closed instead of
+     * treating an unreadable Run as gone.
      */
-    Optional<ScheduledRunInspection> inspect(String ownerId, String threadId, String runId);
+    Optional<ScheduledRunInspection> inspect(String ownerId, String threadId, String runId)
+            throws InspectionUnavailableException;
 
     record LaunchRequest(
             String ownerId, String threadId, String message, String assistantId, boolean createThreadIfMissing) {
@@ -61,4 +66,24 @@ public interface ScheduledRunLauncher {
     }
 
     record ScheduledRunInspection(boolean terminal, ScheduledRunStatus terminalStatus, String error) {}
+
+    /**
+     * A transient failure reading an already submitted Run. Recovery must keep the occurrence's
+     * active slot and retry later rather than converging the Run as gone.
+     */
+    final class InspectionUnavailableException extends RuntimeException {
+        public InspectionUnavailableException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    /**
+     * The target Thread already owns a non-terminal active Run, so this scheduled launch must be
+     * deferred: the caller keeps the occurrence waiting instead of starting a second Run.
+     */
+    final class ActiveRunConflict extends RuntimeException {
+        public ActiveRunConflict(String threadId) {
+            super("Thread " + threadId + " already has an active Run");
+        }
+    }
 }

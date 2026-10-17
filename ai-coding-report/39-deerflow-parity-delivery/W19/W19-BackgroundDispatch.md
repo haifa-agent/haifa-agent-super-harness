@@ -83,8 +83,8 @@
 ## 7. 与冻结实现的有意差异（须单列）
 
 1. **单实例**：未移植 lease/fence/Postgres advisory lock/多实例接管；worker 只有一条守护线程。`enabled=true` 但存在第二个 worker/实例时按 SH 现状 fail-closed（单实例进程内单 worker）。
-2. **模型与上下文选择**：定时 Run 默认解析“当前默认可执行 managed model + 默认 Agent prompt”（`runModelResolver.apply(empty)` / `agentPromptResolver.apply(empty)`）；暂未消费任务的 `assistant_id` 做 Agent/模型选择（`assistant_id` 仅记入 RunRecord 元数据）。M3/M4 若需按任务 Agent 选模，需在 M3 接线并在 M4 用冻结 UI 验证。
-3. **完成跟随**：冻结由 gateway 的 Run 完成回调驱动；本任务用**有界轮询 follower**（`bridge.snapshot`，25ms 起指数退避到 1s，上限 24h，与既有 workspace/title 观察器同层）。`WAITING_APPROVAL` 属非终态：不落终态、保持 `running`（对齐 W05：不静默放行、不因缺订阅者丢失）。跨进程重启后 SDK 无自动恢复，SH 只读真实结果收敛；`launching` 无 Run 退回 `queued` 的窗口与冻结一致。
+2. **模型与上下文选择**：定时 Run 解析任务记录的 `assistant_id`，经既有 `runModelResolver`/`agentPromptResolver` 校验路径选择所选 Agent 的 model/Soul/工具组合（与交互式 Run 同一入口），不再落到默认身份。**M2 返工（W19-M2ReviewFix）已修复 §7 此前的“未消费 `assistant_id`”限制。**
+3. **完成跟随**：冻结由 gateway 的 Run 完成回调驱动；本任务用**有界轮询 follower**（`bridge.snapshot`，25ms 起指数退避到 1s，上限 24h，与既有 workspace/title 观察器同层）。`WAITING_APPROVAL` 属非终态：不落终态、保持 `running`（对齐 W05：不静默放行、不因缺订阅者丢失）。跨进程重启后 SDK 无自动恢复，SH 在恢复时对**仍非终态且已关联 Run** 的 occurrence **重新挂上 follower**（幂等）以收敛其结果；`launching` 无 Run 退回 `queued` 的窗口与冻结一致。单次快照读取瞬态失败在既有 deadline 内重试，不再终止唯一 follower。
 4. **队列超时时间基准**：以 occurrence `created_at` 计 `queue_timeout_seconds`（M1 store 无独立 `queued_at`；`created_at` 即入队时间）。
 5. **`running` 无关联 Run 的恢复**：冻结扫描集为 `launching/running`，本任务对“`running` 且无 `run_id`”按 `interrupted` 收敛（无法定位已提交 Run，不重放），对“`launching` 且无 `run_id`”退回 `queued`（对齐冻结 §3.5）。
 6. **REST/HTTP**：本任务不新增公开后台 Run 路由；派发经 `DeerFlowThreadRunApi` 上的**进程内 Java 接缝**（`ScheduledRunLauncher`）完成，不暴露 HTTP 后台 Run。
@@ -99,15 +99,16 @@
 - 真实模型路径（`live`）：留给 M4；本任务用确定性受控 Provider + 进程内 SDK 链。
 - 慢测试（`@Tag("slow")`）：未新增、未运行。
 - 冻结 UI：未触碰、未运行。
+- W19-M2ReviewFix 返工轮：按主控要求已跑 `verify-full`（结果见 `W19-M2ReviewFix.md` §4）；`ui-live-round-x1` 仍记 `NOT_RUN`，L2 延后到工作包出口。
 
 ## 9. 交接 M3/M4
 
 - 后台服务入口：`DeerFlowBootstrapApi.scheduler()` → `ScheduleDispatchService`（`start()`/`close()`/`pollOnce()`/`recover()`/`triggerManually(taskId, ownerId)`/`store()`）。
 - 配置键与默认值：`HAIFA_SUPER_HARNESS_SCHEDULER_ENABLED`（false）、`..._POLL_SECONDS`（5）、`..._MIN_ONCE_DELAY_SECONDS`（60）、`..._MAX_CONCURRENT_RUNS`（3）、`..._QUEUE_TIMEOUT_SECONDS`（3600）。
 - occurrence↔Run 关联：`ScheduleStore.updateRunStatus(occ, RUNNING, runId, ..., protectTerminal=true)` 写 `run_id`/`started_at`；`updateTaskAfterLaunch(..., lastRunId/lastThreadId, incrementRunCount=true)` 写任务 `last_run_id`/`last_thread_id`/`run_count`（同次启动只加一次）。终态由 follower 回调 `recordTerminal` 落 occurrence + 任务。
-- 恢复语义：见 Oracle W19-M2-07；`recover()` 幂等、仅在启动时执行一次，`queued` 不入扫描集。
+- 恢复语义：见 Oracle W19-M2-07；`recover()` 幂等：`launching` 无 Run 退回 `queued` 仅在启动时执行一次；对已关联 Run 的执行态，每轮按 occurrence 重新校验并**幂等地**补挂 follower，读取暂不可用时保持活跃槽位并重试（fail-closed），`queued` 不入收敛集。
 - M3 需要的 store 接口：`pauseTask`/`deleteTask(...,now)`（对 `launching/running` 抛 `ActiveOccurrenceConflict` → 409）、`triggerManually`（冲突 → 409）、`listRuns` 分页/过滤。
-- 实际 SH SHA：`695e8d4`（`sourceTree=754decda…`，`javaInputFingerprint=e40bd661…`）。
+- 实际 SH SHA：rebase 后 M2 功能提交 `b1c76ea`；返工提交见 `W19-M2ReviewFix.md` 与 `local-tmp/acceptance-handoff.md`（`sourceTree`/`javaInputFingerprint` 以最终绑定运行为准）。
 - SDK 制品身份：`sdk-selection.json` ABSENT → 基线 `io.haifa:haifa-agent-bom:0.1.3-SNAPSHOT`。
 - 通过/失败/未运行：见 §4/§8。剩余限制：§7 第 1/2/3 项。
 - 原始证据路径：`local-tmp/slot-5-w19-m2/evidence/`（HTTP once/approval 原始 Provider 请求响应、定向测试日志）。

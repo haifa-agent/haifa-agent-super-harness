@@ -342,6 +342,132 @@ class ScheduleDispatchServiceTest {
         assertThat(enabled.running()).isFalse();
     }
 
+    // W19-M2-14 (Codex P1): recovery reattaches a follower to a still-active committed Run so its
+    // completion converges the occurrence instead of leaving it running forever.
+    @Test
+    void recoveryReattachesFollowerAndConvergesActiveRun(@TempDir Path dataDirectory) throws Exception {
+        ScheduleStore store = new ScheduleStore(JSON, dataDirectory);
+        FakeLauncher launcher = new FakeLauncher();
+        launcher.inspections.put("run-active", new ScheduledRunLauncher.ScheduledRunInspection(
+                false, null, null));
+        ScheduledTask task = store.createTask(intervalTask("Recovered", NOW.plusSeconds(600)), NOW);
+        ScheduledTaskRun occurrence = store.createRun(activeRun(task, ScheduledRunStatus.RUNNING), NOW);
+        store.associateRun(occurrence.id(), occurrence.threadId(), "run-active", NOW);
+
+        ScheduleDispatchService service = service(store, launcher, configuration(3), new AtomicReference<>(NOW));
+        service.recover();
+
+        assertThat(launcher.watchers).containsKey("run-active");
+        launcher.complete("run-active", ScheduledRunStatus.SUCCESS);
+
+        assertThat(store.findRun(occurrence.id()).orElseThrow().status())
+                .isEqualTo(ScheduledRunStatus.SUCCESS);
+        assertThat(store.findTaskInternal(task.id()).orElseThrow().status())
+                .isEqualTo(ScheduledTaskStatus.ENABLED);
+    }
+
+    // W19-M2-15 (Codex P1): an unavailable inspection stays fail-closed and is retried; the active
+    // slot is never released as if the Run were gone.
+    @Test
+    void unavailableInspectionKeepsActiveSlotAndRetries(@TempDir Path dataDirectory) throws Exception {
+        ScheduleStore store = new ScheduleStore(JSON, dataDirectory);
+        FakeLauncher launcher = new FakeLauncher();
+        ScheduledTask task = store.createTask(intervalTask("Unavailable", NOW.plusSeconds(600)), NOW);
+        ScheduledTaskRun occurrence = store.createRun(activeRun(task, ScheduledRunStatus.RUNNING), NOW);
+        store.associateRun(occurrence.id(), occurrence.threadId(), "run-active", NOW);
+        ScheduleDispatchService service = service(store, launcher, configuration(3), new AtomicReference<>(NOW));
+
+        launcher.inspectionUnavailable = true;
+        service.pollOnce();
+        assertThat(store.findRun(occurrence.id()).orElseThrow().status())
+                .isEqualTo(ScheduledRunStatus.RUNNING);
+        assertThat(launcher.watchers).doesNotContainKey("run-active");
+
+        // The transient read recovers: recovery observes the Run and converges its completion.
+        launcher.inspectionUnavailable = false;
+        launcher.inspections.put("run-active", new ScheduledRunLauncher.ScheduledRunInspection(
+                false, null, null));
+        service.pollOnce();
+        assertThat(launcher.watchers).containsKey("run-active");
+        launcher.complete("run-active", ScheduledRunStatus.SUCCESS);
+        assertThat(store.findRun(occurrence.id()).orElseThrow().status())
+                .isEqualTo(ScheduledRunStatus.SUCCESS);
+    }
+
+    // W19-M2-16 (Codex P1): once the Run association persists, a failing secondary parent-task
+    // bookkeeping write must not stop the terminal follower.
+    @Test
+    void postAssociationBookkeepingFailureStillStartsFollower(@TempDir Path dataDirectory) throws Exception {
+        FailingStore store = new FailingStore(JSON, dataDirectory);
+        FakeLauncher launcher = new FakeLauncher();
+        ScheduleDispatchService service = service(store, launcher, configuration(3), new AtomicReference<>(NOW));
+
+        ScheduledTask task = store.createTask(intervalTask("Secondary fault", NOW), NOW);
+        // persists: #1 createRun, #2 task running, #3 claim, #4 Run association, #5 parent bookkeeping.
+        store.failOnPersistNumber(5);
+        service.pollOnce();
+
+        ScheduledTaskRun occurrence = store.findActiveRun(task.id()).orElseThrow();
+        assertThat(occurrence.status()).isEqualTo(ScheduledRunStatus.RUNNING);
+        assertThat(occurrence.runId()).isEqualTo("run-1");
+        assertThat(launcher.watchers).containsKey("run-1");
+
+        launcher.complete("run-1", ScheduledRunStatus.SUCCESS);
+        assertThat(store.findRun(occurrence.id()).orElseThrow().status())
+                .isEqualTo(ScheduledRunStatus.SUCCESS);
+        assertThat(store.findTaskInternal(task.id()).orElseThrow().status())
+                .isEqualTo(ScheduledTaskStatus.ENABLED);
+    }
+
+    // W19-M2-17 (AarenWang P1): a transient failure in one poll round must not terminate the sole
+    // worker; later due tasks still dispatch.
+    @Test
+    void transientPollRoundFailureKeepsWorkerPolling(@TempDir Path dataDirectory) throws Exception {
+        ThrowingStore store = new ThrowingStore(JSON, dataDirectory);
+        FakeLauncher launcher = new FakeLauncher();
+        ScheduleDispatchService service = new ScheduleDispatchService(store, launcher,
+                new SchedulerRunConfiguration(true, 1, 60, 3, 3600), Instant::now);
+        store.createTask(new ScheduleStore.NewTask(null, OWNER, null, ScheduledTask.FRESH_THREAD_PER_RUN,
+                "lead_agent", "After fault", "run this prompt", "interval",
+                Map.of("every_seconds", 600), "UTC", Instant.now().minusSeconds(1)), Instant.now());
+        store.failNextDueLookup();
+        service.start();
+        try {
+            long deadline = System.nanoTime() + java.time.Duration.ofSeconds(8).toNanos();
+            while (System.nanoTime() < deadline && launcher.requests.size() < 1) {
+                Thread.sleep(25);
+            }
+            assertThat(service.running()).as("worker survives a transient round failure").isTrue();
+            assertThat(launcher.requests).as("a later round still dispatches").hasSize(1);
+        } finally {
+            service.close();
+        }
+        assertThat(service.running()).isFalse();
+    }
+
+    // W19-M2-18 (AarenWang P1): a launch deferred by the Thread active-Run guard keeps the
+    // occurrence queued and never starts a second Run.
+    @Test
+    void threadActiveRunConflictKeepsOccurrenceQueued(@TempDir Path dataDirectory) throws Exception {
+        ScheduleStore store = new ScheduleStore(JSON, dataDirectory);
+        FakeLauncher launcher = new FakeLauncher();
+        ScheduleDispatchService service = service(store, launcher, configuration(3), new AtomicReference<>(NOW));
+
+        ScheduledTask task = store.createTask(intervalTask("Overlap", NOW), NOW);
+        launcher.conflictNextLaunch = true;
+        service.pollOnce();
+
+        assertThat(store.findActiveRun(task.id()).orElseThrow().status())
+                .isEqualTo(ScheduledRunStatus.QUEUED);
+        assertThat(launcher.requests).isEmpty();
+
+        launcher.conflictNextLaunch = false;
+        service.pollOnce();
+        assertThat(store.findActiveRun(task.id()).orElseThrow().status())
+                .isEqualTo(ScheduledRunStatus.RUNNING);
+        assertThat(launcher.requests).hasSize(1);
+    }
+
     // ------------------------------------------------------------------- helpers
 
     private static ScheduleDispatchService service(ScheduleStore store, ScheduledRunLauncher launcher,
@@ -389,10 +515,15 @@ class ScheduleDispatchServiceTest {
         final Map<String, Consumer<ScheduledRunOutcome>> watchers = new HashMap<>();
         final Map<String, ScheduledRunInspection> inspections = new HashMap<>();
         boolean failNextLaunch;
+        boolean conflictNextLaunch;
+        boolean inspectionUnavailable;
         private final AtomicInteger launches = new AtomicInteger();
 
         @Override
         public LaunchedRun launch(LaunchRequest request) {
+            if (conflictNextLaunch) {
+                throw new ScheduledRunLauncher.ActiveRunConflict(request.threadId());
+            }
             if (failNextLaunch) {
                 failNextLaunch = false;
                 throw new IllegalStateException("injected launch failure");
@@ -402,12 +533,17 @@ class ScheduleDispatchServiceTest {
         }
 
         @Override
-        public void watch(String runId, Consumer<ScheduledRunOutcome> onTerminal) {
+        public void watch(String ownerId, String threadId, String runId,
+                Consumer<ScheduledRunOutcome> onTerminal) {
             watchers.put(runId, onTerminal);
         }
 
         @Override
         public Optional<ScheduledRunInspection> inspect(String ownerId, String threadId, String runId) {
+            if (inspectionUnavailable) {
+                throw new ScheduledRunLauncher.InspectionUnavailableException(
+                        "injected inspection failure", new IllegalStateException("injected"));
+            }
             return Optional.ofNullable(inspections.get(runId));
         }
 
@@ -447,6 +583,28 @@ class ScheduleDispatchServiceTest {
                 throw new IOException("injected persistence failure");
             }
             super.persist();
+        }
+    }
+
+    /** Throws once from a dispatch read so a transient poll-round failure is deterministic. */
+    static final class ThrowingStore extends ScheduleStore {
+        private final java.util.concurrent.atomic.AtomicBoolean failOnNextDue =
+                new java.util.concurrent.atomic.AtomicBoolean();
+
+        ThrowingStore(ObjectMapper json, Path dataDirectory) throws IOException {
+            super(json, dataDirectory);
+        }
+
+        void failNextDueLookup() {
+            failOnNextDue.set(true);
+        }
+
+        @Override
+        public List<ScheduledTask> listDueTasks(Instant now) {
+            if (failOnNextDue.compareAndSet(true, false)) {
+                throw new IllegalStateException("injected due lookup failure");
+            }
+            return super.listDueTasks(now);
         }
     }
 }

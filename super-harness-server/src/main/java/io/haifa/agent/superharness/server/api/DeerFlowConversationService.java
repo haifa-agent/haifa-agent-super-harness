@@ -222,6 +222,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     // Scheduled-Run bridges retained for the bounded follower; the bridge itself keeps the Run alive.
     private final Map<String, HaifaRunBridge> backgroundBridges = new ConcurrentHashMap<>();
     private final Set<Thread> backgroundFollowers = ConcurrentHashMap.newKeySet();
+    // Runs this process already follows. Reattaching is idempotent so recovery can call watch for
+    // every active Run each round without starting duplicate followers.
+    private final Set<String> followedRuns = ConcurrentHashMap.newKeySet();
     private volatile DurableTurnScanner durableTurnScanner = this::scanPersistedUserTurns;
     private volatile boolean closed;
 
@@ -1931,11 +1934,18 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         return AccessOwner.call(request.ownerId(), () -> {
             ThreadRecord thread = ensureBackgroundThread(request.ownerId(), request.threadId(),
                     request.createThreadIfMissing());
+            // The stored assistant identity flows through the same validated resolver path as an
+            // interactive Run, so the selected Agent's Soul/model/tool composition is applied
+            // instead of silently falling back to the default identity.
+            var resolverBody = json.createObjectNode();
+            if (request.assistantId() != null && !request.assistantId().isBlank()) {
+                resolverBody.put("assistant_id", request.assistantId());
+            }
             HaifaRunBridge.ModelBinding binding;
             AgentPromptContext agentPrompt;
             try {
-                binding = runModelResolver.apply(json.createObjectNode());
-                agentPrompt = agentPromptResolver.apply(json.createObjectNode());
+                binding = runModelResolver.apply(resolverBody);
+                agentPrompt = agentPromptResolver.apply(resolverBody);
             } catch (RuntimeException unavailable) {
                 throw new IllegalStateException("Scheduled Run model is unavailable", unavailable);
             }
@@ -1944,6 +1954,13 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             HaifaRunBridge.StartedRun started;
             RunRecord run;
             synchronized (thread) {
+                restoreDurableAdmission(thread);
+                if (activeRunInFlight(thread)) {
+                    // A background scheduled Run must never replace an active Run on the same
+                    // Thread; the caller keeps its occurrence waiting instead of starting a second.
+                    bridge.close();
+                    throw new ScheduledRunLauncher.ActiveRunConflict(thread.threadId);
+                }
                 try {
                     started = bridge.start(thread.threadId, request.message(),
                             Optional.ofNullable(thread.session));
@@ -1977,12 +1994,52 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         });
     }
 
-    @Override
-    public void watch(String runId, Consumer<ScheduledRunOutcome> onTerminal) {
-        HaifaRunBridge bridge = backgroundBridges.get(runId);
-        if (bridge == null) {
-            throw new IllegalStateException("Background Run is unknown");
+    /**
+     * True when the Thread already owns a non-terminal Run. A read that cannot be made is treated as
+     * active so a transient failure never admits a second Run.
+     */
+    private boolean activeRunInFlight(ThreadRecord thread) {
+        if (thread.activeRunId == null) {
+            return false;
         }
+        RunRecord active = runs.get(thread.activeRunId);
+        if (active == null) {
+            active = findOrRestoreRun(thread, thread.activeRunId).orElse(null);
+        }
+        if (active == null) {
+            return false;
+        }
+        try {
+            return !active.bridge.snapshot(active.runId).status().isTerminal();
+        } catch (RuntimeException unavailable) {
+            return true;
+        }
+    }
+
+    @Override
+    public void watch(String ownerId, String threadId, String runId, Consumer<ScheduledRunOutcome> onTerminal) {
+        if (!followedRuns.add(runId)) {
+            return;
+        }
+        HaifaRunBridge candidate = backgroundBridges.get(runId);
+        if (candidate == null) {
+            ThreadRecord thread = threads.get(threadId);
+            if (thread == null || !ownerId.equals(thread.ownerId)) {
+                followedRuns.remove(runId);
+                throw new IllegalStateException("Background Run is unknown");
+            }
+            // A Run that outlived the previous process has no in-memory bridge: rebuild the read
+            // bridge from the persisted Thread so its completion can still be observed.
+            try {
+                candidate = AccessOwner.call(ownerId, () -> bridgeForPersistedThread(thread));
+            } catch (RuntimeException unavailable) {
+                followedRuns.remove(runId);
+                throw new ScheduledRunLauncher.InspectionUnavailableException(
+                        "Background Run bridge is unavailable", unavailable);
+            }
+            backgroundBridges.put(runId, candidate);
+        }
+        final HaifaRunBridge bridge = candidate;
         AgentRunId id = new AgentRunId(runId);
         Thread follower = Thread.ofVirtual()
                 .name("super-harness-scheduled-follower-" + runId)
@@ -1992,17 +2049,20 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                         long maxWaitNanos = BACKGROUND_FOLLOWER_MAX_WAIT.toNanos();
                         long pollMillis = BACKGROUND_FOLLOWER_INITIAL_POLL.toMillis();
                         while (!closed && System.nanoTime() - startedNanos < maxWaitNanos) {
-                            AgentRunSnapshot snapshot;
                             try {
-                                snapshot = bridge.snapshot(id);
+                                AgentRunSnapshot snapshot = bridge.snapshot(id);
+                                if (snapshot.status().isTerminal()) {
+                                    onTerminal.accept(new ScheduledRunOutcome(runId,
+                                            scheduledTerminal(snapshot.status()),
+                                            scheduledTerminalError(snapshot.status())));
+                                    return;
+                                }
                             } catch (RuntimeException unavailable) {
-                                return;
-                            }
-                            if (snapshot.status().isTerminal()) {
-                                onTerminal.accept(new ScheduledRunOutcome(runId,
-                                        scheduledTerminal(snapshot.status()),
-                                        scheduledTerminalError(snapshot.status())));
-                                return;
+                                // A single transient snapshot failure must not end the only follower
+                                // without a terminal callback; keep retrying within the deadline.
+                                ADMISSION_LOG.log(System.Logger.Level.WARNING,
+                                        "scheduled Run follower snapshot unavailable: "
+                                                + unavailable.getClass().getName());
                             }
                             Thread.sleep(pollMillis);
                             pollMillis = nextWorkspaceCompletionPollMillis(pollMillis);
@@ -2015,6 +2075,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                     } finally {
                         backgroundFollowers.remove(Thread.currentThread());
                         backgroundBridges.remove(runId);
+                        followedRuns.remove(runId);
                     }
                 });
         backgroundFollowers.add(follower);
@@ -2033,17 +2094,26 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 try {
                     bridge = bridgeForPersistedThread(thread);
                 } catch (RuntimeException unavailable) {
-                    return Optional.<ScheduledRunInspection>empty();
+                    throw new ScheduledRunLauncher.InspectionUnavailableException(
+                            "Background Run bridge is unavailable", unavailable);
                 }
             }
+            final HaifaRunBridge inspectionBridge = bridge;
             try {
-                AgentRunSnapshot snapshot = bridge.snapshot(new AgentRunId(runId));
+                Optional<AgentRunSnapshot> found = inspectionBridge.findRun(new AgentRunId(runId));
+                if (found.isEmpty()) {
+                    return Optional.<ScheduledRunInspection>empty();
+                }
+                AgentRunSnapshot snapshot = found.orElseThrow();
                 boolean terminal = snapshot.status().isTerminal();
                 return Optional.of(new ScheduledRunInspection(terminal,
                         terminal ? scheduledTerminal(snapshot.status()) : null,
                         scheduledTerminalError(snapshot.status())));
             } catch (RuntimeException unavailable) {
-                return Optional.<ScheduledRunInspection>empty();
+                // A transient read failure must stay fail-closed: recovery keeps the active slot and
+                // retries instead of treating an unreadable Run as gone.
+                throw new ScheduledRunLauncher.InspectionUnavailableException(
+                        "Background Run snapshot is unavailable", unavailable);
             }
         });
     }
