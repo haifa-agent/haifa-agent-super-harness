@@ -157,9 +157,25 @@ class ScheduleCalculatorTest {
                 .isInstanceOf(ScheduleValidationException.class);
     }
 
+    // W19-M1ReviewFix (Codex P2): validate the interval bound on the long value before narrowing, so
+    // 2^32 + 60 cannot wrap into an accepted 60-second interval.
     @Test
-    void intervalNextRunIsNowPlusSeconds() {
-        assertThat(ScheduleCalculator.nextRunAt("interval", Map.of("every_seconds", 300), "UTC", NOW))
+    void intervalRejectsIntOverflowWithoutWrapping() {
+        assertThatThrownBy(() -> ScheduleCalculator.validateIntervalSeconds(
+                Map.of("every_seconds", 4294967356L), 60))
+                .isInstanceOf(ScheduleValidationException.class)
+                .hasMessage("interval schedule must be at most " + ScheduleCalculator.MAX_INTERVAL_SECONDS
+                        + " seconds");
+        assertThatThrownBy(() -> ScheduleCalculator.parseIntervalSeconds(
+                Map.of("every_seconds", 4294967356L)))
+                .isInstanceOf(ScheduleValidationException.class);
+        assertThatThrownBy(() -> ScheduleCalculator.nextRunAt("interval",
+                Map.of("every_seconds", 4294967356L), "UTC", NOW))
+                .isInstanceOf(ScheduleValidationException.class);
+    }
+
+    @Test
+    void intervalNextRunIsNowPlusSeconds() {        assertThat(ScheduleCalculator.nextRunAt("interval", Map.of("every_seconds", 300), "UTC", NOW))
                 .isEqualTo(NOW.plusSeconds(300));
     }
 

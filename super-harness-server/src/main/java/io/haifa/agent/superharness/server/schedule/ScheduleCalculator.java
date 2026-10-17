@@ -67,18 +67,19 @@ public final class ScheduleCalculator {
     }
 
     public static int parseIntervalSeconds(Map<String, Object> scheduleSpec) {
-        Object raw = scheduleSpec == null ? null : scheduleSpec.get("every_seconds");
-        if (raw instanceof Boolean || !(raw instanceof Number number) || !isIntegral(number)
-                || number.longValue() < 1) {
+        long seconds = parseIntervalSecondsAsLong(scheduleSpec);
+        if (seconds > Integer.MAX_VALUE) {
+            // Validate before narrowing: intValue() would silently wrap a larger long (for example
+            // 2^32 + 60) into an accepted, high-frequency interval.
             throw new ScheduleValidationException(
                     "interval schedule requires every_seconds as a positive integer");
         }
-        return number.intValue();
+        return (int) seconds;
     }
 
     /** Validates the configured lower and frozen upper bounds; returns the accepted interval. */
     public static int validateIntervalSeconds(Map<String, Object> scheduleSpec, int minimumSeconds) {
-        int everySeconds = parseIntervalSeconds(scheduleSpec);
+        long everySeconds = parseIntervalSecondsAsLong(scheduleSpec);
         if (everySeconds < minimumSeconds) {
             throw new ScheduleValidationException(
                     "interval schedule must be at least " + minimumSeconds + " seconds");
@@ -87,7 +88,17 @@ public final class ScheduleCalculator {
             throw new ScheduleValidationException(
                     "interval schedule must be at most " + MAX_INTERVAL_SECONDS + " seconds");
         }
-        return everySeconds;
+        return (int) everySeconds;
+    }
+
+    private static long parseIntervalSecondsAsLong(Map<String, Object> scheduleSpec) {
+        Object raw = scheduleSpec == null ? null : scheduleSpec.get("every_seconds");
+        if (raw instanceof Boolean || !(raw instanceof Number number) || !isIntegral(number)
+                || number.longValue() < 1) {
+            throw new ScheduleValidationException(
+                    "interval schedule requires every_seconds as a positive integer");
+        }
+        return number.longValue();
     }
 
     /**
