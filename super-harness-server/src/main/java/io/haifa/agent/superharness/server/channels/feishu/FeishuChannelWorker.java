@@ -4,10 +4,13 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.haifa.agent.superharness.server.auth.AccessOwner;
 import io.haifa.agent.superharness.server.config.ChannelConnectionStore;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -25,6 +28,10 @@ import java.util.regex.Pattern;
  *
  * <p>Phase 2: RunEventSink progress, Artifact/Todo appendix, Stop/Steer, mode, Form v2 subset,
  * approval metadata, and busy-path steer instead of silent queueing.
+ *
+ * <p>Processing ACK follows Hermes-agent: {@code Typing} reaction while working, cleared on
+ * success; {@code CrossMark} on failure after a successful clear. Disable with
+ * {@code HAIFA_SUPER_HARNESS_FEISHU_REACTIONS=false} (falls back to the legacy text progress card).
  */
 public final class FeishuChannelWorker implements AutoCloseable {
     private static final System.Logger LOG = System.getLogger(FeishuChannelWorker.class.getName());
@@ -41,6 +48,10 @@ public final class FeishuChannelWorker implements AutoCloseable {
     private static final String INBOUND_FAILURE_REPLY =
             "An error occurred while processing your request. Please try again.";
     private static final String METADATA_MODE_KEY = "run_mode";
+    private static final String REACTIONS_ENV = "HAIFA_SUPER_HARNESS_FEISHU_REACTIONS";
+    private static final Set<String> REACTIONS_OFF = Set.of("0", "false", "no", "off");
+    /** Hermes-bounded cache for message_id → Typing reaction_id. */
+    private static final int PROCESSING_REACTION_CACHE_SIZE = 1024;
 
     private final ChannelConnectionStore connections;
     private final FeishuChatThreadStore threadMap;
@@ -53,6 +64,14 @@ public final class FeishuChannelWorker implements AutoCloseable {
      * applies.
      */
     private final ConcurrentHashMap<String, Boolean> chatBusy = new ConcurrentHashMap<>();
+    /** message_id → Typing reaction_id (LRU-capped). */
+    private final Map<String, String> processingReactions = Collections.synchronizedMap(
+            new LinkedHashMap<>(64, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+                    return size() > PROCESSING_REACTION_CACHE_SIZE;
+                }
+            });
     /** Fast path for /connect so other chats' long Runs cannot starve binding. */
     private final ExecutorService connectExecutor =
             Executors.newCachedThreadPool(r -> {
@@ -169,6 +188,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
                     : INBOUND_FAILURE_REPLY;
             try {
                 if (message != null && message.messageId() != null && !message.messageId().isBlank()) {
+                    markProcessingFailure(message.messageId());
                     reply(message.messageId(), notice);
                 }
             } catch (Exception replyFailure) {
@@ -507,7 +527,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
             String submitted = FeishuInteraction.buildFormSubmissionValue(pending, action.formValues());
             FeishuHumanResponse response = new FeishuHumanResponse(
                     pending.source(), pending.requestId(), "text", null, submitted);
-            present(message, runSubmitted(owner, connectionId, message, threadId, response, pending, connection), threadId);
+            presentSubmitted(message, owner, connectionId, threadId, response, pending, connection);
             return;
         }
         if (FeishuInteraction.OTHER_OPTION.equals(action.optionId())) {
@@ -518,7 +538,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
             }
             FeishuHumanResponse response = new FeishuHumanResponse(
                     pending.source(), pending.requestId(), "text", null, text);
-            present(message, runSubmitted(owner, connectionId, message, threadId, response, pending, connection), threadId);
+            presentSubmitted(message, owner, connectionId, threadId, response, pending, connection);
             return;
         }
         Optional<FeishuPendingInput.Option> option = FeishuInteraction.optionById(pending, action.optionId());
@@ -529,7 +549,23 @@ public final class FeishuChannelWorker implements AutoCloseable {
         FeishuPendingInput.Option selected = option.get();
         FeishuHumanResponse response = new FeishuHumanResponse(
                 pending.source(), pending.requestId(), "option", selected.id(), selected.value());
-        present(message, runSubmitted(owner, connectionId, message, threadId, response, pending, connection), threadId);
+        presentSubmitted(message, owner, connectionId, threadId, response, pending, connection);
+    }
+
+    private void presentSubmitted(
+            FeishuInboundMessage message,
+            String owner,
+            String connectionId,
+            String threadId,
+            FeishuHumanResponse response,
+            FeishuPendingInput pending,
+            ObjectNode connection)
+            throws Exception {
+        present(
+                message,
+                runSubmitted(owner, connectionId, message, threadId, response, pending, connection),
+                threadId);
+        markProcessingSuccess(message.messageId());
     }
 
     private void runChat(
@@ -547,10 +583,8 @@ public final class FeishuChannelWorker implements AutoCloseable {
         if (pending != null) {
             Optional<FeishuHumanResponse> matched = FeishuInteraction.match(pending, strippedText);
             if (matched.isPresent()) {
-                present(
-                        message,
-                        runSubmitted(ownerUserId, connectionId, message, threadId, matched.get(), pending, connection),
-                        threadId);
+                presentSubmitted(
+                        message, ownerUserId, connectionId, threadId, matched.get(), pending, connection);
                 return;
             }
             if (pending.singleChoice()) {
@@ -570,7 +604,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
             if (userText.isBlank() && !files.isEmpty()) {
                 userText = "请查看我发送的附件。";
             }
-            reply(message.messageId(), FeishuInteraction.PROGRESS);
+            markProcessingStart(message.messageId());
             Map<String, Object> metadata = channelMetadata(connectionId, message, connection);
             String mode = readMode(connection);
             FeishuAgentBridge.TurnResult result = agentBridge.runTurn(
@@ -584,6 +618,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
                             .withMode(mode)
                             .withProgress(summary -> reply(message.messageId(), summary)));
             present(message, result, threadId);
+            markProcessingSuccess(message.messageId());
         } finally {
             chatBusy.remove(message.chatId());
         }
@@ -635,8 +670,8 @@ public final class FeishuChannelWorker implements AutoCloseable {
         }
         try {
             String content = FeishuInteraction.responseContent(pending, response);
-            reply(message.messageId(), FeishuInteraction.PROGRESS);
-            return agentBridge.runTurn(
+            markProcessingStart(message.messageId());
+            FeishuAgentBridge.TurnResult result = agentBridge.runTurn(
                     ownerUserId,
                     threadId,
                     channelMetadata(connectionId, message, connection),
@@ -646,6 +681,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
                     FeishuAgentBridge.TurnOptions.defaults()
                             .withMode(readMode(connection))
                             .withProgress(summary -> reply(message.messageId(), summary)));
+            return result;
         } finally {
             chatBusy.remove(message.chatId());
         }
@@ -717,6 +753,109 @@ public final class FeishuChannelWorker implements AutoCloseable {
         if (active != null) {
             active.replyInteractive(messageId, card);
         }
+    }
+
+    /**
+     * Hermes processing-start: add {@code Typing} when reactions are enabled; otherwise fall back to
+     * the legacy text progress card.
+     */
+    private void markProcessingStart(String messageId) throws Exception {
+        if (messageId == null || messageId.isBlank()) {
+            return;
+        }
+        if (!reactionsEnabled()) {
+            reply(messageId, FeishuInteraction.PROGRESS);
+            return;
+        }
+        synchronized (processingReactions) {
+            if (processingReactions.containsKey(messageId)) {
+                return;
+            }
+        }
+        FeishuTransport active;
+        synchronized (lock) {
+            active = transport;
+        }
+        if (active == null) {
+            reply(messageId, FeishuInteraction.PROGRESS);
+            return;
+        }
+        Optional<String> reactionId = active.addReaction(messageId, FeishuInteraction.REACTION_IN_PROGRESS);
+        if (reactionId.isPresent()) {
+            processingReactions.put(messageId, reactionId.get());
+            return;
+        }
+        // Reaction API unavailable — keep the user informed with the text ACK.
+        reply(messageId, FeishuInteraction.PROGRESS);
+    }
+
+    /** Hermes success: clear Typing only (no DONE badge — reply itself is the success signal). */
+    private void markProcessingSuccess(String messageId) {
+        clearProcessingReaction(messageId);
+    }
+
+    /**
+     * Hermes failure: clear Typing, then add CrossMark. If delete fails, skip CrossMark so the UI
+     * does not show Typing and CrossMark together.
+     */
+    private void markProcessingFailure(String messageId) {
+        if (messageId == null || messageId.isBlank() || !reactionsEnabled()) {
+            return;
+        }
+        String reactionId;
+        synchronized (processingReactions) {
+            reactionId = processingReactions.get(messageId);
+        }
+        if (reactionId == null) {
+            return;
+        }
+        FeishuTransport active;
+        synchronized (lock) {
+            active = transport;
+        }
+        if (active == null) {
+            return;
+        }
+        if (!active.deleteReaction(messageId, reactionId)) {
+            return;
+        }
+        processingReactions.remove(messageId);
+        active.addReaction(messageId, FeishuInteraction.REACTION_FAILURE);
+    }
+
+    private void clearProcessingReaction(String messageId) {
+        if (messageId == null || messageId.isBlank()) {
+            return;
+        }
+        String reactionId;
+        synchronized (processingReactions) {
+            reactionId = processingReactions.remove(messageId);
+        }
+        if (reactionId == null) {
+            return;
+        }
+        FeishuTransport active;
+        synchronized (lock) {
+            active = transport;
+        }
+        if (active == null) {
+            return;
+        }
+        if (!active.deleteReaction(messageId, reactionId)) {
+            // Keep the handle so LRU can eventually drop it; do not claim success.
+            processingReactions.put(messageId, reactionId);
+        }
+    }
+
+    /** Package/test seam: reactions on unless env/property explicitly disables. */
+    static boolean reactionsEnabled() {
+        String property = System.getProperty(REACTIONS_ENV);
+        String env = System.getenv(REACTIONS_ENV);
+        String value = property != null && !property.isBlank() ? property : env;
+        if (value == null || value.isBlank()) {
+            return true;
+        }
+        return !REACTIONS_OFF.contains(value.trim().toLowerCase(Locale.ROOT));
     }
 
     @Override

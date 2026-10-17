@@ -85,9 +85,15 @@ class FeishuChannelWorkerUnitTest {
         transport.deliverAndWait(
                 new FeishuInboundMessage("oc_fail", "om_fail", "ou_fail", "please fail", "p2p"), 500);
 
-        assertThat(transport.replies()).hasSize(2);
-        assertThat(transport.replies().getFirst().messageId()).isEqualTo("om_fail");
-        assertThat(transport.replies().getFirst().text()).isEqualTo(FeishuInteraction.PROGRESS);
+        assertThat(transport.reactionAdds())
+                .anyMatch(add -> "om_fail".equals(add.messageId())
+                        && FeishuInteraction.REACTION_IN_PROGRESS.equals(add.emojiType()));
+        assertThat(transport.reactionDeletes())
+                .anyMatch(del -> "om_fail".equals(del.messageId()) && del.success());
+        assertThat(transport.reactionAdds())
+                .anyMatch(add -> "om_fail".equals(add.messageId())
+                        && FeishuInteraction.REACTION_FAILURE.equals(add.emojiType()));
+        assertThat(transport.replies()).hasSize(1);
         assertThat(transport.replies().getLast().text()).contains("An error occurred");
         worker.close();
     }
@@ -210,7 +216,9 @@ class FeishuChannelWorkerUnitTest {
         assertThat(captured.get()).isNotNull().hasSize(1);
         assertThat(captured.get().getFirst().filename()).isEqualTo("image.jpg");
         assertThat(captured.get().getFirst().path()).contains("/mnt/user-data/uploads/");
-        assertThat(transport.replies().getFirst().text()).isEqualTo(FeishuInteraction.PROGRESS);
+        assertThat(transport.reactionAdds())
+                .anyMatch(add -> FeishuInteraction.REACTION_IN_PROGRESS.equals(add.emojiType()));
+        assertThat(transport.reactionDeletes()).isNotEmpty();
         assertThat(transport.replies().getLast().text()).contains("saw 1 file(s)");
         worker.close();
     }
