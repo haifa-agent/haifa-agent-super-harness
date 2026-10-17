@@ -30,7 +30,13 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `verify-deerflow-contracts.ps1` | 冻结 DeerFlow 协议、来源、Oracle 与资源清单校验 |
+| `verify-deerflow-contracts.ps1` | 冻结 DeerFlow 协议、来源、Oracle 与资源清单校验；`Test-Json` 缺少 `FetchExternalReference` 时自动内联兄弟文件 `$ref` 降级；调用冻结 `schedules.py` 校验正值 schedule 语义 |
+| `verify-schedule-semantics.py` | 用冻结 `scheduler/schedules.py`（croniter）校验正值 `schedule_spec` 能产出下一次运行时间（Python；由上面的门禁调用） |
+
+`verify-deerflow-contracts.ps1` 需要能 `import croniter` 的 Python 解释器：依次取 `-SchedulePython`、`HAIFA_CONTRACT_PYTHON`、
+冻结检出自身的 `backend/.venv`、`AGENTS.md` 记录的冻结静态审查解释器，最后是 PATH 上的 `python`/`python3`；都不可用时
+按明确前置失败（fail-closed），不跳过语义校验。可用环境变量 `HAIFA_CONTRACT_FORCE_LEGACY_TEST_JSON=1` 在支持
+`-FetchExternalReference` 的运行时上强制走降级路径做回归。
 
 ### `resources/` — 资源与许可证清单
 
