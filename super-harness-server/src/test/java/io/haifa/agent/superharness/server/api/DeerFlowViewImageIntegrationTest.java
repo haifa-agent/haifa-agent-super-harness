@@ -138,6 +138,11 @@ public class DeerFlowViewImageIntegrationTest {
 
         String endpoint = "http://127.0.0.1:" + provider.getAddress().getPort() + "/v1";
 
+        HttpResponse<String> existing = request("GET", "/api/managed-models", null);
+        if (existing.statusCode() == 200 && existing.body().contains("vision-model")) {
+            return;
+        }
+
         // 1. vision-model (supports_vision: true)
         String visionConfig = """
                 {"config":{"name":"vision-model","display_name":"Vision Controlled",
@@ -470,6 +475,63 @@ public class DeerFlowViewImageIntegrationTest {
             bridge.close();
         } finally {
             foundation.close();
+        }
+    }
+
+    /**
+     * Oracle 9: Real process restart recovery (TASK-W11-002 Oracle 6):
+     * After uploading and running a turn with view_image, simulating process restart by closing and re-opening
+     * the Gateway against the same durable dataRoot, the thread state and session history are fully restored,
+     * subsequent turns continue cleanly without crashing or SQLite pollution.
+     */
+    @Test
+    void testProcessRestartAndThreadRecovery() throws Exception {
+        String threadId = "v2-recovery-" + System.nanoTime();
+
+        // 1. Upload valid image and execute first turn that triggers view_image
+        HttpResponse<String> uploaded = upload(threadId, "chart.png", VALID_PNG_BYTES);
+        assertThat(uploaded.statusCode()).isEqualTo(200);
+
+        assertThat(request("POST", "/api/threads", "{\"thread_id\":\"" + threadId + "\"}").statusCode()).isEqualTo(200);
+
+        RunResult run1 = runWithFiles(threadId, "请分析这张图表",
+                List.of(fileRef("chart.png", VALID_PNG_BYTES.length)), "vision-model");
+        assertThat(run1.status()).isEqualTo("success");
+        assertThat(run1.answer()).isEqualTo(
+                "Vision Analysis: Verified PNG image with sha256=" + sha256(VALID_PNG_BYTES) + ", content confirmed.");
+
+        // 2. Simulate process restart: close current API instance
+        api.close();
+
+        // 3. Re-start Gateway on the SAME dataRoot
+        startGateway();
+
+        // 4. Verify thread state is restored and history accessible
+        HttpResponse<String> stateRes = request("GET", "/api/threads/" + threadId + "/state", null);
+        assertThat(stateRes.statusCode()).isEqualTo(200);
+        JsonNode state = json.readTree(stateRes.body());
+        assertThat(state.path("values").path("messages").size()).isGreaterThanOrEqualTo(3);
+
+        // 5. Run follow-up turn on recovered thread
+        RunResult run2 = runWithFiles(threadId, "总结先前的分析", List.of(), "vision-model");
+        assertThat(run2.status()).isEqualTo("success");
+        assertThat(run2.answer()).isNotBlank();
+
+        // 6. Assert zero Base64 pollution in SQLite after recovery
+        String b64 = Base64.getEncoder().encodeToString(VALID_PNG_BYTES);
+        try (Stream<Path> paths = Files.walk(dataRoot)) {
+            List<Path> dbFiles = paths.filter(Files::isRegularFile)
+                    .filter(p -> {
+                        String name = p.getFileName().toString().toLowerCase(Locale.ROOT);
+                        return name.endsWith(".sqlite") || name.endsWith(".db");
+                    })
+                    .toList();
+            for (Path dbFile : dbFiles) {
+                byte[] raw = Files.readAllBytes(dbFile);
+                String dbContent = new String(raw, StandardCharsets.ISO_8859_1);
+                assertThat(dbContent).as("Database file %s contained Base64 image payload", dbFile)
+                        .doesNotContain(b64);
+            }
         }
     }
 

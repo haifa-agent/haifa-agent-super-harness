@@ -23,6 +23,7 @@ import io.haifa.agent.model.api.ModelStreamSink;
 import io.haifa.agent.model.api.ModelToolCall;
 import io.haifa.agent.model.api.ModelUsage;
 import io.haifa.agent.model.api.ResolvedModelSnapshot;
+import io.haifa.agent.superharness.server.config.McpRunTools;
 import io.haifa.agent.superharness.server.config.SubagentRunConfiguration;
 import io.haifa.agent.superharness.server.prompt.AgentPromptContext;
 import io.haifa.agent.superharness.server.prompt.LeadPromptComposer;
@@ -67,6 +68,8 @@ public class ModelVisionInjectionTest {
     private HaifaRunBridge nonVisionBridge;
     private ResolvedModelSnapshot visionModelSnapshot;
     private ResolvedModelSnapshot nonVisionModelSnapshot;
+    private HaifaRunBridge.ModelBinding visionBinding;
+    private HaifaRunBridge.ModelBinding nonVisionBinding;
 
     private static final byte[] PNG_HEADER = new byte[] {
             (byte) 0x89, (byte) 0x50, (byte) 0x4E, (byte) 0x47,
@@ -91,9 +94,9 @@ public class ModelVisionInjectionTest {
         this.visionModelSnapshot = createModelSnapshot(true);
         this.nonVisionModelSnapshot = createModelSnapshot(false);
 
-        HaifaRunBridge.ModelBinding visionBinding = new HaifaRunBridge.ModelBinding(
+        this.visionBinding = new HaifaRunBridge.ModelBinding(
                 "vision-model", "1.0.0", new DummyChatModel(), visionModelSnapshot);
-        HaifaRunBridge.ModelBinding nonVisionBinding = new HaifaRunBridge.ModelBinding(
+        this.nonVisionBinding = new HaifaRunBridge.ModelBinding(
                 "non-vision-model", "1.0.0", new DummyChatModel(), nonVisionModelSnapshot);
 
         this.visionBridge = new HaifaRunBridge(
@@ -475,6 +478,40 @@ public class ModelVisionInjectionTest {
         Set<String> nonVisionChildTools = HaifaRunBridge.childToolsFor(nonVisionChild, parentTools);
         assertThat(nonVisionChildTools).contains("read_file");
         assertThat(nonVisionChildTools).doesNotContain("view_image");
+    }
+
+    @Test
+    void nonVisionLeadModelWithVisionChildAgent_assemblesSuccessfully() {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var def = mapper.createObjectNode()
+                .put("name", "vision-child")
+                .put("description", "Image analysis")
+                .put("system_prompt", "Analyze the supplied image")
+                .put("max_turns", 3)
+                .put("timeout_seconds", 30);
+        def.putArray("tools").add("view_image");
+
+        var child = new SubagentRunConfiguration.Child(def, visionBinding);
+        var delegation = new SubagentRunConfiguration(
+                List.of(child), SubagentRunConfiguration.Settings.defaults(), "assembly-test");
+
+        List<JavaTool<?, ?>> catalog = promptTools(viewImageTool);
+        try (var bridge = new HaifaRunBridge(
+                nonVisionBinding,
+                catalog,
+                foundation,
+                McpRunTools.Projection.empty(),
+                null,
+                AgentPromptContext.defaults(),
+                delegation)) {
+            assertThat(bridge).isNotNull();
+            assertThat(bridge.hasTools()).isTrue();
+            // Parent prompt tools exclude view_image
+            assertThat(bridge.promptSignature()).doesNotContain("view_image");
+            // Child tools retain view_image
+            Set<String> childTools = HaifaRunBridge.childToolsFor(child, Set.of("read_file", "view_image"));
+            assertThat(childTools).contains("view_image");
+        }
     }
 
     private static final class DummyChatModel implements AgentChatModel {

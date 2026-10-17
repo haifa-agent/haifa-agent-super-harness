@@ -373,10 +373,11 @@ public final class HaifaRunBridge implements AutoCloseable {
             Set<String> promptTools = new LinkedHashSet<>(leadAllowedTools);
             if (delegation.enabled()) promptTools.add("task");
             // The frozen lead prompt is rendered once per Bridge; its signature drives the later-Run
-            // rebuild criterion in DeerFlowThreadRunApi, exactly like the MCP/Skill fingerprints.
             LeadPromptComposer.Composition prompt = composePrompt(promptTools, skillProjection, agentContext, delegation);
             this.promptSignature = prompt.signature();
-            List<? extends JavaTool<?, ?>> registeredTools = visionSupported
+            boolean anyVisionSupported = visionSupported
+                    || delegation.children().stream().anyMatch(c -> supportsVision(c.model().snapshot()));
+            List<? extends JavaTool<?, ?>> registeredTools = anyVisionSupported
                     ? tools
                     : tools.stream()
                             .filter(tool -> !"view_image".equals(tool.spec().name().value()))
