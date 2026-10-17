@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 
 class DeepSeekWebClientTest {
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final String API_KEY = "deepseek-tool-secret-key-456";
+    private static final String MOCK_CREDENTIAL = "mock-credential-value";
 
     private final List<Map<String, String>> recordedHeaders = new ArrayList<>();
     private final List<String> recordedBodies = new ArrayList<>();
@@ -47,7 +47,7 @@ class DeepSeekWebClientTest {
 
     @Test
     void searchSuccessSendsBearerHeaderAndParsesSummaryAndSnippet() throws Exception {
-        var results = client.search("haifa agent", 5, Optional.empty(), API_KEY);
+        var results = client.search("haifa agent", 5, Optional.empty(), MOCK_CREDENTIAL);
         assertThat(results).hasSize(2);
 
         assertThat(results.get(0).title()).isEqualTo("Result 1");
@@ -57,7 +57,7 @@ class DeepSeekWebClientTest {
         assertThat(results.get(1).title()).isEqualTo("Result 2");
         assertThat(results.get(1).content()).isEqualTo("Snippet fallback text");
 
-        assertThat(recordedHeaders.get(0).get("authorization")).isEqualTo("Bearer " + API_KEY);
+        assertThat(recordedHeaders.get(0).get("authorization")).isEqualTo("Bearer " + MOCK_CREDENTIAL);
         assertThat(recordedHeaders.get(0).get("content-type")).isEqualTo("application/json");
 
         JsonNode sentBody = JSON.readTree(recordedBodies.get(0));
@@ -68,7 +68,7 @@ class DeepSeekWebClientTest {
 
     @Test
     void searchNon200ThrowsDeepSeekWebException() {
-        assertThatThrownBy(() -> client.search("error-402", 5, Optional.empty(), API_KEY))
+        assertThatThrownBy(() -> client.search("error-402", 5, Optional.empty(), MOCK_CREDENTIAL))
                 .isInstanceOf(DeepSeekWebClient.DeepSeekWebException.class)
                 .satisfies(ex -> {
                     var failure = (DeepSeekWebClient.DeepSeekWebException) ex;
@@ -79,23 +79,23 @@ class DeepSeekWebClientTest {
 
     @Test
     void searchEmptyResultsReturnsEmptyList() throws Exception {
-        var results = client.search("empty", 5, Optional.empty(), API_KEY);
+        var results = client.search("empty", 5, Optional.empty(), MOCK_CREDENTIAL);
         assertThat(results).isEmpty();
     }
 
     @Test
     void fetchSuccessSendsBearerHeaderAndExtractsMarkdown() throws Exception {
-        String content = client.fetch("https://example.com/page", API_KEY);
+        String content = client.fetch("https://example.com/page", MOCK_CREDENTIAL);
         assertThat(content).isEqualTo("# Page Title\n\nFetched markdown content body.");
 
-        assertThat(recordedHeaders.get(0).get("authorization")).isEqualTo("Bearer " + API_KEY);
+        assertThat(recordedHeaders.get(0).get("authorization")).isEqualTo("Bearer " + MOCK_CREDENTIAL);
         JsonNode sentBody = JSON.readTree(recordedBodies.get(0));
         assertThat(sentBody.path("url").asText()).isEqualTo("https://example.com/page");
     }
 
     @Test
     void fetchNon200ThrowsDeepSeekWebException() {
-        assertThatThrownBy(() -> client.fetch("https://example.com/fail-422", API_KEY))
+        assertThatThrownBy(() -> client.fetch("https://example.com/fail-422", MOCK_CREDENTIAL))
                 .isInstanceOf(DeepSeekWebClient.DeepSeekWebException.class)
                 .satisfies(ex -> {
                     var failure = (DeepSeekWebClient.DeepSeekWebException) ex;
