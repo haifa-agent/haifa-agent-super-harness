@@ -13,6 +13,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -284,6 +285,52 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
             }
         }
         return projector;
+    }
+
+    @Override
+    public Optional<ArtifactBytes> readArtifact(String ownerUserId, String threadId, String virtualPath) {
+        if (workspace == null || virtualPath == null || !virtualPath.startsWith("/mnt/user-data/")) {
+            return Optional.empty();
+        }
+        String owner = ownerUserId == null || ownerUserId.isBlank() ? AccessOwner.DEFAULT : ownerUserId;
+        return AccessOwner.call(owner, () -> {
+            try {
+                WorkspaceBinding binding = workspace.bind(owner, threadId);
+                byte[] bytes = workspace.readVerifiedBytes(owner, binding.workspaceId(), virtualPath);
+                if (bytes == null || bytes.length == 0) {
+                    return Optional.<ArtifactBytes>empty();
+                }
+                return Optional.of(new ArtifactBytes(
+                        filenameOf(virtualPath), mediaTypeOf(virtualPath), bytes));
+            } catch (Exception unavailable) {
+                return Optional.<ArtifactBytes>empty();
+            }
+        });
+    }
+
+    private static String filenameOf(String virtualPath) {
+        int slash = virtualPath.lastIndexOf('/');
+        return slash < 0 ? virtualPath : virtualPath.substring(slash + 1);
+    }
+
+    static String mediaTypeOf(String path) {
+        String lower = path == null ? "" : path.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".png")) {
+            return "image/png";
+        }
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+            return "image/jpeg";
+        }
+        if (lower.endsWith(".webp")) {
+            return "image/webp";
+        }
+        if (lower.endsWith(".gif")) {
+            return "image/gif";
+        }
+        if (lower.endsWith(".bmp")) {
+            return "image/bmp";
+        }
+        return "application/octet-stream";
     }
 
     /** Bounded, Thread-scoped gate so a pending-card replay cannot re-post a tool card. */

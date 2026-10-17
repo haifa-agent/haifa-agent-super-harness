@@ -69,6 +69,19 @@ public interface FeishuTransport extends AutoCloseable {
         return false;
     }
 
+    /**
+     * Upload one Chat image and return the platform {@code image_key}. Default is unsupported so
+     * transports without the image API (and test doubles) keep compiling.
+     */
+    default Optional<String> uploadImage(byte[] bytes, String filename) {
+        return Optional.empty();
+    }
+
+    /** Reply with an uploaded image key. Default: unsupported. */
+    default void replyImage(String messageId, String imageKey) throws Exception {
+        throw new UnsupportedOperationException("Feishu image delivery is not available on this transport");
+    }
+
     @Override
     default void close() {
         stop();
