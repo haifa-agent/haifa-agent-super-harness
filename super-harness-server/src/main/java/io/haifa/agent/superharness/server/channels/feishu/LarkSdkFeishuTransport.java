@@ -21,7 +21,12 @@ import com.lark.oapi.service.im.v1.model.P2MessageReceiveV1;
 import com.lark.oapi.service.im.v1.model.ReplyMessageReq;
 import com.lark.oapi.service.im.v1.model.ReplyMessageReqBody;
 import com.lark.oapi.service.im.v1.model.UserId;
+import com.lark.oapi.service.im.v1.model.GetMessageResourceReq;
+import com.lark.oapi.service.im.v1.model.GetMessageResourceResp;
+import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Method;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -155,6 +160,37 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
         api.im().message().reply(request);
     }
 
+    @Override
+    public byte[] downloadResource(String messageId, String resourceKey, String resourceType) throws Exception {
+        Client api;
+        synchronized (lock) {
+            api = apiClient;
+        }
+        if (api == null
+                || messageId == null
+                || messageId.isBlank()
+                || resourceKey == null
+                || resourceKey.isBlank()) {
+            return new byte[0];
+        }
+        String type = resourceType == null || resourceType.isBlank() ? "file" : resourceType;
+        GetMessageResourceResp response = api.im()
+                .messageResource()
+                .get(GetMessageResourceReq.newBuilder()
+                        .messageId(messageId)
+                        .fileKey(resourceKey)
+                        .type(type)
+                        .build());
+        if (response == null || !response.success()) {
+            throw new IllegalStateException("Feishu media download failed");
+        }
+        Object data = response.getData();
+        if (data instanceof ByteArrayOutputStream stream) {
+            return stream.toByteArray();
+        }
+        return new byte[0];
+    }
+
     public String domain() {
         return domain;
     }
@@ -185,16 +221,21 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                 openId = senderId.getOpenId();
             }
         }
-        String text = extractText(message.getContent());
-        if (text.isBlank()) {
-            return;
-        }
+        String messageType = message.getMessageType() == null || message.getMessageType().isBlank()
+                ? "text"
+                : message.getMessageType().trim().toLowerCase(Locale.ROOT);
+        ParsedContent parsed = parseContent(messageType, message.getContent());
+        // Always deliver: unsupported / media-only messages must reach the worker so it can reply
+        // instead of looking hung (Phase 1 essential).
         handler.onMessage(new FeishuInboundMessage(
                 message.getChatId(),
                 message.getMessageId(),
                 openId,
-                text,
-                message.getChatType()));
+                parsed.text(),
+                message.getChatType(),
+                messageType,
+                parsed.attachments(),
+                null));
     }
 
     private P2CardActionTriggerResponse respondToCard(P2CardActionTrigger event) {
@@ -262,19 +303,87 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                         textValue(value, "card_schema")));
     }
 
-    private static String extractText(String contentJson) {
+    /** Package-visible for unit assertions on inbound content shaping. */
+    record ParsedContent(String text, List<FeishuInboundMessage.Attachment> attachments) {}
+
+    static ParsedContent parseContent(String messageType, String contentJson) {
+        String type = messageType == null ? "text" : messageType;
         if (contentJson == null || contentJson.isBlank()) {
-            return "";
+            return new ParsedContent("", List.of());
         }
         try {
             JsonNode content = JSON.readTree(contentJson);
-            if (content.hasNonNull("text")) {
-                return content.get("text").asText("").trim();
+            if ("image".equals(type)) {
+                String key = content.path("image_key").asText("").trim();
+                List<FeishuInboundMessage.Attachment> attachments = key.isEmpty()
+                        ? List.of()
+                        : List.of(new FeishuInboundMessage.Attachment("image", key, "image.jpg"));
+                return new ParsedContent("", attachments);
             }
-            return "";
+            if ("file".equals(type) || "media".equals(type)) {
+                String key = content.path("file_key").asText("").trim();
+                String name = content.path("file_name").asText("").trim();
+                if (name.isEmpty()) {
+                    name = "file.bin";
+                }
+                List<FeishuInboundMessage.Attachment> attachments = key.isEmpty()
+                        ? List.of()
+                        : List.of(new FeishuInboundMessage.Attachment("file", key, name));
+                return new ParsedContent("", attachments);
+            }
+            if ("post".equals(type)) {
+                return new ParsedContent(extractPostText(content), List.of());
+            }
+            if (content.hasNonNull("text")) {
+                return new ParsedContent(content.get("text").asText("").trim(), List.of());
+            }
+            return new ParsedContent("", List.of());
         } catch (Exception ignored) {
-            return contentJson.trim();
+            return new ParsedContent("text".equals(type) ? contentJson.trim() : "", List.of());
         }
+    }
+
+    /** Best-effort plain text from a Feishu post/rich-text payload. */
+    private static String extractPostText(JsonNode content) {
+        StringBuilder builder = new StringBuilder();
+        collectPostText(content, builder);
+        return builder.toString().trim();
+    }
+
+    private static void collectPostText(JsonNode node, StringBuilder builder) {
+        if (node == null || node.isNull()) {
+            return;
+        }
+        if (node.isTextual()) {
+            appendWord(builder, node.asText());
+            return;
+        }
+        if (node.isObject()) {
+            if (node.hasNonNull("text")) {
+                appendWord(builder, node.get("text").asText());
+            }
+            node.fields().forEachRemaining(entry -> {
+                if (!"text".equals(entry.getKey())) {
+                    collectPostText(entry.getValue(), builder);
+                }
+            });
+            return;
+        }
+        if (node.isArray()) {
+            for (JsonNode child : node) {
+                collectPostText(child, builder);
+            }
+        }
+    }
+
+    private static void appendWord(StringBuilder builder, String text) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        if (!builder.isEmpty()) {
+            builder.append(' ');
+        }
+        builder.append(text.trim());
     }
 
     private static String textValue(Map<String, Object> value, String key) {

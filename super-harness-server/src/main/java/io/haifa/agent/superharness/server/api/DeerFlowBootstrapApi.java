@@ -242,8 +242,10 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         FeishuTransport.Factory transportFactory = testRunModelResolver != null
                 ? ImmediateFeishuTransport::new
                 : LarkSdkFeishuTransport::new;
+        // Same RestrictedWorkspaceService as DeerFlowUploadContext / tool assembly so Feishu
+        // attachments land in the Thread uploads area the web composer uses.
         FeishuAgentBridge feishuAgentBridge =
-                new InProcessFeishuAgentBridge(objectMapper, threadRunApi.conversations());
+                new InProcessFeishuAgentBridge(objectMapper, threadRunApi.conversations(), toolWorkspace);
         this.feishuWorker = new FeishuChannelWorker(
                 channelConnectionStore,
                 new FeishuChatThreadStore(objectMapper, dataDirectory),
