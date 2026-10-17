@@ -35,7 +35,16 @@
     "rest.projects.get.exchange",
     "rest.projects.patch.exchange",
     "rest.projects.threads.exchange",
-    "rest.run.workspace-changes.empty.exchange"
+    "rest.run.workspace-changes.empty.exchange",
+    "rest.schedules.list.exchange",
+    "rest.schedules.thread-list.exchange",
+    "rest.schedules.runs.exchange",
+    "rest.schedules.create.exchange",
+    "rest.schedules.update.exchange",
+    "rest.schedules.pause.exchange",
+    "rest.schedules.resume.exchange",
+    "rest.schedules.trigger.exchange",
+    "rest.schedules.delete.exchange"
   ],
   "contracts": [
     {
@@ -498,13 +507,218 @@
         {"source_path": "backend/packages/harness/deerflow/workspace_changes/api.py", "must_contain": ["if not events:", "\"available\": False", "\"files\": []", "\"limits\": {}"]},
         {"source_path": "frontend/src/core/workspace-changes/api.ts", "must_contain": ["include_files: includeFiles ? \"true\" : \"false\"", "include_diff: includeDiff ? \"true\" : \"false\"", "/workspace-changes?${query}"]}
       ]
+    },
+    {
+      "id": "rest.schedules.list.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/empty-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/scheduled-tasks-list-response.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing scheduled-task read permission"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/scheduled-tasks/api.ts", "must_contain": ["export async function fetchScheduledTasks(): Promise<ScheduledTask[]>", "scheduledTasksUrl(\"\")"]},
+        {"source_path": "frontend/src/core/scheduled-tasks/types.ts", "must_contain": ["export type ScheduledTask = {", "next_run_at: string | null", "last_run_id: string | null"]}
+      ]
+    },
+    {
+      "id": "rest.schedules.thread-list.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/scheduled-task-thread-list-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/scheduled-tasks-list-response.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing scheduled-task read permission"},
+          {"status": 404, "condition": "foreign or missing thread"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/scheduled-tasks/api.ts", "must_contain": ["export async function fetchThreadScheduledTasks(", "/api/threads/${encodeURIComponent(threadId)}/scheduled-tasks"]},
+        {"source_path": "frontend/src/core/scheduled-tasks/types.ts", "must_contain": ["thread_id: string | null", "context_mode: \"fresh_thread_per_run\" | \"reuse_thread\""]}
+      ]
+    },
+    {
+      "id": "rest.schedules.runs.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/scheduled-task-runs-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/scheduled-task-runs-list-response.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing scheduled-task read permission"},
+          {"status": 404, "condition": "foreign or missing task"},
+          {"status": 422, "condition": "invalid limit or offset"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/scheduled-tasks/api.ts", "must_contain": ["export async function fetchScheduledTaskRuns(", "new URLSearchParams({ limit: String(page.limit), offset: String(page.offset) })", "Promise<ScheduledTaskRun[]>"]},
+        {"source_path": "frontend/src/core/scheduled-tasks/types.ts", "must_contain": ["export type ScheduledTaskRun = {", "attempt_count: number", "finished_at: string | null"]}
+      ]
+    },
+    {
+      "id": "rest.schedules.create.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/scheduled-task-create-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/scheduled-task.schema.json",
+      "http_status": {
+        "success": 201,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing scheduled-task write permission"},
+          {"status": 422, "condition": "invalid schedule_type, schedule_spec, timezone, or missing required field"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/scheduled-tasks/api.ts", "must_contain": ["export type ScheduledTaskPayload = {", "context_mode: \"fresh_thread_per_run\" | \"reuse_thread\"", "schedule_type: \"once\" | \"cron\" | \"interval\"", "export async function createScheduledTask("]},
+        {"source_path": "frontend/src/core/scheduled-tasks/types.ts", "must_contain": ["export type ScheduledTask = {", "run_count: number", "updated_at: string"]}
+      ]
+    },
+    {
+      "id": "rest.schedules.update.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/scheduled-task-update-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/scheduled-task.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing scheduled-task write permission"},
+          {"status": 404, "condition": "foreign or missing task"},
+          {"status": 409, "condition": "active occurrence already exists for this task"},
+          {"status": 422, "condition": "invalid schedule_spec, timezone, or empty patch body"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/scheduled-tasks/api.ts", "must_contain": ["export async function updateScheduledTask(", "payload: Partial<Omit<ScheduledTaskPayload, \"thread_id\" | \"schedule_type\">>"]},
+        {"source_path": "frontend/src/core/scheduled-tasks/types.ts", "must_contain": ["export type ScheduledTask = {", "schedule_spec: Record<string, unknown>"]}
+      ]
+    },
+    {
+      "id": "rest.schedules.pause.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/scheduled-task-id-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/scheduled-task.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing scheduled-task write permission"},
+          {"status": 404, "condition": "foreign or missing task"},
+          {"status": 409, "condition": "launching or running occurrence cannot be paused"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/scheduled-tasks/api.ts", "must_contain": ["export async function pauseScheduledTask(", "scheduledTasksUrl(`/${encodeURIComponent(taskId)}/pause`)"]},
+        {"source_path": "frontend/src/core/scheduled-tasks/types.ts", "must_contain": ["| \"enabled\"", "| \"paused\""]}
+      ]
+    },
+    {
+      "id": "rest.schedules.resume.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/scheduled-task-id-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/scheduled-task.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing scheduled-task write permission"},
+          {"status": 404, "condition": "foreign or missing task"},
+          {"status": 409, "condition": "active occurrence already exists for this task"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/scheduled-tasks/api.ts", "must_contain": ["export async function resumeScheduledTask(", "scheduledTasksUrl(`/${encodeURIComponent(taskId)}/resume`)"]},
+        {"source_path": "frontend/src/core/scheduled-tasks/types.ts", "must_contain": ["| \"enabled\"", "| \"paused\""]}
+      ]
+    },
+    {
+      "id": "rest.schedules.trigger.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/scheduled-task-id-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/scheduled-task-trigger-response.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing scheduled-task write permission"},
+          {"status": 404, "condition": "foreign or missing task"},
+          {"status": 409, "condition": "active occurrence already exists for this task"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/scheduled-tasks/api.ts", "must_contain": ["export async function triggerScheduledTask(", "Promise<{ id: string; triggered: boolean }>", "scheduledTasksUrl(`/${encodeURIComponent(taskId)}/trigger`)"]},
+        {"source_path": "frontend/src/core/scheduled-tasks/types.ts", "must_contain": ["trigger: \"scheduled\" | \"manual\""]}
+      ]
+    },
+    {
+      "id": "rest.schedules.delete.exchange",
+      "kind": "REST_EXCHANGE",
+      "request_schema_path": "contracts/upstream/deerflow/schemas/scheduled-task-id-request.schema.json",
+      "response_schema_path": "contracts/upstream/deerflow/schemas/scheduled-task-delete-response.schema.json",
+      "http_status": {
+        "success": 200,
+        "errors": [
+          {"status": 401, "condition": "unauthenticated caller"},
+          {"status": 403, "condition": "missing scheduled-task write permission"},
+          {"status": 404, "condition": "foreign or missing task"},
+          {"status": 409, "condition": "launching or running occurrence cannot be deleted"}
+        ]
+      },
+      "source_status": "SOURCE_VERIFIED",
+      "contract_status": "STATIC_CONTRACT_VERIFIED",
+      "implementation_status": "NOT_ASSESSED",
+      "runtime_status": "NOT_RUN",
+      "evidence": [
+        {"source_path": "frontend/src/core/scheduled-tasks/api.ts", "must_contain": ["export async function deleteScheduledTask(", "Promise<{ id: string; deleted: boolean }>"]},
+        {"source_path": "frontend/src/core/scheduled-tasks/types.ts", "must_contain": ["export type ScheduledTask = {", "created_at: string"]}
+      ]
     }
   ],
   "known_not_covered": [
     "This increment does not enumerate the remaining REST mutations or all feature families.",
     "The schema fixtures are static source-derived oracles; no DeerFlow or Haifa service was started.",
     "SSE message payload schemas beyond the envelope, replay-gap control payload, metadata and end examples remain incremental work.",
-    "This increment covers only the named history, message page, run list, project core and unavailable workspace-change traces; their implementation and runtime parity remain unassessed.",
+    "This increment covers only the named history, message page, run list, project core, unavailable workspace-change traces and scheduled-task wire shapes; their implementation and runtime parity remain unassessed.",
+    "Scheduled-task contracts describe the frozen frontend wire shape only. Schedule calculation, persistence, dispatch, run-history pagination semantics and 401/403/404/409/422 decision logic remain W19 implementation concerns and are not asserted here.",
     "Implementation parity and reference/Haifa/differential runtime results remain NOT_RUN until separate evidence is attached."
   ]
 }

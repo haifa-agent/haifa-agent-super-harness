@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["context_mode", "title", "prompt", "schedule_type", "schedule_spec", "timezone"],
+  "properties": {
+    "context_mode": {"enum": ["fresh_thread_per_run", "reuse_thread"]},
+    "thread_id": {"type": ["string", "null"]},
+    "assistant_id": {"type": ["string", "null"]},
+    "title": {"type": "string"},
+    "prompt": {"type": "string"},
+    "schedule_type": {"enum": ["once", "cron", "interval"]},
+    "schedule_spec": {"type": "object"},
+    "timezone": {"type": "string"}
+  }
+}

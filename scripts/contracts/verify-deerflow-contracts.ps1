@@ -104,7 +104,9 @@ function Assert-JsonMatchesSchema {
     # -InputObject preserves singleton arrays; pipeline input would unwrap them
     # and accidentally validate the only element instead of the wire array.
     $json = ConvertTo-Json -InputObject $Payload -Depth 100 -Compress
-    $isValid = Test-Json -Json $json -SchemaFile $SchemaPath -ErrorAction SilentlyContinue
+    # PowerShell 7.4+ Test-Json (JsonSchema.Net) refuses file-relative $ref unless
+    # -FetchExternalReference is set; sibling schema $refs are otherwise valid.
+    $isValid = Test-Json -Json $json -SchemaFile $SchemaPath -FetchExternalReference -ErrorAction SilentlyContinue
     if (-not $isValid) {
         throw "Fixture '$FixtureId' failed schema validation against '$SchemaPath'."
     }

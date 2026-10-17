@@ -356,6 +356,65 @@ try {
         throw "Unavailable SDK inference gate did not fail for the expected reason:`n$($sdkInferenceHookEntryResult.Output)"
     }
 
+    $scheduleStatusPath = Join-Path $TempRoot 'schedule-unknown-status.json'
+    $scheduleStatus = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $scheduleStatusFixture = @($scheduleStatus.fixtures | Where-Object id -eq 'schedules.create.once')[0]
+    $scheduleStatusFixture.response.status = 'snoozed'
+    $scheduleStatus | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $scheduleStatusPath -Encoding utf8NoBOM
+    $scheduleStatusResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleFixtures $scheduleStatusPath
+    if ($scheduleStatusResult.ExitCode -eq 0 -or $scheduleStatusResult.Output -notmatch 'failed schema validation') {
+        throw "Scheduled-task task status drift gate did not fail for the expected reason:`n$($scheduleStatusResult.Output)"
+    }
+
+    $scheduleSpecPath = Join-Path $TempRoot 'schedule-missing-spec.json'
+    $scheduleSpec = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $scheduleSpecFixture = @($scheduleSpec.fixtures | Where-Object id -eq 'schedules.create.cron')[0]
+    $scheduleSpecFixture.request.PSObject.Properties.Remove('schedule_spec')
+    $scheduleSpec | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $scheduleSpecPath -Encoding utf8NoBOM
+    $scheduleSpecResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleFixtures $scheduleSpecPath
+    if ($scheduleSpecResult.ExitCode -eq 0 -or $scheduleSpecResult.Output -notmatch 'failed schema validation') {
+        throw "Scheduled-task required schedule_spec gate did not fail for the expected reason:`n$($scheduleSpecResult.Output)"
+    }
+
+    $scheduleRunStatusPath = Join-Path $TempRoot 'schedule-run-unknown-status.json'
+    $scheduleRunStatus = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $scheduleRunFixture = @($scheduleRunStatus.fixtures | Where-Object id -eq 'schedules.runs.paged')[0]
+    $scheduleRunFixture.response[0].trigger = 'cron'
+    $scheduleRunStatus | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $scheduleRunStatusPath -Encoding utf8NoBOM
+    $scheduleRunStatusResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleFixtures $scheduleRunStatusPath
+    if ($scheduleRunStatusResult.ExitCode -eq 0 -or $scheduleRunStatusResult.Output -notmatch 'failed schema validation') {
+        throw "Scheduled-task run trigger drift gate did not fail for the expected reason:`n$($scheduleRunStatusResult.Output)"
+    }
+
+    $scheduleNullablePath = Join-Path $TempRoot 'schedule-nullable-type.json'
+    $scheduleNullable = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $scheduleNullableFixture = @($scheduleNullable.fixtures | Where-Object id -eq 'schedules.list.enabled')[0]
+    $scheduleNullableFixture.response[0].next_run_at = 42
+    $scheduleNullable | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $scheduleNullablePath -Encoding utf8NoBOM
+    $scheduleNullableResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleFixtures $scheduleNullablePath
+    if ($scheduleNullableResult.ExitCode -eq 0 -or $scheduleNullableResult.Output -notmatch 'failed schema validation') {
+        throw "Scheduled-task nullable timestamp type gate did not fail for the expected reason:`n$($scheduleNullableResult.Output)"
+    }
+
+    $scheduleLeakPath = Join-Path $TempRoot 'schedule-undeclared-field.json'
+    $scheduleLeak = Get-Content -LiteralPath $OracleFixtures -Raw | ConvertFrom-Json -Depth 100
+    $scheduleLeakFixture = @($scheduleLeak.fixtures | Where-Object id -eq 'schedules.pause.enabled')[0]
+    $scheduleLeakFixture.response | Add-Member -NotePropertyName assistant_name -NotePropertyValue 'must-not-leak'
+    $scheduleLeak | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $scheduleLeakPath -Encoding utf8NoBOM
+    $scheduleLeakResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleFixtures $scheduleLeakPath
+    if ($scheduleLeakResult.ExitCode -eq 0 -or $scheduleLeakResult.Output -notmatch 'failed schema validation') {
+        throw "Scheduled-task undeclared field gate did not fail for the expected reason:`n$($scheduleLeakResult.Output)"
+    }
+
+    $missingScheduleContractPath = Join-Path $TempRoot 'missing-schedule-contract.json'
+    $missingScheduleContract = Get-Content -LiteralPath $OracleManifest -Raw | ConvertFrom-Json -Depth 100
+    $missingScheduleContract.contracts = @($missingScheduleContract.contracts | Where-Object id -ne 'rest.schedules.trigger.exchange')
+    $missingScheduleContract | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $missingScheduleContractPath -Encoding utf8NoBOM
+    $missingScheduleContractResult = Invoke-Verifier -ContractManifest $Manifest -CoreOracleManifest $missingScheduleContractPath
+    if ($missingScheduleContractResult.ExitCode -eq 0 -or $missingScheduleContractResult.Output -notmatch 'Required core protocol contract is missing') {
+        throw "Missing scheduled-task contract gate did not fail for the expected reason:`n$($missingScheduleContractResult.Output)"
+    }
+
     Write-Host 'PASS valid manifest'
     Write-Host 'PASS frozen SHA mismatch is rejected'
     Write-Host 'PASS missing critical SSE surface is rejected'
@@ -390,6 +449,12 @@ try {
     Write-Host 'PASS conflicting hook consumption mapping is rejected'
     Write-Host 'PASS unknown hook consumption surface is rejected'
     Write-Host 'PASS unavailable SDK inference cannot be claimed'
+    Write-Host 'PASS scheduled-task status drift is rejected'
+    Write-Host 'PASS scheduled-task create request requires schedule_spec'
+    Write-Host 'PASS scheduled-task run trigger drift is rejected'
+    Write-Host 'PASS scheduled-task nullable timestamp cannot hold a number'
+    Write-Host 'PASS scheduled-task responses cannot leak undeclared fields'
+    Write-Host 'PASS missing scheduled-task contract is rejected'
 }
 finally {
     if (Test-Path -LiteralPath $TempRoot) {

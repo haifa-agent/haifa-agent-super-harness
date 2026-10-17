@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "body"],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "body": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "context_mode": {"enum": ["fresh_thread_per_run", "reuse_thread"]},
+        "assistant_id": {"type": ["string", "null"]},
+        "title": {"type": "string"},
+        "prompt": {"type": "string"},
+        "schedule_spec": {"type": "object"},
+        "timezone": {"type": "string"}
+      }
+    }
+  }
+}
