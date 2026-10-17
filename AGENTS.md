@@ -187,6 +187,8 @@ $env:no_proxy=$env:NO_PROXY
 - 脚本顶部开 `Set-StrictMode -Version Latest` 后，访问不存在的属性会抛 `PropertyNotFoundException`，**包括对空数组取 `.X`**（`@().X` 也抛）。取集合字段一律写 `@($arr | ForEach-Object { $_.X })`。另：`param([string]$Foo)` 会对变量 `$Foo` 加类型约束，后续把解析出的 `PSCustomObject` 赋给同名 `$Foo` 会被强制转成字符串并按路径误用；JSON 解析结果变量须另起名（如 `$ManifestPath` 参数 + `$manifest` 局部变量）。
 - PowerShell 7.4+ 的 `Test-Json`（JsonSchema.Net）默认拒绝文件相对的 `$ref`，报 `The JSON schema contains a reference that could not be resolved ... use the 'FetchExternalReference' parameter`。本机 7.6.7 复现：`contracts/upstream/deerflow/schemas/` 下用兄弟文件 `$ref` 的 schema（如 `projects-list-response.schema.json`、`thread-runs-list-response.schema.json`）不加 `-FetchExternalReference` 时 `Test-Json` 直接判无效，会让 `verify-deerflow-contracts.ps1` 的夹具校验假失败。检查：`pwsh -NoLogo -NoProfile -File scripts/contracts/verify-deerflow-contracts.ps1`。最小修复：给 `Test-Json` 加 `-FetchExternalReference`（该脚本已修）；不要改成复制 schema 或内联 `$ref` 绕过。
 
+- 经执行入口传入含中文/emoji 的 here-string 写盘会损坏编码：`$x = @'…中文…'@; Set-Content -Encoding utf8` 落盘的是"UTF-8 编码的 GBK 乱码"，读回出现 `锝滈涔` 一类字符，但 `\ufffd`（replacement char）计数仍为 0，容易被误判为正常。检查：用只含 ASCII 的探针读取文件并按 `\uXXXX` 转义比对，如 `io.open(p, encoding="utf-8").read().count("\u4eba\u8bdd\u63cf\u8ff0")`，命中 0 即已损坏。最小修复：中文/emoji 文档与源码改用文件写入工具（`file_write`/`file_patch`）直接落 UTF-8；必须走 shell 时脚本源码只用 ASCII，正文用 `\uXXXX` 转义构造，或先由文件工具写好 UTF-8 正文再按字节复制。同一原因也会让 Python 脚本里的中文模式串匹配失败（`assert` 报 0 命中），不要据此认为目标文件缺少该内容。
+
 ### 冻结前端（pnpm / Next.js）
 
 - 每个验收 worktree 使用独立的 `frontend/node_modules` 和 `.next`（`.next` 可由 runner 从共享缓存复制恢复，但不同 worktree 不得共用同一个 `.next` 目录）；主前端继续供人工验收使用。前端来源按「范围与依赖」的冻结版本校验。
