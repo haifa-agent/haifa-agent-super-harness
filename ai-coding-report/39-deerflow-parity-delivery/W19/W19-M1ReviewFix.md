@@ -58,7 +58,8 @@
    - 根因：裁剪只在 `createRun` 内执行；本轮最后一个 occurrence 在最后一次裁剪之后才转为终态，导致终态历史为 201 条，比上限多 1。
    - 修复：把裁剪同时挂到 `updateRunStatus` 转终态的 mutate 上（活跃 occurrence 仍不裁剪），计数回到上界 200。
    - 原始日志：`local-tmp/test-targeted/test-targeted-20261017-152100-134.log`。
-2. **`verify-full` 前三次 FAIL（环境，非本改动）**：`DeerFlowTaskDelegationApiTest` / `DeerFlowDelegationAdmissionApiTest` 连续报 `Port already in use … 14618`，另有一次 `HostShellToolApprovalTest … SQLite unit of work failed`。这些类不属于本任务范围，且 14618 在三次失败之间处于空闲，属并发车道占用固定测试端口叠加 Windows `LISTEN` 残留；期间本任务 schedule 用例均通过。原始日志：`verify-full-20261017-152409-470.*`、`verify-full-20261017-154051-981.*`、`verify-full-20261017-155713-427.*`。第四次重跑（无并发占用）PASS。
+2. **`verify-full` 前三次 FAIL（环境，非本改动）**：`DeerFlowTaskDelegationApiTest` / `DeerFlowDelegationAdmissionApiTest` 连续报 `Port already in use … 14618`，另有一次 `HostShellToolApprovalTest … SQLite unit of work failed`。这些类不属于本任务范围，且 14618 在三次失败之间处于空闲，属并发车道占用固定测试端口叠加 Windows `LISTEN` 残留；期间本任务 schedule 用例均通过。原始日志：`verify-full-20261017-152409-470.*`、`verify-full-20261017-154051-981.*`、`verify-full-20261017-155713-427.*`。第四次重跑（无并发占用）PASS（`verify-full-20261017-161644-344.*`）。
+3. **`verify-full` 绑定候选 PASS 与随后文档提交的复跑阻塞**：干净候选 `faa6685` 上绑定运行 PASS（814/0/0/21，`javaInputFingerprint=1d92bebf…`，摘要 `verify-full-20261017-162434-230.*`）。其后的文档提交（仅改本报告 markdown，Java 内容逐字节相同，`git diff faa6685 <final> --stat` 只有本报告）复跑两次均只失败于**本改动范围之外**的 `HostShellToolApprovalTest.waitsForApprovalAndFailsClosedWhenRejected`（`SqliteStoreException: SQLite unit of work failed`，根因 `IllegalArgumentException: receivedAt must not precede respondedAt`，SDK `SqliteInteractionPort` 时间戳排序；该用例单独复跑亦复现）。日志：`verify-full-20261017-163057-826.*`、`verify-full-20261017-163700-810.*`、`test-targeted-20261017-164221-533.log`。该失败与本任务 schedule 改动无交集，按“文档提交不使 Java 内容失效”沿用 `faa6685` 的绑定 PASS；最终 HEAD 与指纹见 handoff。
 
 ## 6. `docs-check`
 
