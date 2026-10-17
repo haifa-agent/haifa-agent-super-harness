@@ -290,15 +290,10 @@ public final class HaifaRunBridge implements AutoCloseable {
         this.ownerId = ownerId != null ? ownerId : AccessOwner.current();
 
         boolean visionSupported = supportsVision(binding.snapshot());
-        List<? extends JavaTool<?, ?>> effectiveTools = visionSupported
-                ? tools
-                : tools.stream()
-                        .filter(tool -> !"view_image".equals(tool.spec().name().value()))
-                        .toList();
 
         // MCP ToolLifecycle events are projected by the frozen transcript only when the
         // bridge advertises tools; a bridge whose only tools come from MCP still does.
-        this.hasTools = isPlanMode || delegation.enabled() || !effectiveTools.isEmpty() || !mcpSpecs.isEmpty()
+        this.hasTools = isPlanMode || delegation.enabled() || !tools.isEmpty() || !mcpSpecs.isEmpty()
                 || (skillProjection != null && skillProjection.installTools())
                 || (hostShell != null && hostShell.enabled()) || skillScript != null;
         // The declared Skill script Tool adds its catalog names to the prompt set before the
@@ -316,7 +311,7 @@ public final class HaifaRunBridge implements AutoCloseable {
                 new PrincipalRef(AccessOwner.current(), McpRunTools.PRINCIPAL_TYPE));
         try {
             this.mcpToolNames = platform == null ? Set.of() : Set.copyOf(platform.toolNames());
-            this.delegationSignature = delegation.signature(effectiveTools, this.mcpSignature, this.skillSignature, this.mcpToolNames);
+            this.delegationSignature = delegation.signature(tools, this.mcpSignature, this.skillSignature, this.mcpToolNames);
             Map<ModelAdapterCoordinate, AgentChatModel> adapters = new java.util.LinkedHashMap<>();
             Map<String, ModelBinding> admittedModels = new java.util.LinkedHashMap<>();
             Map<String, ResolvedModelSnapshot> snapshots = new java.util.LinkedHashMap<>();
@@ -352,9 +347,9 @@ public final class HaifaRunBridge implements AutoCloseable {
             };
             admittedModels.values().forEach(model -> adapters.put(ModelAdapterCoordinate.from(model.snapshot()), configuredModels));
             ModelContribution models = new ModelContribution(adapters, binding.snapshot(), snapshots);
-            Set<String> allowedTools = registeredToolNames(effectiveTools, skillProjection);
-            allowedTools.addAll(this.mcpToolNames);
-            allowedTools.remove("task");
+            Set<String> allAllowedTools = registeredToolNames(tools, skillProjection);
+            allAllowedTools.addAll(this.mcpToolNames);
+            allAllowedTools.remove("task");
             // The host shell Tool is a product switch: off keeps the Tool surface and the frozen
             // lead prompt exactly as before, on adds the SDK's own execution_run alias that the
             // bridge registers below through the public SDK assembly entry.
@@ -364,20 +359,25 @@ public final class HaifaRunBridge implements AutoCloseable {
             // declared alias through the public SDK skill script entry below.
             boolean hostShellEnabled = hostShell != null && hostShell.enabled();
             if (hostShellEnabled) {
-                allowedTools.add("execution_run");
+                allAllowedTools.add("execution_run");
             }
-            allowedTools.addAll(this.skillScriptToolNames);
+            allAllowedTools.addAll(this.skillScriptToolNames);
+
+            Set<String> leadAllowedTools = new LinkedHashSet<>(allAllowedTools);
+            if (!visionSupported) {
+                leadAllowedTools.remove("view_image");
+            }
+
             // Runtime adds its built-in task Tool from the Child authorization. It is not
             // a ToolPlatform catalog alias and must not enter ProductProfile.allowedTools.
-            Set<String> promptTools = new LinkedHashSet<>(allowedTools);
+            Set<String> promptTools = new LinkedHashSet<>(leadAllowedTools);
             if (delegation.enabled()) promptTools.add("task");
-            promptTools = LeadPromptComposer.filterToolsForVision(promptTools, visionSupported);
             // The frozen lead prompt is rendered once per Bridge; its signature drives the later-Run
             // rebuild criterion in DeerFlowThreadRunApi, exactly like the MCP/Skill fingerprints.
             LeadPromptComposer.Composition prompt = composePrompt(promptTools, skillProjection, agentContext, delegation);
             this.promptSignature = prompt.signature();
             HaifaAgentBuilder builder = HaifaAgents.builder(profile(
-                            binding.snapshot(), prompt.instructions(), allowedTools,
+                            binding.snapshot(), prompt.instructions(), leadAllowedTools,
                             skillProjection == null ? Set.of() : skillProjection.allowedSkills(), delegation,
                             parentWallTimeMillisForTests))
                     .metadata(new AgentMetadata("Super Harness local compatibility agent"))
@@ -385,7 +385,7 @@ public final class HaifaRunBridge implements AutoCloseable {
                     .model(models)
                     .persistence(foundation.persistence())
                     .conversation(foundation.conversation())
-                    .tools(effectiveTools)
+                    .tools(tools)
                     .policy(new PolicyPlatformContribution(
                             PolicyPresets.standardApproval(), new DefaultPolicyDecisionService()));
             if (this.workspace != null && this.threadId != null) {
@@ -394,7 +394,7 @@ public final class HaifaRunBridge implements AutoCloseable {
             if (delegation.enabled()) {
                 builder.childRunCapacity(childRunCapacity).nonInteractiveChildTools();
                 for (var child : delegation.children()) {
-                    Set<String> childTools = child.allowedTools(allowedTools);
+                    Set<String> childTools = childToolsFor(child, allAllowedTools);
                     Optional<EffectiveModelParameters> effectiveModelParameters = Optional.empty();
                     if (isReasoningCapableOrEnabled(child.model().snapshot())) {
                         ResolvedModelSnapshot snapshot = child.model().snapshot();
@@ -429,7 +429,7 @@ public final class HaifaRunBridge implements AutoCloseable {
             }
             // Human B1 decision: only these production read-only network tools skip the
             // standard network ASK. All other network/MCP and writing tools retain their policy.
-            Set<ToolName> autoApproveReadOnlyNetwork = new LinkedHashSet<>(effectiveTools.stream()
+            Set<ToolName> autoApproveReadOnlyNetwork = new LinkedHashSet<>(tools.stream()
                     .filter(tool -> tool instanceof ProductionWebSearchTool
                             || tool instanceof ProductionWebFetchTool || tool instanceof ProductionImageSearchTool)
                     .map(tool -> tool.spec().name())
@@ -443,7 +443,7 @@ public final class HaifaRunBridge implements AutoCloseable {
                 }
             }
             builder.autoApproveReadOnlyNetworkTools(autoApproveReadOnlyNetwork);
-            builder.autoApproveStandardFileWriteTools(effectiveTools.stream()
+            builder.autoApproveStandardFileWriteTools(tools.stream()
                     .filter(tool -> tool instanceof ProductionSetupAgentTool || tool instanceof ProductionUpdateAgentTool)
                     .map(tool -> tool.spec().name())
                     .collect(java.util.stream.Collectors.toSet()));
@@ -583,11 +583,28 @@ public final class HaifaRunBridge implements AutoCloseable {
 
     public static String promptSignatureFor(List<? extends JavaTool<?, ?>> tools,
             SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
-            SubagentRunConfiguration delegation, Set<String> platformToolNames) {
+            SubagentRunConfiguration delegation, Set<String> platformToolNames,
+            boolean supportsVision) {
         Set<String> names = registeredToolNames(tools, skillProjection);
         names.addAll(platformToolNames);
         if (delegation.enabled()) names.add("task");
+        names = LeadPromptComposer.filterToolsForVision(names, supportsVision);
         return composePrompt(names, skillProjection, agentContext, delegation).signature();
+    }
+
+    public static String promptSignatureFor(List<? extends JavaTool<?, ?>> tools,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation, Set<String> platformToolNames) {
+        return promptSignatureFor(tools, skillProjection, agentContext, delegation, platformToolNames, false);
+    }
+
+    static Set<String> childToolsFor(SubagentRunConfiguration.Child child, Set<String> parentAvailableTools) {
+        boolean childVisionSupported = supportsVision(child.model().snapshot());
+        Set<String> childTools = new LinkedHashSet<>(child.allowedTools(parentAvailableTools));
+        if (!childVisionSupported) {
+            childTools.remove("view_image");
+        }
+        return Set.copyOf(childTools);
     }
 
     private static Set<String> registeredToolNames(
@@ -834,7 +851,7 @@ public final class HaifaRunBridge implements AutoCloseable {
         return threadId;
     }
 
-    static boolean supportsVision(ResolvedModelSnapshot snapshot) {
+    public static boolean supportsVision(ResolvedModelSnapshot snapshot) {
         if (snapshot == null) {
             return false;
         }

@@ -23,6 +23,8 @@ import io.haifa.agent.model.api.ModelStreamSink;
 import io.haifa.agent.model.api.ModelToolCall;
 import io.haifa.agent.model.api.ModelUsage;
 import io.haifa.agent.model.api.ResolvedModelSnapshot;
+import io.haifa.agent.superharness.server.config.SubagentRunConfiguration;
+import io.haifa.agent.superharness.server.prompt.AgentPromptContext;
 import io.haifa.agent.superharness.server.prompt.LeadPromptComposer;
 import io.haifa.agent.superharness.server.tool.file.FileToolSession;
 import io.haifa.agent.superharness.server.tool.file.ProductionReadFileTool;
@@ -419,6 +421,60 @@ public class ModelVisionInjectionTest {
         // Original request messages remain untouched with 3 messages
         assertThat(request.messages()).hasSize(3);
         assertThat(originalMessages).hasSize(3);
+    }
+
+    @Test
+    void preflightSignatures_matchBuiltBridgeForVisionAndNonVisionModels() {
+        List<JavaTool<?, ?>> tools = promptTools(viewImageTool);
+        SubagentRunConfiguration delegation = SubagentRunConfiguration.disabled();
+        Set<String> platformToolNames = Set.of();
+
+        // 1. Non-vision model: preflight must match attached bridge
+        String expectedNonVisionPromptSig = HaifaRunBridge.promptSignatureFor(
+                tools, null, AgentPromptContext.defaults(), delegation, platformToolNames, false);
+        String expectedNonVisionDelegationSig = delegation.signature(tools, "", "");
+
+        assertThat(nonVisionBridge.promptSignature()).isEqualTo(expectedNonVisionPromptSig);
+        assertThat(nonVisionBridge.delegationSignature()).isEqualTo(expectedNonVisionDelegationSig);
+
+        // 2. Vision model: preflight must match attached bridge
+        String expectedVisionPromptSig = HaifaRunBridge.promptSignatureFor(
+                tools, null, AgentPromptContext.defaults(), delegation, platformToolNames, true);
+        String expectedVisionDelegationSig = delegation.signature(tools, "", "");
+
+        assertThat(visionBridge.promptSignature()).isEqualTo(expectedVisionPromptSig);
+        assertThat(visionBridge.delegationSignature()).isEqualTo(expectedVisionDelegationSig);
+    }
+
+    @Test
+    void childToolsFor_gatesVisionToolPerChildModelCapability() {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var childDef = mapper.createObjectNode()
+                .put("name", "child-agent")
+                .put("description", "A child agent")
+                .put("system_prompt", "Help with tasks")
+                .put("max_turns", 3)
+                .put("timeout_seconds", 60);
+        childDef.putArray("tools").add("read_file").add("view_image");
+
+        HaifaRunBridge.ModelBinding visionChildBinding = new HaifaRunBridge.ModelBinding(
+                "vision-model", "1.0.0", new DummyChatModel(), visionModelSnapshot);
+        HaifaRunBridge.ModelBinding nonVisionChildBinding = new HaifaRunBridge.ModelBinding(
+                "non-vision-model", "1.0.0", new DummyChatModel(), nonVisionModelSnapshot);
+
+        var visionChild = new SubagentRunConfiguration.Child(childDef, visionChildBinding);
+        var nonVisionChild = new SubagentRunConfiguration.Child(childDef, nonVisionChildBinding);
+
+        Set<String> parentTools = Set.of("read_file", "write_file", "view_image");
+
+        // Vision child retains view_image
+        Set<String> visionChildTools = HaifaRunBridge.childToolsFor(visionChild, parentTools);
+        assertThat(visionChildTools).contains("read_file", "view_image");
+
+        // Non-vision child has view_image filtered out
+        Set<String> nonVisionChildTools = HaifaRunBridge.childToolsFor(nonVisionChild, parentTools);
+        assertThat(nonVisionChildTools).contains("read_file");
+        assertThat(nonVisionChildTools).doesNotContain("view_image");
     }
 
     private static final class DummyChatModel implements AgentChatModel {
