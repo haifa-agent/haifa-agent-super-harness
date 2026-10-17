@@ -47,6 +47,10 @@ public final class FeishuChannelWorker implements AutoCloseable {
             Pattern.compile("^/(?:skill|goal|compact)(?:\\s.*)?$", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final String INBOUND_FAILURE_REPLY =
             "An error occurred while processing your request. Please try again.";
+    private static final int MAX_ARTIFACT_IMAGES = 4;
+    private static final long MAX_ARTIFACT_IMAGE_BYTES = 10L * 1024 * 1024;
+    private static final Set<String> ARTIFACT_IMAGE_EXTENSIONS =
+            Set.of("png", "jpg", "jpeg", "webp", "gif", "bmp");
     private static final String METADATA_MODE_KEY = "run_mode";
     private static final String REACTIONS_ENV = "HAIFA_SUPER_HARNESS_FEISHU_REACTIONS";
     private static final Set<String> REACTIONS_OFF = Set.of("0", "false", "no", "off");
@@ -561,11 +565,74 @@ public final class FeishuChannelWorker implements AutoCloseable {
             FeishuPendingInput pending,
             ObjectNode connection)
             throws Exception {
-        present(
-                message,
-                runSubmitted(owner, connectionId, message, threadId, response, pending, connection),
-                threadId);
+        FeishuAgentBridge.TurnResult result =
+                runSubmitted(owner, connectionId, message, threadId, response, pending, connection);
+        present(message, result, threadId);
+        deliverArtifactImages(message, result, owner, threadId);
         markProcessingSuccess(message.messageId());
+    }
+
+    /**
+     * DeerFlow/Hermes parity for generated images: upload each image artifact and reply with a real
+     * image message instead of a gateway-relative path Feishu cannot open. Bounded and best effort:
+     * a delivery failure must never replace or delay the text reply already sent.
+     */
+    private void deliverArtifactImages(
+            FeishuInboundMessage message,
+            FeishuAgentBridge.TurnResult result,
+            String owner,
+            String threadId) {
+        if (message == null || result == null || result.artifacts().isEmpty()) {
+            return;
+        }
+        FeishuTransport active;
+        synchronized (lock) {
+            active = transport;
+        }
+        if (active == null) {
+            return;
+        }
+        int sent = 0;
+        Set<String> seen = new java.util.LinkedHashSet<>();
+        for (String path : result.artifacts()) {
+            if (sent >= MAX_ARTIFACT_IMAGES) {
+                return;
+            }
+            if (path == null || path.isBlank() || !seen.add(path) || !isArtifactImage(path)) {
+                continue;
+            }
+            try {
+                Optional<FeishuAgentBridge.ArtifactBytes> artifact =
+                        agentBridge.readArtifact(owner, threadId, path);
+                if (artifact.isEmpty()) {
+                    continue;
+                }
+                FeishuAgentBridge.ArtifactBytes image = artifact.get();
+                if (image.bytes() == null
+                        || image.bytes().length == 0
+                        || image.bytes().length > MAX_ARTIFACT_IMAGE_BYTES) {
+                    continue;
+                }
+                Optional<String> imageKey = active.uploadImage(image.bytes(), image.filename());
+                if (imageKey.isEmpty()) {
+                    continue;
+                }
+                active.replyImage(message.messageId(), imageKey.get());
+                sent++;
+            } catch (Exception failure) {
+                LOG.log(
+                        System.Logger.Level.WARNING,
+                        "Feishu artifact image delivery failed (" + failure.getClass().getSimpleName() + ")");
+            }
+        }
+    }
+
+    private static boolean isArtifactImage(String path) {
+        int dot = path.lastIndexOf('.');
+        if (dot < 0 || dot == path.length() - 1) {
+            return false;
+        }
+        return ARTIFACT_IMAGE_EXTENSIONS.contains(path.substring(dot + 1).toLowerCase(Locale.ROOT));
     }
 
     private void runChat(
@@ -618,6 +685,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
                             .withMode(mode)
                             .withProgress(summary -> reply(message.messageId(), summary)));
             present(message, result, threadId);
+            deliverArtifactImages(message, result, ownerUserId, threadId);
             markProcessingSuccess(message.messageId());
         } finally {
             chatBusy.remove(message.chatId());

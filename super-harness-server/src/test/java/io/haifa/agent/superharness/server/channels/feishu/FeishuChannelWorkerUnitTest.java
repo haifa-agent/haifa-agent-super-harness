@@ -7,6 +7,7 @@ import io.haifa.agent.superharness.server.config.ChannelConnectionStore;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -372,5 +373,136 @@ class FeishuChannelWorkerUnitTest {
         assertThat(InProcessFeishuAgentBridge.storedUploadFilename(
                         "/mnt/user-data/uploads/image__abcdef012345.jpg"))
                 .isEqualTo("image__abcdef012345.jpg");
+    }
+
+    @Test
+    void generatedImageArtifactIsUploadedAndReplied() throws Exception {
+        ChannelConnectionStore connections = new ChannelConnectionStore(json, dataDirectory);
+        FeishuChatThreadStore threads = new FeishuChatThreadStore(json, dataDirectory);
+        AtomicReference<RecordingFeishuTransport> transportRef = new AtomicReference<>();
+        byte[] png = new byte[] {(byte) 0x89, 'P', 'N', 'G'};
+        FeishuAgentBridge bridge = new FeishuAgentBridge() {
+            @Override
+            public TurnResult runTurn(
+                    String owner,
+                    String threadId,
+                    Map<String, Object> metadata,
+                    String userText) {
+                return new TurnResult(threadId, "image ready");
+            }
+
+            @Override
+            public TurnResult runTurn(
+                    String owner,
+                    String threadId,
+                    Map<String, Object> metadata,
+                    String userText,
+                    FeishuHumanResponse response,
+                    List<UploadedFile> files,
+                    TurnOptions options) {
+                return new TurnResult(
+                        threadId,
+                        "image ready",
+                        null,
+                        List.of("/mnt/user-data/outputs/redraw.png"),
+                        List.of(),
+                        List.of());
+            }
+
+            @Override
+            public Optional<ArtifactBytes> readArtifact(
+                    String owner, String threadId, String virtualPath) {
+                return Optional.of(new ArtifactBytes("redraw.png", "image/png", png));
+            }
+        };
+        FeishuChannelWorker worker = new FeishuChannelWorker(connections, threads, bridge, () -> {
+            RecordingFeishuTransport transport = new RecordingFeishuTransport();
+            transportRef.set(transport);
+            return transport;
+        });
+        worker.startOrRestart("cli_x", "secret_x", FeishuOpenDomain.DEFAULT);
+        String code = ChannelConnectionStore.newBindingCode();
+        connections.createOauthStateWithinCap(
+                "owner",
+                "feishu",
+                code,
+                java.time.Instant.now().plusSeconds(60),
+                ChannelConnectionStore.MAX_PENDING_CONNECT_CODES_PER_PROVIDER);
+        connections.bindFeishuFromConnectCode(code, "ou_img", "oc_img", Map.of());
+
+        RecordingFeishuTransport transport = transportRef.get();
+        transport.deliverAndWait(
+                new FeishuInboundMessage("oc_img", "om_img", "ou_img", "draw it", "p2p"), 1500);
+
+        assertThat(transport.replies()).anyMatch(reply -> reply.text().contains("image ready"));
+        assertThat(transport.uploadedImages()).containsExactly("redraw.png");
+        assertThat(transport.imageReplies()).hasSize(1);
+        assertThat(transport.imageReplies().getFirst().messageId()).isEqualTo("om_img");
+        worker.close();
+    }
+
+    @Test
+    void imageUploadFailureKeepsTheTextReply() throws Exception {
+        ChannelConnectionStore connections = new ChannelConnectionStore(json, dataDirectory);
+        FeishuChatThreadStore threads = new FeishuChatThreadStore(json, dataDirectory);
+        AtomicReference<RecordingFeishuTransport> transportRef = new AtomicReference<>();
+        FeishuAgentBridge bridge = new FeishuAgentBridge() {
+            @Override
+            public TurnResult runTurn(
+                    String owner,
+                    String threadId,
+                    Map<String, Object> metadata,
+                    String userText) {
+                return new TurnResult(threadId, "text only");
+            }
+
+            @Override
+            public TurnResult runTurn(
+                    String owner,
+                    String threadId,
+                    Map<String, Object> metadata,
+                    String userText,
+                    FeishuHumanResponse response,
+                    List<UploadedFile> files,
+                    TurnOptions options) {
+                return new TurnResult(
+                        threadId,
+                        "text only",
+                        null,
+                        List.of("/mnt/user-data/outputs/redraw.png"),
+                        List.of(),
+                        List.of());
+            }
+
+            @Override
+            public Optional<ArtifactBytes> readArtifact(
+                    String owner, String threadId, String virtualPath) {
+                return Optional.of(new ArtifactBytes(
+                        "redraw.png", "image/png", new byte[] {(byte) 0x89, 'P', 'N', 'G'}));
+            }
+        };
+        FeishuChannelWorker worker = new FeishuChannelWorker(connections, threads, bridge, () -> {
+            RecordingFeishuTransport transport = new RecordingFeishuTransport();
+            transport.failImageUpload();
+            transportRef.set(transport);
+            return transport;
+        });
+        worker.startOrRestart("cli_x", "secret_x", FeishuOpenDomain.DEFAULT);
+        String code = ChannelConnectionStore.newBindingCode();
+        connections.createOauthStateWithinCap(
+                "owner",
+                "feishu",
+                code,
+                java.time.Instant.now().plusSeconds(60),
+                ChannelConnectionStore.MAX_PENDING_CONNECT_CODES_PER_PROVIDER);
+        connections.bindFeishuFromConnectCode(code, "ou_img2", "oc_img2", Map.of());
+
+        RecordingFeishuTransport transport = transportRef.get();
+        transport.deliverAndWait(
+                new FeishuInboundMessage("oc_img2", "om_img2", "ou_img2", "draw it", "p2p"), 1500);
+
+        assertThat(transport.replies()).anyMatch(reply -> reply.text().contains("text only"));
+        assertThat(transport.imageReplies()).isEmpty();
+        worker.close();
     }
 }

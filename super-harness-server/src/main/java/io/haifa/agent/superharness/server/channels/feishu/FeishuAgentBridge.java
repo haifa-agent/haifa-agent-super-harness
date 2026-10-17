@@ -17,6 +17,18 @@ public interface FeishuAgentBridge {
         }
     }
 
+    /**
+     * Bounded bytes of one Run artifact for channel delivery (image upload). Default: unavailable so
+     * test doubles keep compiling.
+     */
+    record ArtifactBytes(String filename, String mediaType, byte[] bytes) {}
+
+    /** Read one artifact the Run produced; empty when the channel cannot resolve it. */
+    default Optional<ArtifactBytes> readArtifact(
+            String ownerUserId, String threadId, String virtualPath) {
+        return Optional.empty();
+    }
+
     record TurnResult(
             String threadId,
             String assistantText,

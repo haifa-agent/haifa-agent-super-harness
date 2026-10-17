@@ -168,6 +168,75 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
     }
 
     @Override
+    public Optional<String> uploadImage(byte[] bytes, String filename) {
+        Client api;
+        synchronized (lock) {
+            api = apiClient;
+        }
+        if (api == null || bytes == null || bytes.length == 0) {
+            return Optional.empty();
+        }
+        java.nio.file.Path temp = null;
+        try {
+            int dot = filename == null ? -1 : filename.lastIndexOf('.');
+            String suffix = dot > 0 ? filename.substring(dot) : ".png";
+            temp = java.nio.file.Files.createTempFile("feishu-image-", suffix);
+            java.nio.file.Files.write(temp, bytes);
+            com.lark.oapi.service.im.v1.model.CreateImageResp response = api.im().image().create(
+                    com.lark.oapi.service.im.v1.model.CreateImageReq.newBuilder()
+                            .createImageReqBody(com.lark.oapi.service.im.v1.model.CreateImageReqBody
+                                    .newBuilder()
+                                    .imageType("message")
+                                    .image(temp.toFile())
+                                    .build())
+                            .build());
+            if (response == null || !response.success() || response.getData() == null) {
+                LOG.log(
+                        System.Logger.Level.WARNING,
+                        "Feishu image upload failed code={0}",
+                        response == null ? -1 : response.getCode());
+                return Optional.empty();
+            }
+            String imageKey = response.getData().getImageKey();
+            return imageKey == null || imageKey.isBlank() ? Optional.empty() : Optional.of(imageKey);
+        } catch (Exception failure) {
+            LOG.log(System.Logger.Level.WARNING, "Feishu image upload raised", failure);
+            return Optional.empty();
+        } finally {
+            if (temp != null) {
+                try {
+                    java.nio.file.Files.deleteIfExists(temp);
+                } catch (java.io.IOException ignored) {
+                    // Temp cleanup is best effort; the image is already uploaded.
+                }
+            }
+        }
+    }
+
+    @Override
+    public void replyImage(String messageId, String imageKey) throws Exception {
+        Client api;
+        synchronized (lock) {
+            api = apiClient;
+        }
+        if (api == null
+                || messageId == null
+                || messageId.isBlank()
+                || imageKey == null
+                || imageKey.isBlank()) {
+            return;
+        }
+        ReplyMessageReq request = ReplyMessageReq.newBuilder()
+                .messageId(messageId)
+                .replyMessageReqBody(ReplyMessageReqBody.newBuilder()
+                        .msgType("image")
+                        .content("{\"image_key\":\"" + imageKey + "\"}")
+                        .build())
+                .build();
+        api.im().message().reply(request);
+    }
+
+    @Override
     public Optional<String> addReaction(String messageId, String emojiType) {
         Client api;
         synchronized (lock) {
