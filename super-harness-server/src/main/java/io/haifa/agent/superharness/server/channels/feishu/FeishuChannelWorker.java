@@ -37,6 +37,8 @@ public final class FeishuChannelWorker implements AutoCloseable {
     private static final System.Logger LOG = System.getLogger(FeishuChannelWorker.class.getName());
     private static final Pattern CONNECT_CODE =
             Pattern.compile("^/connect\\s+(\\S+)\\s*$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NEW_COMMAND = Pattern.compile("^/new\\s*$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern STATUS_COMMAND = Pattern.compile("^/status\\s*$", Pattern.CASE_INSENSITIVE);
     private static final Pattern MODE_COMMAND =
             Pattern.compile("^/mode(?:\\s+(\\S+))?\\s*$", Pattern.CASE_INSENSITIVE);
     private static final Pattern STOP_COMMAND =
@@ -161,6 +163,48 @@ public final class FeishuChannelWorker implements AutoCloseable {
         }
     }
 
+    /** Resolve explicit reply/topic aliases before the current P2P chat pointer. */
+    private String resolveThread(String connectionId, FeishuInboundMessage message) {
+        String chat = message.chatId();
+        for (String alias : List.of(message.rootId(), message.parentId(), message.feishuThreadId())) {
+            if (alias != null && !alias.isBlank()) {
+                Optional<String> stored = threadMap.findAlias(connectionId, chat, alias);
+                if (stored.isPresent()) {
+                    return stored.get();
+                }
+            }
+        }
+        // Unthreaded group messages start independent conversations; replies use retained aliases.
+        if (!"p2p".equalsIgnoreCase(message.chatType())) {
+            String topic = !message.rootId().isBlank() ? message.rootId()
+                    : !message.feishuThreadId().isBlank() ? message.feishuThreadId() : message.messageId();
+            Optional<String> existing = threadMap.findAlias(connectionId, chat, topic);
+            if (existing.isPresent()) {
+                return existing.get();
+            }
+            String fresh = "feishu-" + java.util.UUID.randomUUID();
+            threadMap.bindAlias(connectionId, chat, topic, fresh);
+            return threadMap.findAlias(connectionId, chat, topic).orElseThrow();
+        }
+        return threadMap.getOrCreate(connectionId, chat);
+    }
+
+    private String resolveAndRemember(String connectionId, FeishuInboundMessage message) {
+        String id = resolveThread(connectionId, message);
+        threadMap.bindAlias(connectionId, message.chatId(), message.messageId(), id);
+        if (!message.rootId().isBlank()) {
+            threadMap.bindAlias(connectionId, message.chatId(), message.rootId(), id);
+        }
+        if (!message.feishuThreadId().isBlank()) {
+            threadMap.bindAlias(connectionId, message.chatId(), message.feishuThreadId(), id);
+        }
+        return id;
+    }
+
+    private static String busyKey(String connectionId, String threadId) {
+        return connectionId + "|" + threadId;
+    }
+
     private void enqueueInbound(FeishuInboundMessage message) {
         if (message == null) {
             return;
@@ -170,11 +214,27 @@ public final class FeishuChannelWorker implements AutoCloseable {
             return;
         }
         // Busy acknowledgement / steer / stop must not wait for a free Turn worker.
-        if (Boolean.TRUE.equals(chatBusy.get(message.chatId()))) {
+        if (isBusyMessage(message)) {
             connectExecutor.execute(() -> runSafely(message, () -> handleBusyInbound(message)));
             return;
         }
         chatExecutor.execute(() -> runSafely(message, () -> handleInbound(message)));
+    }
+
+    private boolean isBusyMessage(FeishuInboundMessage message) {
+        try {
+            Optional<ObjectNode> connection = connections.findConnectionByExternalIdentity(
+                    "feishu", message.openId(), message.chatId());
+            if (connection.isEmpty()) {
+                return false;
+            }
+            String connectionId = connection.get().path("id").asText("");
+            String threadId = resolveThread(connectionId, message);
+            return Boolean.TRUE.equals(chatBusy.get(busyKey(connectionId, threadId)));
+        } catch (Exception failure) {
+            // Do not treat broken identity/routing storage as a new conversation.
+            return false;
+        }
     }
 
     private void runSafely(FeishuInboundMessage message, InboundTask task) {
@@ -271,7 +331,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
         if (handleChannelCommands(owner, connectionId, message, stripped, connection, false)) {
             return;
         }
-        String threadId = threadMap.getOrCreate(connectionId, message.chatId());
+        String threadId = resolveAndRemember(connectionId, message);
         String steerText = stripped;
         if (steerText.isBlank()) {
             reply(message.messageId(), FeishuInteraction.BUSY);
@@ -323,8 +383,19 @@ public final class FeishuChannelWorker implements AutoCloseable {
             ObjectNode connection,
             boolean allowNewTurn)
             throws Exception {
+        if (NEW_COMMAND.matcher(stripped).matches()) {
+            String threadId = threadMap.startNew(connectionId, message.chatId());
+            reply(message.messageId(), "New conversation started. Thread: " + threadId);
+            return true;
+        }
+        if (STATUS_COMMAND.matcher(stripped).matches()) {
+            String threadId = threadMap.find(connectionId, message.chatId()).orElse(null);
+            reply(message.messageId(), threadId == null ? "No active conversation."
+                    : "Active thread: " + threadId);
+            return true;
+        }
         if (STOP_COMMAND.matcher(stripped).matches()) {
-            String threadId = threadMap.getOrCreate(connectionId, message.chatId());
+            String threadId = resolveAndRemember(connectionId, message);
             boolean cancelled = agentBridge.cancelActiveRun(owner, threadId);
             reply(message.messageId(), cancelled ? FeishuInteraction.STOPPED : FeishuInteraction.STOP_FAILED);
             return true;
@@ -351,7 +422,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
         }
         Matcher steer = STEER_COMMAND.matcher(stripped);
         if (steer.matches()) {
-            String threadId = threadMap.getOrCreate(connectionId, message.chatId());
+            String threadId = resolveAndRemember(connectionId, message);
             if (!agentBridge.hasActiveRun(owner, threadId)) {
                 if (!allowNewTurn) {
                     reply(message.messageId(), FeishuInteraction.BUSY);
@@ -480,7 +551,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
             ObjectNode connection = bound.get();
             String owner = connection.path("owner_user_id").asText(AccessOwner.DEFAULT);
             String connectionId = connection.path("id").asText("");
-            String threadId = threadMap.getOrCreate(connectionId, message.chatId());
+            String threadId = resolveAndRemember(connectionId, message);
             FeishuPendingInput pending = agentBridge.currentPending(owner, threadId).orElse(null);
             FeishuInboundMessage.CardAction action = message.cardAction();
             return pending == null
@@ -506,7 +577,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
         ObjectNode connection = bound.get();
         String owner = connection.path("owner_user_id").asText(AccessOwner.DEFAULT);
         String connectionId = connection.path("id").asText("");
-        String threadId = threadMap.getOrCreate(connectionId, message.chatId());
+        String threadId = resolveAndRemember(connectionId, message);
         FeishuPendingInput pending = agentBridge.currentPending(owner, threadId).orElse(null);
         FeishuInboundMessage.CardAction action = message.cardAction();
         if (pending == null
@@ -571,7 +642,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
     private void runChat(
             String ownerUserId, String connectionId, FeishuInboundMessage message, String strippedText)
             throws Exception {
-        String threadId = threadMap.getOrCreate(connectionId, message.chatId());
+        String threadId = resolveAndRemember(connectionId, message);
         Optional<ObjectNode> bound = connections.findConnectionByExternalIdentity(
                 "feishu", message.openId(), message.chatId());
         ObjectNode connection = bound.orElse(null);
@@ -594,7 +665,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
                 return;
             }
         }
-        if (Boolean.TRUE.equals(chatBusy.putIfAbsent(message.chatId(), Boolean.TRUE))) {
+        if (Boolean.TRUE.equals(chatBusy.putIfAbsent(busyKey(connectionId, threadId), Boolean.TRUE))) {
             handleBusyInbound(message);
             return;
         }
@@ -620,7 +691,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
             present(message, result, threadId);
             markProcessingSuccess(message.messageId());
         } finally {
-            chatBusy.remove(message.chatId());
+            chatBusy.remove(busyKey(connectionId, threadId));
         }
     }
 
@@ -664,7 +735,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
             FeishuPendingInput pending,
             ObjectNode connection)
             throws Exception {
-        if (Boolean.TRUE.equals(chatBusy.putIfAbsent(message.chatId(), Boolean.TRUE))) {
+        if (Boolean.TRUE.equals(chatBusy.putIfAbsent(busyKey(connectionId, threadId), Boolean.TRUE))) {
             reply(message.messageId(), FeishuInteraction.BUSY);
             return new FeishuAgentBridge.TurnResult(threadId, FeishuInteraction.BUSY, pending);
         }
@@ -683,7 +754,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
                             .withProgress(summary -> reply(message.messageId(), summary)));
             return result;
         } finally {
-            chatBusy.remove(message.chatId());
+            chatBusy.remove(busyKey(connectionId, threadId));
         }
     }
 
