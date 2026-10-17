@@ -1,6 +1,7 @@
 package io.haifa.agent.superharness.server.channels.feishu;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -8,25 +9,42 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /** Parses frozen human-input cards and builds the Feishu card plus the uplink human message. */
 public final class FeishuInteraction {
-    static final String APPROVAL_HINT =
+    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final Set<String> FORM_FIELD_TYPES =
+            Set.of("text", "textarea", "number", "select");
+
+    public static final String APPROVAL_HINT =
             "当前任务正在等待审批，请点击卡片按钮，或精确回复「批准」/「拒绝」。";
-    static final String CHOICE_HINT = "请点击卡片上的选项，或精确回复序号 / 选项原文。";
-    static final String ALREADY_HANDLED = "该操作已处理，无需重复点击";
-    static final String PROCESSING = "正在处理操作...";
-    static final String FORBIDDEN = "您无权审批该任务";
-    static final String INVALID = "操作无效";
+    public static final String CHOICE_HINT = "请点击卡片上的选项，或精确回复序号 / 选项原文。";
+    public static final String ALREADY_HANDLED = "该操作已处理，无需重复点击";
+    public static final String PROCESSING = "正在处理操作...";
+    public static final String FORBIDDEN = "您无权审批该任务";
+    public static final String INVALID = "操作无效";
     /** Card-only id for the web "其他回答" field. It is not an option in thread state. */
-    static final String OTHER_OPTION = "other";
-    static final String EMPTY_OTHER = "请输入回答后再提交。";
-    static final String PROGRESS = "正在处理您的请求…";
-    static final String BUSY = "当前对话仍在处理上一轮请求，请稍后再试。";
-    static final String UNSUPPORTED_MEDIA =
+    public static final String OTHER_OPTION = "other";
+    /** Card-only id for Form v2 submit. */
+    public static final String FORM_SUBMIT = "form_submit";
+    public static final String EMPTY_OTHER = "请输入回答后再提交。";
+    public static final String EMPTY_FORM = "请填写必填字段后再提交。";
+    public static final String PROGRESS = "正在处理您的请求…";
+    public static final String BUSY = "当前对话仍在处理上一轮请求，请稍后再试。";
+    public static final String STOPPED = "已停止当前任务。";
+    public static final String STOP_FAILED = "当前没有可停止的任务，或停止失败。";
+    public static final String STEER_ACCEPTED = "已向进行中的任务追加指引。";
+    public static final String STEER_FAILED = "无法追加指引（没有进行中的任务，或当前状态不接受 steer）。";
+    public static final String MODE_UPDATED = "已更新运行模式。";
+    public static final String MODE_INVALID =
+            "模式无效。请使用：/mode flash | thinking | pro | ultra";
+    public static final String COMMAND_WEB_ONLY =
+            "该命令请在 Web 端使用（飞书侧暂未接入完整 UI）。";
+    public static final String UNSUPPORTED_MEDIA =
             "暂不支持该类型的飞书消息。请发送文字，或发送图片 / 文件。";
-    static final String MEDIA_FAILED = "无法读取您发送的图片或文件，请重试或改用网页端上传。";
+    public static final String MEDIA_FAILED = "无法读取您发送的图片或文件，请重试或改用网页端上传。";
 
     private FeishuInteraction() {}
 
@@ -46,6 +64,8 @@ public final class FeishuInteraction {
         int version = humanInput.path("version").asInt(1);
         String inputMode = humanInput.path("input_mode").asText("");
         boolean form = version != 1 || "form".equals(inputMode);
+        List<FeishuPendingInput.Field> fields = parseFields(humanInput.path("fields"));
+        boolean formUnsupported = form && !supportsFormFields(fields);
         List<FeishuPendingInput.Option> options = new ArrayList<>();
         if (!form && humanInput.path("options").isArray()) {
             for (JsonNode option : humanInput.path("options")) {
@@ -69,7 +89,27 @@ public final class FeishuInteraction {
                 preface(messages, cardIndex),
                 content,
                 options,
-                form));
+                formUnsupported,
+                fields,
+                humanInput.path("risk_level").asText(""),
+                humanInput.path("purpose").asText(""),
+                parseFacts(humanInput.path("environment_facts")),
+                parseFacts(humanInput.path("technical_facts"))));
+    }
+
+    static boolean supportsFormFields(List<FeishuPendingInput.Field> fields) {
+        if (fields == null || fields.isEmpty()) {
+            return false;
+        }
+        for (FeishuPendingInput.Field field : fields) {
+            if (!FORM_FIELD_TYPES.contains(field.type())) {
+                return false;
+            }
+            if (field.name().isBlank()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public static Optional<FeishuHumanResponse> match(FeishuPendingInput pending, String text) {
@@ -153,6 +193,9 @@ public final class FeishuInteraction {
     }
 
     public static Map<String, Object> interactiveCard(FeishuPendingInput pending) {
+        if (pending.formSupported()) {
+            return formCard(pending);
+        }
         if ("choice_with_other".equals(pending.inputMode()) && !pending.formUnsupported()) {
             return choiceWithOtherCard(pending);
         }
@@ -179,6 +222,41 @@ public final class FeishuInteraction {
         }
         card.put("elements", elements);
         return card;
+    }
+
+    /**
+     * Web-compatible Form v2 submission value: readable summary plus {@code [values: {...}]} JSON
+     * block (see frozen {@code buildHumanInputFormSubmissionValue}).
+     */
+    public static String buildFormSubmissionValue(
+            FeishuPendingInput pending, Map<String, Object> formValues) {
+        Map<String, Object> values = formValues == null ? Map.of() : formValues;
+        List<String> summaryParts = new ArrayList<>();
+        Map<String, Object> record = new LinkedHashMap<>();
+        for (FeishuPendingInput.Field field : pending.fields()) {
+            Object raw = values.get(field.name());
+            if (isEmptyFormValue(raw)) {
+                continue;
+            }
+            Object normalized = normalizeFormValue(raw);
+            record.put(field.name(), normalized);
+            summaryParts.add(field.label() + ": " + formatFormValue(normalized));
+        }
+        try {
+            return String.join("; ", summaryParts) + " [values: " + JSON.writeValueAsString(record) + "]";
+        } catch (Exception failed) {
+            return String.join("; ", summaryParts);
+        }
+    }
+
+    public static boolean formMissingRequired(FeishuPendingInput pending, Map<String, Object> formValues) {
+        Map<String, Object> values = formValues == null ? Map.of() : formValues;
+        for (FeishuPendingInput.Field field : pending.fields()) {
+            if (field.required() && isEmptyFormValue(values.get(field.name()))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static String formNotice(FeishuPendingInput pending) {
@@ -342,6 +420,7 @@ public final class FeishuInteraction {
         if (!pending.content().isBlank()) {
             body.append(pending.content().strip());
         }
+        appendApprovalMetadata(body, pending);
         if (!pending.formUnsupported()
                 && !pending.options().isEmpty()
                 && !pending.content().contains("\n  1. ")) {
@@ -356,7 +435,39 @@ public final class FeishuInteraction {
         return body.toString().strip();
     }
 
+    private static void appendApprovalMetadata(StringBuilder body, FeishuPendingInput pending) {
+        if (!pending.riskLevel().isBlank()) {
+            body.append("\n\n**风险级别：** ").append(pending.riskLevel().strip());
+        }
+        if (!pending.purpose().isBlank()) {
+            body.append("\n**目的：** ").append(truncate(pending.purpose().strip(), 240));
+        }
+        appendFacts(body, "环境事实", pending.environmentFacts());
+        appendFacts(body, "技术事实", pending.technicalFacts());
+    }
+
+    private static void appendFacts(StringBuilder body, String title, List<FeishuPendingInput.Fact> facts) {
+        if (facts == null || facts.isEmpty()) {
+            return;
+        }
+        body.append("\n**").append(title).append("：**");
+        int shown = 0;
+        for (FeishuPendingInput.Fact fact : facts) {
+            if (shown >= 6) {
+                body.append("\n- …");
+                break;
+            }
+            String label = fact.label().isBlank() ? "item" : truncate(fact.label(), 80);
+            String value = truncate(fact.value(), 160);
+            body.append("\n- ").append(label).append(": ").append(value);
+            shown++;
+        }
+    }
+
     private static String footer(FeishuPendingInput pending) {
+        if (pending.formSupported()) {
+            return "请在卡片中填写字段后提交。";
+        }
         if (pending.formUnsupported()) {
             return "请在 Web 端完成该表单。";
         }
@@ -370,6 +481,173 @@ public final class FeishuInteraction {
             return "可点选项，或在「其他回答」中输入后提交。直接回复其他原文也会按自由输入提交。";
         }
         return "可点按钮，或精确回复序号 / 选项原文。";
+    }
+
+    /** Schema 2.0 Form v2 card for the approved Feishu field subset. */
+    private static Map<String, Object> formCard(FeishuPendingInput pending) {
+        List<Map<String, Object>> elements = new ArrayList<>();
+        elements.add(Map.of("tag", "markdown", "content", markdown(pending)));
+        List<Map<String, Object>> formElements = new ArrayList<>();
+        for (FeishuPendingInput.Field field : pending.fields()) {
+            formElements.add(formFieldElement(field));
+        }
+        Map<String, Object> value = buttonValue(pending);
+        value.put("action", FORM_SUBMIT);
+        value.put("option_id", FORM_SUBMIT);
+        Map<String, Object> submit = new LinkedHashMap<>();
+        submit.put("tag", "button");
+        submit.put("name", "form_submit");
+        submit.put("text", Map.of("tag", "plain_text", "content", "提交"));
+        submit.put("type", "primary");
+        submit.put("width", "fill");
+        submit.put("form_action_type", "submit");
+        submit.put("behaviors", List.of(Map.of("type", "callback", "value", value)));
+        formElements.add(submit);
+        Map<String, Object> form = new LinkedHashMap<>();
+        form.put("tag", "form");
+        form.put("name", "human_input_form");
+        form.put("elements", formElements);
+        elements.add(form);
+        Map<String, Object> card = new LinkedHashMap<>();
+        card.put("schema", "2.0");
+        card.put("config", Map.of("update_multi", true));
+        card.put("body", Map.of("elements", elements));
+        return card;
+    }
+
+    private static Map<String, Object> formFieldElement(FeishuPendingInput.Field field) {
+        if ("select".equals(field.type())) {
+            List<Map<String, Object>> options = new ArrayList<>();
+            for (FeishuPendingInput.Option option : field.options()) {
+                options.add(Map.of(
+                        "text", Map.of(
+                                "tag", "plain_text",
+                                "content", option.label().isBlank() ? option.id() : option.label()),
+                        "value", option.value().isBlank() ? option.id() : option.value()));
+            }
+            Map<String, Object> select = new LinkedHashMap<>();
+            select.put("tag", "select_static");
+            select.put("name", field.name());
+            select.put("required", field.required());
+            select.put("placeholder", Map.of(
+                    "tag",
+                    "plain_text",
+                    "content",
+                    field.placeholder().isBlank() ? "请选择" : field.placeholder()));
+            select.put("options", options);
+            select.put("label", Map.of(
+                    "tag",
+                    "plain_text",
+                    "content",
+                    field.label().isBlank() ? field.name() : field.label()));
+            return select;
+        }
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("tag", "textarea".equals(field.type()) ? "input" : "input");
+        input.put("name", field.name());
+        input.put("required", field.required());
+        input.put("width", "fill");
+        input.put("label", Map.of(
+                "tag",
+                "plain_text",
+                "content",
+                field.label().isBlank() ? field.name() : field.label()));
+        input.put("label_position", "top");
+        input.put(
+                "placeholder",
+                Map.of(
+                        "tag",
+                        "plain_text",
+                        "content",
+                        field.placeholder().isBlank()
+                                ? ("number".equals(field.type()) ? "输入数字…" : "输入…")
+                                : field.placeholder()));
+        return input;
+    }
+
+    private static List<FeishuPendingInput.Field> parseFields(JsonNode fieldsNode) {
+        if (fieldsNode == null || !fieldsNode.isArray()) {
+            return List.of();
+        }
+        List<FeishuPendingInput.Field> fields = new ArrayList<>();
+        for (JsonNode field : fieldsNode) {
+            List<FeishuPendingInput.Option> options = new ArrayList<>();
+            if (field.path("options").isArray()) {
+                for (JsonNode option : field.path("options")) {
+                    options.add(new FeishuPendingInput.Option(
+                            option.path("id").asText(""),
+                            option.path("label").asText(""),
+                            option.path("value").asText("")));
+                }
+            }
+            fields.add(new FeishuPendingInput.Field(
+                    field.path("name").asText(""),
+                    field.path("label").asText(""),
+                    field.path("type").asText(""),
+                    field.path("required").asBoolean(false),
+                    field.path("placeholder").asText(""),
+                    options));
+        }
+        return List.copyOf(fields);
+    }
+
+    private static List<FeishuPendingInput.Fact> parseFacts(JsonNode factsNode) {
+        if (factsNode == null || !factsNode.isArray()) {
+            return List.of();
+        }
+        List<FeishuPendingInput.Fact> facts = new ArrayList<>();
+        for (JsonNode fact : factsNode) {
+            facts.add(new FeishuPendingInput.Fact(
+                    fact.path("label").asText(""), fact.path("value").asText("")));
+        }
+        return List.copyOf(facts);
+    }
+
+    private static boolean isEmptyFormValue(Object value) {
+        if (value == null) {
+            return true;
+        }
+        if (value instanceof String text) {
+            return text.trim().isEmpty();
+        }
+        if (value instanceof List<?> list) {
+            return list.isEmpty();
+        }
+        return false;
+    }
+
+    private static Object normalizeFormValue(Object value) {
+        if (value instanceof Number || value instanceof Boolean) {
+            return value;
+        }
+        if (value instanceof List<?> list) {
+            List<String> out = new ArrayList<>();
+            for (Object item : list) {
+                out.add(String.valueOf(item));
+            }
+            return out;
+        }
+        return String.valueOf(value).trim();
+    }
+
+    private static String formatFormValue(Object value) {
+        if (value instanceof List<?> list) {
+            return String.join(", ", list.stream().map(String::valueOf).toList());
+        }
+        if (value instanceof Boolean bool) {
+            return bool ? "yes" : "no";
+        }
+        return String.valueOf(value);
+    }
+
+    private static String truncate(String text, int max) {
+        if (text == null) {
+            return "";
+        }
+        if (text.length() <= max) {
+            return text;
+        }
+        return text.substring(0, Math.max(0, max - 1)) + "…";
     }
 
     /** Schema 2.0 card: the listed choices plus the same free-text field the web card shows. */

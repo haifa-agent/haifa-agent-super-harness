@@ -280,14 +280,22 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
         Map<String, Object> value = action == null ? null : action.getValue();
         String requestId = textValue(value, "request_id");
         String actionName = action == null || action.getName() == null ? "" : action.getName().trim();
+        Map<String, Object> formValues = action == null || action.getFormValue() == null
+                ? Map.of()
+                : Map.copyOf(action.getFormValue());
         String typed = firstText(
-                textValue(action == null ? null : action.getFormValue(), "other"),
+                textValue(formValues, "other"),
                 action == null || action.getInputValue() == null ? "" : action.getInputValue().trim());
         boolean other = FeishuInteraction.OTHER_OPTION.equals(textValue(value, "action"))
                 || "other_submit".equals(actionName);
+        boolean formSubmit = FeishuInteraction.FORM_SUBMIT.equals(textValue(value, "action"))
+                || FeishuInteraction.FORM_SUBMIT.equals(textValue(value, "option_id"))
+                || "form_submit".equals(actionName);
         String optionId = other
                 ? FeishuInteraction.OTHER_OPTION
-                : firstText(textValue(value, "option_id"), textValue(value, "action"));
+                : formSubmit
+                        ? FeishuInteraction.FORM_SUBMIT
+                        : firstText(textValue(value, "option_id"), textValue(value, "action"));
         String submitted = other ? typed : firstText(textValue(value, "value"), optionId);
         return new FeishuInboundMessage(
                 context == null ? "" : context.getOpenChatId(),
@@ -300,7 +308,8 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                         requestId,
                         optionId,
                         submitted,
-                        textValue(value, "card_schema")));
+                        textValue(value, "card_schema"),
+                        formValues));
     }
 
     /** Package-visible for unit assertions on inbound content shaping. */

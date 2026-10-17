@@ -1,6 +1,8 @@
 package io.haifa.agent.superharness.server.channels.feishu;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Normalized inbound Feishu IM message (transport-agnostic).
@@ -47,10 +49,23 @@ public record FeishuInboundMessage(
         }
     }
 
-    /** Button payload copied from a card action. The option value is re-read from thread state. */
-    public record CardAction(String source, String requestId, String optionId, String value, String cardSchema) {
+    /**
+     * Button / form payload copied from a card action. Option labels are re-read from thread state;
+     * Form v2 field values ride {@link #formValues()}.
+     */
+    public record CardAction(
+            String source,
+            String requestId,
+            String optionId,
+            String value,
+            String cardSchema,
+            Map<String, Object> formValues) {
         public CardAction(String source, String requestId, String optionId, String value) {
-            this(source, requestId, optionId, value, "");
+            this(source, requestId, optionId, value, "", Map.of());
+        }
+
+        public CardAction(String source, String requestId, String optionId, String value, String cardSchema) {
+            this(source, requestId, optionId, value, cardSchema, Map.of());
         }
 
         public CardAction {
@@ -59,6 +74,13 @@ public record FeishuInboundMessage(
             optionId = optionId == null ? "" : optionId;
             value = value == null ? "" : value;
             cardSchema = cardSchema == null ? "" : cardSchema;
+            formValues = formValues == null || formValues.isEmpty()
+                    ? Map.of()
+                    : Map.copyOf(new LinkedHashMap<>(formValues));
+        }
+
+        public boolean formSubmit() {
+            return "form_submit".equals(optionId);
         }
     }
 

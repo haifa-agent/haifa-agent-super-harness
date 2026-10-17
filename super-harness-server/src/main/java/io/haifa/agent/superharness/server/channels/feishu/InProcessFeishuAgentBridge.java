@@ -12,6 +12,7 @@ import io.haifa.agent.superharness.workspace.WorkspaceBinding;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Reuses the shared {@link DeerFlowConversationService} product use cases directly under
@@ -20,6 +21,8 @@ import java.util.Optional;
  * the Web compatibility adapter serves, so both channels share one Runtime truth.
  */
 public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
+    private static final Set<String> MODES = Set.of("flash", "thinking", "pro", "ultra");
+
     private final ObjectMapper json;
     private final DeerFlowConversationService threads;
     private final RestrictedWorkspaceService workspace;
@@ -42,7 +45,7 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
             Map<String, Object> channelMetadata,
             String userText)
             throws Exception {
-        return runTurn(ownerUserId, threadId, channelMetadata, userText, null, List.of());
+        return runTurn(ownerUserId, threadId, channelMetadata, userText, null, List.of(), TurnOptions.defaults());
     }
 
     @Override
@@ -53,7 +56,7 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
             String userText,
             FeishuHumanResponse response)
             throws Exception {
-        return runTurn(ownerUserId, threadId, channelMetadata, userText, response, List.of());
+        return runTurn(ownerUserId, threadId, channelMetadata, userText, response, List.of(), TurnOptions.defaults());
     }
 
     @Override
@@ -65,7 +68,22 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
             FeishuHumanResponse response,
             List<UploadedFile> files)
             throws Exception {
+        return runTurn(
+                ownerUserId, threadId, channelMetadata, userText, response, files, TurnOptions.defaults());
+    }
+
+    @Override
+    public TurnResult runTurn(
+            String ownerUserId,
+            String threadId,
+            Map<String, Object> channelMetadata,
+            String userText,
+            FeishuHumanResponse response,
+            List<UploadedFile> files,
+            TurnOptions options)
+            throws Exception {
         String owner = ownerUserId == null || ownerUserId.isBlank() ? AccessOwner.DEFAULT : ownerUserId;
+        TurnOptions resolved = options == null ? TurnOptions.defaults() : options;
         return AccessOwner.call(owner, () -> {
             try {
                 ensureThread(threadId, channelMetadata);
@@ -77,8 +95,18 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
                 if (content == null || content.isBlank()) {
                     content = "";
                 }
-                runStream(threadId, content, response, files == null ? List.of() : files);
-                return readTurn(threadId);
+                FeishuRunProjector projector = runStream(
+                        threadId,
+                        content,
+                        response,
+                        files == null ? List.of() : files,
+                        resolved);
+                // Steer acknowledgement is admission-only: observing the shared Run would block
+                // until terminal and mis-report an already-accepted steer if the Run later errors.
+                if (resolved.steer()) {
+                    return new TurnResult(threadId, "", null, List.of(), List.of(), List.of());
+                }
+                return readTurn(threadId, projector);
             } catch (Exception exception) {
                 throw new IllegalStateException("Feishu channel run failed", exception);
             }
@@ -137,6 +165,29 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
         });
     }
 
+    @Override
+    public boolean cancelActiveRun(String ownerUserId, String threadId) throws Exception {
+        String owner = ownerUserId == null || ownerUserId.isBlank() ? AccessOwner.DEFAULT : ownerUserId;
+        return AccessOwner.call(owner, () -> {
+            Optional<String> runId = threads.activeRunId(threadId);
+            if (runId.isEmpty()) {
+                return false;
+            }
+            try {
+                threads.cancelRun(threadId, runId.get(), "wait=false&action=interrupt");
+                return true;
+            } catch (DeerFlowConversationService.ConversationException rejected) {
+                return false;
+            }
+        });
+    }
+
+    @Override
+    public boolean hasActiveRun(String ownerUserId, String threadId) throws Exception {
+        String owner = ownerUserId == null || ownerUserId.isBlank() ? AccessOwner.DEFAULT : ownerUserId;
+        return AccessOwner.call(owner, () -> threads.activeRunId(threadId).isPresent());
+    }
+
     private void ensureThread(String threadId, Map<String, Object> channelMetadata) throws Exception {
         ObjectNode body = json.createObjectNode();
         body.put("thread_id", threadId);
@@ -155,8 +206,12 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
         }
     }
 
-    private void runStream(
-            String threadId, String userText, FeishuHumanResponse response, List<UploadedFile> files)
+    private FeishuRunProjector runStream(
+            String threadId,
+            String userText,
+            FeishuHumanResponse response,
+            List<UploadedFile> files,
+            TurnOptions options)
             throws Exception {
         ObjectNode body = json.createObjectNode();
         body.put("assistant_id", "lead_agent");
@@ -168,44 +223,45 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
                 response,
                 files);
         body.putArray("stream_mode").add("messages-tuple").add("updates").add("custom");
-        body.putObject("context").put("mode", "flash");
+        // Mode alone feeds DeerFlowReasoningSettings; do not force thinking_enabled so probe /
+        // non-thinking models still admit under thinking/pro/ultra labels when the binding allows.
+        body.putObject("context").put("mode", normalizeMode(options.mode()));
+        String runInput = options.steer() ? "steer" : null;
         DeerFlowConversationService.AdmittedTurn turn;
         try {
-            turn = threads.admitTurn(threadId, body, null, null);
+            turn = threads.admitTurn(threadId, body, runInput, null);
         } catch (DeerFlowConversationService.ConversationException rejected) {
             throw new FeishuRunRejected(rejected.kind().status(), boundedDetail(rejected.detail()));
         }
-        CompletionProbe probe = new CompletionProbe();
-        threads.observeTurn(turn, probe);
-        if (!probe.sawEnd && !probe.sawError && !probe.sawValues && !probe.sawMessages) {
+        if (options.steer()) {
+            // Creator/observer already owns observation; steer only needs admission success.
+            return new FeishuRunProjector(options.progress());
+        }
+        FeishuRunProjector projector = new FeishuRunProjector(options.progress());
+        threads.observeTurn(turn, projector);
+        if (!projector.sawEnd()
+                && !projector.sawError()
+                && !projector.sawValues()
+                && !projector.sawMessages()) {
             // streamRunEvents normally emits end on completion; tolerate values-only fixtures.
             throw new IllegalStateException("Run stream ended without completion marker");
         }
-        if (probe.sawError) {
+        if (projector.sawError()) {
             throw new IllegalStateException("Run stream reported error");
         }
+        return projector;
     }
 
-    /** Records only the frozen projection markers Feishu needs; it never touches SSE bytes. */
-    private static final class CompletionProbe implements DeerFlowConversationService.RunEventSink {
-        private boolean sawEnd;
-        private boolean sawError;
-        private boolean sawValues;
-        private boolean sawMessages;
-
-        @Override
-        public void event(String event, Object data, String id) {
-            switch (event) {
-                case "end" -> sawEnd = true;
-                case "error" -> sawError = true;
-                case "values" -> sawValues = true;
-                case "messages" -> sawMessages = true;
-                default -> { }
-            }
+    static String normalizeMode(String mode) {
+        if (mode == null || mode.isBlank()) {
+            return "flash";
         }
+        String trimmed = mode.trim().toLowerCase();
+        return MODES.contains(trimmed) ? trimmed : "flash";
+    }
 
-        @Override
-        public void heartbeat() {}
+    static boolean isValidMode(String mode) {
+        return mode != null && MODES.contains(mode.trim().toLowerCase());
     }
 
     private Optional<FeishuPendingInput> currentPendingLocked(String threadId) throws Exception {
@@ -225,7 +281,7 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
         return FeishuInteraction.pendingFromMessages(state.path("values").path("messages"));
     }
 
-    private TurnResult readTurn(String threadId) throws Exception {
+    private TurnResult readTurn(String threadId, FeishuRunProjector projector) throws Exception {
         JsonNode state = threadState(threadId);
         if (state == null) {
             throw new IllegalStateException("Thread state failed: HTTP 404");
@@ -245,7 +301,15 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
         if (pending != null && !pending.preface().isBlank()) {
             assistant = pending.preface();
         }
-        return new TurnResult(threadId, assistant, pending);
+        List<String> artifacts = projector == null ? List.of() : projector.artifacts();
+        List<String> todos = projector == null ? List.of() : projector.todoLines();
+        List<String> progress = projector == null ? List.of() : projector.progressLog();
+        if (pending == null) {
+            assistant = assistant
+                    + FeishuRunProjector.todoAppendix(todos)
+                    + FeishuRunProjector.artifactHints(threadId, artifacts);
+        }
+        return new TurnResult(threadId, assistant, pending, artifacts, todos, progress);
     }
 
     private JsonNode threadState(String threadId) throws Exception {
