@@ -113,6 +113,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final DeerFlowSuggestionsApi suggestionsApi;
     private final ScheduleStore scheduleStore;
     private final ScheduleDispatchService scheduler;
+    private final DeerFlowScheduledTasksApi scheduledTasksApi;
 
     private DeerFlowBootstrapApi(
             String bindHost,
@@ -264,6 +265,15 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         // binding). The HTTP adapter and the Feishu bridge share that same instance.
         this.scheduler = new ScheduleDispatchService(scheduleStore, threadRunApi.conversations(),
                 schedulerConfiguration, schedulerClock);
+        this.scheduledTasksApi = new DeerFlowScheduledTasksApi(
+                objectMapper,
+                scheduleStore,
+                scheduler,
+                schedulerConfiguration,
+                threadId -> threadRunApi.conversations().hasThread(threadId)
+                        && threadRunApi.conversations().threadVisibleToCurrentOwner(threadId),
+                configurationApi::agentExists,
+                schedulerClock);
         // createForTests injects a model resolver: use the no-network transport so REST fixtures
         // never open a real Feishu WebSocket. Production create() uses the official Lark SDK.
         FeishuTransport.Factory transportFactory = testRunModelResolver != null
@@ -893,10 +903,13 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         bindPrefix("/api/suggestions", suggestionsApi);
         bindPrefix("/api/projects", projectApi);
         bindPrefix("/api/trash", trashApi);
+        bindPrefix("/api/scheduled-tasks", scheduledTasksApi);
         bindPrefix(
                 "/api/threads",
                 exchange -> {
-                    if (!workspaceApi.tryHandle(exchange) && !suggestionsApi.tryHandle(exchange)) {
+                    if (!workspaceApi.tryHandle(exchange)
+                            && !suggestionsApi.tryHandle(exchange)
+                            && !scheduledTasksApi.tryHandle(exchange)) {
                         threadRunApi.handle(exchange);
                     }
                 });
