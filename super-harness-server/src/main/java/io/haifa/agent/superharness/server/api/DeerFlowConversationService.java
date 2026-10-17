@@ -190,7 +190,7 @@ public class DeerFlowConversationService implements AutoCloseable {
     // One public SDK capacity owner per Gateway, shared by all Thread and recovery Bridges.
     private final io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity;
     /**
-     * Single-flight claim of the accepted Interaction response per Run. Two channels (Feishu and the
+     * Single-flight claim of an in-flight Interaction response submission, keyed by Run and request. Two channels (Feishu and the
      * Web/API) can submit the same card within the same second; without this claim both submissions
      * could enter {@code bridge.respond} and race the SDK's resume transaction, which is how Run
      * 01a14594 was left with a recorded response but no progress (W04-BUG-011).
@@ -1576,11 +1576,14 @@ public class DeerFlowConversationService implements AutoCloseable {
                     } catch (IllegalArgumentException invalid) {
                         throw ConversationException.conflict("Thread has no matching Interaction");
                     }
-                    // Single-flight per Run: two channels (Feishu and Web/API) can submit the same
-                    // card in the same second. Only one may enter the SDK resume path, otherwise the
-                    // second submission races the resume transaction and the Run is left with a
-                    // recorded response but no progress (W04-BUG-011).
-                    var claimed = claimedInteractionResponses.putIfAbsent(run.runId.value(), response);
+                    // Single-flight per Interaction request: two channels (Feishu and Web/API) can
+                    // submit the same card in the same second. Only one may enter the SDK resume path,
+                    // otherwise the second submission races the resume transaction and the Run is left
+                    // with a recorded response but no progress (W04-BUG-011). The claim is scoped to
+                    // this request and released as soon as the attempt settles, so a later approval of
+                    // the same Run is never rejected by a stale claim.
+                    String claimKey = run.runId.value() + "|" + response.requestId();
+                    var claimed = claimedInteractionResponses.putIfAbsent(claimKey, response);
                     if (claimed != null) {
                         throw ConversationException.conflict(claimed.equals(response)
                                 ? "Interaction response already accepted"
@@ -1590,9 +1593,10 @@ public class DeerFlowConversationService implements AutoCloseable {
                     try {
                         receipt = respondWithRetry(run, submission);
                     } catch (RuntimeException rejected) {
-                        claimedInteractionResponses.remove(run.runId.value(), response);
                         sendInteractionFailure(run, "first-response", rejected);
                         throw ConversationException.conflict("Interaction response was rejected");
+                    } finally {
+                        claimedInteractionResponses.remove(claimKey, response);
                     }
                     if (receipt.status() == InteractionResponseReceiptStatus.DUPLICATE) {
                         throw ConversationException.conflict("Interaction response already accepted");
