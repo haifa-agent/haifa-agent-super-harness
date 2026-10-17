@@ -161,25 +161,19 @@ public final class ScheduleDispatchService implements AutoCloseable {
     /**
      * Graded startup recovery, matching the frozen {@code mark_stale_active_runs}: {@code queued} is
      * a durable waiting item and is never converged; a {@code launching} occurrence without a
-     * committed Run returns to {@code queued}; an executing occurrence with a committed Run is
-     * converged from that Run's real result. A still-active Run keeps its slot and gets a
-     * replacement follower, so a Run that outlived the previous process still records its terminal
-     * state. An inspection read that is temporarily unavailable stays fail-closed and is retried on
-     * a later round instead of releasing the slot.
+     * committed Run either adopts the Run the Thread already committed (a failed association write)
+     * or returns to {@code queued}; an executing occurrence with a committed Run is converged from
+     * that Run's real result. A still-active Run keeps its slot and gets a replacement follower, so a
+     * Run that outlived the previous process still records its terminal state. An inspection read
+     * that is temporarily unavailable stays fail-closed and is retried on a later round instead of
+     * releasing the slot. The once-only phase marker is set only after a fully successful pass, so a
+     * transient failure never permanently disables recovery for the affected row.
      */
     private void recoverIfNeeded(Instant now) {
-        if (recovered.compareAndSet(false, true)) {
-            for (ScheduledTaskRun occurrence : store.listExecutingRuns()) {
-                if (occurrence.runId() != null) {
-                    continue;
-                }
-                if (occurrence.status() == ScheduledRunStatus.LAUNCHING) {
-                    store.revertLaunchingToQueued(occurrence.id(), now);
-                } else {
-                    recordTerminal(occurrence.id(), ScheduledRunStatus.INTERRUPTED,
-                            "run association unavailable", now);
-                }
-            }
+        boolean alreadyRecovered = recovered.get();
+        boolean unassociatedComplete = true;
+        if (!alreadyRecovered) {
+            unassociatedComplete = recoverUnassociatedRuns(now);
         }
         List<ScheduledTaskRun> executing = store.listExecutingRuns();
         for (ScheduledTaskRun occurrence : executing) {
@@ -226,6 +220,57 @@ public final class ScheduleDispatchService implements AutoCloseable {
                                 + watchFailure.getClass().getName());
             }
         }
+        if (!alreadyRecovered && unassociatedComplete) {
+            recovered.set(true);
+        }
+    }
+
+    /**
+     * First-phase recovery for occurrences whose association never became durable. A {@code launching}
+     * row may still correspond to a real Run the Thread committed before the association write
+     * failed; adopt that identity and let the observation phase converge it. Only when the Thread
+     * committed no Run after the occurrence was created is the claim safe to re-queue. Returns false
+     * when a recovery read was temporarily unavailable, so the phase is retried on a later round
+     * instead of being permanently disabled.
+     */
+    private boolean recoverUnassociatedRuns(Instant now) {
+        boolean complete = true;
+        for (ScheduledTaskRun occurrence : store.listExecutingRuns()) {
+            if (occurrence.runId() != null) {
+                continue;
+            }
+            if (occurrence.status() != ScheduledRunStatus.LAUNCHING) {
+                recordTerminal(occurrence.id(), ScheduledRunStatus.INTERRUPTED,
+                        "run association unavailable", now);
+                continue;
+            }
+            String owner = store.ownerOfRun(occurrence.id()).orElse(null);
+            if (owner == null) {
+                store.revertLaunchingToQueued(occurrence.id(), now);
+                continue;
+            }
+            Optional<ScheduledRunLauncher.LaunchedRun> recovered;
+            try {
+                recovered = launcher.recoverLaunch(owner, occurrence.threadId(), occurrence.createdAt());
+            } catch (ScheduledRunLauncher.InspectionUnavailableException unavailable) {
+                // Keep the claim and retry recovery on a later round rather than re-queuing a Run
+                // that may already have started.
+                LOG.log(System.Logger.Level.WARNING,
+                        "scheduled launch recovery unavailable for occurrence " + occurrence.id());
+                complete = false;
+                continue;
+            }
+            if (recovered.isEmpty()) {
+                store.revertLaunchingToQueued(occurrence.id(), now);
+                continue;
+            }
+            ScheduledRunLauncher.LaunchedRun run = recovered.orElseThrow();
+            // Adopt the committed Run identity and mark the occurrence running, exactly as the
+            // successful launch association would have, so the observation phase can converge it.
+            store.updateRunStatus(occurrence.id(), ScheduledRunStatus.RUNNING, run.runId(), null, now,
+                    null, true);
+        }
+        return complete;
     }
 
     private void expireQueuedRuns(Instant now) {
@@ -234,21 +279,19 @@ public final class ScheduleDispatchService implements AutoCloseable {
             if (occurrence.createdAt().isAfter(deadline)) {
                 continue;
             }
-            store.updateRunStatus(occurrence.id(), ScheduledRunStatus.FAILED, occurrence.runId(),
-                    QUEUE_TIMEOUT_ERROR, occurrence.startedAt(), now, false);
             ScheduledTask task = store.findTaskInternal(occurrence.taskId()).orElse(null);
-            if (task == null || task.status() == ScheduledTaskStatus.PAUSED) {
-                // A paused task is not overwritten by the timeout; only its waiting item is cleared.
-                continue;
+            ScheduleStore.TaskFinish taskFinish = null;
+            if (task != null && task.status() != ScheduledTaskStatus.PAUSED
+                    && occurrence.trigger() != ScheduledRunTrigger.MANUAL) {
+                ScheduledTaskStatus status =
+                        "once".equals(task.scheduleType()) ? ScheduledTaskStatus.FAILED : ScheduledTaskStatus.ENABLED;
+                taskFinish = new ScheduleStore.TaskFinish(task.id(), status, computeNextRun(task, now), now,
+                        occurrence.runId(), occurrence.threadId(), QUEUE_TIMEOUT_ERROR, true);
             }
-            if (occurrence.trigger() == ScheduledRunTrigger.MANUAL) {
-                // A manual trigger never consumes the task's own plan.
-                continue;
-            }
-            ScheduledTaskStatus status =
-                    "once".equals(task.scheduleType()) ? ScheduledTaskStatus.FAILED : ScheduledTaskStatus.ENABLED;
-            store.finishTask(task.id(), status, computeNextRun(task, now), now, occurrence.runId(),
-                    occurrence.threadId(), QUEUE_TIMEOUT_ERROR, true, now);
+            // The occurrence timeout and the parent-task accounting publish together, so a failed
+            // parent write can never leave a terminal occurrence under a waiting task.
+            store.completeOccurrenceAndTask(occurrence.id(), ScheduledRunStatus.FAILED, occurrence.runId(),
+                    QUEUE_TIMEOUT_ERROR, occurrence.startedAt(), now, false, taskFinish, now);
         }
     }
 
@@ -349,16 +392,18 @@ public final class ScheduleDispatchService implements AutoCloseable {
     }
 
     private void releaseFailedLaunch(ScheduledTaskRun occurrence, ScheduledTask task, Instant now) {
-        store.updateRunStatus(occurrence.id(), ScheduledRunStatus.FAILED, null, LAUNCH_FAILURE_ERROR, null,
-                now, false);
-        if (task.status() == ScheduledTaskStatus.PAUSED
-                || occurrence.trigger() == ScheduledRunTrigger.MANUAL) {
-            return;
+        ScheduleStore.TaskFinish taskFinish = null;
+        if (task.status() != ScheduledTaskStatus.PAUSED
+                && occurrence.trigger() != ScheduledRunTrigger.MANUAL) {
+            ScheduledTaskStatus status =
+                    "once".equals(task.scheduleType()) ? ScheduledTaskStatus.FAILED : ScheduledTaskStatus.ENABLED;
+            taskFinish = new ScheduleStore.TaskFinish(task.id(), status, computeNextRun(task, now), null, null,
+                    null, LAUNCH_FAILURE_ERROR, false);
         }
-        ScheduledTaskStatus status =
-                "once".equals(task.scheduleType()) ? ScheduledTaskStatus.FAILED : ScheduledTaskStatus.ENABLED;
-        store.finishTask(task.id(), status, computeNextRun(task, now), null, null, null, LAUNCH_FAILURE_ERROR,
-                false, now);
+        // The failed occurrence and the parent-task accounting publish together, matching the
+        // terminal path so a secondary write failure never strands a running task.
+        store.completeOccurrenceAndTask(occurrence.id(), ScheduledRunStatus.FAILED, null,
+                LAUNCH_FAILURE_ERROR, null, now, false, taskFinish, now);
     }
 
     // ------------------------------------------------------------------ terminal
@@ -374,30 +419,31 @@ public final class ScheduleDispatchService implements AutoCloseable {
         }
         ScheduledRunStatus status = terminal == null || !terminal.terminal()
                 ? ScheduledRunStatus.INTERRUPTED : terminal;
-        store.updateRunStatus(occurrenceId, status, occurrence.runId(), error, occurrence.startedAt(), now,
-                true);
         ScheduledTask task = store.findTaskInternal(occurrence.taskId()).orElse(null);
-        if (task == null) {
-            return;
+        ScheduleStore.TaskFinish taskFinish = null;
+        if (task != null) {
+            if (task.status() == ScheduledTaskStatus.PAUSED) {
+                // A manual Run on a paused task keeps the paused status and its plan.
+                taskFinish = new ScheduleStore.TaskFinish(task.id(), ScheduledTaskStatus.PAUSED, null, now,
+                        occurrence.runId(), occurrence.threadId(), error, false);
+            } else if ("once".equals(task.scheduleType())) {
+                ScheduledTaskStatus taskStatus = switch (status) {
+                    case SUCCESS -> ScheduledTaskStatus.COMPLETED;
+                    case FAILED -> ScheduledTaskStatus.FAILED;
+                    default -> ScheduledTaskStatus.CANCELLED;
+                };
+                taskFinish = new ScheduleStore.TaskFinish(task.id(), taskStatus, null, now,
+                        occurrence.runId(), occurrence.threadId(), error, true);
+            } else {
+                taskFinish = new ScheduleStore.TaskFinish(task.id(), ScheduledTaskStatus.ENABLED,
+                        computeNextRun(task, now), now, occurrence.runId(), occurrence.threadId(), error,
+                        false);
+            }
         }
-        if (task.status() == ScheduledTaskStatus.PAUSED) {
-            // A manual Run on a paused task keeps the paused status and its plan.
-            store.finishTask(task.id(), ScheduledTaskStatus.PAUSED, null, now, occurrence.runId(),
-                    occurrence.threadId(), error, false, now);
-            return;
-        }
-        if ("once".equals(task.scheduleType())) {
-            ScheduledTaskStatus taskStatus = switch (status) {
-                case SUCCESS -> ScheduledTaskStatus.COMPLETED;
-                case FAILED -> ScheduledTaskStatus.FAILED;
-                default -> ScheduledTaskStatus.CANCELLED;
-            };
-            store.finishTask(task.id(), taskStatus, null, now, occurrence.runId(), occurrence.threadId(),
-                    error, true, now);
-        } else {
-            store.finishTask(task.id(), ScheduledTaskStatus.ENABLED, computeNextRun(task, now), now,
-                    occurrence.runId(), occurrence.threadId(), error, false, now);
-        }
+        // The occurrence terminal state and its parent-task accounting publish together, so a failed
+        // parent write can never strand a terminal occurrence under a still-running task.
+        store.completeOccurrenceAndTask(occurrenceId, status, occurrence.runId(), error,
+                occurrence.startedAt(), now, true, taskFinish, now);
     }
 
     // -------------------------------------------------------------------- helpers

@@ -198,6 +198,78 @@ class W19BackgroundDispatchHttpTest {
         }
     }
 
+    // W19-M2-24 (Codex P1): a scheduled Thread now persists the same prompt/agent selection metadata
+    // interactive admission does, so an approval for a scheduled Run is accepted and the Run resumes
+    // instead of failing closed with a 409.
+    @Test
+    void scheduledRunApprovalResponseIsAcceptedAndResumesRun() throws Exception {
+        String key = Base64.getEncoder().encodeToString(new byte[32]);
+        Map<String, String> environment = schedulerEnvironment(key, "3600");
+        try (var provider = new ControlledProvider(evidence, true, (request, call) ->
+                call <= 1
+                        ? ControlledProvider.call("sched-approval-" + call, "demo-provider-id",
+                                "call-sched-approval-" + call, "write_file",
+                                Map.of("path", "/mnt/user-data/outputs/scheduled-approved.txt",
+                                        "content", "x"))
+                        : ControlledProvider.stop("sched-approval-done-" + call, "demo-provider-id",
+                                "approved"))) {
+            try (var fixture = GatewayFixture.production(dataRoot, 0, environment, evidence)) {
+                configureModel(fixture, provider.port());
+                ScheduleStore store = fixture.api.scheduler().store();
+                Instant now = Instant.now();
+                ScheduledTask task = store.createTask(new ScheduleStore.NewTask(null, "default", null,
+                        ScheduledTask.FRESH_THREAD_PER_RUN, "lead_agent", "Scheduled approval resume",
+                        "write a file", "once", Map.of("run_at", now.minusSeconds(60).toString()), "UTC",
+                        now.minusSeconds(1)), now);
+
+                fixture.api.scheduler().pollOnce();
+
+                ScheduledTaskRun occurrence = awaitLaunch(store, task.id());
+                awaitRunStatus(fixture, occurrence);
+                String requestId = awaitPendingRequestId(fixture, occurrence.threadId());
+
+                var resumed = http.request(fixture.base, "POST",
+                        "/api/threads/" + occurrence.threadId() + "/runs/stream",
+                        hiddenApprovalResponse(requestId), "scheduled-approval-response.json");
+                assertThat(resumed.statusCode())
+                        .as("approval must not fail closed: %s", resumed.body())
+                        .isEqualTo(200);
+                assertThat(resumed.body()).doesNotContain("Pending Run prompt or agent identity is unavailable");
+
+                ScheduledTaskRun finished = awaitTerminal(store, task.id());
+                assertThat(finished.status()).isEqualTo(ScheduledRunStatus.SUCCESS);
+                assertThat(provider.calls).hasValue(2);
+                System.out.println("W19_M2_APPROVAL_RESUME_EVIDENCE thread=" + occurrence.threadId()
+                        + " run=" + occurrence.runId() + " approval_http=200 provider_calls="
+                        + provider.calls.get());
+            }
+        }
+    }
+
+    private String awaitPendingRequestId(GatewayFixture fixture, String threadId) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
+        JsonNode state = null;
+        while (System.nanoTime() < deadline) {
+            state = http.get(fixture.base, "/api/threads/" + threadId + "/state", "scheduled-approval-state.json");
+            for (JsonNode message : state.path("values").path("messages")) {
+                String requestId = message.path("artifact").path("human_input")
+                        .path("request_id").asText("");
+                if (!requestId.isEmpty()) {
+                    return requestId;
+                }
+            }
+            Thread.sleep(25);
+        }
+        throw new AssertionError("scheduled Run exposed no pending interaction: " + state);
+    }
+
+    private static String hiddenApprovalResponse(String requestId) {
+        return """
+                {"assistant_id":"lead_agent","input":{"messages":[{"id":"hidden-response","type":"human","content":[{"type":"text","text":"For your clarification, my answer is: approve"}],"additional_kwargs":{"hide_from_ui":true,"human_input_response":{"version":1,"kind":"human_input_response","source":"haifa_interaction","request_id":"%s","response_kind":"option","option_id":"approve","value":"approve"}}}]},"stream_mode":["messages-tuple","updates","custom"],"on_disconnect":"continue","multitask_strategy":"reject"}
+                """
+                .formatted(requestId);
+    }
+
     private void configureModel(GatewayFixture fixture, int providerPort) throws Exception {        String model = """
                 {"config":{"name":"demo-model","display_name":"Demo Model",
                 "provider":"openai-compatible","model":"demo-provider-id",

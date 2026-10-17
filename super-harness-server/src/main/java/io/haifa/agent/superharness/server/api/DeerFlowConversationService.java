@@ -1242,11 +1242,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 throw ConversationException.conflict("Interaction response already accepted");
             }
             if (thread.activeRunId != null) {
-                RunRecord active = runs.get(thread.activeRunId);
-                if (active == null) {
-                    active = findOrRestoreRun(thread, thread.activeRunId).orElse(null);
-                }
-                if (active != null && !active.bridge.snapshot(active.runId).status().isTerminal()) {
+                RunRecord active = activeRunRecord(thread);
+                if (active != null && runIsActive(active)) {
                     if (runInput == null) {
                         throw ConversationException.conflict("Thread already has an active run");
                     }
@@ -1974,6 +1971,20 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 thread.modelBindingIdentity = bridge.bindingIdentity();
                 thread.activeRunId = started.runId().value();
                 thread.latestRunId = started.runId().value();
+                // Record the same prompt/agent selection metadata interactive admission persists, so
+                // an approval-gated scheduled Run can resolve its pending prompt and accept the
+                // human response instead of failing closed with a 409.
+                thread.setLeadPromptSelection(null, bridge.promptSignature(), agentPrompt);
+                Long existingFraming = thread.framingFromSequence();
+                if (existingFraming == null) {
+                    try {
+                        thread.setFramingFromSequence(
+                                Math.addExact(latestVisibleTurnSequence(thread, bridge), 1));
+                    } catch (RuntimeException unavailableFraming) {
+                        ADMISSION_LOG.log(System.Logger.Level.WARNING,
+                                "scheduled Run framing sequence could not be recorded");
+                    }
+                }
                 thread.updatedAt = Instant.now();
                 long humanSequence = thread.nextMessageSequence;
                 thread.nextMessageSequence += 2;
@@ -1999,21 +2010,35 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
      * active so a transient failure never admits a second Run.
      */
     private boolean activeRunInFlight(ThreadRecord thread) {
-        if (thread.activeRunId == null) {
+        RunRecord active = activeRunRecord(thread);
+        if (active == null) {
             return false;
+        }
+        try {
+            return runIsActive(active);
+        } catch (RuntimeException unavailable) {
+            return true;
+        }
+    }
+
+    /** The Run currently owning the Thread's active slot, without a terminal-status read. */
+    private RunRecord activeRunRecord(ThreadRecord thread) {
+        if (thread.activeRunId == null) {
+            return null;
         }
         RunRecord active = runs.get(thread.activeRunId);
         if (active == null) {
             active = findOrRestoreRun(thread, thread.activeRunId).orElse(null);
         }
-        if (active == null) {
-            return false;
-        }
-        try {
-            return !active.bridge.snapshot(active.runId).status().isTerminal();
-        } catch (RuntimeException unavailable) {
-            return true;
-        }
+        return active;
+    }
+
+    /**
+     * Shared Thread active-Run predicate used by both interactive admission and scheduled launch: a
+     * Run owns its slot until its SDK status is terminal.
+     */
+    private static boolean runIsActive(RunRecord run) {
+        return !run.bridge.snapshot(run.runId).status().isTerminal();
     }
 
     @Override
@@ -2115,6 +2140,37 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 throw new ScheduledRunLauncher.InspectionUnavailableException(
                         "Background Run snapshot is unavailable", unavailable);
             }
+        });
+    }
+
+    /**
+     * Recovers a Run the Thread already committed for a launch whose association write failed. The
+     * Run is durably recorded on the Thread's SDK conversation turns with its Run id and creation
+     * time; only a Run created at or after the occurrence was admitted can belong to this claim, so
+     * an earlier terminal Run on a reused Thread is never mistaken for it. A read that cannot be made
+     * stays fail-closed so recovery keeps the claim rather than re-queuing an already-started Run.
+     */
+    @Override
+    public Optional<LaunchedRun> recoverLaunch(String ownerId, String threadId, Instant launchedAfter) {
+        return AccessOwner.call(ownerId, () -> {
+            ThreadRecord thread = threads.get(threadId);
+            if (thread == null || !ownerId.equals(thread.ownerId)) {
+                throw new ScheduledRunLauncher.InspectionUnavailableException(
+                        "Scheduled Run thread is unavailable", new IllegalStateException("thread unavailable"));
+            }
+            List<RunRecord> committed;
+            try {
+                committed = durableRuns(thread);
+            } catch (RuntimeException unavailable) {
+                throw new ScheduledRunLauncher.InspectionUnavailableException(
+                        "Scheduled Run recovery bridge is unavailable", unavailable);
+            }
+            for (RunRecord run : committed) {
+                if (!run.createdAt.isBefore(launchedAfter)) {
+                    return Optional.of(new LaunchedRun(thread.threadId, run.runId.value()));
+                }
+            }
+            return Optional.<LaunchedRun>empty();
         });
     }
 

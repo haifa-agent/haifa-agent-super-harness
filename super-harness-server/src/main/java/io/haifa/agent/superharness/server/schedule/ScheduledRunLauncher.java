@@ -38,6 +38,18 @@ public interface ScheduledRunLauncher {
     Optional<ScheduledRunInspection> inspect(String ownerId, String threadId, String runId)
             throws InspectionUnavailableException;
 
+    /**
+     * Recovers the identity of a Run that a launch attempt committed to the Thread but whose
+     * occurrence association write failed, so startup recovery can adopt the real Run instead of
+     * re-queuing the claim and starting the same prompt twice. Implementations return the Thread's
+     * committed Run created at or after {@code launchedAfter} (the occurrence creation time), which
+     * distinguishes a Run from this launch attempt from an earlier terminal Run on a reused Thread.
+     * Empty when no such Run was committed (the launch never started one). A transient read failure
+     * raises {@link InspectionUnavailableException} so recovery keeps the claim instead of re-queuing.
+     */
+    Optional<LaunchedRun> recoverLaunch(String ownerId, String threadId, java.time.Instant launchedAfter)
+            throws InspectionUnavailableException;
+
     record LaunchRequest(
             String ownerId, String threadId, String message, String assistantId, boolean createThreadIfMissing) {
         public LaunchRequest {

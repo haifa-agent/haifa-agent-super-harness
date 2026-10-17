@@ -468,6 +468,144 @@ class ScheduleDispatchServiceTest {
         assertThat(launcher.requests).hasSize(1);
     }
 
+    // W19-M2-21 (Codex P1): the terminal occurrence write and the parent-task finish share one
+    // rollback boundary, so a failed parent write never leaves a terminal occurrence under a
+    // still-running task (which recovery only scans as active and due admission never retries).
+    @Test
+    void terminalOccurrenceAndParentCommitAtomically(@TempDir Path dataDirectory) throws Exception {
+        FailingStore store = new FailingStore(JSON, dataDirectory);
+        FakeLauncher launcher = new FakeLauncher();
+        ScheduleDispatchService service = service(store, launcher, configuration(3), new AtomicReference<>(NOW));
+
+        ScheduledTask task = store.createTask(intervalTask("Atomic", NOW), NOW);
+        service.pollOnce();
+        ScheduledTaskRun occurrence = store.findActiveRun(task.id()).orElseThrow();
+        assertThat(occurrence.status()).isEqualTo(ScheduledRunStatus.RUNNING);
+        assertThat(store.findTaskInternal(task.id()).orElseThrow().status())
+                .isEqualTo(ScheduledTaskStatus.RUNNING);
+
+        // The terminal occurrence update and the parent-task finish publish together; a failure at
+        // that boundary leaves neither transition durable.
+        store.failOnPersistNumber(1);
+        assertThatThrownBy(() -> launcher.complete(occurrence.runId(), ScheduledRunStatus.SUCCESS))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(store.findRun(occurrence.id()).orElseThrow().status())
+                .as("occurrence is not terminal without its parent transition")
+                .isEqualTo(ScheduledRunStatus.RUNNING);
+        assertThat(store.findTaskInternal(task.id()).orElseThrow().status())
+                .as("parent is not finished without the occurrence transition")
+                .isEqualTo(ScheduledTaskStatus.RUNNING);
+
+        // A later round converges both once persistence recovers.
+        launcher.inspections.put(occurrence.runId(), new ScheduledRunLauncher.ScheduledRunInspection(
+                true, ScheduledRunStatus.SUCCESS, null));
+        service.pollOnce();
+        assertThat(store.findRun(occurrence.id()).orElseThrow().status())
+                .isEqualTo(ScheduledRunStatus.SUCCESS);
+        assertThat(store.findTaskInternal(task.id()).orElseThrow().status())
+                .isEqualTo(ScheduledTaskStatus.ENABLED);
+    }
+
+    // W19-M2-22 (Codex P1): a transient failure in the first recovery pass must not permanently
+    // disable the once-only phase; a later pass still recovers the launching row.
+    @Test
+    void recoveryRetriesAfterTransientFailureAndStillRevertsLaunching(@TempDir Path dataDirectory)
+            throws Exception {
+        ThrowingStore store = new ThrowingStore(JSON, dataDirectory);
+        FakeLauncher launcher = new FakeLauncher();
+        ScheduledTask task = store.createTask(intervalTask("Recover later", NOW.plusSeconds(600)), NOW);
+        ScheduledTaskRun launching = store.createRun(activeRun(task, ScheduledRunStatus.LAUNCHING), NOW);
+        ScheduleDispatchService service = service(store, launcher, configuration(3), new AtomicReference<>(NOW));
+
+        store.failNextExecutingLookup();
+        assertThatThrownBy(service::recover).isInstanceOf(IllegalStateException.class);
+        assertThat(store.findRun(launching.id()).orElseThrow().status())
+                .as("a failed pass leaves the row untouched for a retry")
+                .isEqualTo(ScheduledRunStatus.LAUNCHING);
+
+        service.recover();
+        assertThat(store.findRun(launching.id()).orElseThrow().status())
+                .as("a later pass still recovers the launching row")
+                .isEqualTo(ScheduledRunStatus.QUEUED);
+    }
+
+    // W19-M2-23 (Codex P1): a launch whose association write failed adopts the Run the Thread already
+    // committed instead of re-queuing the claim, so a restart never starts the same prompt twice.
+    @Test
+    void launchRecoveryAdoptsCommittedRunAfterAssociationFailure(@TempDir Path dataDirectory)
+            throws Exception {
+        ScheduleStore store = new ScheduleStore(JSON, dataDirectory);
+        FakeLauncher launcher = new FakeLauncher();
+        ScheduledTask task = store.createTask(intervalTask("Recover committed", NOW.plusSeconds(600)), NOW);
+        ScheduledTaskRun launching = store.createRun(activeRun(task, ScheduledRunStatus.LAUNCHING), NOW);
+        assertThat(launching.runId()).isNull();
+        launcher.recoveredLaunches.put(launching.threadId(),
+                new ScheduledRunLauncher.LaunchedRun(launching.threadId(), "run-committed"));
+        launcher.inspections.put("run-committed", new ScheduledRunLauncher.ScheduledRunInspection(
+                false, null, null));
+
+        ScheduleDispatchService service = service(store, launcher, configuration(3), new AtomicReference<>(NOW));
+        service.recover();
+
+        ScheduledTaskRun recovered = store.findRun(launching.id()).orElseThrow();
+        assertThat(recovered.status()).isEqualTo(ScheduledRunStatus.RUNNING);
+        assertThat(recovered.runId()).isEqualTo("run-committed");
+        assertThat(launcher.requests).as("the same prompt is never launched a second time").isEmpty();
+        assertThat(launcher.watchers).containsKey("run-committed");
+
+        launcher.complete("run-committed", ScheduledRunStatus.SUCCESS);
+        assertThat(store.findRun(launching.id()).orElseThrow().status())
+                .isEqualTo(ScheduledRunStatus.SUCCESS);
+    }
+
+    // W19-M2-23b (Codex P1): an unavailable launch-recovery read stays fail-closed and is retried
+    // rather than re-queuing a claim whose Run may already be executing.
+    @Test
+    void unavailableLaunchRecoveryKeepsClaimAndRetries(@TempDir Path dataDirectory) throws Exception {
+        ScheduleStore store = new ScheduleStore(JSON, dataDirectory);
+        FakeLauncher launcher = new FakeLauncher();
+        ScheduledTask task = store.createTask(intervalTask("Recover unavailable", NOW.plusSeconds(600)), NOW);
+        ScheduledTaskRun launching = store.createRun(activeRun(task, ScheduledRunStatus.LAUNCHING), NOW);
+        ScheduleDispatchService service = service(store, launcher, configuration(3), new AtomicReference<>(NOW));
+
+        launcher.recoveryUnavailable = true;
+        service.recover();
+        assertThat(store.findRun(launching.id()).orElseThrow().status())
+                .as("an unreadable recovery keeps the claim")
+                .isEqualTo(ScheduledRunStatus.LAUNCHING);
+
+        launcher.recoveryUnavailable = false;
+        launcher.recoveredLaunches.put(launching.threadId(),
+                new ScheduledRunLauncher.LaunchedRun(launching.threadId(), "run-committed"));
+        launcher.inspections.put("run-committed", new ScheduledRunLauncher.ScheduledRunInspection(
+                false, null, null));
+        service.recover();
+        assertThat(store.findRun(launching.id()).orElseThrow().runId()).isEqualTo("run-committed");
+        assertThat(launcher.requests).isEmpty();
+    }
+
+    // W19-M2-25: a launch that never started releases the claimed occurrence and re-enables the
+    // recurring task without consuming its plan, through the same atomic occurrence/parent commit.
+    @Test
+    void failedLaunchReleasesOccurrenceAndReenablesTask(@TempDir Path dataDirectory) throws Exception {
+        ScheduleStore store = new ScheduleStore(JSON, dataDirectory);
+        FakeLauncher launcher = new FakeLauncher();
+        ScheduleDispatchService service = service(store, launcher, configuration(3), new AtomicReference<>(NOW));
+
+        ScheduledTask task = store.createTask(intervalTask("Launch fault", NOW), NOW);
+        launcher.failNextLaunch = true;
+        service.pollOnce();
+
+        assertThat(launcher.requests).isEmpty();
+        ScheduledTaskRun occurrence = store.findRun(
+                store.listRuns(task.id(), OWNER, 10, 0, null).getFirst().id()).orElseThrow();
+        assertThat(occurrence.status()).isEqualTo(ScheduledRunStatus.FAILED);
+        assertThat(occurrence.error()).isEqualTo("scheduled Run could not start");
+        ScheduledTask after = store.findTaskInternal(task.id()).orElseThrow();
+        assertThat(after.status()).isEqualTo(ScheduledTaskStatus.ENABLED);
+        assertThat(after.nextRunAt()).isEqualTo(NOW.plusSeconds(600));
+    }
+
     // ------------------------------------------------------------------- helpers
 
     private static ScheduleDispatchService service(ScheduleStore store, ScheduledRunLauncher launcher,
@@ -514,9 +652,11 @@ class ScheduleDispatchServiceTest {
         final List<LaunchRequest> requests = new ArrayList<>();
         final Map<String, Consumer<ScheduledRunOutcome>> watchers = new HashMap<>();
         final Map<String, ScheduledRunInspection> inspections = new HashMap<>();
+        final Map<String, LaunchedRun> recoveredLaunches = new HashMap<>();
         boolean failNextLaunch;
         boolean conflictNextLaunch;
         boolean inspectionUnavailable;
+        boolean recoveryUnavailable;
         private final AtomicInteger launches = new AtomicInteger();
 
         @Override
@@ -545,6 +685,15 @@ class ScheduleDispatchServiceTest {
                         "injected inspection failure", new IllegalStateException("injected"));
             }
             return Optional.ofNullable(inspections.get(runId));
+        }
+
+        @Override
+        public Optional<LaunchedRun> recoverLaunch(String ownerId, String threadId, Instant launchedAfter) {
+            if (recoveryUnavailable) {
+                throw new ScheduledRunLauncher.InspectionUnavailableException(
+                        "injected recovery failure", new IllegalStateException("injected"));
+            }
+            return Optional.ofNullable(recoveredLaunches.get(threadId));
         }
 
         void complete(String runId, ScheduledRunStatus status) {
@@ -590,6 +739,8 @@ class ScheduleDispatchServiceTest {
     static final class ThrowingStore extends ScheduleStore {
         private final java.util.concurrent.atomic.AtomicBoolean failOnNextDue =
                 new java.util.concurrent.atomic.AtomicBoolean();
+        private final java.util.concurrent.atomic.AtomicBoolean failOnNextExecuting =
+                new java.util.concurrent.atomic.AtomicBoolean();
 
         ThrowingStore(ObjectMapper json, Path dataDirectory) throws IOException {
             super(json, dataDirectory);
@@ -599,12 +750,24 @@ class ScheduleDispatchServiceTest {
             failOnNextDue.set(true);
         }
 
+        void failNextExecutingLookup() {
+            failOnNextExecuting.set(true);
+        }
+
         @Override
         public List<ScheduledTask> listDueTasks(Instant now) {
             if (failOnNextDue.compareAndSet(true, false)) {
                 throw new IllegalStateException("injected due lookup failure");
             }
             return super.listDueTasks(now);
+        }
+
+        @Override
+        public List<ScheduledTaskRun> listExecutingRuns() {
+            if (failOnNextExecuting.compareAndSet(true, false)) {
+                throw new IllegalStateException("injected executing lookup failure");
+            }
+            return super.listExecutingRuns();
         }
     }
 }

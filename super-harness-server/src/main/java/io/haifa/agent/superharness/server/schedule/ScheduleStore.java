@@ -294,22 +294,10 @@ public class ScheduleStore {
             String error, Instant startedAt, Instant finishedAt, boolean protectTerminal) {
         Objects.requireNonNull(status, "status");
         synchronized (lock) {
-            ScheduledTaskRun run = runs.get(runRecordId);
-            if (run == null) {
+            ScheduledTaskRun updated = runUpdate(runRecordId, status, runIdValue, error, startedAt,
+                    finishedAt, protectTerminal);
+            if (updated == null) {
                 return false;
-            }
-            ScheduledTaskRun updated;
-            if (protectTerminal && run.status().terminal()) {
-                updated = new ScheduledTaskRun(run.id(), run.taskId(), run.occurrenceSeq(),
-                        run.threadId(), run.runId() == null ? runIdValue : run.runId(),
-                        run.scheduledFor(), run.trigger(), run.status(), run.error(),
-                        run.startedAt() == null ? startedAt : run.startedAt(), run.finishedAt(),
-                        run.attemptCount(), run.launchAccounted(), run.createdAt());
-            } else {
-                updated = new ScheduledTaskRun(run.id(), run.taskId(), run.occurrenceSeq(),
-                        run.threadId(), runIdValue, run.scheduledFor(), run.trigger(), status, error,
-                        startedAt == null ? run.startedAt() : startedAt, finishedAt, run.attemptCount(),
-                        run.launchAccounted(), run.createdAt());
             }
             mutate(() -> {
                 runs.put(updated.id(), updated);
@@ -319,6 +307,61 @@ public class ScheduleStore {
             });
             return true;
         }
+    }
+
+    /**
+     * Terminal-protected occurrence update and the parent-task bookkeeping in one rollback boundary.
+     * Recovery scans only {@code launching}/{@code running} occurrences and due-task admission
+     * requires an {@code enabled} task, so a terminal occurrence whose parent write was lost would
+     * strand the schedule permanently. {@code taskFinish} may be null when the parent task no longer
+     * needs a write (already gone, paused or a manual trigger); the occurrence is still published.
+     */
+    public boolean completeOccurrenceAndTask(String runRecordId, ScheduledRunStatus status, String runIdValue,
+            String error, Instant startedAt, Instant finishedAt, boolean protectTerminal,
+            TaskFinish parentFinish, Instant now) {
+        Objects.requireNonNull(status, "status");
+        Objects.requireNonNull(now, "now");
+        synchronized (lock) {
+            ScheduledTaskRun updated = runUpdate(runRecordId, status, runIdValue, error, startedAt,
+                    finishedAt, protectTerminal);
+            if (updated == null) {
+                return false;
+            }
+            ScheduledTask parent = parentFinish == null ? null : tasks.get(parentFinish.taskId());
+            ScheduledTask updatedTask = parent == null ? null
+                    : taskFinish(parent, parentFinish.status(), parentFinish.nextRunAt(),
+                            parentFinish.lastRunAt(), parentFinish.lastRunId(), parentFinish.lastThreadId(),
+                            parentFinish.lastError(), parentFinish.protectTerminal(), now);
+            mutate(() -> {
+                runs.put(updated.id(), updated);
+                if (updated.status().terminal()) {
+                    pruneHistory(updated.taskId());
+                }
+                if (updatedTask != null) {
+                    tasks.put(updatedTask.id(), updatedTask);
+                }
+            });
+            return true;
+        }
+    }
+
+    private ScheduledTaskRun runUpdate(String runRecordId, ScheduledRunStatus status, String runIdValue,
+            String error, Instant startedAt, Instant finishedAt, boolean protectTerminal) {
+        ScheduledTaskRun run = runs.get(runRecordId);
+        if (run == null) {
+            return null;
+        }
+        if (protectTerminal && run.status().terminal()) {
+            return new ScheduledTaskRun(run.id(), run.taskId(), run.occurrenceSeq(),
+                    run.threadId(), run.runId() == null ? runIdValue : run.runId(),
+                    run.scheduledFor(), run.trigger(), run.status(), run.error(),
+                    run.startedAt() == null ? startedAt : run.startedAt(), run.finishedAt(),
+                    run.attemptCount(), run.launchAccounted(), run.createdAt());
+        }
+        return new ScheduledTaskRun(run.id(), run.taskId(), run.occurrenceSeq(),
+                run.threadId(), runIdValue, run.scheduledFor(), run.trigger(), status, error,
+                startedAt == null ? run.startedAt() : startedAt, finishedAt, run.attemptCount(),
+                run.launchAccounted(), run.createdAt());
     }
 
     /**
@@ -522,19 +565,26 @@ public class ScheduleStore {
             if (task == null) {
                 return false;
             }
-            boolean protectedTerminal = protectTerminal && task.status().terminal();
-            ScheduledTask updated = new ScheduledTask(task.id(), task.userId(), task.threadId(),
-                    task.contextMode(), task.assistantId(), task.title(), task.prompt(),
-                    task.scheduleType(), task.scheduleSpec(), task.timezone(),
-                    protectedTerminal ? task.status() : status,
-                    nextRunAt == null ? task.nextRunAt() : nextRunAt,
-                    lastRunAt == null ? task.lastRunAt() : lastRunAt,
-                    lastRunId == null ? task.lastRunId() : lastRunId,
-                    lastThreadId == null ? task.lastThreadId() : lastThreadId,
-                    lastError, task.runCount(), task.lastOccurrenceSeq(), task.createdAt(), now);
+            ScheduledTask updated = taskFinish(task, status, nextRunAt, lastRunAt, lastRunId, lastThreadId,
+                    lastError, protectTerminal, now);
             mutate(() -> tasks.put(taskId, updated));
             return true;
         }
+    }
+
+    private static ScheduledTask taskFinish(ScheduledTask task, ScheduledTaskStatus status,
+            Instant nextRunAt, Instant lastRunAt, String lastRunId, String lastThreadId, String lastError,
+            boolean protectTerminal, Instant now) {
+        boolean protectedTerminal = protectTerminal && task.status().terminal();
+        return new ScheduledTask(task.id(), task.userId(), task.threadId(),
+                task.contextMode(), task.assistantId(), task.title(), task.prompt(),
+                task.scheduleType(), task.scheduleSpec(), task.timezone(),
+                protectedTerminal ? task.status() : status,
+                nextRunAt == null ? task.nextRunAt() : nextRunAt,
+                lastRunAt == null ? task.lastRunAt() : lastRunAt,
+                lastRunId == null ? task.lastRunId() : lastRunId,
+                lastThreadId == null ? task.lastThreadId() : lastThreadId,
+                lastError, task.runCount(), task.lastOccurrenceSeq(), task.createdAt(), now);
     }
 
     private static ScheduledTask withStatus(ScheduledTask task, ScheduledTaskStatus status, Instant now) {
@@ -899,6 +949,11 @@ public class ScheduleStore {
     public record TaskLaunchUpdate(String status, Instant nextRunAt, Instant lastRunAt, String lastRunId,
             String lastThreadId, String lastError, boolean incrementRunCount, boolean protectTerminal,
             String taskRunId) {
+    }
+
+    /** Parent-task completion bookkeeping published together with a terminal occurrence. */
+    public record TaskFinish(String taskId, ScheduledTaskStatus status, Instant nextRunAt, Instant lastRunAt,
+            String lastRunId, String lastThreadId, String lastError, boolean protectTerminal) {
     }
 
     /** A concurrent admission already holds the task's single active-occurrence slot. */
