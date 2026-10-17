@@ -90,6 +90,7 @@ class DeerFlowThreadRunApiTest extends AbstractDeerFlowThreadRunApiTest {
                 .hasValueSatisfying(value -> assertThat(value).contains("text/event-stream"));
         // The Next.js rewrite proxy compresses, and so buffers, a stream that lacks no-transform.
         assertThat(response.headers().firstValue("cache-control")).hasValue("no-cache, no-transform");
+        assertThat(response.headers().firstValue("X-Haifa-Interaction-Presentation")).isEmpty();
         String location = response.headers().firstValue("content-location").orElseThrow();
         String runId = location.substring(location.lastIndexOf('/') + 1);
         assertThat(response.body()).contains("event: metadata");

@@ -1421,7 +1421,7 @@ public class DeerFlowConversationService implements AutoCloseable {
                 text(body, "on_disconnect").orElse("cancel"),
                 true,
                 false,
-                true);
+                false);
     }
 
     AdmittedTurn respondToInteraction(
