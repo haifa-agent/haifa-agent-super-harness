@@ -6,13 +6,51 @@ param(
     [string]$ResourceManifestPath,
     [string]$OracleManifestPath,
     [string]$OracleFixturesPath,
-    [string]$ThreadHookMatrixPath
+    [string]$ThreadHookMatrixPath,
+    [string]$SchedulePython
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $ExpectedSourceSha = 'e545c28ac301e6f9feae247c513d8ea8f83df294'
+
+# Verifier-owned baselines. They are deliberately independent of the manifests they check, so a
+# change cannot delete a contract, its own required-id listing and its fixture together and
+# certify itself as complete.
+$ExpectedScheduleContractIds = @(
+    'rest.schedules.create.exchange',
+    'rest.schedules.delete.exchange',
+    'rest.schedules.list.exchange',
+    'rest.schedules.pause.exchange',
+    'rest.schedules.resume.exchange',
+    'rest.schedules.runs.exchange',
+    'rest.schedules.thread-list.exchange',
+    'rest.schedules.trigger.exchange',
+    'rest.schedules.update.exchange'
+)
+$ExpectedScheduleFixtureIds = @(
+    'schedules.create.cron',
+    'schedules.create.interval',
+    'schedules.create.once',
+    'schedules.delete.paused',
+    'schedules.error.active-conflict-409',
+    'schedules.error.not-found-404',
+    'schedules.error.unauthenticated-401',
+    'schedules.error.validation-422',
+    'schedules.list.enabled',
+    'schedules.pause.enabled',
+    'schedules.resume.paused',
+    'schedules.runs.no-query',
+    'schedules.runs.paged',
+    'schedules.thread-list.bound',
+    'schedules.trigger.manual',
+    'schedules.update.prompt'
+)
+# The frozen frontend issues GET /api/scheduled-tasks/{id}/runs without a query string whenever
+# no page is requested, so the run-history request schema must keep query optional.
+$RunHistoryRequestSchemaPath = 'contracts/upstream/deerflow/schemas/scheduled-task-runs-request.schema.json'
+$ExpectedRunHistoryRequestRequired = @('task_id')
 $RepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 
 if ([string]::IsNullOrWhiteSpace($ManifestPath)) {
@@ -92,6 +130,66 @@ function Assert-OneOf {
     }
 }
 
+function Test-JsonSupportsExternalReference {
+    # -FetchExternalReference exists only on some 7.6.x builds. Detect it at runtime and never
+    # let a supported runtime fail the whole contract gate over a missing parameter. The env
+    # override forces the fallback path so the fallback can be exercised on a runtime that does
+    # support the parameter.
+    if ($env:HAIFA_CONTRACT_FORCE_LEGACY_TEST_JSON -eq '1') {
+        return $false
+    }
+    $command = Get-Command -Name Test-Json -ErrorAction SilentlyContinue
+    if ($null -eq $command) {
+        return $false
+    }
+    return $command.Parameters.Keys -contains 'FetchExternalReference'
+}
+
+function Resolve-SchemaExternalReferences {
+    # Inline sibling-file "$ref" targets so Test-Json without -FetchExternalReference can still
+    # validate schemas that reference a sibling file. $schema/$id are dropped from the inlined
+    # sub-schema because they are only valid at a schema resource root.
+    param(
+        [object]$Node,
+        [string]$BaseDirectory,
+        [System.Collections.Generic.HashSet[string]]$Visited
+    )
+    if ($Node -is [System.Collections.IDictionary]) {
+        if ($Node.Contains('$ref')) {
+            $reference = [string]$Node['$ref']
+            if (-not $reference.StartsWith('#')) {
+                $targetPath = [System.IO.Path]::GetFullPath((Join-Path $BaseDirectory $reference))
+                if (-not $Visited.Add($targetPath)) {
+                    throw "Cyclic JSON schema reference: $reference"
+                }
+                if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) {
+                    throw "JSON schema reference target is missing: $reference"
+                }
+                $target = Get-Content -LiteralPath $targetPath -Raw | ConvertFrom-Json -AsHashtable -Depth 100
+                [void]$target.Remove('$schema')
+                [void]$target.Remove('$id')
+                return Resolve-SchemaExternalReferences -Node $target `
+                    -BaseDirectory ([System.IO.Path]::GetDirectoryName($targetPath)) -Visited $Visited
+            }
+            return $Node
+        }
+        $resolved = [ordered]@{}
+        foreach ($key in @($Node.Keys)) {
+            $resolved[[string]$key] = Resolve-SchemaExternalReferences -Node $Node[$key] `
+                -BaseDirectory $BaseDirectory -Visited $Visited
+        }
+        return $resolved
+    }
+    if ($Node -is [System.Collections.IList]) {
+        $items = [System.Collections.Generic.List[object]]::new()
+        foreach ($item in $Node) {
+            $items.Add((Resolve-SchemaExternalReferences -Node $item -BaseDirectory $BaseDirectory -Visited $Visited))
+        }
+        return $items.ToArray()
+    }
+    return $Node
+}
+
 function Assert-JsonMatchesSchema {
     param(
         [object]$Payload,
@@ -104,8 +202,22 @@ function Assert-JsonMatchesSchema {
     # -InputObject preserves singleton arrays; pipeline input would unwrap them
     # and accidentally validate the only element instead of the wire array.
     $json = ConvertTo-Json -InputObject $Payload -Depth 100 -Compress
-    $isValid = Test-Json -Json $json -SchemaFile $SchemaPath -ErrorAction SilentlyContinue
-    if (-not $isValid) {
+    if (Test-JsonSupportsExternalReference) {
+        # PowerShell 7.4+ Test-Json (JsonSchema.Net) refuses file-relative $ref unless
+        # -FetchExternalReference is set; sibling schema $refs are otherwise valid.
+        $isValid = Test-Json -Json $json -SchemaFile $SchemaPath -FetchExternalReference -ErrorAction SilentlyContinue
+    }
+    else {
+        $absolutePath = [System.IO.Path]::GetFullPath($SchemaPath)
+        $visited = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        $null = $visited.Add($absolutePath)
+        $schema = Get-Content -LiteralPath $absolutePath -Raw | ConvertFrom-Json -AsHashtable -Depth 100
+        $resolved = Resolve-SchemaExternalReferences -Node $schema `
+            -BaseDirectory ([System.IO.Path]::GetDirectoryName($absolutePath)) -Visited $visited
+        $schemaJson = ConvertTo-Json -InputObject $resolved -Depth 100 -Compress
+        $isValid = Test-Json -Json $json -Schema $schemaJson -ErrorAction SilentlyContinue
+    }
+    if (-not [bool]$isValid) {
         throw "Fixture '$FixtureId' failed schema validation against '$SchemaPath'."
     }
 }
@@ -444,6 +556,68 @@ function Assert-ThreadHookMatrix {
             throw 'Thread hook consumption not-inventoried gap lacks an id or reason.'
         }
     }
+}
+
+function Resolve-SchedulePython {
+    # The frozen scheduler module imports croniter, so the semantics check needs an interpreter
+    # that can import it. Prefer an explicit path (parameter or HAIFA_CONTRACT_PYTHON), then the
+    # frozen checkout's own venv, then the interpreter documented in AGENTS.md for frozen-python
+    # static review, then whatever `python`/`python3` resolves to.
+    param(
+        [string]$Explicit,
+        [string]$FrozenRoot
+    )
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    foreach ($candidate in @($Explicit, $env:HAIFA_CONTRACT_PYTHON)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+            $candidates.Add($candidate)
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($FrozenRoot)) {
+        $candidates.Add((Join-Path $FrozenRoot 'backend/.venv/Scripts/python.exe'))
+        $candidates.Add((Join-Path $FrozenRoot 'backend/.venv/bin/python'))
+    }
+    $candidates.Add('D:/agents/deer-flow/backend/.venv/Scripts/python.exe')
+    foreach ($name in @('python', 'python3')) {
+        $command = Get-Command -Name $name -ErrorAction SilentlyContinue
+        if ($null -ne $command) {
+            $candidates.Add($command.Source)
+        }
+    }
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            continue
+        }
+        $null = & $candidate -B -c 'import croniter' 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            return $candidate
+        }
+    }
+    throw 'Frozen schedule semantics need a Python with croniter; set HAIFA_CONTRACT_PYTHON or pass -SchedulePython.'
+}
+
+function Assert-ScheduleSemantics {
+    param(
+        [string]$FixturesPath,
+        [string]$ScheduleModulePath,
+        [string]$PythonExecutable
+    )
+    if (-not (Test-Path -LiteralPath $ScheduleModulePath -PathType Leaf)) {
+        throw "Frozen schedule semantics module is missing: $ScheduleModulePath"
+    }
+    if (-not (Test-Path -LiteralPath $FixturesPath -PathType Leaf)) {
+        throw "Schedule semantics fixtures are missing: $FixturesPath"
+    }
+    $helper = Join-Path $RepositoryRoot 'scripts/contracts/verify-schedule-semantics.py'
+    if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
+        throw "Schedule semantics helper is missing: $helper"
+    }
+    $output = & $PythonExecutable -B $helper --fixtures $FixturesPath --frozen-schedules $ScheduleModulePath 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        $firstFailure = @($output.Trim() -split "`n" | Where-Object { $_.Trim() })[0]
+        throw "Frozen schedule semantics check failed: $firstFailure"
+    }
+    Write-Host ($output.Trim())
 }
 
 $resolvedDeerFlowRoot = Resolve-DeerFlowRoot -ExplicitRoot $DeerFlowRoot
@@ -816,6 +990,19 @@ foreach ($requiredId in @($oracleManifest.required_contract_ids)) {
         throw "Required core protocol contract is missing: $requiredId"
     }
 }
+# Independent schedule baseline: removing a schedule contract and its own required_contract_ids
+# entry together must still be rejected.
+$declaredScheduleContractIds = @($oracleContractIds | Where-Object { $_ -like 'rest.schedules.*' })
+if ($declaredScheduleContractIds.Count -ne $ExpectedScheduleContractIds.Count -or
+        @(Compare-Object ($ExpectedScheduleContractIds | Sort-Object) ($declaredScheduleContractIds | Sort-Object)).Count -gt 0) {
+    throw 'Schedule contract inventory drifted from the independent verifier baseline.'
+}
+$runHistoryRequestSchema = Read-JsonFile -Path (Join-Path $RepositoryRoot $RunHistoryRequestSchemaPath)
+$runHistoryRequired = @(@($runHistoryRequestSchema.required) | ForEach-Object { [string]$_ })
+if ($runHistoryRequired -contains 'query' -or
+        @(Compare-Object ($ExpectedRunHistoryRequestRequired | Sort-Object) ($runHistoryRequired | Sort-Object)).Count -gt 0) {
+    throw 'Run history request schema must keep query optional for the frozen frontend.'
+}
 foreach ($contract in $oracleContracts) {
     Assert-Equal $contract.source_status 'SOURCE_VERIFIED' "Contract '$($contract.id)' source status is invalid"
     Assert-Equal $contract.contract_status 'STATIC_CONTRACT_VERIFIED' "Contract '$($contract.id)' static status is invalid"
@@ -860,6 +1047,13 @@ $duplicateFixtureIds = @($fixtureIds | Group-Object | Where-Object Count -gt 1 |
 if ($duplicateFixtureIds.Count -gt 0) {
     throw "Duplicate core protocol fixture IDs: $($duplicateFixtureIds -join ', ')"
 }
+# Independent schedule fixture baseline: a fixture removal cannot be hidden by also dropping the
+# contract and its required_contract_ids entry.
+$declaredScheduleFixtureIds = @($fixtureIds | Where-Object { $_ -like 'schedules.*' })
+if ($declaredScheduleFixtureIds.Count -ne $ExpectedScheduleFixtureIds.Count -or
+        @(Compare-Object ($ExpectedScheduleFixtureIds | Sort-Object) ($declaredScheduleFixtureIds | Sort-Object)).Count -gt 0) {
+    throw 'Schedule fixture inventory drifted from the independent verifier baseline.'
+}
 foreach ($fixture in $fixtures) {
     $contractId = [string]$fixture.contract_id
     if ($oracleContractIds -notcontains $contractId) {
@@ -885,6 +1079,11 @@ foreach ($contractId in @($oracleManifest.required_contract_ids)) {
         throw "Required core protocol contract has no fixture: $contractId"
     }
 }
+# Positive schedule specs must produce a real next run time under the frozen scheduler
+# (schedules.py + croniter), not just satisfy the loose generic schedule_spec object schema.
+$schedulePython = Resolve-SchedulePython -Explicit $SchedulePython -FrozenRoot $resolvedDeerFlowRoot
+$scheduleModulePath = Join-Path $resolvedDeerFlowRoot 'backend/packages/harness/deerflow/scheduler/schedules.py'
+Assert-ScheduleSemantics -FixturesPath $OracleFixturesPath -ScheduleModulePath $scheduleModulePath -PythonExecutable $schedulePython
 
 $runCreateSse = @($surfaces | Where-Object id -eq 'run.create.sdk-sse')[0]
 foreach ($requiredMode in @('messages-tuple', 'updates', 'custom')) {
@@ -971,5 +1170,6 @@ $oracleKindSummary = $oracleContracts | Group-Object kind | Sort-Object Name | F
     "$($_.Name)=$($_.Count)"
 }
 Write-Host "Core protocol contracts: $($oracleContracts.Count) ($($oracleKindSummary -join ', ')); fixtures=$($fixtures.Count); implementation=$($oracleManifest.implementation_status); runtime=NOT_RUN"
+Write-Host "Scheduled-task baseline: contracts=$($declaredScheduleContractIds.Count); fixtures=$($declaredScheduleFixtureIds.Count); semantics=VERIFIED (frozen schedules.py)"
 $importedCount = @($resourceManifest.resources | Where-Object import_status -eq 'IMPORTED').Count
 Write-Host "Resources: $(@($resourceManifest.resources).Count) (IMPORTED=$importedCount, NOT_RUN=$(@($resourceManifest.resources).Count - $importedCount)); runtime_status=NOT_RUN"

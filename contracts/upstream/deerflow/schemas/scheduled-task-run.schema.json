@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "task_id",
+    "thread_id",
+    "run_id",
+    "scheduled_for",
+    "trigger",
+    "status",
+    "error",
+    "attempt_count",
+    "started_at",
+    "finished_at",
+    "created_at"
+  ],
+  "properties": {
+    "id": {"type": "string"},
+    "task_id": {"type": "string"},
+    "thread_id": {"type": "string"},
+    "run_id": {"type": ["string", "null"]},
+    "scheduled_for": {"type": "string"},
+    "trigger": {"enum": ["scheduled", "manual"]},
+    "status": {"enum": ["queued", "launching", "running", "success", "failed", "skipped", "interrupted"]},
+    "error": {"type": ["string", "null"]},
+    "attempt_count": {"type": "integer"},
+    "started_at": {"type": ["string", "null"]},
+    "finished_at": {"type": ["string", "null"]},
+    "created_at": {"type": "string"}
+  }
+}
