@@ -350,7 +350,8 @@ public final class GatewayFixture implements AutoCloseable {
                 ObjectNode model = JSON.createObjectNode();
                 model.putObject("config").put("name", "m3-model").put("provider", "openai-compatible")
                         .put("model", "m3-model").put("enabled", true).put("base_url", provider.endpoint().toString())
-                        .put("context_window", 32768).put("max_tokens", 1024).put("api_key", "controlled-fixture");
+                        .put("context_window", 32768).put("max_tokens", 1024).put("api_key", "controlled-fixture")
+                        .put("supports_vision", true);
                 model.putNull("expected_revision");
                 assertThat(http.request("PUT", "/api/managed-models", model).statusCode()).isEqualTo(200);
             } catch (Exception | Error failure) {
