@@ -62,6 +62,65 @@ public final class FeishuChatThreadStore {
         }
     }
 
+    /** Rotate only the active chat pointer; prior aliases and threads remain valid. */
+    public String startNew(String connectionId, String chatId) {
+        synchronized (lock) {
+            Map<String, ObjectNode> data = read();
+            String threadId = "feishu-" + UUID.randomUUID();
+            ObjectNode row = json.createObjectNode();
+            row.put("connection_id", connectionId);
+            row.put("chat_id", chatId);
+            row.put("thread_id", threadId);
+            data.put(key(connectionId, chatId), row);
+            write(data);
+            return threadId;
+        }
+    }
+
+    /** Look up immutable message/topic aliases in the same connection and chat scope. */
+    public Optional<String> findAlias(String connectionId, String chatId, String alias) {
+        if (alias == null || alias.isBlank()) {
+            return Optional.empty();
+        }
+        synchronized (lock) {
+            ObjectNode row = read().get(aliasKey(connectionId, chatId, alias));
+            if (row == null) {
+                return Optional.empty();
+            }
+            String id = row.path("thread_id").asText("");
+            return id.isBlank() ? Optional.empty() : Optional.of(id);
+        }
+    }
+
+    /** First writer wins: never point a historical reply to a later /new thread. */
+    public void bindAlias(String connectionId, String chatId, String alias, String threadId) {
+        if (alias == null || alias.isBlank() || threadId == null || threadId.isBlank()) {
+            return;
+        }
+        synchronized (lock) {
+            Map<String, ObjectNode> data = read();
+            String aliasKey = aliasKey(connectionId, chatId, alias);
+            ObjectNode existing = data.get(aliasKey);
+            if (existing != null) {
+                if (!threadId.equals(existing.path("thread_id").asText(""))) {
+                    throw new IllegalStateException("Feishu message alias points to another thread");
+                }
+                return;
+            }
+            ObjectNode row = json.createObjectNode();
+            row.put("connection_id", connectionId);
+            row.put("chat_id", chatId);
+            row.put("alias_id", alias);
+            row.put("thread_id", threadId);
+            data.put(aliasKey, row);
+            write(data);
+        }
+    }
+
+    private static String aliasKey(String connectionId, String chatId, String alias) {
+        return key(connectionId, chatId) + "|alias:" + alias;
+    }
+
     private static String key(String connectionId, String chatId) {
         return (connectionId == null ? "" : connectionId) + "|" + (chatId == null ? "" : chatId);
     }
