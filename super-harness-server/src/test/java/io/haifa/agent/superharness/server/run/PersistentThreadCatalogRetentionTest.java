@@ -73,4 +73,56 @@ class PersistentThreadCatalogRetentionTest {
         assertThat(retained.get(retained.size() - 1).answeredKind()).isNull();
         PersistentThreadCatalog.validateClarificationDisplays(retained);
     }
+
+    @Test
+    void dropsUnansweredCardsOfRunsThatAreNoLongerLive() {
+        List<PersistentThreadCatalog.InteractionDisplay> displays = new ArrayList<>();
+        for (int sequence = 1; sequence <= 65; sequence++) {
+            displays.add(approval(sequence, null));
+        }
+
+        List<PersistentThreadCatalog.InteractionDisplay> retained =
+                PersistentThreadCatalog.retainDisplaysWithinCapacity(
+                        displays, java.util.Set.of("run-65"));
+
+        assertThat(retained).hasSize(64);
+        assertThat(retained.get(0).requestSequence()).isEqualTo(2L);
+        assertThat(retained.get(retained.size() - 1).requestSequence()).isEqualTo(65L);
+        assertThat(retained.get(retained.size() - 1).answeredOption()).isNull();
+        PersistentThreadCatalog.validateDisplays(retained);
+    }
+
+    @Test
+    void keepsTheLiveRunCardWhenAnsweredCardsAlreadyFillTheCapacity() {
+        List<PersistentThreadCatalog.InteractionDisplay> displays = new ArrayList<>();
+        for (int sequence = 1; sequence <= 64; sequence++) {
+            displays.add(approval(sequence, "approve"));
+        }
+        displays.add(approval(65, null));
+
+        List<PersistentThreadCatalog.InteractionDisplay> retained =
+                PersistentThreadCatalog.retainDisplaysWithinCapacity(
+                        displays, java.util.Set.of("run-65"));
+
+        assertThat(retained).hasSize(64);
+        assertThat(retained.get(retained.size() - 1).requestSequence()).isEqualTo(65L);
+        assertThat(retained.get(retained.size() - 1).answeredOption()).isNull();
+        PersistentThreadCatalog.validateDisplays(retained);
+    }
+
+    @Test
+    void clarificationRetentionDropsCardsOfRunsThatAreNoLongerLive() {
+        List<PersistentThreadCatalog.ClarificationDisplay> displays = new ArrayList<>();
+        for (int sequence = 1; sequence <= 65; sequence++) {
+            displays.add(clarification(sequence, null));
+        }
+
+        List<PersistentThreadCatalog.ClarificationDisplay> retained =
+                PersistentThreadCatalog.retainClarificationsWithinCapacity(
+                        displays, java.util.Set.of("run-65"));
+
+        assertThat(retained).hasSize(64);
+        assertThat(retained.get(retained.size() - 1).requestSequence()).isEqualTo(65L);
+        PersistentThreadCatalog.validateClarificationDisplays(retained);
+    }
 }
