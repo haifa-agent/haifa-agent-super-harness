@@ -93,14 +93,14 @@ class AgentSoulPromptTest {
             fixture.seed("agent-a", "synthetic existing A");
             fixture.seed("agent-b", "synthetic existing B");
             fixture.thread("bootstrap-identity");
-            long before = fixture.api.threadRunApi().bridgeBuildCount();
+            long before = fixture.api.threadRunApi().conversations().bridgeBuildCount();
             String firstRun = fixture.completed(fixture.run("bootstrap-identity", "agent-a", true));
             var a = fixture.agent("agent-a");
             String aAfterFirst = hash(a.toString());
             recordIdentityStage(fixture, model, "bootstrap-identity", "identity-A", firstRun);
             assertThat(hash(a.path("soul").asText())).isEqualTo(hash("synthetic scoped soul A"));
             assertThreadIdentity(fixture, "bootstrap-identity", "agent-a", true);
-            assertThat(fixture.api.threadRunApi().bridgeBuildCount()).isEqualTo(before + 1);
+            assertThat(fixture.api.threadRunApi().conversations().bridgeBuildCount()).isEqualTo(before + 1);
 
             String secondRun = fixture.completed(fixture.run("bootstrap-identity", "agent-b", true));
             var afterA = fixture.agent("agent-a");
@@ -121,7 +121,7 @@ class AgentSoulPromptTest {
             assertThat(model.requests.get(2).runId()).isNotEqualTo(model.requests.getFirst().runId());
             assertThat(hash(instructions(model.requests.get(2)))).isEqualTo(hash(instructions(model.requests.getFirst())));
             assertBootstrapCatalog(model.requests.get(2));
-            assertThat(fixture.api.threadRunApi().bridgeBuildCount()).isEqualTo(before + 2);
+            assertThat(fixture.api.threadRunApi().conversations().bridgeBuildCount()).isEqualTo(before + 2);
             var setupResults = fixture.results("bootstrap-identity", "setup_agent");
             assertThat(setupResults.size()).isEqualTo(2);
             assertThat(setupResults.getLast().path("additional_kwargs").path("haifa_tool_result").path("success").asBoolean())
@@ -133,14 +133,14 @@ class AgentSoulPromptTest {
             assertThat(hash(fixture.agent("agent-a").path("soul").asText())).isEqualTo(hash("synthetic scoped soul A2"));
             assertThat(hash(fixture.agent("agent-b").toString())).isEqualTo(bAfterSecond);
             assertThreadIdentity(fixture, "bootstrap-identity", "agent-a", true);
-            assertThat(fixture.api.threadRunApi().bridgeBuildCount()).isEqualTo(before + 3);
+            assertThat(fixture.api.threadRunApi().conversations().bridgeBuildCount()).isEqualTo(before + 3);
 
             ConfigFingerprint beforeSameIdentity = ConfigFingerprint.read(data);
             String fourthRun = fixture.completed(fixture.run("bootstrap-identity", "agent-a", true));
             recordIdentityStage(fixture, model, "bootstrap-identity", "identity-A-same", fourthRun);
             beforeSameIdentity.assertUnchanged(data);
             assertThat(model.requests.size()).isEqualTo(7);
-            assertThat(fixture.api.threadRunApi().bridgeBuildCount()).as("same identity/catalog uses the existing Bridge")
+            assertThat(fixture.api.threadRunApi().conversations().bridgeBuildCount()).as("same identity/catalog uses the existing Bridge")
                     .isEqualTo(before + 3);
             assertThat(model.requests.getLast().runId()).isNotEqualTo(model.requests.get(4).runId());
             for (var request : model.requests) {
@@ -161,12 +161,12 @@ class AgentSoulPromptTest {
         });
         try (var fixture = new GatewayFixture(data, model)) {
             fixture.thread("bootstrap-catalog-switch");
-            long before = fixture.api.threadRunApi().bridgeBuildCount();
+            long before = fixture.api.threadRunApi().conversations().bridgeBuildCount();
             String firstRun = fixture.completed(fixture.run("bootstrap-catalog-switch", null, false));
             recordIdentityStage(fixture, model, "bootstrap-catalog-switch", "catalog-default", firstRun);
             assertThat(names(model.requests.getFirst())).containsExactlyInAnyOrderElementsOf(BASE_TOOLS);
             assertThreadIdentity(fixture, "bootstrap-catalog-switch", "", false);
-            assertThat(fixture.api.threadRunApi().bridgeBuildCount()).isEqualTo(before + 1);
+            assertThat(fixture.api.threadRunApi().conversations().bridgeBuildCount()).isEqualTo(before + 1);
 
             var bootstrapPending = fixture.run("bootstrap-catalog-switch", null, true);
             assertThat(bootstrapPending.statusCode()).isEqualTo(200);
@@ -174,7 +174,7 @@ class AgentSoulPromptTest {
             recordIdentityStage(fixture, model, "bootstrap-catalog-switch", "catalog-bootstrap-pending", secondRun);
             assertBootstrapCatalog(model.requests.getLast());
             assertThreadIdentity(fixture, "bootstrap-catalog-switch", "", true);
-            assertThat(fixture.api.threadRunApi().bridgeBuildCount()).isEqualTo(before + 2);
+            assertThat(fixture.api.threadRunApi().conversations().bridgeBuildCount()).isEqualTo(before + 2);
             assertOrdinaryWritePending(fixture, "bootstrap-catalog-switch", secondRun, "bootstrap-scope.txt", 0);
             assertThat(fixture.completed(fixture.approve("bootstrap-catalog-switch", secondRun))).isEqualTo(secondRun);
             assertThat(fixture.results("bootstrap-catalog-switch", "write_file")).hasSize(1);
@@ -188,7 +188,7 @@ class AgentSoulPromptTest {
             recordIdentityStage(fixture, model, "bootstrap-catalog-switch", "catalog-default-again-pending", thirdRun);
             assertThat(names(model.requests.getLast())).containsExactlyInAnyOrderElementsOf(BASE_TOOLS);
             assertThreadIdentity(fixture, "bootstrap-catalog-switch", "", false);
-            assertThat(fixture.api.threadRunApi().bridgeBuildCount()).isEqualTo(before + 3);
+            assertThat(fixture.api.threadRunApi().conversations().bridgeBuildCount()).isEqualTo(before + 3);
             assertOrdinaryWritePending(fixture, "bootstrap-catalog-switch", thirdRun, "default-scope.txt", 1);
             assertThat(fixture.completed(fixture.approve("bootstrap-catalog-switch", thirdRun))).isEqualTo(thirdRun);
             assertThat(fixture.results("bootstrap-catalog-switch", "write_file")).hasSize(2);
@@ -200,7 +200,7 @@ class AgentSoulPromptTest {
             recordIdentityStage(fixture, model, "bootstrap-catalog-switch", "catalog-default-same", fourthRun);
             assertThat(model.requests.size()).isEqualTo(6);
             assertThat(names(model.requests.getLast())).containsExactlyInAnyOrderElementsOf(BASE_TOOLS);
-            assertThat(fixture.api.threadRunApi().bridgeBuildCount()).as("same default identity/catalog needs no rebuild")
+            assertThat(fixture.api.threadRunApi().conversations().bridgeBuildCount()).as("same default identity/catalog needs no rebuild")
                     .isEqualTo(before + 3);
             for (var request : model.requests) {
                 assertThat(hash(instructions(request))).isEqualTo(hash(instructions(model.requests.getFirst())));
@@ -229,7 +229,7 @@ class AgentSoulPromptTest {
                 .put("stage", stage).put("run_location", runLocation).put("thread_id", thread)
                 .put("metadata_agent_name", metadata.path("haifa_agent_name").asText())
                 .put("metadata_bootstrap", metadata.path("haifa_agent_bootstrap").asBoolean())
-                .put("bridge_build_count", fixture.api.threadRunApi().bridgeBuildCount())
+                .put("bridge_build_count", fixture.api.threadRunApi().conversations().bridgeBuildCount())
                 .put("model_request_count", model.requests.size());
         summary.set("public_run", safeRunSummary(fixture.get(runLocation)));
         var requests = summary.putArray("model_requests");
@@ -289,7 +289,7 @@ class AgentSoulPromptTest {
         try (var fixture = new GatewayFixture(data, model)) {
             fixture.seed("agent-a", "synthetic-A");
             fixture.thread("next-turn");
-            long before = fixture.api.threadRunApi().bridgeBuildCount();
+            long before = fixture.api.threadRunApi().conversations().bridgeBuildCount();
             try (var original = fixture.client.send(fixture.builder("POST", "/api/threads/next-turn/runs/stream",
                     fixture.input("agent-a", false, "initial")).build(), HttpResponse.BodyHandlers.ofInputStream()).body()) {
                 assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
@@ -313,13 +313,13 @@ class AgentSoulPromptTest {
             soulEquals(instructions(second), "synthetic-A");
             assertThat(second.messages().stream().anyMatch(message -> message.role().name().equals("USER")
                     && message.content().contains("synthetic-steer-new-input"))).isTrue();
-            assertThat(fixture.api.threadRunApi().bridgeBuildCount()).isEqualTo(before + 1);
+            assertThat(fixture.api.threadRunApi().conversations().bridgeBuildCount()).isEqualTo(before + 1);
             fixture.completed(fixture.run("next-turn", "agent-a", false));
             var next = model.requests.getLast();
             assertThat(next.runId()).isNotEqualTo(first.runId());
             soulEquals(instructions(next), "synthetic-B");
             assertThat(hash(instructions(next))).isNotEqualTo(hash(instructions(first)));
-            assertThat(fixture.api.threadRunApi().bridgeBuildCount()).isEqualTo(before + 2);
+            assertThat(fixture.api.threadRunApi().conversations().bridgeBuildCount()).isEqualTo(before + 2);
             for (var request : model.requests) requestEvidence(fixture, request);
         } finally { release.countDown(); }
     }

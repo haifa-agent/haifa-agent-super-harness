@@ -231,8 +231,8 @@ class DeerFlowCreatedChildZeroExecutionHttpTest {
         }
     }
 
-    private static DeerFlowThreadRunApi api(GatewayFixture gateway) {
-        return gateway.api.threadRunApi();
+    private static DeerFlowConversationService api(GatewayFixture gateway) {
+        return gateway.api.threadRunApi().conversations();
     }
 
     private static void assertNoPhysicalExecution(HaifaRunBridge bridge, AgentRunId parent, AgentRunId childId) {

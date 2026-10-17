@@ -182,7 +182,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 dataDirectory,
                 continuationKey,
                 scope -> promptReadyTools(testRunTools, projects, toolWorkspace, scope, configurationApi, skillStore, skillScreening, localAuth),
-                new DeerFlowThreadRunApi.McpProjectionProvider() {
+                new DeerFlowConversationService.McpProjectionProvider() {
                     @Override
                     public McpRunTools.Projection forRun(JsonNode body) {
                         return McpRunTools.projection(
@@ -198,8 +198,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                     }
                 },
                 testRunModelResolver != null && testSkillStore == null
-                        ? DeerFlowThreadRunApi.SkillProjectionProvider.none()
-                        : new DeerFlowThreadRunApi.SkillProjectionProvider() {
+                        ? DeerFlowConversationService.SkillProjectionProvider.none()
+                        : new DeerFlowConversationService.SkillProjectionProvider() {
                             @Override
                             public SkillRunTools.Projection forRun(JsonNode body) {
                                 return skillStore.projection(configurationApi.resolveSkillSelection(body));
@@ -243,7 +243,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 ? ImmediateFeishuTransport::new
                 : LarkSdkFeishuTransport::new;
         FeishuAgentBridge feishuAgentBridge =
-                new InProcessFeishuAgentBridge(objectMapper, threadRunApi);
+                new InProcessFeishuAgentBridge(objectMapper, threadRunApi.conversations());
         this.feishuWorker = new FeishuChannelWorker(
                 channelConnectionStore,
                 new FeishuChatThreadStore(objectMapper, dataDirectory),
@@ -252,13 +252,13 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.channelsApi = new DeerFlowChannelsApi(
                 objectMapper, channelRuntimeStore, channelConnectionStore, feishuWorker);
         this.workspaceApi = new DeerFlowWorkspaceApi(
-                objectMapper, dataDirectory.resolve("workspace"), threadRunApi::hasThread);
+                objectMapper, dataDirectory.resolve("workspace"), threadRunApi.conversations()::hasThread);
         this.skillsApi = new DeerFlowSkillsApi(objectMapper, skillStore, workspaceApi);
-        this.projectApi = new DeerFlowProjectApi(objectMapper, projects, threadRunApi, workspaceApi);
+        this.projectApi = new DeerFlowProjectApi(objectMapper, projects, threadRunApi.conversations(), workspaceApi);
         this.trashApi = new DeerFlowTrashApi(objectMapper, projects);
         this.inputPolishApi = new DeerFlowInputPolishApi(objectMapper, modelResolver);
         this.suggestionsApi = new DeerFlowSuggestionsApi(
-                objectMapper, modelResolver, threadRunApi::hasThread, suggestionsSettings);
+                objectMapper, modelResolver, threadRunApi.conversations()::hasThread, suggestionsSettings);
         registerRoutes();
     }
 
@@ -270,7 +270,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             List<? extends JavaTool<?, ?>> configured,
             PersistentProjectWorkspaceService projects,
             RestrictedWorkspaceService toolWorkspace,
-            DeerFlowThreadRunApi.ThreadToolScope scope,
+            DeerFlowConversationService.ThreadToolScope scope,
             DeerFlowConfigurationApi configuration,
             SkillConfigStore skills,
             io.haifa.agent.superharness.server.config.SkillPackageScreening skillScreening,
@@ -289,7 +289,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             }));
             AgentPromptContext nextAgent = new AgentPromptContext(
                     candidate.path("name").asText(), false, candidate.path("soul").asText());
-            var nextScope = new DeerFlowThreadRunApi.ThreadToolScope(
+            var nextScope = new DeerFlowConversationService.ThreadToolScope(
                     scope.threadId(), scope.projectId(), scope.currentRunUploads(), nextAgent);
             // Pure M2 composition checks the complete registered catalog and SDK instruction limit
             // before the existing ConfigurationStore performs its single atomic replacement.
@@ -336,7 +336,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
      * tools share one {@link WebToolConfig} whose endpoint defaults are the real public providers.
      */
     static List<? extends JavaTool<?, ?>> fileTools(
-            DeerFlowThreadRunApi.ThreadToolScope scope,
+            DeerFlowConversationService.ThreadToolScope scope,
             PersistentProjectWorkspaceService projects,
             RestrictedWorkspaceService workspace) {
         FileToolSession session = new FileToolSession();
@@ -704,19 +704,19 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     }
 
     int cachedRunCount() {
-        return threadRunApi.cachedRunCount();
+        return threadRunApi.conversations().cachedRunCount();
     }
 
     void resetTurnPageReads(String threadId) {
-        threadRunApi.resetTurnPageReads(threadId);
+        threadRunApi.conversations().resetTurnPageReads(threadId);
     }
 
     long turnPageReads(String threadId) {
-        return threadRunApi.turnPageReads(threadId);
+        return threadRunApi.conversations().turnPageReads(threadId);
     }
 
     public boolean hasAttachedBridge(String threadId) {
-        return threadRunApi.hasAttachedBridge(threadId);
+        return threadRunApi.conversations().hasAttachedBridge(threadId);
     }
 
     @Override

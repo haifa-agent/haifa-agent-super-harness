@@ -1,5 +1,7 @@
 package io.haifa.agent.superharness.server.prompt;
 
+import io.haifa.agent.superharness.server.api.DeerFlowConversationService;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -91,14 +93,14 @@ public class LeadPromptLegacyProjectionTest {
                 // Recreating an existing thread must also leave its missing framing provenance intact.
                 support.request(base, "POST", "/api/threads", support.json.writeValueAsString(Map.of(
                         "thread_id", threadId, "metadata", Map.of(
-                                DeerFlowThreadRunApi.USER_INPUT_FRAMING_METADATA_KEY, 1))), "forge-existing.json");
+                                DeerFlowConversationService.USER_INPUT_FRAMING_METADATA_KEY, 1))), "forge-existing.json");
                 assertThat(support.get(base, "/api/threads/" + threadId, "legacy-thread.json")
-                        .path("metadata").has(DeerFlowThreadRunApi.USER_INPUT_FRAMING_METADATA_KEY)).isFalse();
+                        .path("metadata").has(DeerFlowConversationService.USER_INPUT_FRAMING_METADATA_KEY)).isFalse();
                 var newThread = support.request(base, "POST", "/api/threads", support.json.writeValueAsString(Map.of(
                         "thread_id", "lead-framing-forgery", "metadata", Map.of(
-                                DeerFlowThreadRunApi.USER_INPUT_FRAMING_METADATA_KEY, 1))), "forge-new.json");
+                                DeerFlowConversationService.USER_INPUT_FRAMING_METADATA_KEY, 1))), "forge-new.json");
                 assertThat(support.json.readTree(newThread.body()).path("metadata")
-                        .has(DeerFlowThreadRunApi.USER_INPUT_FRAMING_METADATA_KEY)).isFalse();
+                        .has(DeerFlowConversationService.USER_INPUT_FRAMING_METADATA_KEY)).isFalse();
                 String body = support.json.writeValueAsString(Map.of("assistant_id", "lead_agent",
                         "input", Map.of("messages", List.of(Map.of("type", "human", "content", CURRENT))),
                         "context", Map.of("model_name", binding.name()),
@@ -107,7 +109,7 @@ public class LeadPromptLegacyProjectionTest {
                 GatewayFixture.location(support.request(base, "POST",
                         "/api/threads/" + threadId + "/runs/stream", body, "new-turn.sse"));
                 fromSequence = support.get(base, "/api/threads/" + threadId, "new-thread.json")
-                        .path("metadata").path(DeerFlowThreadRunApi.USER_INPUT_FRAMING_METADATA_KEY).asLong();
+                        .path("metadata").path(DeerFlowConversationService.USER_INPUT_FRAMING_METADATA_KEY).asLong();
                 assertThat(fromSequence).isEqualTo(legacyLastSequence + 1);
                 assertUsers(support.get(base, "/api/threads/" + threadId + "/state", "mixed-state.json"), LEGACY, CURRENT);
                 assertHistory(support, base, threadId, "mixed-history.json", LEGACY, CURRENT);
@@ -127,7 +129,7 @@ public class LeadPromptLegacyProjectionTest {
                 assertUsers(support.get(base, "/api/threads/" + threadId + "/state", "restarted-state.json"), LEGACY, CURRENT);
                 assertHistory(support, base, threadId, "restarted-history.json", LEGACY, CURRENT);
                 assertThat(support.get(base, "/api/threads/" + threadId, "restarted-thread.json")
-                        .path("metadata").path(DeerFlowThreadRunApi.USER_INPUT_FRAMING_METADATA_KEY).asLong())
+                        .path("metadata").path(DeerFlowConversationService.USER_INPUT_FRAMING_METADATA_KEY).asLong())
                         .isEqualTo(fromSequence);
             }
             GatewayFixture.portReleased(restartedPort);

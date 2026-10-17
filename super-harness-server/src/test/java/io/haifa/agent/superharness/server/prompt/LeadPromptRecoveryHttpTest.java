@@ -1,5 +1,7 @@
 package io.haifa.agent.superharness.server.prompt;
 
+import io.haifa.agent.superharness.server.api.DeerFlowConversationService;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -81,13 +83,13 @@ public class LeadPromptRecoveryHttpTest {
                 assertThat(support.json.readTree(agentCreated.body()).path("skills"))
                         .isEqualTo(support.json.valueToTree(selectedSkills));
                 String create = support.json.writeValueAsString(Map.of("thread_id", threadId, "metadata", Map.of(
-                        "title", "Recovery fixture", DeerFlowThreadRunApi.SKILL_SELECTION_METADATA_KEY,
-                        List.of("forged-skill"), DeerFlowThreadRunApi.LEAD_SIGNATURE_METADATA_KEY, "forged-signature")));
+                        "title", "Recovery fixture", DeerFlowConversationService.SKILL_SELECTION_METADATA_KEY,
+                        List.of("forged-skill"), DeerFlowConversationService.LEAD_SIGNATURE_METADATA_KEY, "forged-signature")));
                 var created = support.request(base, "POST", "/api/threads", create, "create.json");
                 assertThat(created.statusCode()).isEqualTo(200);
                 JsonNode metadata = support.json.readTree(created.body()).path("metadata");
-                assertThat(metadata.has(DeerFlowThreadRunApi.SKILL_SELECTION_METADATA_KEY)).isFalse();
-                assertThat(metadata.has(DeerFlowThreadRunApi.LEAD_SIGNATURE_METADATA_KEY)).isFalse();
+                assertThat(metadata.has(DeerFlowConversationService.SKILL_SELECTION_METADATA_KEY)).isFalse();
+                assertThat(metadata.has(DeerFlowConversationService.LEAD_SIGNATURE_METADATA_KEY)).isFalse();
                 var context = Map.of("model_name", binding.name(), "agent_name", agentName);
                 String body = support.json.writeValueAsString(Map.of("assistant_id", "lead_agent",
                         "input", Map.of("messages", List.of(Map.of("type", "human", "content", ORIGINAL))),
@@ -98,12 +100,12 @@ public class LeadPromptRecoveryHttpTest {
                 // Assert actual admission before restart: request context.skills is not the frozen
                 // declaration contract; the selected managed Agent.skills must reach this metadata.
                 JsonNode admittedThread = support.get(base, "/api/threads/" + threadId, "admitted-thread.json");
-                assertThat(admittedThread.path("metadata").path(DeerFlowThreadRunApi.SKILL_SELECTION_METADATA_KEY))
+                assertThat(admittedThread.path("metadata").path(DeerFlowConversationService.SKILL_SELECTION_METADATA_KEY))
                         .isEqualTo(support.json.valueToTree(selectedSkills));
                 JsonNode run = support.get(base, runLocation, "run.json");
                 assertThat(run.path("diagnostics").path("sdk_status").asText()).isEqualTo("COMPLETED");
                 signature = LeadPromptAcceptanceTestSupport.bridge(api, threadId).promptSignature();
-                assertThat(admittedThread.path("metadata").path(DeerFlowThreadRunApi.LEAD_SIGNATURE_METADATA_KEY).asText())
+                assertThat(admittedThread.path("metadata").path(DeerFlowConversationService.LEAD_SIGNATURE_METADATA_KEY).asText())
                         .isEqualTo(signature);
                 JsonNode state = support.get(base, "/api/threads/" + threadId + "/state", "state.json");
                 originalMessages = state.path("values").path("messages");
@@ -141,9 +143,9 @@ public class LeadPromptRecoveryHttpTest {
                 assertThat(LeadPromptAcceptanceTestSupport.bridge(restarted, threadId).promptSignature())
                         .isEqualTo(signature);
                 JsonNode thread = support.get(base, "/api/threads/" + threadId, "restarted-thread.json");
-                assertThat(thread.path("metadata").path(DeerFlowThreadRunApi.LEAD_SIGNATURE_METADATA_KEY).asText())
+                assertThat(thread.path("metadata").path(DeerFlowConversationService.LEAD_SIGNATURE_METADATA_KEY).asText())
                         .isEqualTo(signature);
-                assertThat(thread.path("metadata").path(DeerFlowThreadRunApi.SKILL_SELECTION_METADATA_KEY))
+                assertThat(thread.path("metadata").path(DeerFlowConversationService.SKILL_SELECTION_METADATA_KEY))
                         .isEqualTo(support.json.valueToTree(selected ? List.of("consulting-analysis") : List.of()));
                 var historyResponse = support.request(base, "POST", "/api/threads/" + threadId + "/history",
                         "{\"limit\":10}", "restarted-history.json");

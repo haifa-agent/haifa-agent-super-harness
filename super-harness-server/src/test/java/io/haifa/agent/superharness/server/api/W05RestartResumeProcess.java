@@ -171,7 +171,7 @@ public final class W05RestartResumeProcess {
                 dataRoot.resolve("workspace"), WorkspaceLimits.defaults());
         List<JavaTool<?, ?>> tools = new java.util.ArrayList<>();
         tools.add(tool);
-        tools.addAll(DeerFlowBootstrapApi.fileTools(new DeerFlowThreadRunApi.ThreadToolScope(
+        tools.addAll(DeerFlowBootstrapApi.fileTools(new DeerFlowConversationService.ThreadToolScope(
                 "w05-cross-process", Optional.empty(), new CurrentRunUploads()), projects, toolWorkspace));
         // The Gateway now registers these Skill tools for every Run. The child must
         // restore the same public Tool bindings even though this case invokes only MarkerTool.

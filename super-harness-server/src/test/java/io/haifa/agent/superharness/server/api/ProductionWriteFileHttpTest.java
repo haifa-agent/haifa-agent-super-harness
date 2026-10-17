@@ -545,9 +545,9 @@ class ProductionWriteFileHttpTest {
 
     /** Reads the actual SDK event feed of one Run through the attached product Bridge. */
     private static List<AgentRunEvent> sdkRunEvents(DeerFlowBootstrapApi api, String runId) throws Exception {
-        var runsField = DeerFlowThreadRunApi.class.getDeclaredField("runs");
+        var runsField = DeerFlowConversationService.class.getDeclaredField("runs");
         runsField.setAccessible(true);
-        Object record = ((Map<?, ?>) runsField.get(api.threadRunApi())).get(runId);
+        Object record = ((Map<?, ?>) runsField.get(api.threadRunApi().conversations())).get(runId);
         assertThat(record).as("cached RunRecord for %s", runId).isNotNull();
         var bridgeField = record.getClass().getDeclaredField("bridge");
         bridgeField.setAccessible(true);
