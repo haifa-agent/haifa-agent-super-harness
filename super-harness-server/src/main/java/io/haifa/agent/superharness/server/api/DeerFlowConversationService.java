@@ -152,6 +152,12 @@ public class DeerFlowConversationService implements AutoCloseable {
     /** Page size for reading the SDK per-message Tool-call grouping during the round scan. */
     private static final int MESSAGE_ROUND_SCAN_PAGE_SIZE = 100;
     private static final int TERMINAL_RUN_CACHE_LIMIT = 8;
+    /**
+     * Upper bound of Turns materialized by a whole-thread state read. Channel adapters that only
+     * need the newest assistant text and pending card ask for a smaller tail instead
+     * ({@link #readThreadStateTail(String, int)}); no caller should pull the whole transcript.
+     */
+    static final int THREAD_STATE_MAX_TURNS = 200;
     private static final java.time.Duration TERMINAL_EVENT_SETTLE_TIMEOUT =
             java.time.Duration.ofSeconds(2);
     static final Duration RUN_START_TIMEOUT = Duration.ofSeconds(5);
@@ -648,7 +654,21 @@ public class DeerFlowConversationService implements AutoCloseable {
         if (thread == null || !AccessOwner.current().equals(thread.ownerId)) {
             throw ConversationException.notFound("Thread not found");
         }
-        return json.valueToTree(threadStateResponse(thread));
+        return json.valueToTree(threadStateResponse(thread, THREAD_STATE_MAX_TURNS));
+    }
+
+    /**
+     * Bounded tail of the same projection. Channel adapters (Feishu) only need the latest
+     * assistant message and the newest Interaction card, so they must not materialize a long
+     * transcript on every Turn.
+     */
+    public JsonNode readThreadStateTail(String threadId, int maxTurns) throws ConversationException {
+        ThreadRecord thread = threads.get(threadId);
+        if (thread == null || !AccessOwner.current().equals(thread.ownerId)) {
+            throw ConversationException.notFound("Thread not found");
+        }
+        int bounded = Math.max(1, Math.min(THREAD_STATE_MAX_TURNS, maxTurns));
+        return json.valueToTree(threadStateResponse(thread, bounded));
     }
 
     /**
@@ -748,7 +768,7 @@ public class DeerFlowConversationService implements AutoCloseable {
                 persistThread(thread);
             }
         }
-        return threadStateResponse(thread);
+        return threadStateResponse(thread, THREAD_STATE_MAX_TURNS);
     }
 
     /** Frozen title fallback bound; the configured title model's max_chars is clamped to this. */
@@ -3516,8 +3536,8 @@ public class DeerFlowConversationService implements AutoCloseable {
 
     private record DiagnosticScan(RunDiagnosticProjection.Facts facts, int pagesRead) {}
 
-    private Map<String, Object> threadStateResponse(ThreadRecord thread) {
-        List<ConversationTurn> turns = scanTurns(thread, 200);
+    private Map<String, Object> threadStateResponse(ThreadRecord thread, int maxTurns) {
+        List<ConversationTurn> turns = scanTurns(thread, maxTurns);
         Map<Long, Integer> ordinals = computeTurnOrdinals(thread);
         Optional<List<Map<String, Object>>> todos = resolveThreadTodos(thread);
         ConversationTurn checkpoint = turns.stream()

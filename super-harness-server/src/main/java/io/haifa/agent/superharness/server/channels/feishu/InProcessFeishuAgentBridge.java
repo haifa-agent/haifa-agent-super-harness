@@ -9,6 +9,9 @@ import io.haifa.agent.superharness.server.auth.AccessOwner;
 import io.haifa.agent.superharness.workspace.RestrictedWorkspaceService;
 import io.haifa.agent.superharness.workspace.UploadReceipt;
 import io.haifa.agent.superharness.workspace.WorkspaceBinding;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -24,6 +27,19 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
     private static final System.Logger LOG = System.getLogger(InProcessFeishuAgentBridge.class.getName());
 
     private static final Set<String> MODES = Set.of("flash", "thinking", "pro", "ultra");
+
+    /** Turns materialized by one Feishu state read; enough for the newest card and answer. */
+    static final int STATE_TAIL_TURNS = 24;
+    /** Threads that keep a cross-Turn tool-card dedupe scope before the oldest is evicted. */
+    static final int TOOL_DEDUPE_THREADS = 64;
+
+    private final Map<String, Set<String>> toolCardScopes = Collections.synchronizedMap(
+            new LinkedHashMap<String, Set<String>>(16, 0.75f, false) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Set<String>> eldest) {
+                    return size() > TOOL_DEDUPE_THREADS;
+                }
+            });
 
     private final ObjectMapper json;
     private final DeerFlowConversationService threads;
@@ -239,7 +255,11 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
             // Creator/observer already owns observation; steer only needs admission success.
             return new FeishuRunProjector(options.progress());
         }
-        FeishuRunProjector projector = new FeishuRunProjector(options.progress());
+        FeishuRunProjector projector = new FeishuRunProjector(
+                options.progress(),
+                FeishuRunProjector.MIN_PROGRESS_GAP_MS,
+                FeishuRunProjector.MAX_PROGRESS_EVENTS,
+                toolCardScope(threadId));
         threads.observeTurn(turn, projector);
         if (projector.sawError()) {
             throw new IllegalStateException("Run stream reported error");
@@ -264,6 +284,19 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
             }
         }
         return projector;
+    }
+
+    /** Bounded, Thread-scoped gate so a pending-card replay cannot re-post a tool card. */
+    Set<String> toolCardScope(String threadId) {
+        String scope = AccessOwner.current() + "|" + threadId;
+        synchronized (toolCardScopes) {
+            Set<String> keys = toolCardScopes.get(scope);
+            if (keys == null) {
+                keys = Collections.synchronizedSet(new LinkedHashSet<>());
+                toolCardScopes.put(scope, keys);
+            }
+            return keys;
+        }
     }
 
     static String normalizeMode(String mode) {
@@ -328,7 +361,8 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
 
     private JsonNode threadState(String threadId) throws Exception {
         try {
-            return threads.readThreadState(threadId);
+            // Bounded tail: a long Thread must not be materialized end-to-start for one reply.
+            return threads.readThreadStateTail(threadId, STATE_TAIL_TURNS);
         } catch (DeerFlowConversationService.ConversationException rejected) {
             if (rejected.kind() == DeerFlowConversationService.ConversationException.Kind.NOT_FOUND) {
                 return null;

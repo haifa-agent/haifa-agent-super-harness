@@ -3,8 +3,10 @@ package io.haifa.agent.superharness.server.channels.feishu;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class FeishuRunProjectorTest {
@@ -85,5 +87,25 @@ class FeishuRunProjectorTest {
 
         assertThat(projector.gapDiagnostics()).hasSize(FeishuRunProjector.MAX_GAP_DIAGNOSTICS);
         assertThat(projector.sawGap()).isTrue();
+    }
+
+    @Test
+    void sharedToolScopeKeepsReplayedToolCardsToOncePerThread() throws Exception {
+        Set<String> scope = new LinkedHashSet<>();
+
+        List<String> firstTurn = new ArrayList<>();
+        FeishuRunProjector turn1 = new FeishuRunProjector(firstTurn::add, 0L, 24, scope);
+        turn1.event("messages", FeishuRunProjector.toolRequestFrame("execution_run", "call-1"), "1-0");
+        turn1.event("messages", FeishuRunProjector.toolResultFrame("execution_run", "call-1", "ok"), "2-0");
+
+        // A later Turn observes the same historical tool frames when a pending card is re-emitted.
+        List<String> secondTurn = new ArrayList<>();
+        FeishuRunProjector turn2 = new FeishuRunProjector(secondTurn::add, 0L, 24, scope);
+        turn2.event("messages", FeishuRunProjector.toolRequestFrame("execution_run", "call-1"), "1-0");
+        turn2.event("messages", FeishuRunProjector.toolResultFrame("execution_run", "call-1", "ok"), "2-0");
+
+        assertThat(firstTurn).anyMatch(line -> line.contains("execution_run"));
+        assertThat(secondTurn).isEmpty();
+        assertThat(turn2.toolProgressCount()).isGreaterThanOrEqualTo(1);
     }
 }
