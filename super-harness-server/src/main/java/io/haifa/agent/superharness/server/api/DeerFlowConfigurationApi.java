@@ -386,6 +386,11 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         return store.models().stream().anyMatch(model -> model.path("name").asText().equals(name));
     }
 
+    /** Owner-visible custom Agent existence, used by the frozen scheduled-task assistant check. */
+    boolean agentExists(String name) {
+        return name != null && store.agent(name).isPresent();
+    }
+
     private void saveManagedModel(HttpExchange exchange) throws IOException {
         ObjectNode request = readObject(exchange);
         validateModelRequest(request);
