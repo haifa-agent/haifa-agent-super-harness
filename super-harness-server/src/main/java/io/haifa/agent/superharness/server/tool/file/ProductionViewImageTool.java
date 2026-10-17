@@ -162,7 +162,7 @@ public final class ProductionViewImageTool
     }
 
     private static boolean isAllowedImageVirtualPath(String path) {
-        if (path == null) {
+        if (path == null || path.contains("..") || path.contains("\\")) {
             return false;
         }
         for (String root : ALLOWED_ROOTS) {
@@ -268,6 +268,15 @@ public final class ProductionViewImageTool
                     "",
                     "",
                     0L);
+        }
+
+        public Map<String, Object> structuredData() {
+            return Map.of(
+                    "status", status,
+                    "path", path,
+                    "sha256", sha256,
+                    "mime_type", mime_type,
+                    "size", size);
         }
     }
 }

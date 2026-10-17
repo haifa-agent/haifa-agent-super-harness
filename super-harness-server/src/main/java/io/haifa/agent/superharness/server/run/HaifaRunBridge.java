@@ -376,6 +376,11 @@ public final class HaifaRunBridge implements AutoCloseable {
             // rebuild criterion in DeerFlowThreadRunApi, exactly like the MCP/Skill fingerprints.
             LeadPromptComposer.Composition prompt = composePrompt(promptTools, skillProjection, agentContext, delegation);
             this.promptSignature = prompt.signature();
+            List<? extends JavaTool<?, ?>> registeredTools = visionSupported
+                    ? tools
+                    : tools.stream()
+                            .filter(tool -> !"view_image".equals(tool.spec().name().value()))
+                            .toList();
             HaifaAgentBuilder builder = HaifaAgents.builder(profile(
                             binding.snapshot(), prompt.instructions(), leadAllowedTools,
                             skillProjection == null ? Set.of() : skillProjection.allowedSkills(), delegation,
@@ -385,7 +390,7 @@ public final class HaifaRunBridge implements AutoCloseable {
                     .model(models)
                     .persistence(foundation.persistence())
                     .conversation(foundation.conversation())
-                    .tools(tools)
+                    .tools(registeredTools)
                     .policy(new PolicyPlatformContribution(
                             PolicyPresets.standardApproval(), new DefaultPolicyDecisionService()));
             if (this.workspace != null && this.threadId != null) {
@@ -872,7 +877,7 @@ public final class HaifaRunBridge implements AutoCloseable {
         return false;
     }
 
-    AgentChatRequest injectVision(AgentChatRequest request) {
+    public AgentChatRequest injectVision(AgentChatRequest request) {
         if (!supportsVision(request.model())) {
             return request;
         }
