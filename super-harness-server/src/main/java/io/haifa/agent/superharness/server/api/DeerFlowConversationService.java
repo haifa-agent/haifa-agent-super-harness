@@ -3161,8 +3161,31 @@ public class DeerFlowConversationService implements AutoCloseable {
         return sequence + "-0";
     }
 
+    /**
+     * Active Run id for {@code threadId}, if any. Used by the Feishu channel for Stop/Steer without
+     * reconstructing HTTP/SSE.
+     */
+    public Optional<String> activeRunId(String threadId) {
+        ThreadRecord thread = threads.get(threadId);
+        if (thread == null) {
+            return Optional.empty();
+        }
+        String active = thread.activeRunId;
+        if (active == null || active.isBlank()) {
+            return Optional.empty();
+        }
+        RunRecord run = runs.get(active);
+        if (run == null) {
+            run = findOrRestoreRun(thread, active).orElse(null);
+        }
+        if (run == null || run.bridge.snapshot(run.runId).status().isTerminal()) {
+            return Optional.empty();
+        }
+        return Optional.of(active);
+    }
+
     /** Cancels a Run; returns normally on 202, throws a bounded rejection otherwise. */
-    void cancelRun(String threadId, String runId, String rawQuery) throws ConversationException {
+    public void cancelRun(String threadId, String runId, String rawQuery) throws ConversationException {
         String action = queryValue(rawQuery, "action").orElse("interrupt");
         String wait = queryValue(rawQuery, "wait").orElse("false");
         // The frozen JS SDK serializes boolean false as "0" while direct DeerFlow

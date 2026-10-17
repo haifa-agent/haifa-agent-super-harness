@@ -217,6 +217,46 @@ public final class ChannelConnectionStore {
         }
     }
 
+    /**
+     * Merge keys into an owned connection's metadata object (shallow). Returns empty when the row is
+     * missing or not owned. Used by Feishu {@code /mode} without inventing a second connection store.
+     */
+    public Optional<ObjectNode> mergeConnectionMetadata(
+            String connectionId, String ownerUserId, Map<String, ?> patch) {
+        if (connectionId == null || connectionId.isBlank() || patch == null || patch.isEmpty()) {
+            return Optional.empty();
+        }
+        Instant now = Instant.now();
+        synchronized (lock) {
+            StoreData data = read();
+            for (ObjectNode row : data.connections) {
+                if (!connectionId.equals(text(row, "id"))
+                        || !ownerUserId.equals(text(row, "owner_user_id"))) {
+                    continue;
+                }
+                ObjectNode metadata = row.has("metadata") && row.get("metadata").isObject()
+                        ? (ObjectNode) row.get("metadata")
+                        : row.putObject("metadata");
+                for (Map.Entry<String, ?> entry : patch.entrySet()) {
+                    if (entry.getKey() == null || entry.getKey().isBlank()) {
+                        continue;
+                    }
+                    if (entry.getValue() == null) {
+                        metadata.remove(entry.getKey());
+                    } else {
+                        metadata.set(entry.getKey(), json.valueToTree(entry.getValue()));
+                    }
+                }
+                row.put("updated_at", now.toString());
+                write(data);
+                ObjectNode out = projection(row);
+                out.put("owner_user_id", text(row, "owner_user_id"));
+                return Optional.of(out);
+            }
+            return Optional.empty();
+        }
+    }
+
     /** Owner-scoped disconnect. Returns {@code false} when the row is missing or not owned. */
     public boolean disconnectConnection(String connectionId, String ownerUserId) {
         Instant now = Instant.now();
