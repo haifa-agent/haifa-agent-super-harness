@@ -2,6 +2,7 @@
 
 > 状态：本报告由 W19-task-1 执行者编写，记录实际交付、证据与偏差。任务状态、门禁结果与阶段决策以 SHPM 为准，本报告不预填 PASS。
 > 里程碑：M1。冻结 DF：`e545c28ac301e6f9feae247c513d8ea8f83df294`。
+> 后续修订：PR #69 审查意见的处置见 [`W19-M1ReviewFix.md`](W19-M1ReviewFix.md)。其中 DST gap 期望（本文 §2/§4 所述 `30 2 * * *` 在 spring-forward 的取值）与 §7 第 3 条「未逐值对照 croniter」已被该报告更正为与冻结 `croniter` 逐值对齐。
 
 ## 1. 任务基本信息
 
@@ -74,7 +75,7 @@
 
 1. **存储介质**：冻结用 SQLAlchemy（SQLite/Postgres）；本任务按 M0 §4.1 用文件型 `state.json`。单实例、单文档原子发布；未移植多实例 lease/fence、Postgres advisory lock、`BEGIN IMMEDIATE` 等。
 2. **裁剪列**：未移植 `lease_owner/lease_expires_at`、`overlap_policy`。`overlap_policy` 冻结默认 `enqueue` 且冻结前端 `types.ts` 不消费，本期固定「单活跃 + 入队等待」；`last_occurrence_seq` 保留为内部序号。删除任务仅删任务行（冻结 `delete_with_queue_cancellation` 同款），历史 occurrence 行保留。
-3. **cron 引擎**：冻结用 Python `croniter`；本任务用自含 Java 5 字段求值器。本机无 `croniter` 且离线，未能逐值对照参考实现；DST 期望值依据「aware 本地构造选前偏移（fold=0）」与 Java `LocalDateTime.atZone` 的 gap/fold 解析等价推导（见 `ScheduleCalculatorTest` 注释）。**偏差风险**：`croniter` 对折叠窗口、`a/n` 语法、不可达表达式（>5 年）的处理未与参考逐项比对；不可达表达式抛 `ScheduleValidationException`（冻结 `croniter` 抛 `CroniterBadDateError`）。
+3. **cron 引擎**：冻结用 Python `croniter`；本任务用自含 Java 5 字段求值器。初版 DST 解析用 Java `LocalDateTime.atZone` 的 gap/fold 语义，后续审查发现与 `croniter` 不一致，已在 `W19-M1ReviewFix.md` 按 `croniter` 算法重写并逐值对照（DST gap/overlap、`L`/`W`/`#`、超大步长、固定偏移时区拒绝）；不可达表达式抛 `ScheduleValidationException`（冻结 `croniter` 抛 `CroniterBadDateError`）。
 4. **`can_project`/sequence 排序**：冻结有多处按 `occurrence_seq` 的父任务投影资格判定；单实例本期未移植，列表按 `created_at desc, id desc`（对齐冻结 `list_by_task`）。
 5. **Run id 前缀**：store 生成的 occurrence id 前缀 `occ-`、task id `task-<32hex>`（task 对齐冻结 `task-{uuid4.hex}`）。
 

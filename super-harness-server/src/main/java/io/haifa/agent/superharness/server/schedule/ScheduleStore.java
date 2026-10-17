@@ -35,6 +35,7 @@ public class ScheduleStore {
     private static final int FORMAT_VERSION = 1;
     private static final long MAXIMUM_BYTES = 16L * 1024 * 1024;
     private static final int MAXIMUM_PAGE_SIZE = 200;
+    private static final int MAXIMUM_HISTORY_PER_TASK = 200;
 
     private final ObjectMapper json;
     private final Path file;
@@ -135,7 +136,10 @@ public class ScheduleStore {
             if (current == null || !current.userId().equals(ownerId)) {
                 return false;
             }
-            mutate(() -> tasks.remove(taskId));
+            mutate(() -> {
+                tasks.remove(taskId);
+                runs.values().removeIf(run -> run.taskId().equals(taskId));
+            });
             return true;
         }
     }
@@ -183,6 +187,7 @@ public class ScheduleStore {
             mutate(() -> {
                 tasks.put(task.id(), updatedTask);
                 runs.put(id, run);
+                pruneHistory(task.id());
             });
             return run;
         }
@@ -291,7 +296,12 @@ public class ScheduleStore {
                         startedAt == null ? run.startedAt() : startedAt, finishedAt, run.attemptCount(),
                         run.launchAccounted(), run.createdAt());
             }
-            mutate(() -> runs.put(updated.id(), updated));
+            mutate(() -> {
+                runs.put(updated.id(), updated);
+                if (updated.status().terminal()) {
+                    pruneHistory(updated.taskId());
+                }
+            });
             return true;
         }
     }
@@ -310,17 +320,24 @@ public class ScheduleStore {
                 return false;
             }
             ScheduledTaskRun occurrence = update.taskRunId() == null ? null : runs.get(update.taskRunId());
-            boolean shouldIncrement = update.incrementRunCount()
-                    && (update.lastRunId() == null || !update.lastRunId().equals(task.lastRunId()));
-            if (occurrence != null && shouldIncrement
-                    && !Boolean.TRUE.equals(occurrence.launchAccounted())) {
-                ScheduledTaskRun accounted = new ScheduledTaskRun(occurrence.id(), occurrence.taskId(),
-                        occurrence.occurrenceSeq(), occurrence.threadId(), occurrence.runId(),
-                        occurrence.scheduledFor(), occurrence.trigger(), occurrence.status(),
-                        occurrence.error(), occurrence.startedAt(), occurrence.finishedAt(),
-                        occurrence.attemptCount(), Boolean.TRUE, occurrence.createdAt());
-                runs.put(accounted.id(), accounted);
+            // Once-only accounting: when the occurrence row tracks the launch, its launchAccounted
+            // marker is authoritative, so a recoverable retry cannot increment run_count twice. Only
+            // occurrence-less updates fall back to comparing the last stable run id.
+            boolean accountLaunch;
+            if (occurrence != null) {
+                accountLaunch = update.incrementRunCount()
+                        && !Boolean.TRUE.equals(occurrence.launchAccounted());
+            } else {
+                accountLaunch = update.incrementRunCount()
+                        && (update.lastRunId() == null || !update.lastRunId().equals(task.lastRunId()));
             }
+            ScheduledTaskRun accounted = accountLaunch && occurrence != null
+                    ? new ScheduledTaskRun(occurrence.id(), occurrence.taskId(),
+                            occurrence.occurrenceSeq(), occurrence.threadId(), occurrence.runId(),
+                            occurrence.scheduledFor(), occurrence.trigger(), occurrence.status(),
+                            occurrence.error(), occurrence.startedAt(), occurrence.finishedAt(),
+                            occurrence.attemptCount(), Boolean.TRUE, occurrence.createdAt())
+                    : null;
             boolean protectedTerminal = update.protectTerminal()
                     && (task.status().terminal()
                             || occurrence != null && occurrence.status().terminal());
@@ -335,9 +352,16 @@ public class ScheduleStore {
                     update.lastRunId() == null ? task.lastRunId() : update.lastRunId(),
                     update.lastThreadId() == null ? task.lastThreadId() : update.lastThreadId(),
                     protectedTerminal ? task.lastError() : update.lastError(),
-                    task.runCount() + (shouldIncrement ? 1 : 0), task.lastOccurrenceSeq(),
+                    task.runCount() + (accountLaunch ? 1 : 0), task.lastOccurrenceSeq(),
                     task.createdAt(), now);
-            mutate(() -> tasks.put(taskId, updated));
+            // The occurrence accounting marker and the task row publish in one rollback boundary, so a
+            // failed write never leaves launchAccounted advanced without the matching run_count.
+            mutate(() -> {
+                if (accounted != null) {
+                    runs.put(accounted.id(), accounted);
+                }
+                tasks.put(taskId, updated);
+            });
             return true;
         }
     }
@@ -361,6 +385,26 @@ public class ScheduleStore {
                 .filter(run -> run.taskId().equals(taskId) && run.status().active())
                 .min(Comparator.comparing(ScheduledTaskRun::createdAt)
                         .thenComparing(ScheduledTaskRun::id));
+    }
+
+    /**
+     * Bounds the per-task occurrence history. Only terminal occurrences are eligible, newest first,
+     * so the single active occurrence and every recent record are always retained. Called inside the
+     * {@link #createRun} and terminal {@link #updateRunStatus} mutations, before the document can
+     * approach the size bound.
+     */
+    private void pruneHistory(String taskId) {
+        List<ScheduledTaskRun> terminal = runs.values().stream()
+                .filter(run -> run.taskId().equals(taskId) && run.status().terminal())
+                .sorted(Comparator.comparing(ScheduledTaskRun::createdAt).reversed()
+                        .thenComparing(ScheduledTaskRun::id, Comparator.reverseOrder()))
+                .toList();
+        if (terminal.size() <= MAXIMUM_HISTORY_PER_TASK) {
+            return;
+        }
+        for (ScheduledTaskRun run : terminal.subList(MAXIMUM_HISTORY_PER_TASK, terminal.size())) {
+            runs.remove(run.id());
+        }
     }
 
     private ScheduledTask applyUpdates(ScheduledTask current, Map<String, Object> updates, Instant now) {

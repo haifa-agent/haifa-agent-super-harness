@@ -61,10 +61,11 @@ class ScheduleCalculatorTest {
 
     @Test
     void cronDstSpringForwardGapResolvesForward() {
-        // America/New_York 2026-03-08 02:00 -> 03:00; a 02:30 wall clock does not exist.
+        // America/New_York 2026-03-08 02:00 -> 03:00; a 02:30 wall clock does not exist. croniter
+        // nudges a nonexistent wall clock to the first existing minute (03:00), not gap-shifted.
         assertThat(ScheduleCalculator.nextRunAt("cron", Map.of("cron", "30 2 * * *"),
                 "America/New_York", Instant.parse("2026-03-07T12:00:00Z")))
-                .isEqualTo(Instant.parse("2026-03-08T07:30:00Z"));
+                .isEqualTo(Instant.parse("2026-03-08T07:00:00Z"));
         assertThat(ScheduleCalculator.nextRunAt("cron", Map.of("cron", "0 2 * * *"),
                 "America/New_York", Instant.parse("2026-03-07T12:00:00Z")))
                 .isEqualTo(Instant.parse("2026-03-08T07:00:00Z"));
@@ -76,6 +77,24 @@ class ScheduleCalculatorTest {
         assertThat(ScheduleCalculator.nextRunAt("cron", Map.of("cron", "30 1 * * *"),
                 "America/New_York", Instant.parse("2026-10-31T12:00:00Z")))
                 .isEqualTo(Instant.parse("2026-11-01T05:30:00Z"));
+    }
+
+    @Test
+    void cronDstFoldSecondOccurrenceIsUsedOnceFirstPasses() {
+        // From inside the repeated hour croniter returns the second (EST) occurrence, not the next
+        // day: 01:00 EDT = 05:00Z, 01:00 EST = 06:00Z.
+        assertThat(ScheduleCalculator.nextRunAt("cron", Map.of("cron", "0 1 * * *"),
+                "America/New_York", Instant.parse("2026-11-01T04:30:00Z")))
+                .isEqualTo(Instant.parse("2026-11-01T05:00:00Z"));
+        assertThat(ScheduleCalculator.nextRunAt("cron", Map.of("cron", "0 1 * * *"),
+                "America/New_York", Instant.parse("2026-11-01T05:00:00Z")))
+                .isEqualTo(Instant.parse("2026-11-01T06:00:00Z"));
+        assertThat(ScheduleCalculator.nextRunAt("cron", Map.of("cron", "0 1 * * *"),
+                "America/New_York", Instant.parse("2026-11-01T05:30:00Z")))
+                .isEqualTo(Instant.parse("2026-11-01T06:00:00Z"));
+        assertThat(ScheduleCalculator.nextRunAt("cron", Map.of("cron", "0 1 * * *"),
+                "America/New_York", Instant.parse("2026-11-01T06:00:00Z")))
+                .isEqualTo(Instant.parse("2026-11-02T06:00:00Z"));
     }
 
     @Test
@@ -151,8 +170,7 @@ class ScheduleCalculatorTest {
                 .isInstanceOf(ScheduleValidationException.class)
                 .hasMessage("Unknown timezone: Mars/Phobos");
         assertThatThrownBy(() -> ScheduleCalculator.validateTimezone("+08:00"))
-                .isInstanceOf(ScheduleValidationException.class);
-        assertThatThrownBy(() -> ScheduleCalculator.normalizeCronExpression("0 9 * *"))
+                .isInstanceOf(ScheduleValidationException.class);        assertThatThrownBy(() -> ScheduleCalculator.normalizeCronExpression("0 9 * *"))
                 .isInstanceOf(ScheduleValidationException.class)
                 .hasMessage("Cron expression must contain exactly 5 fields");
         assertThatThrownBy(() -> ScheduleCalculator.nextRunAt("cron", Map.of("cron", "0 99 * * *"),
@@ -167,6 +185,30 @@ class ScheduleCalculatorTest {
         assertThatThrownBy(() -> ScheduleCalculator.nextRunAt("cron", Map.of(), "UTC", NOW))
                 .isInstanceOf(ScheduleValidationException.class)
                 .hasMessage("cron schedule requires schedule_spec.cron");
+    }
+
+    @Test
+    void timezoneRejectsFixedOffsetAliasesButKeepsNamedRegions() {
+        // Java's ZoneId.of accepts "UTC+08:00"-style prefixed offsets that Python zoneinfo rejects.
+        assertThatThrownBy(() -> ScheduleCalculator.validateTimezone("UTC+08:00"))
+                .isInstanceOf(ScheduleValidationException.class)
+                .hasMessage("Unknown timezone: UTC+08:00");
+        assertThatThrownBy(() -> ScheduleCalculator.validateTimezone("GMT+08:00"))
+                .isInstanceOf(ScheduleValidationException.class);
+        assertThatThrownBy(() -> ScheduleCalculator.validateTimezone("UT+08:00"))
+                .isInstanceOf(ScheduleValidationException.class);
+        assertThatThrownBy(() -> ScheduleCalculator.validateTimezone("UTC+8"))
+                .isInstanceOf(ScheduleValidationException.class);
+        assertThatThrownBy(() -> ScheduleCalculator.validateTimezone("Z"))
+                .isInstanceOf(ScheduleValidationException.class);
+        assertThatThrownBy(() -> ScheduleCalculator.validateTimezone("UT"))
+                .isInstanceOf(ScheduleValidationException.class);
+
+        assertThat(ScheduleCalculator.validateTimezone("UTC")).isEqualTo("UTC");
+        assertThat(ScheduleCalculator.validateTimezone("Etc/GMT+8")).isEqualTo("Etc/GMT+8");
+        assertThat(ScheduleCalculator.validateTimezone("Etc/UTC")).isEqualTo("Etc/UTC");
+        assertThat(ScheduleCalculator.validateTimezone("America/New_York"))
+                .isEqualTo("America/New_York");
     }
 
     @Test

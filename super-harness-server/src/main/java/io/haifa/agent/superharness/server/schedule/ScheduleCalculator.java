@@ -31,14 +31,30 @@ public final class ScheduleCalculator {
         }
         try {
             ZoneId zone = ZoneId.of(timezone);
-            if (zone instanceof ZoneOffset) {
-                // Python zoneinfo rejects fixed-offset identifiers; only named regions resolve.
+            // Python zoneinfo rejects fixed-offset identifiers and Java's "UTC+08:00"-style
+            // prefixed-offset aliases; only named regions (UTC, Etc/*, America/*) resolve.
+            if (zone instanceof ZoneOffset || isFixedOffsetAlias(zone.getId())) {
                 throw new ScheduleValidationException("Unknown timezone: " + timezone);
             }
             return timezone;
         } catch (DateTimeException failure) {
             throw new ScheduleValidationException("Unknown timezone: " + timezone);
         }
+    }
+
+    private static boolean isFixedOffsetAlias(String id) {
+        if ("UT".equals(id)) {
+            return true;
+        }
+        for (String prefix : new String[] {"UTC", "GMT", "UT"}) {
+            if (id.length() > prefix.length() && id.startsWith(prefix)) {
+                char suffix = id.charAt(prefix.length());
+                if (suffix == '+' || suffix == '-') {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     public static String normalizeCronExpression(String expression) {

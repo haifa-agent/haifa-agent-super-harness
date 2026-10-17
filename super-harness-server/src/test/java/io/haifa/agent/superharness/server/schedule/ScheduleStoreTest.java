@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
@@ -204,9 +205,83 @@ class ScheduleStoreTest {
         assertThat(updated.lastError()).isNull();
     }
 
+    // W19-M1-09 launch accounting must roll back with the task row (Codex P1: runs.put before mutate).
     @Test
-    void runHistoryIsPagedAndFilteredByStatus(@TempDir Path dataDirectory) throws Exception {
+    void launchAccountingRollsBackWithFailedPersistence(@TempDir Path dataDirectory) throws Exception {
+        FailingStore store = new FailingStore(JSON, dataDirectory);
+        ScheduledTask task = store.createTask(newTask("Atomic accounting"), NOW);
+        ScheduledTaskRun run = store.createRun(newRun(task.id(), OWNER), NOW);
+        assertThat(store.claimQueuedRun(run.id(), NOW)).isTrue();
+
+        ScheduleStore.TaskLaunchUpdate launch = new ScheduleStore.TaskLaunchUpdate("running",
+                NOW.plusSeconds(600), NOW, null, "thread-9", null, true, false, run.id());
+        store.failNext = true;
+        assertThatThrownBy(() -> store.updateTaskAfterLaunch(task.id(), launch, NOW))
+                .isInstanceOf(IllegalStateException.class);
+
+        // The occurrence accounting marker rolled back with the failed task write.
+        assertThat(store.findRun(run.id()).orElseThrow().launchAccounted()).isNotEqualTo(Boolean.TRUE);
+        assertThat(store.findTaskInternal(task.id()).orElseThrow().runCount()).isZero();
+
+        // A retry now accounts exactly once, and a further retry is a no-op.
+        assertThat(store.updateTaskAfterLaunch(task.id(), launch, NOW)).isTrue();
+        assertThat(store.findTaskInternal(task.id()).orElseThrow().runCount()).isEqualTo(1);
+        assertThat(store.findRun(run.id()).orElseThrow().launchAccounted()).isEqualTo(Boolean.TRUE);
+        assertThat(store.updateTaskAfterLaunch(task.id(), launch, NOW.plusSeconds(1))).isTrue();
+        assertThat(store.findTaskInternal(task.id()).orElseThrow().runCount()).isEqualTo(1);
+    }
+
+    // W19-M1-09 recoverable accounting with no stable run id still increments at most once (Codex P2).
+    @Test
+    void occurrenceAccountingDoesNotDoubleIncrementWithoutStableRunId(@TempDir Path dataDirectory)
+            throws Exception {
         ScheduleStore store = new ScheduleStore(JSON, dataDirectory);
+        ScheduledTask task = store.createTask(newTask("Nil run id"), NOW);
+        ScheduledTaskRun run = store.createRun(newRun(task.id(), OWNER), NOW);
+
+        ScheduleStore.TaskLaunchUpdate launch = new ScheduleStore.TaskLaunchUpdate("running",
+                NOW.plusSeconds(600), NOW, null, "thread-9", null, true, false, run.id());
+        assertThat(store.updateTaskAfterLaunch(task.id(), launch, NOW)).isTrue();
+        assertThat(store.updateTaskAfterLaunch(task.id(), launch, NOW.plusSeconds(1))).isTrue();
+        assertThat(store.updateTaskAfterLaunch(task.id(), launch, NOW.plusSeconds(2))).isTrue();
+        assertThat(store.findTaskInternal(task.id()).orElseThrow().runCount()).isEqualTo(1);
+    }
+
+    // W19-M1-05/06 bounded history: completed occurrences are trimmed before the document hits its
+    // size bound, while the active occurrence is always retained (Codex P1: unbounded growth).
+    @Test
+    void occurrenceHistoryIsBoundedPerTask(@TempDir Path dataDirectory) throws Exception {
+        ScheduleStore store = new ScheduleStore(JSON, dataDirectory);
+        ScheduledTask task = store.createTask(newTask("Bounded"), NOW);
+        for (int index = 0; index < 260; index++) {
+            ScheduledTaskRun run = store.createRun(newRun(task.id(), OWNER), NOW.plusSeconds(index));
+            store.updateRunStatus(run.id(), ScheduledRunStatus.SUCCESS, "run-" + index, null,
+                    NOW.plusSeconds(index + 1), NOW.plusSeconds(index + 1), false);
+        }
+        assertThat(store.listRuns(task.id(), OWNER, 200, 0, null)).hasSize(200);
+        assertThat(store.listRuns(task.id(), OWNER, 200, 200, null)).isEmpty();
+        assertThat(Files.size(dataDirectory.resolve("scheduler").resolve("state.json")))
+                .isLessThan(16L * 1024 * 1024);
+
+        // The trimmed history survives a restart.
+        assertThat(new ScheduleStore(JSON, dataDirectory).listRuns(task.id(), OWNER, 200, 200, null))
+                .isEmpty();
+    }
+
+    // W19-M1-07 deleting a task also clears its occurrence history (Codex P1 cleanup).
+    @Test
+    void deleteTaskRemovesItsOccurrences(@TempDir Path dataDirectory) throws Exception {
+        ScheduleStore store = new ScheduleStore(JSON, dataDirectory);
+        ScheduledTask task = store.createTask(newTask("Delete"), NOW);
+        ScheduledTaskRun run = store.createRun(newRun(task.id(), OWNER), NOW);
+
+        assertThat(store.deleteTask(task.id(), OWNER)).isTrue();
+        assertThat(store.findRun(run.id())).isEmpty();
+        assertThat(new ScheduleStore(JSON, dataDirectory).findRun(run.id())).isEmpty();
+    }
+
+    @Test
+    void runHistoryIsPagedAndFilteredByStatus(@TempDir Path dataDirectory) throws Exception {        ScheduleStore store = new ScheduleStore(JSON, dataDirectory);
         ScheduledTask task = store.createTask(newTask("History"), NOW);
         for (int index = 0; index < 3; index++) {
             ScheduledTaskRun run = store.createRun(newRun(task.id(), OWNER), NOW.plusSeconds(index));
