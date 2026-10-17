@@ -144,17 +144,27 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
 
     @Override
     public void replyCard(String messageId, String text) throws Exception {
-        replyInteractive(messageId, cardPayloadMap(text == null ? "" : text));
+        replyCardId(messageId, text);
+    }
+
+    @Override
+    public Optional<String> replyCardId(String messageId, String text) throws Exception {
+        return replyInteractiveId(messageId, cardPayloadMap(text == null ? "" : text));
     }
 
     @Override
     public void replyInteractive(String messageId, Map<String, Object> card) throws Exception {
+        replyInteractiveId(messageId, card);
+    }
+
+    @Override
+    public Optional<String> replyInteractiveId(String messageId, Map<String, Object> card) throws Exception {
         Client api;
         synchronized (lock) {
             api = apiClient;
         }
         if (api == null || messageId == null || messageId.isBlank() || card == null) {
-            return;
+            return Optional.empty();
         }
         String content = Jsons.DEFAULT.toJson(card);
         ReplyMessageReq request = ReplyMessageReq.newBuilder()
@@ -164,7 +174,12 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                         .content(content)
                         .build())
                 .build();
-        api.im().message().reply(request);
+        var response = api.im().message().reply(request);
+        if (response == null || !response.success()) {
+            throw new IllegalStateException("Feishu reply message failed");
+        }
+        return response.getData() == null ? Optional.empty()
+                : Optional.ofNullable(response.getData().getMessageId());
     }
 
     @Override
