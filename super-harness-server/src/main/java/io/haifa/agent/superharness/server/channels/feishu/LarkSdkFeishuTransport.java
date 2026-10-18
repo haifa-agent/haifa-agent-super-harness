@@ -568,18 +568,14 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
     }
 
     /**
-     * DeerFlow interactive card: markdown element so code fences, headings, and emphasis render in
-     * the Feishu client ({@code feishu.py} {@code _build_card_content}).
+     * DeerFlow interactive card: Card JSON 2.0 presentation so code fences, headings, tables,
+     * and emphasis render properly in Feishu desktop and mobile clients.
      */
     static Object cardPayload(String text) {
         return cardPayloadMap(text);
     }
 
     private static Map<String, Object> cardPayloadMap(String text) {
-        return Map.of(
-                "config",
-                Map.of("wide_screen_mode", true, "update_multi", true),
-                "elements",
-                java.util.List.of(Map.of("tag", "markdown", "content", text)));
+        return FeishuCardPresenter.cardPayload(text == null ? "" : text);
     }
 }
