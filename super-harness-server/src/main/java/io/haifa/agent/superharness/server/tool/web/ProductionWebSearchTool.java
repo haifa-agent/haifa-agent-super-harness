@@ -80,6 +80,16 @@ public final class ProductionWebSearchTool
 
     @Override
     public Output invoke(Input input, JavaToolContext context) {
+        try {
+            return doInvoke(input, context);
+        } catch (VirtualMachineError fatal) {
+            throw fatal;
+        } catch (Throwable failure) {
+            return unexpected(failure, input == null ? "" : input.query());
+        }
+    }
+
+    private Output doInvoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(context, "context");
         if (!SDK_LOCAL_PRINCIPAL.equals(context.principal().principalId())
@@ -155,6 +165,22 @@ public final class ProductionWebSearchTool
 
     private static String noResults(String query) {
         return errorPayload("No results found", query);
+    }
+
+    /** A Tool failure never fails the Run: log the class and answer with the error payload. */
+    private static Output unexpected(Throwable failure, String query) {
+        LOG.log(System.Logger.Level.WARNING, "web_search invocation failed: {0}: {1}",
+                failure.getClass().getName(), bounded(failure.getMessage()));
+        return new Output(errorPayload(
+                "web_search invocation failed: " + failure.getClass().getSimpleName(), query));
+    }
+
+    private static String bounded(String message) {
+        if (message == null) {
+            return "";
+        }
+        String single = message.replace('\n', ' ').replace('\r', ' ');
+        return single.length() <= 200 ? single : single.substring(0, 200);
     }
 
     private static String errorPayload(String message, String query) {

@@ -87,6 +87,16 @@ public final class ProductionWebFetchTool
 
     @Override
     public Output invoke(Input input, JavaToolContext context) {
+        try {
+            return doInvoke(input, context);
+        } catch (VirtualMachineError fatal) {
+            throw fatal;
+        } catch (Throwable failure) {
+            return unexpected(failure, input == null ? "" : input.url());
+        }
+    }
+
+    private Output doInvoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(context, "context");
         if (!SDK_LOCAL_PRINCIPAL.equals(context.principal().principalId())
@@ -181,6 +191,22 @@ public final class ProductionWebFetchTool
     }
 
     /** Same contract as {@code web_search}: a guard rejection is a Tool error, not a Run error. */
+    /** A Tool must not take the Run down: report the failure as the frozen error payload. */
+    private static Output unexpected(Throwable failure, String url) {
+        LOG.log(System.Logger.Level.WARNING, "web_fetch invocation failed: {0}: {1}",
+                failure.getClass().getName(), bounded(failure.getMessage()));
+        return Output.failure(url,
+                "web_fetch invocation failed: " + failure.getClass().getSimpleName());
+    }
+
+    private static String bounded(String message) {
+        if (message == null) {
+            return "";
+        }
+        String single = message.replace((char) 10, ' ').replace((char) 13, ' ');
+        return single.length() <= 200 ? single : single.substring(0, 200);
+    }
+
     private static Output refused(String guard, String url, JavaToolContext context, String message) {
         LOG.log(System.Logger.Level.WARNING,
                 "web_fetch refused guard={0} principal={1}/{2} deadline={3} now={4}",
