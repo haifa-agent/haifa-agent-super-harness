@@ -326,9 +326,16 @@ public final class HaifaRunBridge implements AutoCloseable {
                 (skillProjection.recovery() ? "recovery:" : "") + skillProjection.fingerprint();
         HostExecutionPlatforms.HostExecutionPlatform hostExecution = null;
         SkillScriptPlatforms.SkillScriptPlatform skillScriptPlatform = null;
+        // One credential boundary for the whole Agent. SH's env-backed broker also answers the
+        // credentials a Java Tool declares (DEEPSEEK_TOOL_API_KEY, JINA_API_KEY); handing it to the MCP
+        // platform as the fallback keeps MCP header secrets authoritative instead of replacing the
+        // boundary, which used to fail such a Tool closed whenever MCP servers were configured.
+        CredentialPlatformContribution toolCredentials =
+                new CredentialPlatformContribution(id -> Optional.ofNullable(System.getenv(id)));
         McpToolPlatforms.McpToolPlatform platform = mcpSpecs.isEmpty() ? null : McpToolPlatforms.connect(
                 mcpSpecs, new TenantRef(McpRunTools.TENANT_ID),
-                new PrincipalRef(AccessOwner.current(), McpRunTools.PRINCIPAL_TYPE));
+                new PrincipalRef(AccessOwner.current(), McpRunTools.PRINCIPAL_TYPE),
+                toolCredentials.broker());
         try {
             this.mcpToolNames = platform == null ? Set.of() : Set.copyOf(platform.toolNames());
             this.delegationSignature = delegation.signature(tools, this.mcpSignature, this.skillSignature, this.mcpToolNames);
@@ -537,12 +544,11 @@ public final class HaifaRunBridge implements AutoCloseable {
             }
             if (platform != null) {
                 // The SDK owns per-server connection isolation, discovery, naming, invocation
-                // and release; SH only declares the projections. applyTo sets the builder's
-                // credentials contribution, so SH must not set another one.
+                // and release; SH only declares the projections. The platform claims the single
+                // credentials contribution built above, with SH's broker as its fallback.
                 platform.applyTo(builder);
             } else {
-                builder.credentials(new CredentialPlatformContribution(
-                        id -> Optional.ofNullable(System.getenv(id))));
+                builder.credentials(toolCredentials);
             }
             // Optional host bootstrap: the default SDK virtual-thread executor stays in place
             // when no factory is supplied; the SDK owns the fresh executor and its closing.
