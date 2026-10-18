@@ -13,6 +13,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class RecordingFeishuTransport implements FeishuTransport {
     public record CardReply(String messageId, String text) {}
 
+    public record TextReply(String messageId, String text) {}
+
     public record InteractiveReply(String messageId, Map<String, Object> card) {}
 
     public record ReactionAdd(String messageId, String emojiType, String reactionId) {}
@@ -20,7 +22,9 @@ public final class RecordingFeishuTransport implements FeishuTransport {
     public record ReactionDelete(String messageId, String reactionId, boolean success) {}
 
     private final CopyOnWriteArrayList<CardReply> replies = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<TextReply> textReplies = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<InteractiveReply> interactiveReplies = new CopyOnWriteArrayList<>();
+    private final AtomicBoolean failInteractive = new AtomicBoolean(false);
     private final CopyOnWriteArrayList<ReactionAdd> reactionAdds = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<ReactionDelete> reactionDeletes = new CopyOnWriteArrayList<>();
     private final ConcurrentHashMap<String, byte[]> resources = new ConcurrentHashMap<>();
@@ -55,12 +59,30 @@ public final class RecordingFeishuTransport implements FeishuTransport {
 
     @Override
     public void replyCard(String messageId, String text) {
+        if (failInteractive.get()) {
+            throw new FeishuDeliveryException(
+                    FeishuDeliveryException.Failure.INVALID, 200830, "log-x", "interactive", "2.0", "simulated");
+        }
         replies.add(new CardReply(messageId, text));
     }
 
     @Override
     public void replyInteractive(String messageId, Map<String, Object> card) {
+        if (failInteractive.get()) {
+            throw new FeishuDeliveryException(
+                    FeishuDeliveryException.Failure.INVALID, 200830, "log-x", "interactive", "2.0", "simulated");
+        }
         interactiveReplies.add(new InteractiveReply(messageId, card));
+    }
+
+    @Override
+    public void replyText(String messageId, String text) {
+        textReplies.add(new TextReply(messageId, text));
+    }
+
+    /** Makes the next and subsequent {@link #replyInteractive} calls fail (delivery-fallback test). */
+    public void failInteractiveDelivery() {
+        failInteractive.set(true);
     }
 
     /** Fixture bytes for {@link #downloadResource}; keyed by {@code messageId + ":" + resourceKey}. */
@@ -105,6 +127,10 @@ public final class RecordingFeishuTransport implements FeishuTransport {
 
     public List<InteractiveReply> interactiveReplies() {
         return new ArrayList<>(interactiveReplies);
+    }
+
+    public List<TextReply> textReplies() {
+        return new ArrayList<>(textReplies);
     }
 
     public List<ReactionAdd> reactionAdds() {

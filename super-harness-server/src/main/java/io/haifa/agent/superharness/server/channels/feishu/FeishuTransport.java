@@ -41,8 +41,16 @@ public interface FeishuTransport extends AutoCloseable {
     /** Reply with a simple interactive card (final assistant text or bind status). */
     void replyCard(String messageId, String text) throws Exception;
 
-    /** Reply with a card 1.0 payload that may include an {@code action} button row. */
+    /** Reply with a Feishu Card JSON 2.0 payload ({@code schema: "2.0"}, {@code body.elements}). */
     void replyInteractive(String messageId, Map<String, Object> card) throws Exception;
+
+    /**
+     * Reply with a plain text message. Used as the safe fallback when interactive-card delivery
+     * fails; the default delegates to the card path for transports without a text seam.
+     */
+    default void replyText(String messageId, String text) throws Exception {
+        replyCard(messageId, text);
+    }
 
     /**
      * Download an inbound image/file resource. {@code resourceType} is the Feishu resource type
