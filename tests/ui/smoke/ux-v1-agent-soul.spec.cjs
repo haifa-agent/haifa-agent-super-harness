@@ -188,7 +188,15 @@ async function agentTurn(page, context, pending, info, label, identities, name) 
     expect(call.status).toBe("SUCCEEDED");
   }
   const state = await readState(context, identity.threadId);
-  return { identity, state, durationMs: Date.now() - started };
+  const raw = await response.text();
+  const durationMs = Date.now() - started;
+  await evidence(info, label, {
+    derived: true, identity, status: "success", durationMs,
+    actualModelCalls: modelCalls.map(({ model_call_id, run_id, provider_id, model_id, status, attempt }) =>
+      ({ model_call_id, run_id, provider_id, model_id, status, attempt })),
+    streamSha256: hash(raw), streamBytes: Buffer.byteLength(raw),
+  });
+  return { identity, state, durationMs };
 }
 
 test("Agent SOUL: existing agent chat update_agent -> next Run -> reentry", async ({ page, context }, info) => {
@@ -238,6 +246,9 @@ test("Agent SOUL: existing agent chat update_agent -> next Run -> reentry", asyn
 
     // Run 2: next Run in the same thread must re-read the stored SOUL (signature changes).
     const metadataAfterUpdate = (await (await context.request.get(`${APP}/api/threads/${updated.identity.threadId}`)).json()).metadata;
+    expect(metadataAfterUpdate.haifa_agent_name).toBe(name);
+    expect(metadataAfterUpdate.haifa_agent_bootstrap).toBe(false);
+    expect(metadataAfterUpdate.haifa_lead_prompt_signature).toMatch(/^[0-9a-f]{64}$/);
     const second = nextStream(page);
     await input.fill("请只回复 OK，不要调用任何工具。");
     await input.press("Enter");
@@ -257,8 +268,21 @@ test("Agent SOUL: existing agent chat update_agent -> next Run -> reentry", asyn
     await page.locator('[data-slot="card"]').filter({ hasText: name })
       .getByRole("button", { name: /^(Chat|对话)$/ }).click();
     await expect(page).toHaveURL(new RegExp(`/workspace/agents/${name}/chats/new$`));
+    const reentryInput = page.locator('textarea[name="message"]');
+    await expect(reentryInput).toBeEnabled();
+    const reentryStream = nextStream(page);
+    await reentryInput.fill("请只回复 OK，不要调用任何工具。");
+    await reentryInput.press("Enter");
+    const reentry = await agentTurn(page, context, reentryStream, info, "03-reentry-run", identities, name);
+    expect(reentry.identity.threadId).not.toBe(next.identity.threadId);
+    expect(reentry.identity.runId).not.toBe(next.identity.runId);
+    const reentryMetadata = (await (await context.request.get(`${APP}/api/threads/${reentry.identity.threadId}`)).json()).metadata;
+    expect(reentryMetadata.haifa_agent_name).toBe(name);
+    expect(reentryMetadata.haifa_agent_bootstrap).toBe(false);
+    expect(reentryMetadata.haifa_lead_prompt_signature).toBe(metadataAfterNext.haifa_lead_prompt_signature);
     const reentered = await (await context.request.get(`${APP}/api/agents/${name}`)).json();
     expect(reentered.soul, "SOUL persists after browser reentry").toContain(markerB);
+    expect(hash(reentered.soul), "reentry preserves the exact stored SOUL").toBe(hash(afterUpdate.soul));
     const shot = info.outputPath("existing-agent-reentry.png");
     await page.screenshot({ path: shot, fullPage: true });
     await info.attach("existing-agent-reentry", { path: shot, contentType: "image/png" });
@@ -269,6 +293,7 @@ test("Agent SOUL: existing agent chat update_agent -> next Run -> reentry", asyn
       signatures: {
         afterUpdate: metadataAfterUpdate.haifa_lead_prompt_signature,
         afterNext: metadataAfterNext.haifa_lead_prompt_signature,
+        afterReentry: reentryMetadata.haifa_lead_prompt_signature,
       },
       identities,
     });
