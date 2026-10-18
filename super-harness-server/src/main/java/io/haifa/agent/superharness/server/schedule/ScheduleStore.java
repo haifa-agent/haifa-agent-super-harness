@@ -131,6 +131,68 @@ public class ScheduleStore {
     }
 
     /**
+     * Applies an allow-listed patch only when the task is mutable, with the RUNNING status and the
+     * single active-occurrence check evaluated and the write performed under one lock. This closes
+     * the window in which an occurrence could be admitted between a separate guard read and
+     * {@link #updateTask}, and then consume the patched prompt/agent/Thread. Raises
+     * {@link ActiveOccurrenceConflict} for a RUNNING task or any queued/launching/running occurrence.
+     */
+    public Optional<ScheduledTask> updateTaskIfMutable(String taskId, String ownerId,
+            Map<String, Object> updates, Instant now) {
+        Objects.requireNonNull(updates, "updates");
+        Objects.requireNonNull(now, "now");
+        synchronized (lock) {
+            ScheduledTask current = tasks.get(taskId);
+            if (current == null || !current.userId().equals(ownerId)) {
+                return Optional.empty();
+            }
+            if (current.status() == ScheduledTaskStatus.RUNNING) {
+                throw new ActiveOccurrenceConflict(taskId, current.status().wire());
+            }
+            ScheduledTaskRun active = findActive(taskId).orElse(null);
+            if (active != null) {
+                throw new ActiveOccurrenceConflict(taskId, active.status().wire());
+            }
+            ScheduledTask updated = applyUpdates(current, updates, now);
+            mutate(() -> tasks.put(taskId, updated));
+            return Optional.of(updated);
+        }
+    }
+
+    /**
+     * Atomically resumes a paused, non-terminal task to {@code enabled}. A terminal task (already
+     * completed/failed/cancelled) or a task that is not paused is rejected with
+     * {@link ScheduleValidationException} (mapped to 422), and an active occurrence conflicts with
+     * {@link ActiveOccurrenceConflict} (mapped to 409). Because the guard and the write share one
+     * lock, a resume can never re-arm an already-run {@code once} task (whose {@code next_run_at}
+     * stays in the past) nor race an occurrence admission. Returns empty when the task is not the
+     * owner's.
+     */
+    public Optional<ScheduledTask> resumeTask(String taskId, String ownerId, Instant now) {
+        Objects.requireNonNull(now, "now");
+        synchronized (lock) {
+            ScheduledTask current = tasks.get(taskId);
+            if (current == null || !current.userId().equals(ownerId)) {
+                return Optional.empty();
+            }
+            ScheduledTaskRun active = findActive(taskId).orElse(null);
+            if (active != null) {
+                throw new ActiveOccurrenceConflict(taskId, active.status().wire());
+            }
+            if (current.status().terminal()) {
+                throw new ScheduleValidationException(
+                        "terminal scheduled task cannot be resumed; update its schedule to a future time");
+            }
+            if (current.status() != ScheduledTaskStatus.PAUSED) {
+                throw new ScheduleValidationException("only a paused scheduled task can be resumed");
+            }
+            ScheduledTask resumed = withStatus(current, ScheduledTaskStatus.ENABLED, now);
+            mutate(() -> tasks.put(taskId, resumed));
+            return Optional.of(resumed);
+        }
+    }
+
+    /**
      * Deletes an owner's task, cancelling any waiting {@code queued} occurrence first. A
      * launching/running occurrence makes the delete conflict ({@link ActiveOccurrenceConflict}) so a
      * deleting task never strands an executing Run.
