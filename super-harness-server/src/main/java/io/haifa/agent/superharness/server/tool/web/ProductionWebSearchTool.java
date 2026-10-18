@@ -28,6 +28,8 @@ public final class ProductionWebSearchTool
         implements JavaTool<ProductionWebSearchTool.Input, ProductionWebSearchTool.Output> {
     static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final System.Logger LOG =
+            System.getLogger("io.haifa.agent.superharness.server.tool.web");
     private final JavaToolSpec<Input, Output> spec;
 
     private final WebToolConfig config;
@@ -64,7 +66,12 @@ public final class ProductionWebSearchTool
                 .title("Search the web")
                 .description(ToolDescriptions.load("web_search"))
                 .networkAccess(networkHost);
-        if (config.searchProvider() == WebToolConfig.WebSearchProvider.DEEPSEEK) {
+        // Declare the SDK credential requirement only when the product has no key of its own:
+        // a declared requirement is resolved before the Tool runs, and a stale Runtime binding
+        // then fails the call without ever reaching invoke. With a configured key the Tool reads
+        // it itself, so the requirement would only add that gate.
+        if (config.searchProvider() == WebToolConfig.WebSearchProvider.DEEPSEEK
+                && config.deepseekToolApiKey().isEmpty()) {
             builder.credentialRequirements(new CredentialRequirement(
                     WebToolConfig.DEEPSEEK_TOOL_API_KEY_CREDENTIAL));
         }
@@ -78,15 +85,26 @@ public final class ProductionWebSearchTool
 
     @Override
     public Output invoke(Input input, JavaToolContext context) {
+        try {
+            return doInvoke(input, context);
+        } catch (VirtualMachineError fatal) {
+            throw fatal;
+        } catch (Throwable failure) {
+            return unexpected(failure, input == null ? "" : input.query());
+        }
+    }
+
+    private Output doInvoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(context, "context");
         if (!SDK_LOCAL_PRINCIPAL.equals(context.principal().principalId())
                 || !"user".equals(context.principal().principalType())) {
-            throw new IllegalArgumentException("web_search requires the local Thread owner");
+            return refused("principal", input.query(), context,
+                    "web_search requires the local Thread owner");
         }
         context.cancellation().throwIfCancellationRequested();
         if (!Instant.now().isBefore(context.deadline())) {
-            throw new IllegalStateException("web_search deadline has expired");
+            return refused("deadline", input.query(), context, "web_search deadline has expired");
         }
 
         int maxResults = input.max_results().orElse(config.maxResults());
@@ -135,8 +153,39 @@ public final class ProductionWebSearchTool
         return output.result();
     }
 
+    /**
+     * A guard rejection is a Tool-level error, not a Run-fatal one: the model still receives the
+     * frozen error payload, and the bounded facts are logged for the operator.
+     */
+    private static Output refused(String guard, String query, JavaToolContext context, String message) {
+        LOG.log(System.Logger.Level.WARNING,
+                "web_search refused guard={0} principal={1}/{2} deadline={3} now={4}",
+                guard,
+                context.principal().principalId(),
+                context.principal().principalType(),
+                context.deadline(),
+                Instant.now());
+        return new Output(errorPayload(message, query));
+    }
+
     private static String noResults(String query) {
         return errorPayload("No results found", query);
+    }
+
+    /** A Tool failure never fails the Run: log the class and answer with the error payload. */
+    private static Output unexpected(Throwable failure, String query) {
+        LOG.log(System.Logger.Level.WARNING, "web_search invocation failed: {0}: {1}",
+                failure.getClass().getName(), bounded(failure.getMessage()));
+        return new Output(errorPayload(
+                "web_search invocation failed: " + failure.getClass().getSimpleName(), query));
+    }
+
+    private static String bounded(String message) {
+        if (message == null) {
+            return "";
+        }
+        String single = message.replace('\n', ' ').replace('\r', ' ');
+        return single.length() <= 200 ? single : single.substring(0, 200);
     }
 
     private static String errorPayload(String message, String query) {
