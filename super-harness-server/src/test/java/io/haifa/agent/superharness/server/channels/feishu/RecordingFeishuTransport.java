@@ -76,8 +76,26 @@ public final class RecordingFeishuTransport implements FeishuTransport {
     }
 
     @Override
+    public Optional<String> replyCardId(String messageId, String text) {
+        replyCard(messageId, text);
+        return Optional.of("reply-card-" + replies.size());
+    }
+
+    @Override
+    public Optional<String> replyInteractiveId(String messageId, Map<String, Object> card) {
+        replyInteractive(messageId, card);
+        return Optional.of("reply-interactive-" + interactiveReplies.size());
+    }
+
+    @Override
     public void replyText(String messageId, String text) {
         textReplies.add(new TextReply(messageId, text));
+    }
+
+    @Override
+    public Optional<String> replyTextId(String messageId, String text) {
+        replyText(messageId, text);
+        return Optional.of("reply-text-" + textReplies.size());
     }
 
     /** Makes the next and subsequent {@link #replyInteractive} calls fail (delivery-fallback test). */

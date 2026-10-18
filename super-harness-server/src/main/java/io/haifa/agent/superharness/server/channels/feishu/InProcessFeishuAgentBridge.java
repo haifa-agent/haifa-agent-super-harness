@@ -209,6 +209,20 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
         return AccessOwner.call(owner, () -> threads.activeRunId(threadId).isPresent());
     }
 
+    @Override
+    public void createThread(String ownerUserId, String threadId, Map<String, Object> channelMetadata)
+            throws Exception {
+        String owner = ownerUserId == null || ownerUserId.isBlank() ? AccessOwner.DEFAULT : ownerUserId;
+        AccessOwner.call(owner, () -> {
+            try {
+                ensureThread(threadId, channelMetadata);
+                return null;
+            } catch (Exception exception) {
+                throw new IllegalStateException("Feishu thread create failed", exception);
+            }
+        });
+    }
+
     private void ensureThread(String threadId, Map<String, Object> channelMetadata) throws Exception {
         ObjectNode body = json.createObjectNode();
         body.put("thread_id", threadId);

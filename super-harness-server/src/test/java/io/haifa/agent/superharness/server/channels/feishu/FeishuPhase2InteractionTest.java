@@ -47,6 +47,7 @@ class FeishuPhase2InteractionTest {
         assertThat(submitted).contains("\"version\":\"1.2.3\"").contains("\"env\":\"prod\"");
 
         Harness harness = harness();
+        bindRequest(harness, "req-form");
         harness.bridge.pending = pending;
         harness.worker.handleInbound(new FeishuInboundMessage(
                 "oc_chat",
@@ -206,6 +207,7 @@ class FeishuPhase2InteractionTest {
         assertThat(FeishuInteraction.formMissingRequired(pending, Map.of())).isFalse();
 
         Harness harness = harness();
+        bindRequest(harness, "req-opt");
         harness.bridge.pending = pending;
         String toast = harness.worker.acceptCardAction(new FeishuInboundMessage(
                 "oc_chat",
@@ -331,14 +333,27 @@ class FeishuPhase2InteractionTest {
                 java.time.Instant.now().plusSeconds(60),
                 ChannelConnectionStore.MAX_PENDING_CONNECT_CODES_PER_PROVIDER);
         connections.bindFeishuFromConnectCode(code, "ou_owner", "oc_chat", Map.of());
-        return new Harness(worker, transportRef.get(), bridge, connections);
+        return new Harness(worker, transportRef.get(), bridge, connections, threads);
     }
 
     private record Harness(
             FeishuChannelWorker worker,
             RecordingFeishuTransport transport,
             ScriptedBridge bridge,
-            ChannelConnectionStore connections) {}
+            ChannelConnectionStore connections,
+            FeishuChatThreadStore threads) {}
+
+    /** Bind the immutable card request alias the way the production card-delivery path does. */
+    private static void bindRequest(Harness harness, String requestId) {
+        String connectionId = harness
+                .connections()
+                .findConnectionByExternalIdentity("feishu", "ou_owner", "oc_chat")
+                .orElseThrow()
+                .path("id")
+                .asText("");
+        harness.threads()
+                .bindAliasIfAbsent(connectionId, "oc_chat", "request:" + requestId, "feishu-test-thread");
+    }
 
     private static final class ScriptedBridge implements FeishuAgentBridge {
         private final AtomicInteger turns = new AtomicInteger();
