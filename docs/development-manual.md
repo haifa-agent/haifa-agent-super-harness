@@ -211,6 +211,13 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -GatewayOnly
   `read_only` 的 MCP 工具保留强制审批。
 - **默认 Web 工具**：三个生产 Web 工具通过 `JavaToolSpec.networkAccess(hosts)` 声明 `NETWORK_ACCESS` 与逻辑
   服务主机，仅它们被 `autoApproveReadOnlyNetworkTools` 豁免；代理配置见 [README「默认 Web 工具的环境代理」](../README.md#默认-web-工具的环境代理)。
+- **全局审批级别（默认 `ask`）**：进程变量 `HAIFA_SUPER_HARNESS_APPROVAL_MODE=ask|auto|deny` 选择交给 SDK 的策略数据集，
+  缺省、空、`ask` 或非法值一律保持今天的逐次审批（fail closed，拼错不会放大权限）。`auto` 对齐上游 CodingAgent 的
+  `--approval auto`：不再声明 `FILE_WRITE` / `PROCESS_EXECUTION` / `NETWORK_ACCESS` / `EXTERNAL_SYSTEM_MUTATION` /
+  `PERMISSION_ELEVATION` 的 ASK 规则，并以 `ApprovalMode.AUTO` 装配，因此 `write_file`、宿主 `execution_run`、
+  非只读 MCP 与技能脚本不再逐个弹审批；`deny` 把同样的能力改为 DENY。两者都保留 CRITICAL 风险 DENY，凭据
+  `REAUTHENTICATE` 在 `auto` 下仍要求审批。级别只在 Gateway 启动时读取、对之后新建的 Run 生效；已在等待的审批按原级别处理。
+  该开关是信任扩大，不得用作验收或演示证据，也不得据此放宽任何 Oracle（登记见 SHPM issue `W05-APPROVAL-LEVEL`，归属 W21）。
 - **宿主 Shell 工具（默认关闭）**：设进程变量 `HAIFA_SUPER_HARNESS_HOST_SHELL=on`（缺省、空、`off` 或非法值
   均保持关闭，关闭时工具面与披露逐字不变）后，经公开 `HostExecutionPlatforms.hostGuarded` 注册 SDK 的
   `execution_run`。命令或脚本以 Gateway OS 用户在**唯一注册的宿主 workspace** 内执行；模型不能选择 workspace
