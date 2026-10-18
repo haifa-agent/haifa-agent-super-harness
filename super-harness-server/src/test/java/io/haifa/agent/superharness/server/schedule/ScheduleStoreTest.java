@@ -295,6 +295,50 @@ class ScheduleStoreTest {
         assertThat(store.listRuns(task.id(), OWNER, 2, 2, null)).hasSize(1);
     }
 
+    // W19-M3-10 guarded update: the mutability check and the write share one lock, so an active
+    // occurrence rejects the patch without modifying the stored row.
+    @Test
+    void guardedUpdateRejectsActiveOccurrenceWithoutWriting(@TempDir Path dataDirectory)
+            throws Exception {
+        ScheduleStore store = new ScheduleStore(JSON, dataDirectory);
+        ScheduledTask task = store.createTask(newTask("Guarded"), NOW);
+        ScheduledTaskRun run = store.createRun(newRun(task.id(), OWNER), NOW);
+
+        assertThatThrownBy(() -> store.updateTaskIfMutable(task.id(), OWNER,
+                Map.of("prompt", "patched"), NOW))
+                .isInstanceOf(ScheduleStore.ActiveOccurrenceConflict.class);
+        assertThat(store.findTask(task.id(), OWNER).orElseThrow().prompt()).isEqualTo("prompt");
+
+        // After the occurrence reaches a terminal status the guarded write applies.
+        store.updateRunStatus(run.id(), ScheduledRunStatus.INTERRUPTED, null, "done", null, NOW, false);
+        assertThat(store.updateTaskIfMutable(task.id(), OWNER, Map.of("prompt", "patched"), NOW)
+                .orElseThrow().prompt()).isEqualTo("patched");
+        assertThat(store.updateTaskIfMutable(task.id(), OTHER, Map.of("prompt", "hijack"), NOW))
+                .isEmpty();
+    }
+
+    // W19-M3-09 resume is limited to a paused, non-terminal task: an enabled or terminal task is
+    // rejected so a run-once task can never be re-armed from its past next_run_at.
+    @Test
+    void resumeRequiresPausedNonTerminalTask(@TempDir Path dataDirectory) throws Exception {
+        ScheduleStore store = new ScheduleStore(JSON, dataDirectory);
+        ScheduledTask task = store.createTask(newTask("Resume"), NOW);
+
+        assertThatThrownBy(() -> store.resumeTask(task.id(), OWNER, NOW))
+                .isInstanceOf(ScheduleValidationException.class);
+
+        assertThat(store.pauseTask(task.id(), OWNER, NOW)).isTrue();
+        assertThat(store.resumeTask(task.id(), OWNER, NOW).orElseThrow().status())
+                .isEqualTo(ScheduledTaskStatus.ENABLED);
+
+        store.updateTask(task.id(), OWNER, Map.of("status", "completed"), NOW.plusSeconds(1));
+        assertThatThrownBy(() -> store.resumeTask(task.id(), OWNER, NOW.plusSeconds(2)))
+                .isInstanceOf(ScheduleValidationException.class);
+        assertThat(store.findTask(task.id(), OWNER).orElseThrow().status())
+                .isEqualTo(ScheduledTaskStatus.COMPLETED);
+        assertThat(store.resumeTask(task.id(), OTHER, NOW)).isEmpty();
+    }
+
     private boolean isOk(Future<String> future) {
         try {
             return "ok".equals(future.get());
