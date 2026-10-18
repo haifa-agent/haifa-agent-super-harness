@@ -7,8 +7,9 @@ mvnw.cmd text eol=crlf
 third-party/deerflow/skills/**/SKILL.md -text
 # Complete frozen packages retain upstream byte hashes, including intentional whitespace.
 third-party/deerflow/skills/e545c28ac301e6f9feae247c513d8ea8f83df294/** -text whitespace=-trailing-space
-# The trusted Skill manifest hashes the pinned DeerFlow license's LF bytes.
-third-party/deerflow/LICENSES/deer-flow-MIT.txt text eol=lf
+# The trusted Skill manifest hashes pinned DeerFlow license LF bytes. Pin every license file so a
+# fresh worktree with core.autocrlf=true cannot materialize CRLF and fail the strict hash check.
+third-party/deerflow/LICENSES/*.txt text eol=lf
 # Byte-faithful frozen lead-agent prompt template: keep committed bytes untouched and treat its
 # deliberate final trailing spaces as data, not a check failure.
 resources/upstream/deerflow/prompts/*.txt -text whitespace=-trailing-space
@@ -17,5 +18,7 @@ resources/upstream/deerflow/prompts/*.json text eol=lf
 resources/upstream/deerflow/prompts/*.md text eol=lf
 # Tool description and manifest ledger hashes use the same LF bytes on every checkout.
 super-harness-server/src/main/resources/upstream/deerflow/tool-descriptions/* text eol=lf
+# Frozen plan-mode prompt resources hash committed LF bytes on every checkout.
+super-harness-server/src/main/resources/upstream/deerflow/prompts/* text eol=lf
 # Frozen Skill scanner manifests hash committed LF bytes, including Python resources.
 super-harness-server/src/main/resources/upstream/deerflow/w15/** text eol=lf
