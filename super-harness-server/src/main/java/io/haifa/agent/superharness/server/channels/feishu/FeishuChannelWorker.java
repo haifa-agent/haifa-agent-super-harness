@@ -609,8 +609,14 @@ public final class FeishuChannelWorker implements AutoCloseable {
                 && message.cardAction().value().isBlank()) {
             return FeishuInteraction.EMPTY_OTHER;
         }
-        // Form v2: do not reject an empty form_values map here — optional-only forms may submit
-        // {} when untouched controls are omitted. Required-field checks run in continueCardAction.
+        // Form v2 required checks must run before PROCESSING: settledCard only keeps the form open
+        // when the toast is not PROCESSING/ALREADY_HANDLED. Feishu's checker has no required=true,
+        // so an unchecked required checkbox would otherwise settle the card and leave EMPTY_FORM
+        // with no controls left to correct. Optional-only forms may still submit {}. Lookup
+        // failures skip this gate and still enqueue (continueCardAction re-checks).
+        if (message.cardAction().formSubmit() && formMissingRequiredOnAccept(message)) {
+            return FeishuInteraction.EMPTY_FORM;
+        }
         enqueueInbound(message);
         return FeishuInteraction.PROCESSING;
     }
@@ -637,6 +643,38 @@ public final class FeishuChannelWorker implements AutoCloseable {
                     || !pending.requestId().equals(action.requestId());
         } catch (Exception failure) {
             LOG.log(System.Logger.Level.WARNING, "Feishu pending read failed; queueing the card action", failure);
+            return false;
+        }
+    }
+
+    /**
+     * Synchronous Form v2 required-field gate for the card callback toast. Returns false when the
+     * pending card cannot be read so the action is still enqueued rather than dropped.
+     */
+    private boolean formMissingRequiredOnAccept(FeishuInboundMessage message) {
+        try {
+            Optional<ObjectNode> bound = connections.findConnectionByExternalIdentity(
+                    "feishu", message.openId(), message.chatId());
+            if (bound.isEmpty()) {
+                return false;
+            }
+            ObjectNode connection = bound.get();
+            String owner = connection.path("owner_user_id").asText(AccessOwner.DEFAULT);
+            String connectionId = connection.path("id").asText("");
+            String threadId = resolveThread(connectionId, message, false);
+            if (threadId == null || threadId.isBlank()) {
+                return false;
+            }
+            FeishuPendingInput pending = agentBridge.currentPending(owner, threadId).orElse(null);
+            return pending != null
+                    && pending.formSupported()
+                    && pending.requestId().equals(message.cardAction().requestId())
+                    && FeishuInteraction.formMissingRequired(pending, message.cardAction().formValues());
+        } catch (Exception failure) {
+            LOG.log(
+                    System.Logger.Level.WARNING,
+                    "Feishu form required check failed; queueing the card action",
+                    failure);
             return false;
         }
     }

@@ -752,6 +752,9 @@ public final class FeishuInteraction {
         if ("date".equals(field.type())) {
             return normalizeDateValue(value);
         }
+        if ("multi_select".equals(field.type())) {
+            return normalizeMultiSelectValue(field, value);
+        }
         return normalizeFormValue(value);
     }
 
@@ -770,6 +773,46 @@ public final class FeishuInteraction {
         return text;
     }
 
+    /**
+     * Keep multi_select JSON as a string array (web Form v2 shape). Feishu usually returns a list;
+     * some clients/SDKs may deliver a single string — prefer an exact option match, then a
+     * comma-split only when every segment is a known option value (so labels containing commas
+     * are not mis-split).
+     */
+    private static Object normalizeMultiSelectValue(FeishuPendingInput.Field field, Object value) {
+        if (value instanceof List<?> list) {
+            return normalizeFormValue(list);
+        }
+        String text = String.valueOf(value == null ? "" : value).trim();
+        if (text.isEmpty()) {
+            return List.of();
+        }
+        List<String> known = new ArrayList<>();
+        for (FeishuPendingInput.Option option : field.options()) {
+            String optionValue = option.value().isBlank() ? option.id() : option.value();
+            if (!optionValue.isBlank()) {
+                known.add(optionValue);
+            }
+        }
+        for (String optionValue : known) {
+            if (optionValue.equals(text)) {
+                return List.of(optionValue);
+            }
+        }
+        String[] parts = text.split(",");
+        List<String> segments = new ArrayList<>();
+        for (String part : parts) {
+            String segment = part.trim();
+            if (!segment.isEmpty()) {
+                segments.add(segment);
+            }
+        }
+        if (!segments.isEmpty() && known.containsAll(segments)) {
+            return List.copyOf(segments);
+        }
+        return List.of(text);
+    }
+
     private static Object normalizeFormValue(Object value) {
         if (value instanceof Number || value instanceof Boolean) {
             return value;
@@ -781,8 +824,6 @@ public final class FeishuInteraction {
             }
             return out;
         }
-        // Feishu multi_select occasionally arrives as a comma-joined string; keep a single string
-        // when the product field is not multi_select (handled via List above when SDK gives arrays).
         return String.valueOf(value).trim();
     }
 

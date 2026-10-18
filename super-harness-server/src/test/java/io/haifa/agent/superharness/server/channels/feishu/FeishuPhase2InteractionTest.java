@@ -285,6 +285,113 @@ class FeishuPhase2InteractionTest {
     }
 
     @Test
+    void requiredCheckboxMissingRejectsBeforeSettlingCard() throws Exception {
+        ArrayNode messages = json.createArrayNode();
+        messages.add(toolForm(
+                "req-check",
+                List.of(
+                        field("agree", "确认继续", "checkbox", true),
+                        field("notes", "备注", "text", false))));
+        FeishuPendingInput pending = FeishuInteraction.pendingFromMessages(messages).orElseThrow();
+        assertThat(pending.formSupported()).isTrue();
+
+        Harness harness = harness();
+        bindRequest(harness, "req-check");
+        harness.bridge.pending = pending;
+        FeishuInboundMessage unchecked = new FeishuInboundMessage(
+                "oc_chat",
+                "om_check",
+                "ou_owner",
+                "",
+                "p2p",
+                new FeishuInboundMessage.CardAction(
+                        "ask_clarification",
+                        "req-check",
+                        FeishuInteraction.FORM_SUBMIT,
+                        "",
+                        "2.0",
+                        Map.of("agree", false)));
+        assertThat(harness.worker.acceptCardAction(unchecked)).isEqualTo(FeishuInteraction.EMPTY_FORM);
+        assertThat(FeishuInteraction.settledCard(unchecked, FeishuInteraction.EMPTY_FORM)).isNull();
+        assertThat(harness.bridge.turns.get()).isZero();
+
+        Map<String, Object> checked = Map.of("agree", true, "notes", "ok");
+        FeishuInboundMessage ok = new FeishuInboundMessage(
+                "oc_chat",
+                "om_check_ok",
+                "ou_owner",
+                "",
+                "p2p",
+                new FeishuInboundMessage.CardAction(
+                        "ask_clarification",
+                        "req-check",
+                        FeishuInteraction.FORM_SUBMIT,
+                        "",
+                        "2.0",
+                        checked));
+        assertThat(harness.worker.acceptCardAction(ok)).isEqualTo(FeishuInteraction.PROCESSING);
+        Thread.sleep(400);
+        assertThat(harness.bridge.turns.get()).isEqualTo(1);
+        assertThat(harness.bridge.responses.get().value()).contains("确认继续: yes");
+        harness.worker.close();
+    }
+
+    @Test
+    void multiSelectCommaJoinedStringNormalizesToArray() {
+        FeishuPendingInput pending = new FeishuPendingInput(
+                "ask_clarification",
+                "req-ms",
+                "form",
+                "form",
+                "选角度",
+                "",
+                "选角度",
+                List.of(),
+                false,
+                List.of(field(
+                        "angles",
+                        "切入角度",
+                        "multi_select",
+                        true,
+                        List.of(
+                                option("a1", "技术经济账", "技术经济账"),
+                                option("a2", "产业格局", "产业格局"),
+                                option("a3", "竞品对照", "竞品对照")))),
+                "",
+                "",
+                List.of(),
+                List.of());
+        String submitted = FeishuInteraction.buildFormSubmissionValue(
+                pending, Map.of("angles", "产业格局,竞品对照"));
+        assertThat(submitted)
+                .contains("\"angles\":[\"产业格局\",\"竞品对照\"]")
+                .doesNotContain("\"angles\":\"产业格局,竞品对照\"");
+        // Exact option value that itself contains a comma must stay a single element.
+        FeishuPendingInput commaOption = new FeishuPendingInput(
+                "ask_clarification",
+                "req-ms2",
+                "form",
+                "form",
+                "选角度",
+                "",
+                "选角度",
+                List.of(),
+                false,
+                List.of(field(
+                        "angles",
+                        "切入角度",
+                        "multi_select",
+                        true,
+                        List.of(option("a1", "a,b", "a,b"), option("a2", "c", "c")))),
+                "",
+                "",
+                List.of(),
+                List.of());
+        assertThat(FeishuInteraction.buildFormSubmissionValue(commaOption, Map.of("angles", "a,b")))
+                .contains("\"angles\":[\"a,b\"]");
+    }
+
+    @Test
     void optionalOnlyFormAcceptsEmptyFormValues() throws Exception {
         ArrayNode messages = json.createArrayNode();
         messages.add(toolForm(
