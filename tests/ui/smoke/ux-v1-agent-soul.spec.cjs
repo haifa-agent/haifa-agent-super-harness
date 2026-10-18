@@ -151,3 +151,128 @@ test("Agent SOUL: conversation -> save -> setup_agent -> created -> gallery refr
     await evidence(info, "observed-runs", { derived: true, name, identities, syntheticInputsOnly: true, retries: 0 });
   }
 });
+
+// Oracle: existing named Agent — real Gallery selection -> chat -> update_agent -> next Run -> reentry.
+// The Agent row is seeded through the product REST API (allowed fixture setup); every tested
+// selection, chat, update, next-Run and reentry step below runs against the frozen browser UI.
+// Expected per-call context is explicit here: a normal Agent chat is NOT bootstrap, unlike the
+// create flow above, so the original bootstrap assertions stay untouched.
+async function agentTurn(page, context, pending, info, label, identities, name) {
+  const response = await pending;
+  expect(response.status(), `${label}: stream admission`).toBe(200);
+  const location = response.headers()["content-location"];
+  const match = location?.match(/\/api\/threads\/([^/]+)\/runs\/([^/]+)$/);
+  expect(match, `${label}: actual Run identity`).toBeTruthy();
+  const identity = { threadId: match[1], runId: match[2], location };
+  identities.push(identity);
+  const input = response.request().postDataJSON();
+  expect(input.context.is_bootstrap, `${label}: a stored Agent chat is not a bootstrap Run`).not.toBe(true);
+  expect(input.context.agent_name, `${label}: named Agent context`).toBe(name);
+  const started = Date.now();
+  let terminal;
+  await expect.poll(async () => {
+    const snapshot = await context.request.get(`${APP}${location}`, { timeout: 10_000 });
+    expect(snapshot.status()).toBe(200);
+    terminal = await snapshot.json();
+    const status = terminal.status;
+    expect(["error", "interrupted", "timeout"], `${label}: failed or suspended Run`).not.toContain(status);
+    return status;
+  }, { timeout: 120_000, intervals: [250, 500, 1000], message: `${label}: bounded terminal Run` }).toBe("success");
+  expect(terminal.run_id).toBe(identity.runId);
+  const modelCalls = terminal.diagnostics.model_calls;
+  expect(modelCalls.length, `${label}: actual managed model calls`).toBeGreaterThan(0);
+  for (const call of modelCalls) {
+    expect(call.run_id).toBe(identity.runId);
+    expect(call.provider_id).toBe("deepseek");
+    expect(call.model_id).toBe(PROVIDER_MODEL);
+    expect(call.status).toBe("SUCCEEDED");
+  }
+  const state = await readState(context, identity.threadId);
+  return { identity, state, durationMs: Date.now() - started };
+}
+
+test("Agent SOUL: existing agent chat update_agent -> next Run -> reentry", async ({ page, context }, info) => {
+  const name = `uxv1-soul-existing-${Date.now()}`;
+  const markerA = `SYNTHETIC_SOUL_A_${Date.now()}`;
+  const markerB = `SYNTHETIC_SOUL_B_${Date.now()}`;
+  const description = "Synthetic existing-agent acceptance assistant.";
+  const identities = [];
+  try {
+    const models = await (await context.request.get(`${APP}/api/models`)).json();
+    expect(models.models.map((model) => model.name)).toContain(MODEL);
+    // Fixture setup only: seed the already-stored named Agent through the product REST API.
+    const seeded = await context.request.post(`${APP}/api/agents`, {
+      data: { name, soul: `You are a synthetic test assistant.\n${markerA}`, description },
+    });
+    expect(seeded.status(), "seeded existing Agent").toBe(201);
+
+    // Real Gallery UI selection and chat entry for the stored Agent.
+    await page.goto("/workspace/agents", { waitUntil: "domcontentloaded" });
+    const card = page.locator('[data-slot="card"]').filter({ hasText: name });
+    await expect(card).toBeVisible();
+    await card.getByRole("button", { name: /^(Chat|对话)$/ }).click();
+    await expect(page).toHaveURL(new RegExp(`/workspace/agents/${name}/chats/new$`));
+    const input = page.locator('textarea[name="message"]');
+    await expect(input).toBeEnabled();
+
+    // Run 1: real chat turn that must persist a new SOUL through the actual update_agent Tool.
+    const first = nextStream(page);
+    await input.fill(`请用 update_agent 工具把 SOUL 全量替换为：你是合成测试助手。\n${markerB}\n不要调用任何其它工具，也不要询问额外问题。`);
+    await input.press("Enter");
+    const updated = await agentTurn(page, context, first, info, "01-update", identities, name);
+    const updateCalls = updated.state.values.messages
+      .flatMap((message) => message.tool_calls ?? []).filter((call) => call.name === "update_agent");
+    expect(updateCalls.length, "the actual chat turn must invoke update_agent").toBeGreaterThan(0);
+    const updateResults = updated.state.values.messages
+      .filter((message) => message.type === "tool" && message.name === "update_agent");
+    expect(updateResults.length).toBeGreaterThan(0);
+    for (const result of updateResults) {
+      expect(updateCalls.some((call) => call.id === result.tool_call_id)).toBe(true);
+      expect(result.additional_kwargs?.haifa_tool_result?.success).toBe(true);
+      expect(String(result.content)).toContain(`Agent '${name}' updated successfully!`);
+    }
+    const afterUpdate = await (await context.request.get(`${APP}/api/agents/${name}`)).json();
+    expect(afterUpdate.soul).toContain(markerB);
+    expect(afterUpdate.soul, "the SOUL was fully replaced, not appended").not.toContain(markerA);
+    expect(afterUpdate.description, "unrelated configuration is unchanged").toBe(description);
+
+    // Run 2: next Run in the same thread must re-read the stored SOUL (signature changes).
+    const metadataAfterUpdate = (await (await context.request.get(`${APP}/api/threads/${updated.identity.threadId}`)).json()).metadata;
+    const second = nextStream(page);
+    await input.fill("请只回复 OK，不要调用任何工具。");
+    await input.press("Enter");
+    const next = await agentTurn(page, context, second, info, "02-next-run", identities, name);
+    expect(next.identity.threadId).toBe(updated.identity.threadId);
+    expect(next.identity.runId).not.toBe(updated.identity.runId);
+    const metadataAfterNext = (await (await context.request.get(`${APP}/api/threads/${next.identity.threadId}`)).json()).metadata;
+    expect(metadataAfterNext.haifa_agent_name).toBe(name);
+    expect(metadataAfterNext.haifa_agent_bootstrap).toBe(false);
+    expect(metadataAfterNext.haifa_lead_prompt_signature).toMatch(/^[0-9a-f]{64}$/);
+    expect(metadataAfterNext.haifa_lead_prompt_signature, "next Run uses the updated SOUL")
+      .not.toBe(metadataAfterUpdate.haifa_lead_prompt_signature);
+
+    // Reentry: reload the Gallery and re-open the Agent chat through the real UI.
+    await page.goto("/workspace/agents", { waitUntil: "domcontentloaded" });
+    await expect(page.getByText(name, { exact: true })).toBeVisible();
+    await page.locator('[data-slot="card"]').filter({ hasText: name })
+      .getByRole("button", { name: /^(Chat|对话)$/ }).click();
+    await expect(page).toHaveURL(new RegExp(`/workspace/agents/${name}/chats/new$`));
+    const reentered = await (await context.request.get(`${APP}/api/agents/${name}`)).json();
+    expect(reentered.soul, "SOUL persists after browser reentry").toContain(markerB);
+    const shot = info.outputPath("existing-agent-reentry.png");
+    await page.screenshot({ path: shot, fullPage: true });
+    await info.attach("existing-agent-reentry", { path: shot, contentType: "image/png" });
+    await evidence(info, "05-existing-agent", {
+      derived: true, name, soulSha256: hash(reentered.soul), soulChars: reentered.soul.length,
+      markerBPresent: true, markerAAbsent: true, descriptionUnchanged: true,
+      updateCallIds: updateCalls.map((call) => call.id),
+      signatures: {
+        afterUpdate: metadataAfterUpdate.haifa_lead_prompt_signature,
+        afterNext: metadataAfterNext.haifa_lead_prompt_signature,
+      },
+      identities,
+    });
+  } finally {
+    await evidence(info, "observed-existing-agent-runs", { derived: true, name, identities, syntheticInputsOnly: true, retries: 0 });
+  }
+});
