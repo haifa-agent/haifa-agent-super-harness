@@ -44,6 +44,11 @@ public final class ImmediateFeishuTransport implements FeishuTransport {
     }
 
     @Override
+    public void replyText(String messageId, String text) {
+        // No-op, same as replyCard.
+    }
+
+    @Override
     public byte[] downloadResource(String messageId, String resourceKey, String resourceType) {
         // createForTests never opens Feishu; media fixtures use RecordingFeishuTransport.
         return new byte[0];
