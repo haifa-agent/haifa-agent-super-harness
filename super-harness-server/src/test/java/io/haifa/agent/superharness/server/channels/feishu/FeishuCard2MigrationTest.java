@@ -91,7 +91,17 @@ class FeishuCard2MigrationTest {
                         field("version", "版本号", "text", true, List.of()),
                         field("notes", "备注", "textarea", false, List.of()),
                         field("count", "数量", "number", true, List.of()),
-                        field("env", "环境", "select", true, List.of(option("prod", "生产", "prod")))),
+                        field("env", "环境", "select", true, List.of(option("prod", "生产", "prod"))),
+                        field(
+                                "angles",
+                                "切入角度",
+                                "multi_select",
+                                true,
+                                List.of(
+                                        option("a", "技术经济", "技术经济"),
+                                        option("b", "产业格局", "产业格局"))),
+                        field("agree", "确认继续", "checkbox", true, List.of()),
+                        field("ship", "发布日", "date", false, List.of())),
                 "",
                 "",
                 List.of(),
@@ -108,6 +118,12 @@ class FeishuCard2MigrationTest {
         assertThat(byName.get("count").get("required")).isEqualTo(true);
         assertThat(byName.get("env").get("tag")).isEqualTo("select_static");
         assertThat(byName.get("env").get("required")).isEqualTo(true);
+        assertThat(byName.get("angles").get("tag")).isEqualTo("multi_select_static");
+        assertThat(byName.get("angles").get("required")).isEqualTo(true);
+        assertThat(byName.get("agree").get("tag")).isEqualTo("checker");
+        assertThat(byName.get("agree").get("checked")).isEqualTo(false);
+        assertThat(byName.get("ship").get("tag")).isEqualTo("date_picker");
+        assertThat(byName.get("ship").get("required")).isEqualTo(false);
     }
 
     @Test
