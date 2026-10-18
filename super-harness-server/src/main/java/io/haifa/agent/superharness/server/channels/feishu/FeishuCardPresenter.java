@@ -30,7 +30,7 @@ public final class FeishuCardPresenter {
     public static final int MAX_TABLE_ELEMENTS_PER_CARD = 5;
     public static final int MAX_TABLE_COLUMNS = 50;
     public static final int MAX_TABLE_ROWS = 100;
-    public static final int MAX_CARD_PAYLOAD_CHARS = 24_000;
+    public static final int MAX_CARD_PAYLOAD_BYTES = 24_000;
 
     private static final Pattern ATX_HEADING = Pattern.compile("^(#{1,6})\\s+(.*)$");
     private static final Pattern SETEXT_H1 = Pattern.compile("^={2,}\\s*$");
@@ -46,7 +46,7 @@ public final class FeishuCardPresenter {
     public static Map<String, Object> cardPayload(String markdownText) {
         Map<String, Object> card = new LinkedHashMap<>();
         card.put("schema", "2.0");
-        card.put("config", Map.of("wide_screen_mode", true, "update_multi", true));
+        card.put("config", Map.of("width_mode", "fill", "update_multi", true));
         card.put("body", Map.of("elements", presentElements(markdownText)));
         return card;
     }
@@ -150,10 +150,25 @@ public final class FeishuCardPresenter {
     }
 
     private static String boundPayloadSize(String text) {
-        if (text.length() <= MAX_CARD_PAYLOAD_CHARS) {
+        byte[] bytes = text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (bytes.length <= MAX_CARD_PAYLOAD_BYTES) {
             return text;
         }
-        return text.substring(0, MAX_CARD_PAYLOAD_CHARS)
+        int byteBudget = MAX_CARD_PAYLOAD_BYTES;
+        int charCount = 0;
+        int currentBytes = 0;
+        while (charCount < text.length()) {
+            int codePoint = text.codePointAt(charCount);
+            int charSize = Character.charCount(codePoint);
+            int codePointBytes = new String(Character.toChars(codePoint))
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            if (currentBytes + codePointBytes > byteBudget) {
+                break;
+            }
+            currentBytes += codePointBytes;
+            charCount += charSize;
+        }
+        return text.substring(0, charCount)
                 + "\n\n*(内容较长，已展示前部分内容，完整结果请在 Web 查看)*";
     }
 

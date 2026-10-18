@@ -53,7 +53,7 @@ class FeishuChannelWorkerUnitTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> card = (Map<String, Object>) LarkSdkFeishuTransport.cardPayload("**hi**");
         assertThat(card.get("schema")).isEqualTo("2.0");
-        assertThat(card.get("config")).isEqualTo(Map.of("wide_screen_mode", true, "update_multi", true));
+        assertThat(card.get("config")).isEqualTo(Map.of("width_mode", "fill", "update_multi", true));
         assertThat(card).doesNotContainKey("elements");
         @SuppressWarnings("unchecked")
         Map<String, Object> body = (Map<String, Object>) card.get("body");

@@ -46,7 +46,7 @@ class FeishuCardPresenterTest {
         Map<String, Object> card = FeishuCardPresenter.cardPayload(REPRODUCTION_FIXTURE);
 
         assertThat(card.get("schema")).isEqualTo("2.0");
-        assertThat(card.get("config")).isEqualTo(Map.of("wide_screen_mode", true, "update_multi", true));
+        assertThat(card.get("config")).isEqualTo(Map.of("width_mode", "fill", "update_multi", true));
         assertThat(card).doesNotContainKey("elements");
 
         @SuppressWarnings("unchecked")
@@ -273,5 +273,14 @@ class FeishuCardPresenterTest {
         String content = (String) elements.getFirst().get("content");
         assertThat(content.length()).isLessThan(30_000);
         assertThat(content).contains("*(内容较长，已展示前部分内容，完整结果请在 Web 查看)*");
+
+        // CJK text: 10,000 Chinese characters = 30,000 UTF-8 bytes
+        String cjkText = "测试中文长文本内容验证".repeat(1000);
+        List<Map<String, Object>> cjkElements = FeishuCardPresenter.presentElements(cjkText);
+        assertThat(cjkElements).hasSize(1);
+        String cjkContent = (String) cjkElements.getFirst().get("content");
+        assertThat(cjkContent.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)
+                .isLessThan(30_000);
+        assertThat(cjkContent).contains("*(内容较长，已展示前部分内容，完整结果请在 Web 查看)*");
     }
 }
