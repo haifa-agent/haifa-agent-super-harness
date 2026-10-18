@@ -11,6 +11,17 @@ if (!readyFile) {
   throw new Error("provider ready metadata path is required");
 }
 
+// W19 scheduled-task differential hold marker. A scheduled Run issues a
+// non-streaming model call and the controlled provider answers instantly, so
+// there is otherwise no deterministic window during which an occurrence is
+// active. This bounded, exact-prompt hold (never matched by any other spec: the
+// suggestions request carries a long transcript prompt) keeps the occurrence
+// running so the W19 spec can exercise the active-run conflict boundary. The
+// timer is cleared if the client disconnects early.
+const W19_SCHEDULED_SLOW_MARKER = "__w19_scheduled_slow__";
+const W19_SCHEDULED_SLOW_MS = 10_000;
+const W19_SCHEDULED_SLOW_STREAM_MS = 50;
+
 function sendJson(response, status, value) {
   const body = JSON.stringify(value);
   response.writeHead(status, {
@@ -933,7 +944,7 @@ const server = http.createServer((request, response) => {
           stream: false,
         }),
       );
-      sendJson(response, 200, {
+      const deliver = () => sendJson(response, 200, {
         id: `w18-nonstream-${Date.now()}`,
         object: "chat.completion",
         created: Math.floor(Date.now() / 1000),
@@ -950,6 +961,12 @@ const server = http.createServer((request, response) => {
         }],
         usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 },
       });
+      if (prompt === W19_SCHEDULED_SLOW_MARKER) {
+        const timer = setTimeout(deliver, W19_SCHEDULED_SLOW_MS);
+        response.on("close", () => clearTimeout(timer));
+        return;
+      }
+      deliver();
       return;
     }
 
@@ -1261,7 +1278,8 @@ const server = http.createServer((request, response) => {
     }
 
     const id = `w18-run-${Date.now()}`;
-    if (prompt === "__slow__" || prompt === "__slow_differential__") {
+    const w19Hold = prompt === W19_SCHEDULED_SLOW_MARKER;
+    if (prompt === "__slow__" || prompt === "__slow_differential__" || w19Hold) {
       let emitted = 0;
       const timer = setInterval(() => {
         if (response.destroyed || response.writableEnded) {
@@ -1281,7 +1299,7 @@ const server = http.createServer((request, response) => {
           frame(response, "[DONE]");
           response.end();
         }
-      }, prompt === "__slow_differential__" ? 100 : 25);
+      }, prompt === "__slow_differential__" ? 100 : w19Hold ? W19_SCHEDULED_SLOW_STREAM_MS : 25);
       response.on("close", () => clearInterval(timer));
       return;
     }

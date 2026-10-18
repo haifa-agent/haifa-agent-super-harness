@@ -8,9 +8,17 @@ const { defineConfig, devices } = require(path.resolve(
 const evidenceRoot = process.env.W18_DIFFERENTIAL_EVIDENCE;
 if (!evidenceRoot) throw new Error("W18_DIFFERENTIAL_EVIDENCE is required");
 
+// The V2 differential round runs its two committed specs. A non-V2 differential
+// profile (for example the W19 scheduled-tasks profile) selects exactly one spec
+// through W18_DUAL_PLAYWRIGHT_SPEC, so the V2 default is never widened.
+const specOverride = process.env.W18_DUAL_PLAYWRIGHT_SPEC;
+const testMatch = specOverride
+  ? [specOverride]
+  : ["differential.spec.cjs", "v2-m1-model-file.spec.cjs"];
+
 module.exports = defineConfig({
   testDir: __dirname,
-  testMatch: ["differential.spec.cjs", "v2-m1-model-file.spec.cjs"],
+  testMatch,
   fullyParallel: false,
   workers: 1,
   retries: 0,
