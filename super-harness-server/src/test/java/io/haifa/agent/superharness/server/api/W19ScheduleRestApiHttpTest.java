@@ -10,6 +10,7 @@ import io.haifa.agent.superharness.server.schedule.ScheduledRunStatus;
 import io.haifa.agent.superharness.server.schedule.ScheduledRunTrigger;
 import io.haifa.agent.superharness.server.schedule.ScheduledTask;
 import io.haifa.agent.superharness.server.schedule.ScheduledTaskRun;
+import io.haifa.agent.superharness.server.schedule.ScheduledTaskStatus;
 import io.haifa.agent.superharness.server.testsupport.GatewayFixture;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -230,12 +231,19 @@ class W19ScheduleRestApiHttpTest {
         ObjectNode unknown = json.createObjectNode().put("schedule_type", "cron");
         assertThat(request("PATCH", "/api/scheduled-tasks/" + onceId, unknown.toString())
                 .statusCode()).isEqualTo(422);
+        // W19-M3-10: the frozen update schema excludes thread_id, so a raw PATCH carrying it is a
+        // 422 and never rebinds a reuse-thread task.
+        ObjectNode rebind = json.createObjectNode().put("thread_id", "thread-update");
+        assertThat(request("PATCH", "/api/scheduled-tasks/" + onceId, rebind.toString())
+                .statusCode()).isEqualTo(422);
 
         ScheduleStore store = fixture.api.scheduler().store();
         seedRun(store, onceId, "thread-update", ScheduledRunStatus.QUEUED, now.plusSeconds(30));
         assertThat(request("PATCH", "/api/scheduled-tasks/" + onceId,
                 json.createObjectNode().put("prompt", "blocked").toString()).statusCode())
                 .isEqualTo(409);
+        // W19-M3-10: the rejected patch is atomic, so the stored prompt is untouched.
+        assertThat(store.findTask(onceId, "default").orElseThrow().prompt()).isEqualTo("new prompt");
         finishOpenRuns(store, onceId, now);
         assertThat(patchTask(onceId, json.createObjectNode().put("prompt", "allowed"))
                 .path("prompt").asText()).isEqualTo("allowed");
@@ -270,6 +278,55 @@ class W19ScheduleRestApiHttpTest {
         rearm.putObject("schedule_spec").put("run_at", now.plusSeconds(10800).toString());
         JsonNode rearmed = patchTask(terminalId, rearm);
         assertThat(rearmed.path("status").asText()).isEqualTo("enabled");
+    }
+
+    // W19-M3-09: an explicit null assistant_id is a real patch that resets to the default lead
+    // agent, distinct from an omitted field which leaves the stored assistant untouched.
+    @Test
+    void explicitNullAssistantIdResetsToDefault() throws Exception {
+        start(Map.of());
+        fixture.seed("custom-agent", "custom soul");
+        ObjectNode body = createBody("assistant reset", "interval",
+                object("every_seconds", 600), "UTC");
+        body.put("assistant_id", "custom-agent");
+        JsonNode created = createTask(body);
+        assertThat(created.path("assistant_id").asText()).isEqualTo("custom-agent");
+
+        JsonNode reset = patchTask(created.path("id").asText(),
+                json.createObjectNode().putNull("assistant_id"));
+        assertThat(reset.path("assistant_id").asText()).isEqualTo("lead_agent");
+
+        // An omitted assistant_id leaves the stored value (custom-agent) untouched.
+        JsonNode reopened = patchTask(created.path("id").asText(),
+                json.createObjectNode().put("assistant_id", "custom-agent"));
+        assertThat(reopened.path("assistant_id").asText()).isEqualTo("custom-agent");
+        JsonNode untouched = patchTask(created.path("id").asText(),
+                json.createObjectNode().put("prompt", "still here"));
+        assertThat(untouched.path("assistant_id").asText()).isEqualTo("custom-agent");
+    }
+
+    // W19-M3-09: a terminal once task cannot resume (its past next_run_at would re-admit it), and it
+    // only returns to enabled through a future schedule PATCH.
+    @Test
+    void terminalOnceResumeIsRejectedUntilReplanned() throws Exception {
+        start(Map.of());
+        Instant now = Instant.now();
+        String taskId = createTask(createBody("terminal resume", "once",
+                object("run_at", now.plusSeconds(3600).toString()), "UTC")).path("id").asText();
+        ScheduleStore store = fixture.api.scheduler().store();
+        store.updateTask(taskId, "default", Map.of("status", "completed"), Instant.now());
+
+        assertThat(request("POST", "/api/scheduled-tasks/" + taskId + "/resume", null).statusCode())
+                .isEqualTo(422);
+        assertThat(store.findTask(taskId, "default").orElseThrow().status())
+                .isEqualTo(ScheduledTaskStatus.COMPLETED);
+
+        ObjectNode rearm = json.createObjectNode();
+        rearm.putObject("schedule_spec").put("run_at", now.plusSeconds(7200).toString());
+        JsonNode rearmed = patchTask(taskId, rearm);
+        assertThat(rearmed.path("status").asText()).isEqualTo("enabled");
+        assertThat(Instant.parse(rearmed.path("next_run_at").asText()))
+                .isAfter(Instant.parse(rearmed.path("created_at").asText()));
     }
 
     // W19-M3-04/W19-M3-06: queued cancellation on pause/delete, active conflicts, resume and delete

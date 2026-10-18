@@ -69,8 +69,7 @@ final class DeerFlowScheduledTasksApi implements HttpHandler {
             "context_mode", "thread_id", "assistant_id", "title", "prompt", "schedule_type",
             "schedule_spec", "timezone");
     private static final Set<String> UPDATE_FIELDS = Set.of(
-            "context_mode", "thread_id", "assistant_id", "title", "prompt", "schedule_spec",
-            "timezone");
+            "context_mode", "assistant_id", "title", "prompt", "schedule_spec", "timezone");
 
     private final ObjectMapper json;
     private final ScheduleStore store;
@@ -248,7 +247,6 @@ final class DeerFlowScheduledTasksApi implements HttpHandler {
         ScheduledTask existing = requireTask(taskId);
         JsonNode body = readObject(exchange);
         rejectUnknownFields(body, UPDATE_FIELDS);
-        requireMutable(existing);
 
         Instant now = clock.get();
         Map<String, Object> updates = new LinkedHashMap<>();
@@ -257,17 +255,15 @@ final class DeerFlowScheduledTasksApi implements HttpHandler {
             validateContextMode(contextMode);
             updates.put("context_mode", contextMode);
         }
-        String threadId = optionalText(body, "thread_id");
-        if (threadId != null) {
-            updates.put("thread_id", threadId);
-        }
         if (body.hasNonNull("title")) {
             updates.put("title", requiredNonEmptyText(body, "title"));
         }
         if (body.hasNonNull("prompt")) {
             updates.put("prompt", requiredNonEmptyText(body, "prompt"));
         }
-        if (body.hasNonNull("assistant_id")) {
+        // An explicit null is a real patch (the frozen schema allows null and null means the default
+        // lead agent); only a missing field leaves the stored assistant untouched.
+        if (body.has("assistant_id")) {
             updates.put("assistant_id", resolveAssistantId(optionalText(body, "assistant_id")));
         }
         String timezone = optionalText(body, "timezone");
@@ -281,8 +277,10 @@ final class DeerFlowScheduledTasksApi implements HttpHandler {
             updates.put("schedule_spec", providedSpec);
         }
 
+        // thread_id is not patchable: the frozen update schema excludes it, so a reuse_thread task
+        // cannot be rebound here. The stored Thread only changes through context_mode below.
         String effectiveMode = contextMode != null ? contextMode : existing.contextMode();
-        String effectiveThreadId = threadId != null ? threadId : existing.threadId();
+        String effectiveThreadId = existing.threadId();
         if (ScheduledTask.REUSE_THREAD.equals(effectiveMode)) {
             if (effectiveThreadId == null || effectiveThreadId.isBlank()) {
                 throw new HttpFailure(422, "reuse_thread requires thread_id");
@@ -308,7 +306,9 @@ final class DeerFlowScheduledTasksApi implements HttpHandler {
             }
         }
 
-        ScheduledTask updated = store.updateTask(taskId, owner(), updates, now)
+        // The active-occurrence check and the write are one store operation so an occurrence cannot
+        // be admitted between them and then consume the patched prompt/agent/Thread.
+        ScheduledTask updated = store.updateTaskIfMutable(taskId, owner(), updates, now)
                 .orElseThrow(() -> new HttpFailure(404, "Scheduled task not found"));
         sendJson(exchange, 200, updated.wire());
     }
@@ -327,10 +327,11 @@ final class DeerFlowScheduledTasksApi implements HttpHandler {
     }
 
     private void resumeTask(HttpExchange exchange, String taskId) throws IOException {
-        ScheduledTask existing = requireTask(taskId);
-        requireMutable(existing);
-        ScheduledTask updated = store.updateTask(taskId, owner(), Map.of("status", "enabled"),
-                clock.get()).orElseThrow(() -> new HttpFailure(404, "Scheduled task not found"));
+        // Only a truly paused, non-terminal task may resume. A terminal once task keeps its past
+        // next_run_at, so blindly re-enabling it would let listDueTasks admit it again and repeat
+        // Tool side effects; such a task must be re-armed with a future schedule PATCH first.
+        ScheduledTask updated = store.resumeTask(taskId, owner(), clock.get())
+                .orElseThrow(() -> new HttpFailure(404, "Scheduled task not found"));
         sendJson(exchange, 200, updated.wire());
     }
 
@@ -467,17 +468,6 @@ final class DeerFlowScheduledTasksApi implements HttpHandler {
             }
         }
         return nextRunAt;
-    }
-
-    private void requireMutable(ScheduledTask task) {
-        if (task.status() == ScheduledTaskStatus.RUNNING) {
-            throw new HttpFailure(409,
-                    "Scheduled task is currently running; retry after the active execution finishes");
-        }
-        Optional<ScheduledTaskRun> active = store.findActiveRun(task.id());
-        if (active.isPresent()) {
-            throw new HttpFailure(409, activeConflictDetail(active.orElseThrow().status().wire()));
-        }
     }
 
     private static String activeConflictDetail(String status) {
