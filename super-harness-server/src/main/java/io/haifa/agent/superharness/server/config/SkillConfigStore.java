@@ -35,6 +35,10 @@ import java.util.UUID;
  */
 public final class SkillConfigStore {
     private static final String MANIFEST = "third-party/deerflow/skills/manifest.json";
+    private static final System.Logger RECOVERY_LOG =
+            System.getLogger(SkillConfigStore.class.getName() + ".recovery");
+    /** Bounded length of a persisted Skill name echoed into a recovery diagnostic. */
+    private static final int DIAGNOSTIC_NAME_LENGTH = 64;
 
     public static Path repositoryRootFromWorkingDirectory() throws IOException {
         Path current = Path.of("").toAbsolutePath().normalize();
@@ -432,15 +436,25 @@ public final class SkillConfigStore {
         State current = state;
         List<SkillRunTools.Package> restoredPackages = current.packages();
         if (!versions.isEmpty()) {
-            restoredPackages = current.packages().stream().map(pkg -> new SkillRunTools.Package(pkg.name(), pkg.description(),
+            List<SkillRunTools.Package> pinned = current.packages().stream().map(pkg -> new SkillRunTools.Package(pkg.name(), pkg.description(),
                     pkg.category(), pkg.license(), pkg.sourceName(), pkg.sourceSha(), pkg.version(), pkg.contentHash(),
                     (pkg.source().descriptor().reference().sourceId() + "@" + pkg.version()).equals(versions.get(pkg.name())),
                     pkg.enabledByDefault(), pkg.source())).toList();
-            for (String name : versions.keySet()) {
-                if (restoredPackages.stream().noneMatch(pkg -> pkg.active() && pkg.name().equals(name))) {
-                    throw new IllegalStateException("Persisted Skill package version is unavailable");
-                }
+            // A Thread records the exact packages it admitted. When one of them no longer exists in
+            // this catalog, the Thread keeps its history: the missing package (and any package whose
+            // version no longer matches) stays inactive, so no Run can silently bind a different
+            // version, and only the affected Tool registration is lost.
+            List<String> unavailable = versions.keySet().stream()
+                    .filter(name -> pinned.stream().noneMatch(pkg -> pkg.active() && pkg.name().equals(name)))
+                    .map(SkillConfigStore::diagnosticName)
+                    .sorted()
+                    .toList();
+            if (!unavailable.isEmpty()) {
+                RECOVERY_LOG.log(System.Logger.Level.WARNING,
+                        "Persisted Skill package version is unavailable; recovering this Thread without"
+                                + " those Skill Tools: " + unavailable);
             }
+            restoredPackages = pinned;
         }
         // Restore the admitted product declaration, irrespective of later UI enable toggles.
         // Immutable package sources and the retained loader remain SDK inputs.
@@ -452,6 +466,13 @@ public final class SkillConfigStore {
         // Nonempty and legacy-unknown declarations retain the historical recovery registrations.
         if (selection.names().isPresent() && selection.names().orElseThrow().isEmpty()) return currentReviewLoader(restored);
         return currentReviewLoader(restored.forRecovery());
+    }
+
+    private static String diagnosticName(String name) {
+        String single = name.replace('\n', ' ').replace('\r', ' ');
+        return single.length() > DIAGNOSTIC_NAME_LENGTH
+                ? single.substring(0, DIAGNOSTIC_NAME_LENGTH) + "..."
+                : single;
     }
 
     public List<Map<String, Object>> list() {

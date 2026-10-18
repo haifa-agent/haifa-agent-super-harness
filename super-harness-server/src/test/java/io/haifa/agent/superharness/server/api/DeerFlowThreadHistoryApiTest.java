@@ -316,6 +316,39 @@ class DeerFlowThreadHistoryApiTest extends AbstractDeerFlowThreadRunApiTest {
         HttpResponse<String> unavailable = get("/api/threads/thread-missing-session/messages/page");
         assertThat(unavailable.statusCode()).isEqualTo(503);
         assertThat(unavailable.body()).contains("Durable thread state is unavailable");
+        assertThat(unavailable.body()).contains("persisted thread conversation is unavailable");
         assertThat(api.hasAttachedBridge("thread-missing-session")).isFalse();
+    }
+
+    @Test
+    void searchKeepsDescribableThreadsWhenOneProjectionIsUnrecoverable() throws Exception {
+        api.close();
+        api = null;
+        HaifaRunBridge.ModelBinding binding = LocalProbeModelTestSupport.binding();
+        PersistentThreadCatalog catalog = new PersistentThreadCatalog(json, dataDirectory);
+        catalog.save(new PersistentThreadCatalog.Entry(
+                "thread-healthy",
+                Map.of(),
+                Instant.parse("2026-09-24T00:00:00Z"),
+                Instant.parse("2026-09-24T00:00:02Z"),
+                Optional.empty(),
+                Optional.empty()));
+        catalog.save(new PersistentThreadCatalog.Entry(
+                "thread-missing-session",
+                Map.of(),
+                Instant.parse("2026-09-24T00:00:00Z"),
+                Instant.parse("2026-09-24T00:00:01Z"),
+                Optional.of(new io.haifa.agent.core.session.AgentSessionId("missing-session")),
+                Optional.of(binding.name() + "@" + binding.revision())));
+        startApi();
+
+        HttpResponse<String> search = postJson("/api/threads/search", "{\"limit\":100,\"offset\":0}");
+
+        assertThat(search.statusCode()).isEqualTo(200);
+        assertThat(json.readTree(search.body()).findValuesAsText("thread_id"))
+                .contains("thread-healthy")
+                .doesNotContain("thread-missing-session");
+        // The unrecoverable Thread still reports its own failure instead of disappearing silently.
+        assertThat(get("/api/threads/thread-missing-session").statusCode()).isEqualTo(503);
     }
 }

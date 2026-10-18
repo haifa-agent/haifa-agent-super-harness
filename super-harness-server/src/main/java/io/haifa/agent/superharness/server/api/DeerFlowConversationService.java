@@ -1191,22 +1191,48 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         Optional<String> statusFilter = text(body, "status");
         boolean archivedFilterPresent = body.has("archived") && !body.get("archived").isNull();
         boolean archived = body.path("archived").asBoolean(false);
-        List<Map<String, Object>> matches = threads.values().stream()
+        List<ThreadRecord> candidates = threads.values().stream()
                 .filter(record -> AccessOwner.current().equals(record.ownerId))
                 .filter(record -> !archivedFilterPresent
                         || Boolean.TRUE.equals(record.metadata.get("deerflow_archived")) == archived)
                 .filter(record -> metadataFilter.entrySet().stream()
                         .allMatch(entry -> java.util.Objects.equals(
                                 record.metadata.get(entry.getKey()), entry.getValue())))
-                .filter(record -> statusFilter
-                        .map(expected -> expected.equals(threadStatus(record)))
-                        .orElse(true))
                 .sorted((left, right) -> right.updatedAt.compareTo(left.updatedAt))
-                .skip(offset)
-                .limit(limit)
-                .map(this::threadResponse)
                 .toList();
+        // Resolving one Thread's durable projection can fail on its own: its persisted session may
+        // be gone, or its recorded Skill/Run projection may no longer be readable. Such a Thread is
+        // skipped and recorded here; the page keeps every Thread it can describe instead of failing
+        // the whole list for every client.
+        List<ThreadRecord> matching = new ArrayList<>(candidates.size());
+        for (ThreadRecord record : candidates) {
+            if (statusFilter.isEmpty()) {
+                matching.add(record);
+                continue;
+            }
+            try {
+                if (statusFilter.orElseThrow().equals(threadStatus(record))) matching.add(record);
+            } catch (RuntimeException unavailable) {
+                logSearchProjectionFailure("status", record, unavailable);
+            }
+        }
+        int from = Math.min(offset, matching.size());
+        int to = Math.min(from + limit, matching.size());
+        List<Map<String, Object>> matches = new ArrayList<>(to - from);
+        for (ThreadRecord record : matching.subList(from, to)) {
+            try {
+                matches.add(threadResponse(record));
+            } catch (RuntimeException unavailable) {
+                logSearchProjectionFailure("row", record, unavailable);
+            }
+        }
         return matches;
+    }
+
+    private static void logSearchProjectionFailure(String scope, ThreadRecord record, RuntimeException failure) {
+        INTERACTION_LOG.log(System.Logger.Level.WARNING,
+                "Thread search skipped a " + scope + " projection for " + record.threadId + ": "
+                        + failure.getClass().getSimpleName() + ": " + boundedReason(failure));
     }
 
     public AdmittedTurn admitTurn(String threadId, JsonNode body, String runInput, String lastEventId) throws IOException {

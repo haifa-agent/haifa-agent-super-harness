@@ -65,6 +65,13 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
     private static final Pattern OWNED_THREAD =
             Pattern.compile("^/api/threads/([^/]+)(?:/.*)?$");
 
+    /** Frozen client-facing detail for any request whose durable state cannot be projected. */
+    private static final String DURABLE_STATE_UNAVAILABLE = "Durable thread state is unavailable";
+    private static final System.Logger API_LOG =
+            System.getLogger(DeerFlowThreadRunApi.class.getName());
+    /** Bounded length of a client path or failure cause echoed into one diagnostic line. */
+    private static final int DIAGNOSTIC_LENGTH = 160;
+
     private final DeerFlowConversationService conversations;
 
     DeerFlowThreadRunApi(
@@ -276,8 +283,26 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                             "detail",
                             "Durable transcript exceeds the bounded scan budget; narrow the requested cursor"));
         } catch (IllegalStateException unavailable) {
-            sendJson(exchange, 503, Map.of("detail", "Durable thread state is unavailable"));
+            // The client keeps the frozen detail prefix; the log names the request and the real
+            // cause, so a corrupt persisted projection is never reported as a silent missing store.
+            API_LOG.log(System.Logger.Level.WARNING,
+                    "Durable thread state unavailable for " + exchange.getRequestMethod() + " "
+                            + bounded(exchange.getRequestURI().getPath(), DIAGNOSTIC_LENGTH) + ": "
+                            + unavailable.getClass().getSimpleName() + ": "
+                            + bounded(unavailable.getMessage(), DIAGNOSTIC_LENGTH));
+            sendJson(exchange, 503, Map.of("detail", durableStateUnavailableDetail(unavailable)));
         }
+    }
+
+    private static String durableStateUnavailableDetail(IllegalStateException failure) {
+        String cause = bounded(failure.getMessage(), DIAGNOSTIC_LENGTH);
+        return cause.isEmpty() ? DURABLE_STATE_UNAVAILABLE : DURABLE_STATE_UNAVAILABLE + " (" + cause + ")";
+    }
+
+    private static String bounded(String value, int maximum) {
+        if (value == null) return "";
+        String single = value.replace('\n', ' ').replace('\r', ' ');
+        return single.length() > maximum ? single.substring(0, maximum) : single;
     }
 
     private void createThread(HttpExchange exchange) throws IOException {

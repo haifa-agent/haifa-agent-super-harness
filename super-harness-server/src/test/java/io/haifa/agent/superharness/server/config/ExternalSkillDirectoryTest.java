@@ -162,6 +162,24 @@ class ExternalSkillDirectoryTest {
         assertThat(directory.list()).hasSize(23);
     }
 
+    @Test void recoveryKeepsHistoryWhenAPinnedPackageIsGone() throws Exception {
+        var store = store(packages());
+        int listed = store.list().size();
+        // A Thread outlives the package it admitted: its history must stay readable, and no
+        // substitute version may be bound in place of the recorded one.
+        var retired = store.recoveryProjection(SkillRunTools.Selection.of(java.util.Set.of("retired-skill")),
+                java.util.Map.of("retired-skill", "retired-skill@sha256:" + "0".repeat(64)));
+        assertThat(retired.catalog().snapshot().bindings()).isEmpty();
+        assertThat(store.list()).hasSize(listed);
+    }
+
+    @Test void recoveryIgnoresAMismatchedPinnedVersionInsteadOfBindingTheCurrentOne() throws Exception {
+        var store = store(packages());
+        var mismatched = store.recoveryProjection(SkillRunTools.Selection.of(java.util.Set.of("bootstrap")),
+                java.util.Map.of("bootstrap", "bootstrap@sha256:" + "1".repeat(64)));
+        assertThat(mismatched.catalog().snapshot().bindings()).isEmpty();
+    }
+
     @Test void missingDirectoryNeverFallsBackAndNamesCannotEscape() throws Exception {
         Path root = packages(); var store = store(root);
         assertThatThrownBy(() -> store.reviewFiles("../bootstrap")).isInstanceOf(IllegalArgumentException.class);
