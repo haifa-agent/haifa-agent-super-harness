@@ -15,15 +15,34 @@ public record FeishuInboundMessage(
         String chatType,
         String messageType,
         List<Attachment> attachments,
-        CardAction cardAction) {
+        CardAction cardAction,
+        String rootId,
+        String parentId,
+        String feishuThreadId) {
 
     public FeishuInboundMessage(String chatId, String messageId, String openId, String text, String chatType) {
-        this(chatId, messageId, openId, text, chatType, "text", List.of(), null);
+        this(chatId, messageId, openId, text, chatType, "text", List.of(), null, "", "", "");
     }
 
     public FeishuInboundMessage(
             String chatId, String messageId, String openId, String text, String chatType, CardAction cardAction) {
-        this(chatId, messageId, openId, text, chatType, "text", List.of(), cardAction);
+        this(chatId, messageId, openId, text, chatType, "text", List.of(), cardAction, "", "", "");
+    }
+
+    /**
+     * Compatibility constructor for callers and tests that predate reply-chain identifiers.
+     * {@code rootId}/{@code parentId}/{@code feishuThreadId} default to empty (never fabricated).
+     */
+    public FeishuInboundMessage(
+            String chatId,
+            String messageId,
+            String openId,
+            String text,
+            String chatType,
+            String messageType,
+            List<Attachment> attachments,
+            CardAction cardAction) {
+        this(chatId, messageId, openId, text, chatType, messageType, attachments, cardAction, "", "", "");
     }
 
     public FeishuInboundMessage {
@@ -34,6 +53,14 @@ public record FeishuInboundMessage(
         chatType = chatType == null ? "" : chatType;
         messageType = messageType == null || messageType.isBlank() ? "text" : messageType;
         attachments = attachments == null ? List.of() : List.copyOf(attachments);
+        rootId = rootId == null ? "" : rootId;
+        parentId = parentId == null ? "" : parentId;
+        feishuThreadId = feishuThreadId == null ? "" : feishuThreadId;
+    }
+
+    /** True for a group (non-P2P) chat; group routing uses reply/topic identity, not a chat pointer. */
+    public boolean isGroupChat() {
+        return !chatType.isBlank() && !"p2p".equalsIgnoreCase(chatType);
     }
 
     /** Image or file resource referenced by the inbound Feishu message. */

@@ -58,8 +58,22 @@ public final class FeishuInteraction {
      * Distinct from the intentional unsupported-form Web handoff ({@link #formNotice}).
      */
     public static final String CARD_DELIVERY_FAILED = "⚠️ 交互卡片发送失败，请直接以文字回复，以免遗漏本次请求。";
+    public static final String NEW_THREAD_STARTED = "已开启新会话。Thread: ";
+    public static final String NEW_THREAD_IN_TOPIC = "该话题已有会话，未切换；回复本话题仍进入原会话。";
+    public static final String NO_ACTIVE_THREAD = "当前没有进行中的会话。";
+    public static final String ACTIVE_THREAD = "当前会话 Thread: ";
 
     private FeishuInteraction() {}
+
+    /** {@code /new} confirmation carrying the SH thread id the user can open in Web. */
+    public static String newThreadNotice(String threadId) {
+        return NEW_THREAD_STARTED + (threadId == null ? "" : threadId);
+    }
+
+    /** {@code /status} answer for the thread this message resolves to (never creates one). */
+    public static String statusNotice(String threadId) {
+        return threadId == null || threadId.isBlank() ? NO_ACTIVE_THREAD : ACTIVE_THREAD + threadId;
+    }
 
     public static Optional<FeishuPendingInput> pendingFromMessages(JsonNode messages) {
         if (messages == null || !messages.isArray() || messages.isEmpty()) {
