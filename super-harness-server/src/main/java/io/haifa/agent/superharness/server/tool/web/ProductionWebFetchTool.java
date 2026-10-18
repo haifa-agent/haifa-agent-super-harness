@@ -34,6 +34,8 @@ import java.util.Objects;
 public final class ProductionWebFetchTool
         implements JavaTool<ProductionWebFetchTool.Input, ProductionWebFetchTool.Output> {
     static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
+    private static final System.Logger LOG =
+            System.getLogger("io.haifa.agent.superharness.server.tool.web");
     static final int MAX_CONTENT_CHARACTERS = 4096;
     static final String JINA_API_KEY_CREDENTIAL = "JINA_API_KEY";
     static final String DEEPSEEK_TOOL_API_KEY_CREDENTIAL = WebToolConfig.DEEPSEEK_TOOL_API_KEY_CREDENTIAL;
@@ -89,11 +91,12 @@ public final class ProductionWebFetchTool
         Objects.requireNonNull(context, "context");
         if (!SDK_LOCAL_PRINCIPAL.equals(context.principal().principalId())
                 || !"user".equals(context.principal().principalType())) {
-            throw new IllegalArgumentException("web_fetch requires the local Thread owner");
+            return refused("principal", input.url(), context,
+                    "web_fetch requires the local Thread owner");
         }
         context.cancellation().throwIfCancellationRequested();
         if (!Instant.now().isBefore(context.deadline())) {
-            throw new IllegalStateException("web_fetch deadline has expired");
+            return refused("deadline", input.url(), context, "web_fetch deadline has expired");
         }
         String url = input.url();
         if (!isAbsoluteHttpUrl(url)) {
@@ -175,6 +178,18 @@ public final class ProductionWebFetchTool
     @Override
     public String summarize(Output output) {
         return output.error().isEmpty() ? output.content() : output.error();
+    }
+
+    /** Same contract as {@code web_search}: a guard rejection is a Tool error, not a Run error. */
+    private static Output refused(String guard, String url, JavaToolContext context, String message) {
+        LOG.log(System.Logger.Level.WARNING,
+                "web_fetch refused guard={0} principal={1}/{2} deadline={3} now={4}",
+                guard,
+                context.principal().principalId(),
+                context.principal().principalType(),
+                context.deadline(),
+                Instant.now());
+        return Output.failure(url, message);
     }
 
     private static boolean isAbsoluteHttpUrl(String url) {

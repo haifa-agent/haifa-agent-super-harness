@@ -265,7 +265,9 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
                 toolCardScope(threadId));
         threads.observeTurn(turn, projector);
         if (projector.sawError()) {
-            throw new IllegalStateException("Run stream reported error");
+            String detail = projector.errorDetail();
+            LOG.log(System.Logger.Level.WARNING, "Feishu run stream reported an error: {0}", detail);
+            throw new IllegalStateException("Run stream reported error: " + detail);
         }
         if (!projector.sawEnd()) {
             // The Feishu reply is projected from the durable thread state (readTurn), so an

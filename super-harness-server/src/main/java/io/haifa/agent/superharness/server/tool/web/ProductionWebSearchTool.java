@@ -28,6 +28,8 @@ public final class ProductionWebSearchTool
         implements JavaTool<ProductionWebSearchTool.Input, ProductionWebSearchTool.Output> {
     static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final System.Logger LOG =
+            System.getLogger("io.haifa.agent.superharness.server.tool.web");
     private final JavaToolSpec<Input, Output> spec;
 
     private final WebToolConfig config;
@@ -82,11 +84,12 @@ public final class ProductionWebSearchTool
         Objects.requireNonNull(context, "context");
         if (!SDK_LOCAL_PRINCIPAL.equals(context.principal().principalId())
                 || !"user".equals(context.principal().principalType())) {
-            throw new IllegalArgumentException("web_search requires the local Thread owner");
+            return refused("principal", input.query(), context,
+                    "web_search requires the local Thread owner");
         }
         context.cancellation().throwIfCancellationRequested();
         if (!Instant.now().isBefore(context.deadline())) {
-            throw new IllegalStateException("web_search deadline has expired");
+            return refused("deadline", input.query(), context, "web_search deadline has expired");
         }
 
         int maxResults = input.max_results().orElse(config.maxResults());
@@ -133,6 +136,21 @@ public final class ProductionWebSearchTool
     @Override
     public String summarize(Output output) {
         return output.result();
+    }
+
+    /**
+     * A guard rejection is a Tool-level error, not a Run-fatal one: the model still receives the
+     * frozen error payload, and the bounded facts are logged for the operator.
+     */
+    private static Output refused(String guard, String query, JavaToolContext context, String message) {
+        LOG.log(System.Logger.Level.WARNING,
+                "web_search refused guard={0} principal={1}/{2} deadline={3} now={4}",
+                guard,
+                context.principal().principalId(),
+                context.principal().principalType(),
+                context.deadline(),
+                Instant.now());
+        return new Output(errorPayload(message, query));
     }
 
     private static String noResults(String query) {

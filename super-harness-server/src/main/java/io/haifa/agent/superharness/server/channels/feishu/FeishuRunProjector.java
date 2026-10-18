@@ -38,6 +38,7 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
 
     private boolean sawEnd;
     private boolean sawError;
+    private String errorDetail = "";
     private boolean sawValues;
     private boolean sawMessages;
     private boolean sawGap;
@@ -78,7 +79,10 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
         try {
             switch (event == null ? "" : event) {
                 case "end" -> sawEnd = true;
-                case "error" -> sawError = true;
+                case "error" -> {
+                    sawError = true;
+                    errorDetail = boundedDetail(data);
+                }
                 case "values" -> sawValues = true;
                 case "gap" -> onGap(data);
                 case "messages" -> {
@@ -103,6 +107,16 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
 
     public boolean sawError() {
         return sawError;
+    }
+
+    /** Bounded text of the last {@code error} frame; never the reply text. */
+    public String errorDetail() {
+        return errorDetail;
+    }
+
+    private static String boundedDetail(Object data) {
+        String text = data == null ? "" : String.valueOf(data).replace('\n', ' ').replace('\r', ' ');
+        return text.length() <= 400 ? text : text.substring(0, 400);
     }
 
     /**
