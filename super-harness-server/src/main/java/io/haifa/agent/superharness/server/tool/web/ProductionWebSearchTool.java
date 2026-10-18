@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.haifa.agent.credential.api.CredentialRequirement;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
@@ -59,11 +60,15 @@ public final class ProductionWebSearchTool
         String networkHost = config.searchProvider() == WebToolConfig.WebSearchProvider.DEEPSEEK
                 ? WebToolConfig.endpointHost(config.deepseekSearchUrl())
                 : WebToolConfig.endpointHost(config.duckduckgoHtmlUrl());
-        this.spec = JavaToolSpec.builder("web_search", Input.class, Output.class)
+        JavaToolSpec.Builder<Input, Output> builder = JavaToolSpec.builder("web_search", Input.class, Output.class)
                 .title("Search the web")
                 .description(ToolDescriptions.load("web_search"))
-                .networkAccess(networkHost)
-                .build();
+                .networkAccess(networkHost);
+        if (config.searchProvider() == WebToolConfig.WebSearchProvider.DEEPSEEK) {
+            builder.credentialRequirements(new CredentialRequirement(
+                    WebToolConfig.DEEPSEEK_TOOL_API_KEY_CREDENTIAL));
+        }
+        this.spec = builder.build();
     }
 
     @Override
@@ -104,7 +109,8 @@ public final class ProductionWebSearchTool
                 Thread.currentThread().interrupt();
                 return new Output(errorPayload("DeepSeek Search request failed: interrupted", input.query()));
             } catch (Exception failure) {
-                return new Output(errorPayload("DeepSeek Search request failed: " + failure.getMessage(), input.query()));
+                return new Output(errorPayload(ToolSecretRedactor.redact(
+                        "DeepSeek Search request failed: " + failure.getMessage(), apiKey), input.query()));
             }
             if (deepSeekResults.isEmpty()) {
                 return new Output(noResults(input.query()));

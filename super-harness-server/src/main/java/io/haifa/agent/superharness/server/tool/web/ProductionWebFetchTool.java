@@ -2,6 +2,7 @@ package io.haifa.agent.superharness.server.tool.web;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
+import io.haifa.agent.credential.api.CredentialRequirement;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
@@ -25,8 +26,10 @@ import java.util.Objects;
  * accepted, results are formatted as clean Markdown truncated to 4096 characters, and any transport,
  * non-200, missing key, or parse failure is reported as the frozen-style {@code Error: ...} text.
  *
- * <p>API keys ({@code JINA_API_KEY} or {@code DEEPSEEK_TOOL_API_KEY}) are read only dynamically from
- * the SDK credential map and are never written to a result, event or log line.
+ * <p>API keys ({@code JINA_API_KEY} or {@code DEEPSEEK_TOOL_API_KEY}) are declared through
+ * {@link JavaToolSpec.Builder#credentialRequirements}, so the SDK resolves them, injects them into
+ * {@link JavaToolContext#credentials()} and registers them for scoped redaction; they are never
+ * written to a result, event or log line.
  */
 public final class ProductionWebFetchTool
         implements JavaTool<ProductionWebFetchTool.Input, ProductionWebFetchTool.Output> {
@@ -63,11 +66,16 @@ public final class ProductionWebFetchTool
         String networkHost = config.fetchProvider() == WebToolConfig.WebFetchProvider.DEEPSEEK
                 ? WebToolConfig.endpointHost(config.deepseekFetchUrl())
                 : WebToolConfig.endpointHost(config.jinaReaderUrl());
-        this.spec = JavaToolSpec.builder("web_fetch", Input.class, Output.class)
+        JavaToolSpec.Builder<Input, Output> builder = JavaToolSpec.builder("web_fetch", Input.class, Output.class)
                 .title("Fetch a web page")
                 .description(ToolDescriptions.load("web_fetch"))
-                .networkAccess(networkHost)
-                .build();
+                .networkAccess(networkHost);
+        if (config.fetchProvider() == WebToolConfig.WebFetchProvider.DEEPSEEK) {
+            builder.credentialRequirements(new CredentialRequirement(DEEPSEEK_TOOL_API_KEY_CREDENTIAL));
+        } else if (config.jinaApiKey().isPresent()) {
+            builder.credentialRequirements(new CredentialRequirement(JINA_API_KEY_CREDENTIAL));
+        }
+        this.spec = builder.build();
     }
 
     @Override
@@ -104,11 +112,13 @@ public final class ProductionWebFetchTool
             try {
                 content = deepSeekClient.fetch(url, apiKey);
             } catch (DeepSeekWebClient.DeepSeekWebException exception) {
-                return Output.failure(url, "Error: DeepSeek API returned status " + exception.statusCode()
-                        + ": " + exception.getMessage());
+                return Output.failure(url, ToolSecretRedactor.redact(
+                        "Error: DeepSeek API returned status " + exception.statusCode()
+                                + ": " + exception.getMessage(), apiKey));
             } catch (IOException exception) {
-                return Output.failure(url, "Error: Request to DeepSeek API failed: "
-                        + exception.getClass().getSimpleName() + ": " + exception.getMessage());
+                return Output.failure(url, ToolSecretRedactor.redact(
+                        "Error: Request to DeepSeek API failed: "
+                                + exception.getClass().getSimpleName() + ": " + exception.getMessage(), apiKey));
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 return Output.failure(url, "Error: Request to DeepSeek API failed: interrupted");
@@ -144,15 +154,16 @@ public final class ProductionWebFetchTool
         try {
             response = http.send(request.build(), HttpResponse.BodyHandlers.ofString(UTF_8));
         } catch (IOException exception) {
-            return Output.failure(url, "Error: Request to Jina API failed: "
-                    + exception.getClass().getSimpleName() + ": " + exception.getMessage());
+            return Output.failure(url, ToolSecretRedactor.redact(
+                    "Error: Request to Jina API failed: "
+                            + exception.getClass().getSimpleName() + ": " + exception.getMessage(), apiKey));
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             return Output.failure(url, "Error: Request to Jina API failed: interrupted");
         }
         if (response.statusCode() != 200) {
-            return Output.failure(url, "Error: Jina API returned status " + response.statusCode()
-                    + ": " + response.body());
+            return Output.failure(url, ToolSecretRedactor.redact(
+                    "Error: Jina API returned status " + response.statusCode() + ": " + response.body(), apiKey));
         }
         String content = response.body();
         if (content == null || content.strip().isEmpty()) {
