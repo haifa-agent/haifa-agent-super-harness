@@ -27,6 +27,10 @@ param(
     # W15 representative managed Skill and evaluation-result chain using the real provider.
     [switch]$W15LiveSkill,
     [switch]$W15PackageDifferential,
+    # W19 scheduled tasks: the frozen /workspace/scheduled-tasks page against the real model.
+    [switch]$W19ScheduledTasks,
+    # W19 restart round: reopens the same data root and checks startup recovery and rescheduling.
+    [switch]$W19ScheduledTasksRestart,
     # W04 skill admission seed: host shell Tool on, isolated baoyu-image-gen seed directory,
     # the deferred 038-32 assertion table, and the live DeepSeek managed model.
     [switch]$W04ImageGen,
@@ -60,7 +64,7 @@ $expectedGatewayPort = 10618 + (10000 * $AgentSlot)
 $expectedFrontendPort = 15618 + (10000 * $AgentSlot)
 # W15 controller: additional isolated slot authorized by the user on 2026-10-03.
 if ($AgentSlot -eq 4) { $expectedGatewayPort = 11618; $expectedFrontendPort = 16618 }
-if ($AgentSlot -eq 5) { $expectedGatewayPort = 12618; $expectedFrontendPort = 17618 }
+if ($AgentSlot -eq 5) { $expectedGatewayPort = 21618; $expectedFrontendPort = 26618 }
 if ($GatewayPort -ne $expectedGatewayPort -or $FrontendPort -ne $expectedFrontendPort -or $ProviderPort -ne 0) {
     throw "W18 slot $AgentSlot requires Gateway=$expectedGatewayPort and Frontend=$expectedFrontendPort; controlled Provider must use OS-assigned port 0."
 }
@@ -88,6 +92,16 @@ if ($W04ImageGen) {
     # stay in the AllowedNotRun list sourced from w04-imagegen-deferred.json.
     $LiveDeepSeek = $true
 }
+if (@($W19ScheduledTasks, $W19ScheduledTasksRestart).Where({ $_ }).Count -gt 1) {
+    throw 'The W19 scheduled-task profiles are mutually exclusive.'
+}
+if ($W19ScheduledTasks -or $W19ScheduledTasksRestart) {
+    if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $LiveDeepSeek, $W08LiveDelegation, $W15LiveSkill, $W15PackageDifferential, $UxV1DefaultTools, $UxV1AgentSoul, $W04ImageGen).Where({ $_ }).Count -gt 0) {
+        throw 'The W19 scheduled-task profiles are mutually exclusive with the other profiles.'
+    }
+    # W19 runs the real managed model (scheduled Runs resolve the default executable model).
+    $LiveDeepSeek = $true
+}
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 . (Join-Path $PSScriptRoot '../lib/sdk-selection.ps1')
@@ -99,7 +113,7 @@ $controlledContextWindow = 32768
 $sdk = [pscustomobject]@{ Status = 'NOT_RUN'; HaifaVersion = $null }
 $internalGatewayBaseUrl = "http://127.0.0.1:$GatewayPort"
  . (Join-Path $PSScriptRoot '../lib/run-fixture.ps1')
-$tag = if ($W15PackageDifferential) { 'w15-package-differential' } elseif ($W15LiveSkill) { 'w15-live-skill' } elseif ($UxV1AgentSoul) { 'ux-v1-soul' } elseif ($UxV1DefaultTools) { 'ux-v1' }
+$tag = if ($W19ScheduledTasksRestart) { 'w19-scheduled-tasks-restart' } elseif ($W19ScheduledTasks) { 'w19-scheduled-tasks' } elseif ($W15PackageDifferential) { 'w15-package-differential' } elseif ($W15LiveSkill) { 'w15-live-skill' } elseif ($UxV1AgentSoul) { 'ux-v1-soul' } elseif ($UxV1DefaultTools) { 'ux-v1' }
     elseif ($W04ImageGen) { 'w04-imagegen' }
     elseif ($W08LiveDelegation) { 'w08-live-delegation' }
     elseif ($LiveDeepSeek) { 'w18-deepseek' } elseif ($ActiveReconnect) { 'w05-active-reconnect' }
@@ -276,8 +290,18 @@ $managedEnvironment = @{
     # table is never persisted; the key itself is only tracked in the process environment.
     HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF = $(if ($W04ImageGen) { 'env://W04_IMAGEGEN_CONTINUATION_KEY' } else { $null })
     W04_IMAGEGEN_CONTINUATION_KEY = $(if ($W04ImageGen) { [Convert]::ToBase64String($w04KeyBytes) } else { $null })
+    # W19 scheduled-task profiles: enable the single-instance scheduler worker with a 2s poll so the
+    # bounded UI round observes a real occurrence. The 60s interval floor is the frozen DeerFlow
+    # default and the frozen UI clamps interval edits to >= 60s, so the round waits for one cadence.
+    HAIFA_SUPER_HARNESS_SCHEDULER_ENABLED = $(if ($W19ScheduledTasks -or $W19ScheduledTasksRestart) { '1' } else { $null })
+    HAIFA_SUPER_HARNESS_SCHEDULER_POLL_SECONDS = $(if ($W19ScheduledTasks -or $W19ScheduledTasksRestart) { '2' } else { $null })
+    HAIFA_SUPER_HARNESS_SCHEDULER_MIN_ONCE_DELAY_SECONDS = $(if ($W19ScheduledTasks -or $W19ScheduledTasksRestart) { '30' } else { $null })
     W18_MODEL_NAME = $(if ($LiveDeepSeek) { 'w18-deepseek-live' } else { 'w18-controlled' })
-    W18_PLAYWRIGHT_SPEC = $(if ($W15PackageDifferential) {
+    W18_PLAYWRIGHT_SPEC = $(if ($W19ScheduledTasksRestart) {
+        'w19-scheduled-tasks-restart.spec.cjs'
+    } elseif ($W19ScheduledTasks) {
+        'w19-scheduled-tasks.spec.cjs'
+    } elseif ($W15PackageDifferential) {
         'w15-package-differential.spec.cjs'
     } elseif ($W15LiveSkill) {
         'w15-live-skill.spec.cjs'
@@ -318,7 +342,7 @@ $managedEnvironment = @{
     } else {
         'w18-ui-smoke.spec.cjs'
     })
-    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill -or $W04ImageGen) { '360000' } elseif ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation -or $LiveRendering) { '120000' } else { '60000' })
+    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill -or $W04ImageGen -or $W19ScheduledTasks -or $W19ScheduledTasksRestart) { '360000' } elseif ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation -or $LiveRendering) { '120000' } else { '60000' })
     W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation -or $LiveRendering) { 'on' } else { 'retain-on-failure' })
     # Pass index handed to the spec; restored with the rest at the end.
     W18_PASS_INDEX = '1'
