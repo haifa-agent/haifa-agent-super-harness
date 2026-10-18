@@ -181,3 +181,18 @@ pwsh -NoProfile -File scripts/governance/audit-work-package-delivery.ps1
 W08 参考差分使用 `scripts/ui/run-w18-dual-backend.ps1 -Backend reference -W08Catalog` 或 `-W08Delegation`，指定冻结 `-SourceRepository` 和已核验的 `-ReferencePython`；使用槽位 3 的 40618/45618/46618 全端口组和每轮新的 `-DataDirectory`，只作为参考验收，不替代 Haifa 后端。受控委派与真实模型 UI 门禁分开登记。
 
 参考 W08 进行中 SSE 可显式加 `-ReferenceIdentityEncoding`，通过请求 `Accept-Encoding: identity` 避免压缩缓冲；此参数只允许参考 W08 profile，不改冻结来源、响应或模型请求。已逐项人工批准的参考差异在 SHPM 登记：UI07 结束前验真实 SSE/卡片步骤，结束后仍验持久化、精确前缀和重载；UI15 验真实写入的字节及无审批；UI10 用原生事件/状态替代不存在的 Haifa 专属字段，其 Child HTTP 取消缺陷保留 `FAIL`、后续依赖断言保留 `NOT_RUN`，按人工裁决作为非阻断参考风险。Haifa 对应全部严格断言保留；其余参考失败不能据此豁免，脚本不自动提升阶段结果或 `GO`。
+
+## 审批级别（`HAIFA_SUPER_HARNESS_APPROVAL_MODE`）
+
+Gateway 在启动时读取进程变量 `HAIFA_SUPER_HARNESS_APPROVAL_MODE`，决定交给 SDK 的审批策略数据集：
+
+- `ask`（默认）：逐次审批，与之前行为逐字节一致。
+- `auto`：对齐上游 CodingAgent 的 `--approval auto`——`write_file`、宿主 `execution_run`、非只读 MCP 与技能脚本不再逐个弹审批，直接执行。
+- `deny`：上述 side-effect 能力直接拒绝。
+
+缺省、空、`ask` 或任何非法值一律保持 `ask`，拼错不会放大权限。`ask` 与 `auto`/`deny` 都保留 CRITICAL 风险 DENY；`auto`
+下凭据 `REAUTHENTICATE` 仍要求审批，工作区约束、Broker 与 Sandbox 不变。该值只在 Gateway 启动时读取，对之后新建的 Run
+生效，已在等待的审批按原级别处理。
+
+`auto` 是信任扩大，只适用于可信本地主机，不得用作验收或演示证据，也不得据此放宽任何 Oracle。逐项说明与开关清单见
+[开发手册](docs/development-manual.md)。
