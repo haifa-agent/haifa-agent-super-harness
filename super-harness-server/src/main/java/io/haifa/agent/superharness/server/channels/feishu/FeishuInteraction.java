@@ -426,7 +426,7 @@ public final class FeishuInteraction {
             body.append(pending.preface().strip()).append("\n\n");
         }
         if (!pending.content().isBlank()) {
-            body.append(pending.content().strip());
+            body.append(FeishuCardPresenter.presentMarkdown(pending.content().strip()));
         }
         appendApprovalMetadata(body, pending);
         if (!pending.formUnsupported()

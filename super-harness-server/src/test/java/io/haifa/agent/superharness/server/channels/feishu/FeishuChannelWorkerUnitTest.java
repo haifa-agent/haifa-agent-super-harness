@@ -49,11 +49,15 @@ class FeishuChannelWorkerUnitTest {
     }
 
     @Test
-    void cardPayloadUsesDeerFlowMarkdownElement() {
+    void cardPayloadUsesCard2MarkdownElement() {
         @SuppressWarnings("unchecked")
         Map<String, Object> card = (Map<String, Object>) LarkSdkFeishuTransport.cardPayload("**hi**");
-        assertThat(card.get("config")).isEqualTo(Map.of("wide_screen_mode", true, "update_multi", true));
-        assertThat(card.get("elements")).isEqualTo(java.util.List.of(Map.of("tag", "markdown", "content", "**hi**")));
+        assertThat(card.get("schema")).isEqualTo("2.0");
+        assertThat(card.get("config")).isEqualTo(Map.of("width_mode", "fill", "update_multi", true));
+        assertThat(card).doesNotContainKey("elements");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = (Map<String, Object>) card.get("body");
+        assertThat(body.get("elements")).isEqualTo(java.util.List.of(Map.of("tag", "markdown", "content", "**hi**")));
     }
 
     @Test
