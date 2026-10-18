@@ -53,6 +53,11 @@ public final class FeishuInteraction {
     public static final String UNSUPPORTED_MEDIA =
             "暂不支持该类型的飞书消息。请发送文字，或发送图片 / 文件。";
     public static final String MEDIA_FAILED = "无法读取您发送的图片或文件，请重试或改用网页端上传。";
+    /**
+     * Plain-text fallback marker used when interactive-card delivery is rejected by the provider.
+     * Distinct from the intentional unsupported-form Web handoff ({@link #formNotice}).
+     */
+    public static final String CARD_DELIVERY_FAILED = "⚠️ 交互卡片发送失败，请直接以文字回复，以免遗漏本次请求。";
 
     private FeishuInteraction() {}
 
@@ -200,6 +205,11 @@ public final class FeishuInteraction {
         human.put("value", response.value());
     }
 
+    /**
+     * Builds the interactive card for a pending human input. Every newly generated card uses Feishu
+     * Card JSON 2.0 ({@code schema: "2.0"} with {@code body.elements}); the legacy 1.0 top-level
+     * {@code elements}/{@code action} shape is no longer produced for new messages.
+     */
     public static Map<String, Object> interactiveCard(FeishuPendingInput pending) {
         if (pending.formSupported()) {
             return formCard(pending);
@@ -207,28 +217,22 @@ public final class FeishuInteraction {
         if ("choice_with_other".equals(pending.inputMode()) && !pending.formUnsupported()) {
             return choiceWithOtherCard(pending);
         }
-        Map<String, Object> card = new LinkedHashMap<>();
-        card.put("config", Map.of("wide_screen_mode", true, "update_multi", true));
         List<Map<String, Object>> elements = new ArrayList<>();
         elements.add(Map.of("tag", "markdown", "content", markdown(pending)));
-        if (!pending.formUnsupported() && !pending.options().isEmpty()) {
-            List<Map<String, Object>> actions = new ArrayList<>();
+        if (!pending.formUnsupported()) {
             for (FeishuPendingInput.Option option : pending.options()) {
-                String label = option.label().isBlank() ? option.id() : option.label();
-                Map<String, Object> value = new LinkedHashMap<>();
-                value.put("source", pending.source());
-                value.put("request_id", pending.requestId());
-                value.put("option_id", option.id());
-                value.put("value", option.value());
-                actions.add(Map.of(
-                        "tag", "button",
-                        "text", Map.of("tag", "plain_text", "content", label),
-                        "type", buttonType(option.id()),
-                        "value", value));
+                elements.add(callbackButton(pending, option));
             }
-            elements.add(Map.of("tag", "action", "actions", actions));
         }
-        card.put("elements", elements);
+        return card2(elements);
+    }
+
+    /** Card JSON 2.0 envelope: {@code schema}, {@code config}, and {@code body.elements}. */
+    private static Map<String, Object> card2(List<Map<String, Object>> elements) {
+        Map<String, Object> card = new LinkedHashMap<>();
+        card.put("schema", "2.0");
+        card.put("config", Map.of("update_multi", true));
+        card.put("body", Map.of("elements", elements));
         return card;
     }
 
@@ -288,6 +292,34 @@ public final class FeishuInteraction {
         return notice.toString();
     }
 
+    /**
+     * Plain-text fallback when an interactive card could not be delivered. Preserves the pending
+     * request content and the reply instructions so an approval or clarification is never silently
+     * lost. For form cards the safe path stays the Web handoff, still clearly marked as a delivery
+     * failure rather than the intentional unsupported-form redirect.
+     */
+    public static String cardDeliveryFallback(FeishuPendingInput pending, String threadId) {
+        if (pending == null) {
+            return CARD_DELIVERY_FAILED;
+        }
+        if (pending.formSupported() || pending.formUnsupported()) {
+            return CARD_DELIVERY_FAILED + "\n\n" + formNotice(pending, threadId);
+        }
+        StringBuilder body = new StringBuilder(CARD_DELIVERY_FAILED);
+        if (!pending.content().isBlank()) {
+            body.append("\n\n").append(pending.content().strip());
+        }
+        if (!pending.options().isEmpty()) {
+            for (int index = 0; index < pending.options().size(); index++) {
+                FeishuPendingInput.Option option = pending.options().get(index);
+                String label = option.label().isBlank() ? option.id() : option.label();
+                body.append("\n  ").append(index + 1).append(". ").append(label);
+            }
+        }
+        body.append("\n\n").append(footer(pending));
+        return body.toString().strip();
+    }
+
     /** Card shown after a click. No buttons, so the same action cannot be submitted again. */
     public static Map<String, Object> settledCard(FeishuInboundMessage message, String toast) {
         if (!PROCESSING.equals(toast) && !ALREADY_HANDLED.equals(toast)) {
@@ -315,8 +347,11 @@ public final class FeishuInteraction {
         if (message == null || message.cardAction() == null) {
             return false;
         }
+        // A Card 2.0 settlement must stay 2.0; a legacy 1.0 card must keep its own version. The
+        // "other" free-text field and Form v2 submit only ever existed on Card 2.0, so they imply it.
         return "2.0".equals(message.cardAction().cardSchema())
-                || OTHER_OPTION.equals(message.cardAction().optionId());
+                || OTHER_OPTION.equals(message.cardAction().optionId())
+                || FORM_SUBMIT.equals(message.cardAction().optionId());
     }
 
     private static String choiceLabel(FeishuInboundMessage message) {
@@ -551,10 +586,15 @@ public final class FeishuInteraction {
             return select;
         }
         Map<String, Object> input = new LinkedHashMap<>();
-        input.put("tag", "textarea".equals(field.type()) ? "input" : "input");
+        input.put("tag", "input");
         input.put("name", field.name());
         input.put("required", field.required());
         input.put("width", "fill");
+        input.put("input_type", inputType(field.type()));
+        if ("textarea".equals(field.type())) {
+            input.put("rows", 4);
+            input.put("auto_resize", true);
+        }
         input.put("label", Map.of(
                 "tag",
                 "plain_text",
@@ -571,6 +611,20 @@ public final class FeishuInteraction {
                                 ? ("number".equals(field.type()) ? "输入数字…" : "输入…")
                                 : field.placeholder()));
         return input;
+    }
+
+    /**
+     * Card 2.0 {@code input_type} for the supported field subset. {@code textarea} renders as a
+     * multiline text input; {@code number} keeps numeric semantics; everything else is plain text.
+     */
+    private static String inputType(String fieldType) {
+        if ("textarea".equals(fieldType)) {
+            return "multiline_text";
+        }
+        if ("number".equals(fieldType)) {
+            return "number";
+        }
+        return "text";
     }
 
     private static List<FeishuPendingInput.Field> parseFields(JsonNode fieldsNode) {
@@ -681,7 +735,7 @@ public final class FeishuInteraction {
         Map<String, Object> button = new LinkedHashMap<>();
         button.put("tag", "button");
         button.put("text", Map.of("tag", "plain_text", "content", label));
-        button.put("type", "default");
+        button.put("type", buttonType(option.id()));
         button.put("width", "fill");
         button.put("behaviors", List.of(Map.of("type", "callback", "value", value)));
         return button;

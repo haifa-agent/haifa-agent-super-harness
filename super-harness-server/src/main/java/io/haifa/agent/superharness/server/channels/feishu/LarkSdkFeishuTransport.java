@@ -3,6 +3,7 @@ package io.haifa.agent.superharness.server.channels.feishu;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lark.oapi.Client;
+import com.lark.oapi.core.response.RawResponse;
 import com.lark.oapi.core.utils.Jsons;
 import com.lark.oapi.event.EventDispatcher;
 import com.lark.oapi.event.cardcallback.P2CardActionTriggerHandler;
@@ -20,6 +21,7 @@ import com.lark.oapi.service.im.v1.model.EventSender;
 import com.lark.oapi.service.im.v1.model.P2MessageReceiveV1;
 import com.lark.oapi.service.im.v1.model.ReplyMessageReq;
 import com.lark.oapi.service.im.v1.model.ReplyMessageReqBody;
+import com.lark.oapi.service.im.v1.model.ReplyMessageResp;
 import com.lark.oapi.service.im.v1.model.UserId;
 import com.lark.oapi.service.im.v1.model.CreateMessageReactionReq;
 import com.lark.oapi.service.im.v1.model.CreateMessageReactionReqBody;
@@ -44,6 +46,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class LarkSdkFeishuTransport implements FeishuTransport {
     private static final System.Logger LOG = System.getLogger(LarkSdkFeishuTransport.class.getName());
     private static final ObjectMapper JSON = new ObjectMapper();
+    /** Bounded attempts for a reply: one initial send plus at most one duplicate-safe retry. */
+    private static final int REPLY_MAX_ATTEMPTS = 2;
+    private static final long REPLY_RETRY_BACKOFF_MILLIS = 300L;
 
     private final Object lock = new Object();
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -164,7 +169,26 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                         .content(content)
                         .build())
                 .build();
-        api.im().message().reply(request);
+        sendReplyValidated(api, request, messageId, "interactive", cardVersion(card));
+    }
+
+    @Override
+    public void replyText(String messageId, String text) throws Exception {
+        Client api;
+        synchronized (lock) {
+            api = apiClient;
+        }
+        if (api == null || messageId == null || messageId.isBlank()) {
+            return;
+        }
+        ReplyMessageReq request = ReplyMessageReq.newBuilder()
+                .messageId(messageId)
+                .replyMessageReqBody(ReplyMessageReqBody.newBuilder()
+                        .msgType("text")
+                        .content(Jsons.DEFAULT.toJson(Map.of("text", text == null ? "" : text)))
+                        .build())
+                .build();
+        sendReplyValidated(api, request, messageId, "text", "text");
     }
 
     @Override
@@ -233,7 +257,141 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                         .content("{\"image_key\":\"" + imageKey + "\"}")
                         .build())
                 .build();
-        api.im().message().reply(request);
+        sendReplyValidated(api, request, messageId, "image", "image");
+    }
+
+    /**
+     * Sends a reply and refuses to treat an unsuccessful provider response as delivered. Bounded,
+     * duplicate-safe retries run only for rate limiting and transient transport errors; a rejected
+     * payload or missing permission fails immediately. Never logs card or message content.
+     */
+    private void sendReplyValidated(
+            Client api, ReplyMessageReq request, String messageId, String messageType, String cardVersion)
+            throws Exception {
+        FeishuDeliveryException last = null;
+        for (int attempt = 1; attempt <= REPLY_MAX_ATTEMPTS; attempt++) {
+            ReplyMessageResp response;
+            try {
+                response = api.im().message().reply(request);
+            } catch (Exception transportFailure) {
+                last = new FeishuDeliveryException(
+                        FeishuDeliveryException.Failure.TRANSPORT, -1, "", messageType, cardVersion, "transport error");
+                LOG.log(
+                        System.Logger.Level.WARNING,
+                        "feishu.reply.transport messageType={0} attempt={1} of={2}",
+                        messageType,
+                        attempt,
+                        REPLY_MAX_ATTEMPTS);
+                if (attempt < REPLY_MAX_ATTEMPTS) {
+                    backoff();
+                    continue;
+                }
+                throw last;
+            }
+            FeishuDeliveryException failure = validateReply(response, messageType, cardVersion);
+            if (failure == null) {
+                LOG.log(
+                        System.Logger.Level.DEBUG,
+                        "feishu.reply.delivered messageType={0} cardVersion={1} providerMessageId={2}",
+                        messageType,
+                        cardVersion,
+                        response.getData().getMessageId());
+                return;
+            }
+            last = failure;
+            LOG.log(
+                    System.Logger.Level.WARNING,
+                    "feishu.reply.rejected messageType={0} failure={1} code={2} logId={3} attempt={4} of={5}",
+                    messageType,
+                    failure.failure(),
+                    failure.code(),
+                    failure.logId(),
+                    attempt,
+                    REPLY_MAX_ATTEMPTS);
+            if (failure.retryable() && attempt < REPLY_MAX_ATTEMPTS) {
+                backoff();
+                continue;
+            }
+            throw failure;
+        }
+        if (last != null) {
+            throw last;
+        }
+    }
+
+    /**
+     * Returns {@code null} when the provider confirmed delivery (success status plus a provider
+     * message id), otherwise a value-free failure describing the rejection class.
+     */
+    static FeishuDeliveryException validateReply(
+            ReplyMessageResp response, String messageType, String cardVersion) {
+        if (response == null) {
+            return new FeishuDeliveryException(
+                    FeishuDeliveryException.Failure.TRANSPORT, -1, "", messageType, cardVersion, "null response");
+        }
+        String logId = response.getError() == null ? "" : response.getError().getLogId();
+        if (!response.success()) {
+            return new FeishuDeliveryException(
+                    classifyFailure(response.getCode(), httpStatus(response)),
+                    response.getCode(),
+                    logId,
+                    messageType,
+                    cardVersion,
+                    "provider rejected reply");
+        }
+        String providerMessageId = response.getData() == null ? "" : response.getData().getMessageId();
+        if (providerMessageId == null || providerMessageId.isBlank()) {
+            return new FeishuDeliveryException(
+                    FeishuDeliveryException.Failure.UNKNOWN,
+                    response.getCode(),
+                    logId,
+                    messageType,
+                    cardVersion,
+                    "reply missing provider message id");
+        }
+        return null;
+    }
+
+    /** Classifies a provider rejection so retries and diagnostics stay bounded and distinct. */
+    static FeishuDeliveryException.Failure classifyFailure(int code, int httpStatus) {
+        if (httpStatus == 429) {
+            return FeishuDeliveryException.Failure.RATE_LIMIT;
+        }
+        if (httpStatus == 401 || httpStatus == 403) {
+            return FeishuDeliveryException.Failure.PERMISSION;
+        }
+        if (httpStatus >= 500) {
+            return FeishuDeliveryException.Failure.TRANSPORT;
+        }
+        if (httpStatus == 400) {
+            return FeishuDeliveryException.Failure.INVALID;
+        }
+        if (code == 200830 || code == 230001 || code == 230002 || code == 230006 || code == 230009) {
+            return FeishuDeliveryException.Failure.INVALID;
+        }
+        if (code == 99991400 || code == 99991401) {
+            return FeishuDeliveryException.Failure.RATE_LIMIT;
+        }
+        return FeishuDeliveryException.Failure.UNKNOWN;
+    }
+
+    private static int httpStatus(ReplyMessageResp response) {
+        RawResponse raw = response.getRawResponse();
+        return raw == null ? 0 : raw.getStatusCode();
+    }
+
+    private static void backoff() {
+        try {
+            Thread.sleep(REPLY_RETRY_BACKOFF_MILLIS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** Card JSON version marker used for diagnostics only; never logs card content. */
+    private static String cardVersion(Map<String, Object> card) {
+        Object schema = card.get("schema");
+        return schema == null ? "1.0" : String.valueOf(schema);
     }
 
     @Override

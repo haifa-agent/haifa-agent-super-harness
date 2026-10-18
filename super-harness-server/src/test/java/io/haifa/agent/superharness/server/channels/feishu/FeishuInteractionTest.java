@@ -57,10 +57,13 @@ class FeishuInteractionTest {
         assertThat(followedByAssistant.preface()).contains("I'll create a file with one line of content.");
 
         Map<String, Object> card = FeishuInteraction.interactiveCard(followedByAssistant);
+        assertThat(card.get("schema")).isEqualTo("2.0");
+        assertThat(card).doesNotContainKey("elements");
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> elements = (List<Map<String, Object>>) card.get("elements");
-        assertThat(elements).anyMatch(element -> "action".equals(element.get("tag")));
-        assertThat(elements).noneMatch(element -> "button".equals(element.get("tag")));
+        List<Map<String, Object>> elements =
+                (List<Map<String, Object>>) ((Map<String, Object>) card.get("body")).get("elements");
+        assertThat(elements).noneMatch(element -> "action".equals(element.get("tag")));
+        assertThat(elements).anyMatch(element -> "button".equals(element.get("tag")));
         assertThat(elements.getFirst().get("content").toString()).contains("1. Approve").contains("2. Reject");
     }
 
@@ -180,7 +183,7 @@ class FeishuInteractionTest {
         FeishuPendingInput pending = FeishuInteraction.pendingFromMessages(messages).orElseThrow();
         assertThat(pending.formUnsupported()).isTrue();
         assertThat(FeishuInteraction.match(pending, "1.0.0")).isEmpty();
-        assertThat(FeishuInteraction.interactiveCard(pending).get("elements").toString()).doesNotContain("button");
+        assertThat(FeishuInteraction.interactiveCard(pending).toString()).doesNotContain("button");
         assertThat(FeishuInteraction.formNotice(pending)).contains("请在 Web 端完成该表单");
         assertThat(FeishuInteraction.formNotice(pending, "thread-form-1"))
                 .contains("请在 Web 端完成该表单")

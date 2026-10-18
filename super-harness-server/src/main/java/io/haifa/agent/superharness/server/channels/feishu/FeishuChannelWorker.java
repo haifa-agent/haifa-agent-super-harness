@@ -644,7 +644,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
         ObjectNode connection = bound.orElse(null);
         FeishuPendingInput pending = agentBridge.currentPending(ownerUserId, threadId).orElse(null);
         if (pending != null && pending.formUnsupported() && !pending.formSupported()) {
-            reply(message.messageId(), FeishuInteraction.formNotice(pending, threadId));
+            replyUnsupportedFormHandoff(message, pending, threadId);
             return;
         }
         if (pending != null) {
@@ -778,11 +778,11 @@ public final class FeishuChannelWorker implements AutoCloseable {
             throws Exception {
         FeishuPendingInput pending = result.pending();
         if (pending != null && pending.formUnsupported() && !pending.formSupported()) {
-            reply(message.messageId(), FeishuInteraction.formNotice(pending, threadId));
+            replyUnsupportedFormHandoff(message, pending, threadId);
             return;
         }
         if (pending != null) {
-            replyInteractive(message.messageId(), FeishuInteraction.interactiveCard(pending));
+            deliverInteractiveCard(message, pending, threadId);
             return;
         }
         String text = result.assistantText();
@@ -792,7 +792,72 @@ public final class FeishuChannelWorker implements AutoCloseable {
         if (FeishuInteraction.BUSY.equals(text)) {
             return;
         }
-        reply(message.messageId(), text);
+        deliverText(message.messageId(), text, threadId);
+    }
+
+    /**
+     * Delivers the interactive approval / clarification card. A rejected delivery is never treated
+     * as success: it is logged with correlation identifiers (no message or form content) and the
+     * pending request is re-sent as a plain text fallback so it cannot be silently lost.
+     */
+    private void deliverInteractiveCard(FeishuInboundMessage message, FeishuPendingInput pending, String threadId)
+            throws Exception {
+        Map<String, Object> card = FeishuInteraction.interactiveCard(pending);
+        String cardType = pending.formSupported() ? "form" : pending.inputMode();
+        try {
+            replyInteractive(message.messageId(), card);
+            LOG.log(
+                    System.Logger.Level.INFO,
+                    "feishu.card.delivered channel=feishu chat={0} thread={1} request={2} cardType={3}",
+                    message.chatId(),
+                    threadId,
+                    pending.requestId(),
+                    cardType);
+        } catch (Exception failure) {
+            FeishuDeliveryException delivery = FeishuDeliveryException.find(failure);
+            LOG.log(
+                    System.Logger.Level.WARNING,
+                    "feishu.card.delivery.failed channel=feishu chat={0} thread={1} request={2} cardType={3} failure={4} code={5}",
+                    message.chatId(),
+                    threadId,
+                    pending.requestId(),
+                    cardType,
+                    delivery == null ? failure.getClass().getSimpleName() : delivery.failure(),
+                    delivery == null ? -1 : delivery.code());
+            replyText(message.messageId(), FeishuInteraction.cardDeliveryFallback(pending, threadId));
+        }
+    }
+
+    /** Ordinary text / progress / error reply; falls back to a plain text message on card failure. */
+    private void deliverText(String messageId, String text, String threadId) throws Exception {
+        try {
+            reply(messageId, text);
+        } catch (Exception failure) {
+            FeishuDeliveryException delivery = FeishuDeliveryException.find(failure);
+            LOG.log(
+                    System.Logger.Level.WARNING,
+                    "feishu.text.card.failed channel=feishu message={0} thread={1} failure={2} code={3}",
+                    messageId,
+                    threadId,
+                    delivery == null ? failure.getClass().getSimpleName() : delivery.failure(),
+                    delivery == null ? -1 : delivery.code());
+            replyText(messageId, text);
+        }
+    }
+
+    /**
+     * Intentional Web handoff for a form the Feishu card subset cannot render. Logged distinctly so
+     * operators can separate "by design" from an attempted-but-failed card delivery.
+     */
+    private void replyUnsupportedFormHandoff(
+            FeishuInboundMessage message, FeishuPendingInput pending, String threadId) throws Exception {
+        LOG.log(
+                System.Logger.Level.INFO,
+                "feishu.form.handoff channel=feishu chat={0} thread={1} request={2} reason=unsupported-form",
+                message.chatId(),
+                threadId,
+                pending.requestId());
+        reply(message.messageId(), FeishuInteraction.formNotice(pending, threadId));
     }
 
     private boolean authorized(FeishuInboundMessage message) {
@@ -820,6 +885,16 @@ public final class FeishuChannelWorker implements AutoCloseable {
         }
         if (active != null) {
             active.replyInteractive(messageId, card);
+        }
+    }
+
+    private void replyText(String messageId, String text) throws Exception {
+        FeishuTransport active;
+        synchronized (lock) {
+            active = transport;
+        }
+        if (active != null) {
+            active.replyText(messageId, text);
         }
     }
 
