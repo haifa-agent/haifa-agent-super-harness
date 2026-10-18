@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -169,7 +170,7 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                         .content(content)
                         .build())
                 .build();
-        sendReplyValidated(api, request, messageId, "interactive", cardVersion(card));
+        sendReplyValidated(api, request, "interactive", cardVersion(card));
     }
 
     @Override
@@ -188,7 +189,7 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                         .content(Jsons.DEFAULT.toJson(Map.of("text", text == null ? "" : text)))
                         .build())
                 .build();
-        sendReplyValidated(api, request, messageId, "text", "text");
+        sendReplyValidated(api, request, "text", "text");
     }
 
     @Override
@@ -257,7 +258,7 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                         .content("{\"image_key\":\"" + imageKey + "\"}")
                         .build())
                 .build();
-        sendReplyValidated(api, request, messageId, "image", "image");
+        sendReplyValidated(api, request, "image", "image");
     }
 
     /**
@@ -266,8 +267,8 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
      * payload or missing permission fails immediately. Never logs card or message content.
      */
     private void sendReplyValidated(
-            Client api, ReplyMessageReq request, String messageId, String messageType, String cardVersion)
-            throws Exception {
+            Client api, ReplyMessageReq request, String messageType, String cardVersion) throws Exception {
+        ensureIdempotencyKey(request);
         FeishuDeliveryException last = null;
         for (int attempt = 1; attempt <= REPLY_MAX_ATTEMPTS; attempt++) {
             ReplyMessageResp response;
@@ -320,6 +321,17 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
     }
 
     /**
+     * Assigns one stable idempotency key per logical reply. A bounded retry reuses the same key so
+     * the provider can deduplicate the resend instead of posting a duplicate message.
+     */
+    static void ensureIdempotencyKey(ReplyMessageReq request) {
+        ReplyMessageReqBody body = request == null ? null : request.getReplyMessageReqBody();
+        if (body != null && (body.getUuid() == null || body.getUuid().isBlank())) {
+            body.setUuid(UUID.randomUUID().toString());
+        }
+    }
+
+    /**
      * Returns {@code null} when the provider confirmed delivery (success status plus a provider
      * message id), otherwise a value-free failure describing the rejection class.
      */
@@ -352,8 +364,18 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
         return null;
     }
 
-    /** Classifies a provider rejection so retries and diagnostics stay bounded and distinct. */
+    /**
+     * Classifies a provider rejection so retries and diagnostics stay bounded and distinct. Business
+     * codes are checked before the generic HTTP status so a rate-limit or invalid-parameter
+     * rejection that arrives with HTTP 400 is not misclassified.
+     */
     static FeishuDeliveryException.Failure classifyFailure(int code, int httpStatus) {
+        if (code == 99991400 || code == 99991401) {
+            return FeishuDeliveryException.Failure.RATE_LIMIT;
+        }
+        if (code == 200830 || code == 230001 || code == 230002 || code == 230006 || code == 230009) {
+            return FeishuDeliveryException.Failure.INVALID;
+        }
         if (httpStatus == 429) {
             return FeishuDeliveryException.Failure.RATE_LIMIT;
         }
@@ -365,12 +387,6 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
         }
         if (httpStatus == 400) {
             return FeishuDeliveryException.Failure.INVALID;
-        }
-        if (code == 200830 || code == 230001 || code == 230002 || code == 230006 || code == 230009) {
-            return FeishuDeliveryException.Failure.INVALID;
-        }
-        if (code == 99991400 || code == 99991401) {
-            return FeishuDeliveryException.Failure.RATE_LIMIT;
         }
         return FeishuDeliveryException.Failure.UNKNOWN;
     }

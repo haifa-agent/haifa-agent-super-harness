@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lark.oapi.core.response.error.Error;
+import com.lark.oapi.service.im.v1.model.ReplyMessageReq;
+import com.lark.oapi.service.im.v1.model.ReplyMessageReqBody;
 import com.lark.oapi.service.im.v1.model.ReplyMessageResp;
 import com.lark.oapi.service.im.v1.model.ReplyMessageRespBody;
 import io.haifa.agent.superharness.server.config.ChannelConnectionStore;
@@ -168,6 +170,11 @@ class FeishuCard2MigrationTest {
                 .isEqualTo(FeishuDeliveryException.Failure.INVALID);
         assertThat(LarkSdkFeishuTransport.classifyFailure(99991400, 200))
                 .isEqualTo(FeishuDeliveryException.Failure.RATE_LIMIT);
+        // Business codes win over the generic HTTP 400 fallback.
+        assertThat(LarkSdkFeishuTransport.classifyFailure(99991400, 400))
+                .isEqualTo(FeishuDeliveryException.Failure.RATE_LIMIT);
+        assertThat(LarkSdkFeishuTransport.classifyFailure(200830, 400))
+                .isEqualTo(FeishuDeliveryException.Failure.INVALID);
         assertThat(new FeishuDeliveryException(
                                 FeishuDeliveryException.Failure.RATE_LIMIT, 99991400, "", "interactive", "2.0", "")
                         .retryable())
@@ -176,6 +183,22 @@ class FeishuCard2MigrationTest {
                                 FeishuDeliveryException.Failure.INVALID, 200830, "", "interactive", "2.0", "")
                         .retryable())
                 .isFalse();
+    }
+
+    @Test
+    void replyRetryReusesOneIdempotencyKey() {
+        ReplyMessageReq request = ReplyMessageReq.newBuilder()
+                .messageId("om_in")
+                .replyMessageReqBody(ReplyMessageReqBody.newBuilder()
+                        .msgType("interactive")
+                        .content("{}")
+                        .build())
+                .build();
+        LarkSdkFeishuTransport.ensureIdempotencyKey(request);
+        String first = request.getReplyMessageReqBody().getUuid();
+        assertThat(first).isNotBlank();
+        LarkSdkFeishuTransport.ensureIdempotencyKey(request);
+        assertThat(request.getReplyMessageReqBody().getUuid()).isEqualTo(first);
     }
 
     // ---- worker fallback -------------------------------------------------------------------
