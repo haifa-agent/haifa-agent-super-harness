@@ -12,6 +12,7 @@ import com.lark.oapi.event.cardcallback.model.CallBackOperator;
 import com.lark.oapi.event.cardcallback.model.P2CardActionTrigger;
 import com.lark.oapi.event.cardcallback.model.P2CardActionTriggerData;
 import io.haifa.agent.superharness.server.config.ChannelConnectionStore;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -141,6 +142,7 @@ class FeishuInteractionTest {
         assertThat(settled.get("body").toString()).contains("已提交：自定义答案").doesNotContain("button");
 
         Harness harness = harness();
+        bindRequest(harness, "clarification:abc");
         harness.bridge.pending = pending;
         harness.worker.handleInbound(new FeishuInboundMessage(
                 "oc_chat", "om_other", "ou_owner", "", "p2p", message.cardAction()));
@@ -265,6 +267,7 @@ class FeishuInteractionTest {
         assertThat(updated.getCard().getData()).isSameAs(settled);
 
         Harness harness = harness();
+        bindRequest(harness, "req-1");
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         harness.bridge.pending = approval();
@@ -276,14 +279,35 @@ class FeishuInteractionTest {
         assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
         assertThat(harness.bridge.responses.get()).isNull();
         release.countDown();
-        assertThat(harness.transport.replies().isEmpty() || true).isTrue();
+        // Wait for the enqueued card action to finish projecting its reply (and its reply-id binding)
+        // before closing, so the background writer is not still holding the store temp file.
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
-        while (harness.bridge.responses.get() == null && System.nanoTime() < deadline) {
+        while ((harness.bridge.responses.get() == null || harness.transport.replies().isEmpty())
+                && System.nanoTime() < deadline) {
             Thread.sleep(20);
         }
         assertThat(harness.bridge.responses.get().optionId()).isEqualTo("approve");
         assertThat(harness.bridge.responses.get().value()).isEqualTo("approve");
+        waitForStoreSettle();
         harness.worker.close();
+    }
+
+    /** Bounded wait until the Feishu thread-map store has no in-flight temp file. */
+    private void waitForStoreSettle() throws Exception {
+        Path channels = dataDirectory.resolve("channels");
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (System.nanoTime() < deadline) {
+            boolean pending = false;
+            if (Files.isDirectory(channels)) {
+                try (var entries = Files.list(channels)) {
+                    pending = entries.anyMatch(path -> path.getFileName().toString().endsWith(".tmp"));
+                }
+            }
+            if (!pending) {
+                return;
+            }
+            Thread.sleep(20);
+        }
     }
 
     @Test
@@ -420,10 +444,27 @@ class FeishuInteractionTest {
                 java.time.Instant.now().plusSeconds(60),
                 ChannelConnectionStore.MAX_PENDING_CONNECT_CODES_PER_PROVIDER);
         connections.bindFeishuFromConnectCode(code, "ou_owner", "oc_chat", Map.of());
-        return new Harness(worker, transportRef.get(), bridge);
+        return new Harness(worker, transportRef.get(), bridge, connections, threads);
     }
 
-    private record Harness(FeishuChannelWorker worker, RecordingFeishuTransport transport, ScriptedBridge bridge) {}
+    private record Harness(
+            FeishuChannelWorker worker,
+            RecordingFeishuTransport transport,
+            ScriptedBridge bridge,
+            ChannelConnectionStore connections,
+            FeishuChatThreadStore threads) {}
+
+    /** Bind the immutable card request alias the way the production card-delivery path does. */
+    private static void bindRequest(Harness harness, String requestId) {
+        String connectionId = harness
+                .connections()
+                .findConnectionByExternalIdentity("feishu", "ou_owner", "oc_chat")
+                .orElseThrow()
+                .path("id")
+                .asText("");
+        harness.threads()
+                .bindAliasIfAbsent(connectionId, "oc_chat", "request:" + requestId, "feishu-test-thread");
+    }
 
     private static final class ScriptedBridge implements FeishuAgentBridge {
         private final AtomicInteger turns = new AtomicInteger();

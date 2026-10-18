@@ -150,17 +150,27 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
 
     @Override
     public void replyCard(String messageId, String text) throws Exception {
-        replyInteractive(messageId, cardPayloadMap(text == null ? "" : text));
+        replyCardId(messageId, text);
+    }
+
+    @Override
+    public Optional<String> replyCardId(String messageId, String text) throws Exception {
+        return replyInteractiveId(messageId, cardPayloadMap(text == null ? "" : text));
     }
 
     @Override
     public void replyInteractive(String messageId, Map<String, Object> card) throws Exception {
+        replyInteractiveId(messageId, card);
+    }
+
+    @Override
+    public Optional<String> replyInteractiveId(String messageId, Map<String, Object> card) throws Exception {
         Client api;
         synchronized (lock) {
             api = apiClient;
         }
         if (api == null || messageId == null || messageId.isBlank() || card == null) {
-            return;
+            return Optional.empty();
         }
         String content = Jsons.DEFAULT.toJson(card);
         ReplyMessageReq request = ReplyMessageReq.newBuilder()
@@ -170,17 +180,22 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                         .content(content)
                         .build())
                 .build();
-        sendReplyValidated(api, request, "interactive", cardVersion(card));
+        return sendReplyValidated(api, request, "interactive", cardVersion(card));
     }
 
     @Override
     public void replyText(String messageId, String text) throws Exception {
+        replyTextId(messageId, text);
+    }
+
+    @Override
+    public Optional<String> replyTextId(String messageId, String text) throws Exception {
         Client api;
         synchronized (lock) {
             api = apiClient;
         }
         if (api == null || messageId == null || messageId.isBlank()) {
-            return;
+            return Optional.empty();
         }
         ReplyMessageReq request = ReplyMessageReq.newBuilder()
                 .messageId(messageId)
@@ -189,7 +204,7 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                         .content(Jsons.DEFAULT.toJson(Map.of("text", text == null ? "" : text)))
                         .build())
                 .build();
-        sendReplyValidated(api, request, "text", "text");
+        return sendReplyValidated(api, request, "text", "text");
     }
 
     @Override
@@ -266,7 +281,7 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
      * duplicate-safe retries run only for rate limiting and transient transport errors; a rejected
      * payload or missing permission fails immediately. Never logs card or message content.
      */
-    private void sendReplyValidated(
+    private Optional<String> sendReplyValidated(
             Client api, ReplyMessageReq request, String messageType, String cardVersion) throws Exception {
         ensureIdempotencyKey(request);
         FeishuDeliveryException last = null;
@@ -291,13 +306,14 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
             }
             FeishuDeliveryException failure = validateReply(response, messageType, cardVersion);
             if (failure == null) {
+                String providerMessageId = response.getData().getMessageId();
                 LOG.log(
                         System.Logger.Level.DEBUG,
                         "feishu.reply.delivered messageType={0} cardVersion={1} providerMessageId={2}",
                         messageType,
                         cardVersion,
-                        response.getData().getMessageId());
-                return;
+                        providerMessageId);
+                return Optional.ofNullable(providerMessageId).filter(id -> !id.isBlank());
             }
             last = failure;
             LOG.log(
@@ -318,6 +334,7 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
         if (last != null) {
             throw last;
         }
+        return Optional.empty();
     }
 
     /**
@@ -569,7 +586,10 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                 message.getChatType(),
                 messageType,
                 parsed.attachments(),
-                null));
+                null,
+                message.getRootId(),
+                message.getParentId(),
+                message.getThreadId()));
     }
 
     private P2CardActionTriggerResponse respondToCard(P2CardActionTrigger event) {

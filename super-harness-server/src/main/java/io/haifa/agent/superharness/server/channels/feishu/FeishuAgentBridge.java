@@ -148,6 +148,16 @@ public interface FeishuAgentBridge {
         return Optional.empty();
     }
 
+    /**
+     * Create the SH Thread for {@code /new} through the shared conversation use case so the id handed
+     * back to the user is a real, Web-openable thread (not a locally generated UUID). Default is a
+     * no-op for test doubles that do not own a Runtime.
+     */
+    default void createThread(String ownerUserId, String threadId, Map<String, Object> channelMetadata)
+            throws Exception {
+        // No-op: test doubles route without a Runtime; production uses InProcessFeishuAgentBridge.
+    }
+
     /** Cancel the thread's active Run (Stop). Default reports no active run. */
     default boolean cancelActiveRun(String ownerUserId, String threadId) throws Exception {
         return false;

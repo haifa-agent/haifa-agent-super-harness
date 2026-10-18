@@ -45,11 +45,32 @@ public interface FeishuTransport extends AutoCloseable {
     void replyInteractive(String messageId, Map<String, Object> card) throws Exception;
 
     /**
+     * Reply and expose the provider message id so historical reply routing can bind the outbound
+     * message back to its SH thread. Default returns empty for transports without a platform id.
+     */
+    default Optional<String> replyCardId(String messageId, String text) throws Exception {
+        replyCard(messageId, text);
+        return Optional.empty();
+    }
+
+    /** Card reply variant of {@link #replyCardId} for approval / clarification / form cards. */
+    default Optional<String> replyInteractiveId(String messageId, Map<String, Object> card) throws Exception {
+        replyInteractive(messageId, card);
+        return Optional.empty();
+    }
+
+    /**
      * Reply with a plain text message. Used as the safe fallback when interactive-card delivery
      * fails; the default delegates to the card path for transports without a text seam.
      */
     default void replyText(String messageId, String text) throws Exception {
         replyCard(messageId, text);
+    }
+
+    /** Plain-text reply variant of {@link #replyCardId}; default delegates to {@link #replyText}. */
+    default Optional<String> replyTextId(String messageId, String text) throws Exception {
+        replyText(messageId, text);
+        return Optional.empty();
     }
 
     /**
