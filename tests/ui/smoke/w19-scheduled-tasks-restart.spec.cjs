@@ -65,6 +65,16 @@ test("W19-M4-07 same-data-root restart keeps tasks and history, converges stale 
   expect(DATA_ROOT, "the restart round must run on an explicit data root").toBeTruthy();
   const storeFile = path.join(DATA_ROOT, "scheduler", "state.json");
   expect(fs.existsSync(storeFile), `scheduler store must survive at ${storeFile}`).toBe(true);
+
+  // The warm round persisted an explicit stale `launching` claim before its process stopped; that is
+  // the pre-shutdown active occurrence this round must converge (not a vacuous empty set).
+  const seedFile = path.join(DATA_ROOT, "w19-m4-restart-seed.json");
+  expect(fs.existsSync(seedFile), `the warm round must persist the stale-claim seed at ${seedFile}`).toBe(
+    true,
+  );
+  const seed = JSON.parse(fs.readFileSync(seedFile, "utf8"));
+  expect(seed.status, "the seed describes a pre-shutdown active occurrence").toBe("launching");
+
   const store = JSON.parse(fs.readFileSync(storeFile, "utf8"));
   const storeTaskIds = (store.tasks ?? []).map((task) => task.id);
 
@@ -72,9 +82,38 @@ test("W19-M4-07 same-data-root restart keeps tasks and history, converges stale 
   const byPrefix = (prefix) => tasks.filter((task) => task.title.startsWith(prefix));
   expect(byPrefix("W19-M4-01-interval").length).toBeGreaterThanOrEqual(1);
   expect(byPrefix("W19-M4-05-bound").length).toBeGreaterThanOrEqual(1);
+  expect(storeTaskIds, "the reopened data root must own the seeded holder task").toContain(seed.taskId);
   for (const task of tasks) {
     expect(storeTaskIds, "the reopened data root must own every listed task").toContain(task.id);
   }
+
+  // Convergence of the explicitly seeded stale claim: startup recovery must move it out of the
+  // dangling `launching` state (with no committed Run) and re-dispatch it onto a real Run, so it
+  // terminates from a committed Run rather than staying a dangling claim. With recovery disabled the
+  // claim would remain `launching` here and this wait would fail.
+  const seededSettled = await waitForRuns(
+    request,
+    seed.taskId,
+    (run) => run.id === seed.occurrenceId && run.status !== "launching",
+    60_000,
+    "stale launch converged out of launching",
+  );
+  const seededRun = seededSettled.find((run) => run.id === seed.occurrenceId);
+  expect(seededRun.status).not.toBe("launching");
+
+  const seededTerminal = await waitForRuns(
+    request,
+    seed.taskId,
+    (run) => run.id === seed.occurrenceId && TERMINAL.has(run.status),
+    200_000,
+    "stale launch terminal after re-dispatch",
+  );
+  const converged = seededTerminal.find((run) => run.id === seed.occurrenceId);
+  expect(converged.status).toBe("success");
+  expect(
+    converged.run_id,
+    "the recovered claim must carry the committed Run it was re-dispatched to",
+  ).toBeTruthy();
 
   // Convergence: no occurrence may remain a dangling `launching` claim after restart, and any
   // still-active occurrence must already carry a committed Run id.
@@ -99,24 +138,31 @@ test("W19-M4-07 same-data-root restart keeps tasks and history, converges stale 
   expect(danglingLaunches, "recovery must not leave a dangling launching occurrence").toBe(0);
   expect(activeWithoutRun, "an active occurrence must reference a committed Run").toBe(0);
 
-  // Rescheduling: the interval task created before the restart must fire again on the reopened
-  // instance, proving the worker restarted and the plan was rescheduled from persisted state.
+  // Rescheduling: the interval task from the warm round (paused there only to freeze the store while
+  // the claim was injected) is re-armed, and must fire again on the reopened instance, proving the
+  // worker restarted and the plan was rescheduled from persisted state.
   const interval = byPrefix("W19-M4-01-interval")[0];
+  if (interval.status === "paused") {
+    const resumed = await request.post(
+      `${APP}/api/scheduled-tasks/${encodeURIComponent(interval.id)}/resume`,
+    );
+    expect(resumed.status(), await resumed.text()).toBe(200);
+  }
   const before = await apiRuns(request, interval.id);
-  const beforeCount = before.length;
+  const beforeIds = new Set(before.map((run) => run.id));
   expect(
     before.some((run) => run.trigger === "scheduled" && TERMINAL.has(run.status)),
-    "the pre-restart terminal occurrence must still be readable",
+    "a pre-restart terminal occurrence must still be readable",
   ).toBe(true);
 
   const after = await waitForRuns(
     request,
     interval.id,
-    (run) => !before.some((previous) => previous.id === run.id),
+    (run) => !beforeIds.has(run.id) && run.trigger === "scheduled",
     200_000,
-    "new occurrence after restart",
+    "new scheduled occurrence after restart",
   );
-  const newRun = after.find((run) => !before.some((previous) => previous.id === run.id));
+  const newRun = after.find((run) => !beforeIds.has(run.id) && run.trigger === "scheduled");
   expect(newRun, "a new occurrence must be admitted after restart").toBeTruthy();
 
   const settled = await waitForRuns(
@@ -130,6 +176,19 @@ test("W19-M4-07 same-data-root restart keeps tasks and history, converges stale 
 
   await saveEvidence(testInfo, "w19-m4-07.json", {
     dataRoot: DATA_ROOT,
+    seed: {
+      occurrenceId: seed.occurrenceId,
+      taskId: seed.taskId,
+      threadId: seed.threadId,
+      preShutdownStatus: seed.status,
+      seededAt: seed.seededAt,
+    },
+    seededConvergence: {
+      status: converged.status,
+      runId: converged.run_id,
+      startedAt: converged.started_at,
+      finishedAt: converged.finished_at,
+    },
     storeTaskIds,
     taskIds: tasks.map((task) => task.id),
     danglingLaunches,

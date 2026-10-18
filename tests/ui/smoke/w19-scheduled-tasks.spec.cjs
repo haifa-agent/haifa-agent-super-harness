@@ -16,6 +16,7 @@ const APP =
   process.env.E2E_APP_URL ??
   `http://127.0.0.1:${process.env.E2E_FRONTEND_PORT ?? "26618"}`;
 const PAGE_PATH = "/workspace/scheduled-tasks";
+const DATA_ROOT = process.env.SUPER_HARNESS_DATA_ROOT;
 
 const ACTIVE = new Set(["queued", "launching", "running"]);
 const TERMINAL = new Set(["success", "failed", "skipped", "interrupted"]);
@@ -101,6 +102,77 @@ async function waitForTask(request, title, timeoutMs = 20_000) {
   }
 }
 
+// Cases must be runnable on their own (`-CaseTitle`). Every prerequisite is created or discovered
+// from the persisted state instead of relying on an earlier case's in-memory `state` slot.
+async function ensureEnabledIntervalTask(request, titlePrefix, prompt) {
+  const existing = (await apiListTasks(request)).find((task) => task.title.startsWith(titlePrefix));
+  if (existing) {
+    if (existing.status === "paused") {
+      // A previous round may have paused the task while freezing the store; re-arm it so its
+      // interval fires again. A concurrent occurrence keeps the task busy, so retry bounded.
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        const resumed = await request.post(
+          `${APP}/api/scheduled-tasks/${encodeURIComponent(existing.id)}/resume`,
+        );
+        if (resumed.status() === 200) {
+          break;
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `timed out resuming interval task '${existing.title}': ${await resumed.text()}`,
+          );
+        }
+        await sleep(1_000);
+      }
+    }
+    return apiFindTask(request, existing.id);
+  }
+  const created = await apiCreate(request, {
+    context_mode: "fresh_thread_per_run",
+    assistant_id: "lead_agent",
+    title: marker(titlePrefix),
+    prompt,
+    schedule_type: "interval",
+    schedule_spec: { every_seconds: 60 },
+    timezone: "UTC",
+  });
+  return waitForTask(request, created.title);
+}
+
+// Discover an already-successful occurrence with a committed Run/Thread so M4-08 is independent of
+// M4-02's module state; if none exists yet, admit one through the real trigger route and wait.
+async function ensureSuccessfulOccurrence(request) {
+  for (const task of await apiListTasks(request)) {
+    const runs = await apiRuns(request, task.id);
+    const found = runs.find((run) => run.status === "success" && run.run_id && run.thread_id);
+    if (found) {
+      return found;
+    }
+  }
+  const created = await apiCreate(request, {
+    context_mode: "fresh_thread_per_run",
+    assistant_id: "lead_agent",
+    title: marker("W19-M4-08-standalone"),
+    prompt: "Reply with the single word SCHEDULED_M4_08_OK and nothing else. Do not use tools.",
+    schedule_type: "interval",
+    schedule_spec: { every_seconds: 3600 },
+    timezone: "UTC",
+  });
+  const triggered = await request.post(
+    `${APP}/api/scheduled-tasks/${encodeURIComponent(created.id)}/trigger`,
+  );
+  expect(triggered.status(), await triggered.text()).toBe(200);
+  const runs = await waitForRuns(
+    request,
+    created.id,
+    (run) => run.status === "success" && run.run_id && run.thread_id,
+    180_000,
+    "standalone successful occurrence",
+  );
+  return runs.find((run) => run.status === "success" && run.run_id && run.thread_id);
+}
+
 async function gotoPage(page) {
   await page.goto(PAGE_PATH, { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("scheduled-task-create-form")).toBeVisible();
@@ -173,8 +245,18 @@ test("W19-M4-02 a due interval task auto-triggers a real Run and run history sho
   page,
   request,
 }, testInfo) => {
-  expect(state.task01, "M4-01 must have created the interval task").toBeTruthy();
-  const taskId = state.task01.id;
+  // Self-contained: use M4-01's task when it ran, otherwise discover (or create) an enabled
+  // interval task; never depend on the earlier case's module state.
+  const intervalTask =
+    (state.task01 && state.task01.status === "enabled" ? state.task01 : null) ??
+    (await ensureEnabledIntervalTask(
+      request,
+      "W19-M4-01-interval",
+      "Reply with the single word SCHEDULED_M4_01_OK and nothing else. Do not use tools.",
+    ));
+  expect(intervalTask, "an enabled interval task must be available for M4-02").toBeTruthy();
+  const taskId = intervalTask.id;
+  state.task01 = intervalTask;
   const startedAt = Date.now();
 
   const scheduledRuns = await waitForRuns(
@@ -227,20 +309,57 @@ test("W19-M4-03 manual trigger works, works while paused, and repeated triggers 
 }, testInfo) => {
   const title = marker("W19-M4-03-manual");
   const prompt =
-    "Reply with the single word SCHEDULED_M4_03_OK and nothing else. Do not use tools.";
+    "Print every integer from 1 through 300, one per line. Write the full list with no abbreviation, commentary, code fence, or tools.";
   await createIntervalTask(page, { title, prompt, amount: 3600 });
   const task = await waitForTask(request, title);
   expect(task.schedule_spec.every_seconds).toBe(3600);
 
   await selectTask(page, task.id, title);
   await page.getByRole("button", { name: "Trigger now", exact: true }).click();
+
+  // Overlap window: while the first manual occurrence is still active, burst concurrent triggers.
+  // The single-active-occurrence rule must reject every competing trigger and the peak active count
+  // observed must never exceed one; waiting for the first to finish would make the guard vacuous.
   await waitForRuns(
+    request,
+    task.id,
+    (run) => ACTIVE.has(run.status),
+    60_000,
+    "active manual occurrence",
+  );
+  const burst = await Promise.all(
+    Array.from({ length: 5 }, () =>
+      request.post(`${APP}/api/scheduled-tasks/${encodeURIComponent(task.id)}/trigger`),
+    ),
+  );
+  const burstStatuses = burst.map((response) => response.status());
+  expect(
+    burstStatuses.every((status) => status === 409),
+    `concurrent triggers during an active occurrence must all be rejected, saw ${burstStatuses.join(",")}`,
+  ).toBe(true);
+
+  // Observe the peak active count across the whole overlap window (before and after the burst).
+  let peakActive = 0;
+  const overlapDeadline = Date.now() + 30_000;
+  for (;;) {
+    const runs = await apiRuns(request, task.id);
+    const activeNow = runs.filter((run) => ACTIVE.has(run.status)).length;
+    peakActive = Math.max(peakActive, activeNow);
+    if (activeNow === 0 || Date.now() >= overlapDeadline) {
+      break;
+    }
+    await sleep(250);
+  }
+  expect(peakActive, "a task must never have two active occurrences at once").toBeLessThanOrEqual(1);
+
+  const firstManual = await waitForRuns(
     request,
     task.id,
     (run) => run.trigger === "manual" && TERMINAL.has(run.status),
     180_000,
     "manual occurrence",
   );
+  expect(firstManual.some((run) => run.trigger === "manual" && TERMINAL.has(run.status))).toBe(true);
 
   // Pause the task, then trigger again: a manual trigger is allowed while paused.
   const pause = await request.post(`${APP}/api/scheduled-tasks/${encodeURIComponent(task.id)}/pause`);
@@ -273,6 +392,8 @@ test("W19-M4-03 manual trigger works, works while paused, and repeated triggers 
     taskId: task.id,
     manualCount: manual.length,
     activeCount: active.length,
+    peakActive,
+    burstStatuses,
     statusAfterPausedTrigger: "paused",
   });
 });
@@ -372,9 +493,13 @@ test("W19-M4-06 refresh keeps tasks, history and status consistent with no ghost
   expect(new Set(rowIds).size).toBe(rowIds.length);
   expect([...rowIds].sort()).toEqual(after.map((task) => task.id).sort());
 
-  if (state.task01) {
-    const runs = await apiRuns(request, state.task01.id);
-    await selectTask(page, state.task01.id, state.task01.title);
+  const historyTask =
+    state.task01 ??
+    (await apiListTasks(request)).find((task) => task.title.startsWith("W19-M4-01-interval")) ??
+    null;
+  if (historyTask) {
+    const runs = await apiRuns(request, historyTask.id);
+    await selectTask(page, historyTask.id, historyTask.title);
     await expect(page.getByTestId("scheduled-task-run-list")).toContainText("scheduled", {
       timeout: 20_000,
     });
@@ -389,8 +514,12 @@ test("W19-M4-06 refresh keeps tasks, history and status consistent with no ghost
 test("W19-M4-08 the scheduled Run exposes a verifiable Run identity and real model output", async ({
   request,
 }, testInfo) => {
-  expect(state.occurrence02, "M4-02 must have produced a successful occurrence").toBeTruthy();
-  const { run_id: runId, thread_id: threadId } = state.occurrence02;
+  // Self-contained: prefer M4-02's occurrence, otherwise discover an already-successful occurrence
+  // from the persisted state (or admit one) so this case does not depend on case order.
+  const occurrence = state.occurrence02 ?? (await ensureSuccessfulOccurrence(request));
+  expect(occurrence, "a successful scheduled occurrence must be available").toBeTruthy();
+  state.occurrence02 = occurrence;
+  const { run_id: runId, thread_id: threadId } = occurrence;
 
   const runResponse = await request.get(
     `${APP}/api/langgraph/threads/${encodeURIComponent(threadId)}/runs/${encodeURIComponent(runId)}`,
@@ -480,4 +609,135 @@ test("W19-M4-05 the thread entry links to the thread-bound scheduled task view",
   state.task05 = created;
   await screenshot(testInfo, page, "w19-m4-05-thread-link.png");
   await saveEvidence(testInfo, "w19-m4-05.json", { threadId, taskId: created.id, title });
+});
+
+// M4-07 setup, run last in the warm round. M4-07 previously reopened a data root whose occurrences
+// had all reached a terminal state before shutdown, so its "no dangling launching" convergence
+// assertion was vacuous (it would pass even with recovery fully disabled). Persist an explicit stale
+// `launching` claim (no committed Run) into the scheduler store before the round's process stops, so
+// the restart round must actively converge it: the claim is re-queued and re-dispatched onto a real
+// Run. The claim mirrors the crash window between the atomic claim and the association write.
+test("W19-M4-07a the warm round persists a stale launching occurrence before the process stops", async ({
+  request,
+}, testInfo) => {
+  expect(DATA_ROOT, "the warm round must run on an explicit data root").toBeTruthy();
+  const storeFile = path.join(DATA_ROOT, "scheduler", "state.json");
+  expect(fs.existsSync(storeFile), `scheduler store must exist at ${storeFile}`).toBe(true);
+
+  // A host Thread that already exists, so restart `recoverLaunch` can read the Thread's committed
+  // Runs instead of fail-closing on an unknown Thread.
+  const interval = (await apiListTasks(request)).find((task) =>
+    task.title.startsWith("W19-M4-01-interval"),
+  );
+  expect(interval, "the warm interval task must exist before seeding").toBeTruthy();
+  const hostRun = (await apiRuns(request, interval.id)).find(
+    (run) => TERMINAL.has(run.status) && run.thread_id,
+  );
+  expect(hostRun, "a terminal occurrence with a real Thread is required as the stale host").toBeTruthy();
+
+  // Dedicated holder task so seeding does not perturb the interval task M4-07 later resumes for its
+  // rescheduling proof. Not due for an hour, so it cannot mutate the store during the freeze.
+  const holderTitle = marker("W19-M4-07a-stale-holder");
+  const holder = await apiCreate(request, {
+    context_mode: "fresh_thread_per_run",
+    assistant_id: "lead_agent",
+    title: holderTitle,
+    prompt: "Reply with the single word SCHEDULED_M4_07A_OK and nothing else. Do not use tools.",
+    schedule_type: "interval",
+    schedule_spec: { every_seconds: 3600 },
+    timezone: "UTC",
+  });
+
+  // Freeze the scheduler so no further store mutation can overwrite the injected claim: pause the
+  // only due task (the interval task) and wait for every active occurrence to settle.
+  const pauseDeadline = Date.now() + 60_000;
+  for (;;) {
+    const paused = await request.post(
+      `${APP}/api/scheduled-tasks/${encodeURIComponent(interval.id)}/pause`,
+    );
+    if (paused.status() === 200) {
+      break;
+    }
+    if (Date.now() >= pauseDeadline) {
+      throw new Error(`could not pause the interval task before seeding: ${await paused.text()}`);
+    }
+    await sleep(1_000);
+  }
+  expect((await apiFindTask(request, interval.id)).status).toBe("paused");
+  const settleDeadline = Date.now() + 60_000;
+  for (;;) {
+    let activeNow = 0;
+    for (const task of await apiListTasks(request)) {
+      activeNow += (await apiRuns(request, task.id)).filter((run) => ACTIVE.has(run.status)).length;
+    }
+    if (activeNow === 0) {
+      break;
+    }
+    if (Date.now() >= settleDeadline) {
+      throw new Error(`occurrences did not settle before seeding (active=${activeNow})`);
+    }
+    await sleep(1_000);
+  }
+
+  const store = JSON.parse(fs.readFileSync(storeFile, "utf8"));
+  const holderNode = (store.tasks ?? []).find((task) => task.id === holder.id);
+  expect(holderNode, "the holder task must be persisted in the store").toBeTruthy();
+  const occurrenceId = `occ-stale-${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+  const seededAt = new Date().toISOString();
+  holderNode.last_occurrence_seq = Number(holderNode.last_occurrence_seq ?? 0) + 1;
+  store.runs.push({
+    id: occurrenceId,
+    task_id: holder.id,
+    occurrence_seq: holderNode.last_occurrence_seq,
+    thread_id: hostRun.thread_id,
+    run_id: null,
+    scheduled_for: seededAt,
+    trigger: "scheduled",
+    status: "launching",
+    error: null,
+    started_at: null,
+    finished_at: null,
+    attempt_count: 1,
+    launch_accounted: false,
+    created_at: seededAt,
+  });
+  const temporary = `${storeFile}.w19-seed.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+  fs.renameSync(temporary, storeFile);
+
+  const readBack = JSON.parse(fs.readFileSync(storeFile, "utf8"));
+  const seeded = (readBack.runs ?? []).find((run) => run.id === occurrenceId);
+  expect(seeded, "the stale launching claim must be persisted before the process stops").toBeTruthy();
+  expect(seeded.status).toBe("launching");
+  expect(seeded.run_id).toBe(null);
+
+  const seedFile = path.join(DATA_ROOT, "w19-m4-restart-seed.json");
+  fs.writeFileSync(
+    seedFile,
+    `${JSON.stringify(
+      {
+        schema: "w19-m4-restart-seed/1",
+        seededAt,
+        occurrenceId,
+        taskId: holder.id,
+        holderTitle,
+        threadId: hostRun.thread_id,
+        status: "launching",
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+
+  state.seed07 = { occurrenceId, taskId: holder.id, threadId: hostRun.thread_id };
+  await saveEvidence(testInfo, "w19-m4-07a-seed.json", {
+    occurrenceId,
+    taskId: holder.id,
+    holderTitle,
+    threadId: hostRun.thread_id,
+    status: "launching",
+    storeFile,
+    seedFile,
+  });
 });
