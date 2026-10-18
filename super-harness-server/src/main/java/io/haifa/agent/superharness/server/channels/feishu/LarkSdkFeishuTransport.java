@@ -185,12 +185,17 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
 
     @Override
     public void replyText(String messageId, String text) throws Exception {
+        replyTextId(messageId, text);
+    }
+
+    @Override
+    public Optional<String> replyTextId(String messageId, String text) throws Exception {
         Client api;
         synchronized (lock) {
             api = apiClient;
         }
         if (api == null || messageId == null || messageId.isBlank()) {
-            return;
+            return Optional.empty();
         }
         ReplyMessageReq request = ReplyMessageReq.newBuilder()
                 .messageId(messageId)
@@ -199,7 +204,7 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
                         .content(Jsons.DEFAULT.toJson(Map.of("text", text == null ? "" : text)))
                         .build())
                 .build();
-        sendReplyValidated(api, request, "text", "text");
+        return sendReplyValidated(api, request, "text", "text");
     }
 
     @Override

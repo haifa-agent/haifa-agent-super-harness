@@ -518,15 +518,22 @@ public final class FeishuChannelWorker implements AutoCloseable {
             reply(message.messageId(), FeishuInteraction.NEW_THREAD_IN_TOPIC);
             return;
         }
-        String threadId = "feishu-" + java.util.UUID.randomUUID();
-        agentBridge.createThread(owner, threadId, channelMetadata(connectionId, message, connection));
-        if (message.isGroupChat()) {
-            threadMap.bindAliasIfAbsent(connectionId, chat, message.messageId(), threadId);
-            threadId = threadMap.findAlias(connectionId, chat, message.messageId()).orElse(threadId);
-        } else {
-            threadMap.bindCurrent(connectionId, chat, threadId);
+        // Idempotent for redelivered events: claim this command's message id first. The first
+        // delivery creates and anchors the thread; a retry reuses the winner without creating a new
+        // thread or rotating the chat pointer again.
+        String candidate = "feishu-" + java.util.UUID.randomUUID();
+        String claimed = message.messageId().isBlank()
+                ? candidate
+                : threadMap.bindAliasIfAbsent(connectionId, chat, message.messageId(), candidate);
+        if (!claimed.equals(candidate)) {
+            replyAndBind(message, connectionId, claimed, FeishuInteraction.newThreadNotice(claimed));
+            return;
         }
-        replyAndBind(message, connectionId, threadId, FeishuInteraction.newThreadNotice(threadId));
+        agentBridge.createThread(owner, claimed, channelMetadata(connectionId, message, connection));
+        if (!message.isGroupChat()) {
+            threadMap.bindCurrent(connectionId, chat, claimed);
+        }
+        replyAndBind(message, connectionId, claimed, FeishuInteraction.newThreadNotice(claimed));
     }
 
     private static boolean isConnectCommand(FeishuInboundMessage message) {
@@ -976,7 +983,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
                     cardType,
                     delivery == null ? failure.getClass().getSimpleName() : delivery.failure(),
                     delivery == null ? -1 : delivery.code());
-            replyText(message.messageId(), FeishuInteraction.cardDeliveryFallback(pending, threadId));
+            replyTextAndBind(message, FeishuInteraction.cardDeliveryFallback(pending, threadId), threadId);
         }
     }
 
@@ -1004,7 +1011,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
                     threadId,
                     delivery == null ? failure.getClass().getSimpleName() : delivery.failure(),
                     delivery == null ? -1 : delivery.code());
-            replyText(source.messageId(), text);
+            replyTextAndBind(source, text, threadId);
         }
     }
 
@@ -1030,6 +1037,22 @@ public final class FeishuChannelWorker implements AutoCloseable {
         connections.findConnectionByExternalIdentity("feishu", source.openId(), source.chatId())
                 .ifPresent(connection -> threadMap.bindAliasIfAbsent(
                         connection.path("id").asText(""), source.chatId(), replyId.get(), threadId));
+    }
+
+    /**
+     * Plain-text fallback that still binds its provider message id to the thread, so a reply to the
+     * fallback continues the pending request instead of starting a new group topic.
+     */
+    private void replyTextAndBind(FeishuInboundMessage source, String text, String threadId) throws Exception {
+        FeishuTransport active;
+        synchronized (lock) {
+            active = transport;
+        }
+        if (active == null) {
+            return;
+        }
+        Optional<String> replyId = active.replyTextId(source.messageId(), text);
+        bindReplyId(source, replyId, threadId);
     }
 
     /** Reply on the source message and bind the outbound message id (used by {@code /new}). */
@@ -1078,16 +1101,6 @@ public final class FeishuChannelWorker implements AutoCloseable {
         }
         if (active != null) {
             active.replyCard(messageId, text);
-        }
-    }
-
-    private void replyText(String messageId, String text) throws Exception {
-        FeishuTransport active;
-        synchronized (lock) {
-            active = transport;
-        }
-        if (active != null) {
-            active.replyText(messageId, text);
         }
     }
 

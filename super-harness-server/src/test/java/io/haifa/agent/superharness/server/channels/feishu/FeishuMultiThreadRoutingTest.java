@@ -320,6 +320,40 @@ class FeishuMultiThreadRoutingTest {
         assertThat(store.findAlias("conn-1", "other-chat", "root")).contains("thread-3");
     }
 
+    // ---- review follow-ups ----------------------------------------------------------------
+
+    @Test
+    void redeliveredNewCommandIsIdempotent() throws Exception {
+        Harness harness = harness();
+        String connectionId = connectionId(harness);
+        worker(harness).handleInbound(p2p(harness, "om-1", "hello"));
+        worker(harness).handleInbound(p2p(harness, "om-new", "/new"));
+        String threadB = harness.threads().find(connectionId, "oc_chat").orElseThrow();
+        int created = harness.bridge().createdThreads.size();
+
+        // The same /new event redelivered must reuse the thread, not create/rotate again.
+        worker(harness).handleInbound(p2p(harness, "om-new", "/new"));
+        assertThat(harness.threads().find(connectionId, "oc_chat")).contains(threadB);
+        assertThat(harness.bridge().createdThreads).hasSize(created);
+        harness.worker().close();
+    }
+
+    @Test
+    void fallbackTextReplyBindsToOriginatingGroupThread() throws Exception {
+        Harness harness = harness();
+        bindGroup(harness, "oc_group");
+        String connectionId = connectionId(harness, "oc_group");
+        harness.transport().failInteractiveDelivery();
+        harness.bridge().turnPending = approval("req-fallback");
+
+        worker(harness).handleInbound(group(harness, "oc_group", "om-card", "need approval", "", "root-1", ""));
+        String thread = harness.bridge().turnThreads.getLast();
+        assertThat(harness.transport().textReplies()).isNotEmpty();
+        // The plain-text fallback's provider id is bound, so a reply continues the same thread.
+        assertThat(harness.threads().findAlias(connectionId, "oc_group", "reply-text-1")).contains(thread);
+        harness.worker().close();
+    }
+
     // ---- harness ---------------------------------------------------------------------------
 
     private static FeishuChannelWorker worker(Harness harness) {
@@ -331,8 +365,12 @@ class FeishuMultiThreadRoutingTest {
     }
 
     private String connectionId(Harness harness) {
+        return connectionId(harness, "oc_chat");
+    }
+
+    private String connectionId(Harness harness, String chatId) {
         return harness.connections()
-                .findConnectionByExternalIdentity("feishu", "ou_owner", "oc_chat")
+                .findConnectionByExternalIdentity("feishu", "ou_owner", chatId)
                 .orElseThrow()
                 .path("id")
                 .asText("");
@@ -416,6 +454,7 @@ class FeishuMultiThreadRoutingTest {
         private final List<String> steerThreads = new CopyOnWriteArrayList<>();
         private final List<String> createdThreads = new CopyOnWriteArrayList<>();
         private volatile FeishuPendingInput pending;
+        private volatile FeishuPendingInput turnPending;
         private volatile boolean activeRun;
         private volatile CountDownLatch blockEnter;
         private volatile CountDownLatch blockRelease;
@@ -452,7 +491,9 @@ class FeishuMultiThreadRoutingTest {
                 release.await(3, TimeUnit.SECONDS);
             }
             pending = null;
-            return new TurnResult(threadId, "continued:" + userText);
+            FeishuPendingInput resultPending = turnPending;
+            turnPending = null;
+            return new TurnResult(threadId, "continued:" + userText, resultPending);
         }
 
         @Override

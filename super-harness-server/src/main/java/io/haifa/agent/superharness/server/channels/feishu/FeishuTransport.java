@@ -67,6 +67,12 @@ public interface FeishuTransport extends AutoCloseable {
         replyCard(messageId, text);
     }
 
+    /** Plain-text reply variant of {@link #replyCardId}; default delegates to {@link #replyText}. */
+    default Optional<String> replyTextId(String messageId, String text) throws Exception {
+        replyText(messageId, text);
+        return Optional.empty();
+    }
+
     /**
      * Download an inbound image/file resource. {@code resourceType} is the Feishu resource type
      * ({@code image} or {@code file}). Test doubles may return fixture bytes.

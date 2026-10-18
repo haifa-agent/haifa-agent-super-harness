@@ -92,6 +92,12 @@ public final class RecordingFeishuTransport implements FeishuTransport {
         textReplies.add(new TextReply(messageId, text));
     }
 
+    @Override
+    public Optional<String> replyTextId(String messageId, String text) {
+        replyText(messageId, text);
+        return Optional.of("reply-text-" + textReplies.size());
+    }
+
     /** Makes the next and subsequent {@link #replyInteractive} calls fail (delivery-fallback test). */
     public void failInteractiveDelivery() {
         failInteractive.set(true);
