@@ -70,6 +70,94 @@ class FeishuPhase2InteractionTest {
     }
 
     @Test
+    void multiSelectCheckboxDateFormRendersAndSubmitsWithoutWebHandoff() throws Exception {
+        ArrayNode messages = json.createArrayNode();
+        ObjectNode form = toolForm(
+                "req-pareto",
+                List.of(
+                        field(
+                                "release",
+                                "指哪次发布",
+                                "select",
+                                true,
+                                List.of(
+                                        option(
+                                                "r1",
+                                                "DeepSeek-V4.1-Flash",
+                                                "DeepSeek-V4.1-Flash"),
+                                        option("r2", "其他", "其他"))),
+                        field(
+                                "angles",
+                                "帕累托改进的切入角度",
+                                "multi_select",
+                                true,
+                                List.of(
+                                        option("a1", "技术经济账", "技术经济账"),
+                                        option("a2", "产业格局", "产业格局"),
+                                        option("a3", "竞品对照", "竞品对照"))),
+                        field("confirm", "确认继续", "checkbox", true, List.of()),
+                        field("ship_date", "期望回复日", "date", false, List.of())));
+        messages.add(form);
+        FeishuPendingInput pending = FeishuInteraction.pendingFromMessages(messages).orElseThrow();
+        assertThat(pending.formUnsupported()).isFalse();
+        assertThat(pending.formSupported()).isTrue();
+        String cardJson = FeishuInteraction.interactiveCard(pending).toString();
+        assertThat(cardJson)
+                .contains("multi_select_static")
+                .contains("checker")
+                .contains("date_picker")
+                .doesNotContain("请在 Web 端完成该表单");
+
+        assertThat(FeishuInteraction.formMissingRequired(
+                        pending, Map.of("release", "DeepSeek-V4.1-Flash", "angles", List.of("产业格局"))))
+                .isTrue();
+        assertThat(FeishuInteraction.formMissingRequired(
+                        pending,
+                        Map.of(
+                                "release",
+                                "DeepSeek-V4.1-Flash",
+                                "angles",
+                                List.of("产业格局"),
+                                "confirm",
+                                false)))
+                .isTrue();
+
+        Map<String, Object> values = new java.util.LinkedHashMap<>();
+        values.put("release", "DeepSeek-V4.1-Flash");
+        values.put("angles", List.of("产业格局", "竞品对照"));
+        values.put("confirm", true);
+        values.put("ship_date", "2026-10-20 +0800");
+        String submitted = FeishuInteraction.buildFormSubmissionValue(pending, values);
+        assertThat(submitted)
+                .contains("指哪次发布: DeepSeek-V4.1-Flash")
+                .contains("产业格局, 竞品对照")
+                .contains("确认继续: yes")
+                .contains("期望回复日: 2026-10-20")
+                .contains("\"ship_date\":\"2026-10-20\"")
+                .doesNotContain("+0800");
+
+        Harness harness = harness();
+        bindRequest(harness, "req-pareto");
+        harness.bridge.pending = pending;
+        harness.worker.handleInbound(new FeishuInboundMessage(
+                "oc_chat",
+                "om_pareto",
+                "ou_owner",
+                "",
+                "p2p",
+                new FeishuInboundMessage.CardAction(
+                        "ask_clarification",
+                        "req-pareto",
+                        FeishuInteraction.FORM_SUBMIT,
+                        "",
+                        "2.0",
+                        values)));
+        assertThat(harness.bridge.turns.get()).isEqualTo(1);
+        assertThat(harness.bridge.responses.get().value()).contains("\"angles\":[\"产业格局\",\"竞品对照\"]");
+        harness.worker.close();
+    }
+
+    @Test
     void approvalCardIncludesRiskAndEnvironmentFacts() throws Exception {
         ArrayNode messages = json.createArrayNode();
         ObjectNode card = toolCard("req-1", "haifa_interaction", "single_choice", "是否允许写入？");

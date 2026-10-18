@@ -15,8 +15,14 @@ import java.util.UUID;
 /** Parses frozen human-input cards and builds the Feishu card plus the uplink human message. */
 public final class FeishuInteraction {
     private static final ObjectMapper JSON = new ObjectMapper();
+    /**
+     * Clarification Form v2 field types Feishu Card 2.0 can render natively. Matches the product
+     * form vocabulary in {@code ClarificationRequestNormalizer}; each type maps to one Card element
+     * ({@code input} / {@code select_static} / {@code multi_select_static} / {@code checker} /
+     * {@code date_picker}). Anything outside this set triggers the intentional Web handoff.
+     */
     private static final Set<String> FORM_FIELD_TYPES =
-            Set.of("text", "textarea", "number", "select");
+            Set.of("text", "textarea", "number", "select", "multi_select", "checkbox", "date");
 
     public static final String APPROVAL_HINT =
             "当前任务正在等待审批，请点击卡片按钮，或精确回复「批准」/「拒绝」。";
@@ -260,11 +266,13 @@ public final class FeishuInteraction {
         List<String> summaryParts = new ArrayList<>();
         Map<String, Object> record = new LinkedHashMap<>();
         for (FeishuPendingInput.Field field : pending.fields()) {
-            Object raw = values.get(field.name());
+            // Web seeds optional checkboxes to false so an untouched control still serializes as
+            // "no". Feishu may omit unchecked checkers from form_value; mirror that seed here.
+            Object raw = formFieldValue(field, values);
             if (isEmptyFormValue(raw)) {
                 continue;
             }
-            Object normalized = normalizeFormValue(raw);
+            Object normalized = normalizeFormFieldValue(field, raw);
             record.put(field.name(), normalized);
             summaryParts.add(field.label() + ": " + formatFormValue(normalized));
         }
@@ -278,7 +286,18 @@ public final class FeishuInteraction {
     public static boolean formMissingRequired(FeishuPendingInput pending, Map<String, Object> formValues) {
         Map<String, Object> values = formValues == null ? Map.of() : formValues;
         for (FeishuPendingInput.Field field : pending.fields()) {
-            if (field.required() && isEmptyFormValue(values.get(field.name()))) {
+            if (!field.required()) {
+                continue;
+            }
+            // Match web must-agree semantics: a required checkbox is missing until checked.
+            if ("checkbox".equals(field.type())) {
+                Object raw = values.get(field.name());
+                if (!(raw instanceof Boolean checked) || !checked) {
+                    return true;
+                }
+                continue;
+            }
+            if (isEmptyFormValue(values.get(field.name()))) {
                 return true;
             }
         }
@@ -573,31 +592,14 @@ public final class FeishuInteraction {
     }
 
     private static Map<String, Object> formFieldElement(FeishuPendingInput.Field field) {
-        if ("select".equals(field.type())) {
-            List<Map<String, Object>> options = new ArrayList<>();
-            for (FeishuPendingInput.Option option : field.options()) {
-                options.add(Map.of(
-                        "text", Map.of(
-                                "tag", "plain_text",
-                                "content", option.label().isBlank() ? option.id() : option.label()),
-                        "value", option.value().isBlank() ? option.id() : option.value()));
-            }
-            Map<String, Object> select = new LinkedHashMap<>();
-            select.put("tag", "select_static");
-            select.put("name", field.name());
-            select.put("required", field.required());
-            select.put("placeholder", Map.of(
-                    "tag",
-                    "plain_text",
-                    "content",
-                    field.placeholder().isBlank() ? "请选择" : field.placeholder()));
-            select.put("options", options);
-            select.put("label", Map.of(
-                    "tag",
-                    "plain_text",
-                    "content",
-                    field.label().isBlank() ? field.name() : field.label()));
-            return select;
+        if ("select".equals(field.type()) || "multi_select".equals(field.type())) {
+            return selectFieldElement(field);
+        }
+        if ("checkbox".equals(field.type())) {
+            return checkboxFieldElement(field);
+        }
+        if ("date".equals(field.type())) {
+            return dateFieldElement(field);
         }
         Map<String, Object> input = new LinkedHashMap<>();
         input.put("tag", "input");
@@ -609,22 +611,67 @@ public final class FeishuInteraction {
             input.put("rows", 4);
             input.put("auto_resize", true);
         }
-        input.put("label", Map.of(
-                "tag",
-                "plain_text",
-                "content",
-                field.label().isBlank() ? field.name() : field.label()));
+        input.put("label", plainText(field.label().isBlank() ? field.name() : field.label()));
         input.put("label_position", "top");
         input.put(
                 "placeholder",
-                Map.of(
-                        "tag",
-                        "plain_text",
-                        "content",
+                plainText(
                         field.placeholder().isBlank()
                                 ? ("number".equals(field.type()) ? "输入数字…" : "输入…")
                                 : field.placeholder()));
         return input;
+    }
+
+    /** Single- or multi-select dropdown inside the Form v2 container. */
+    private static Map<String, Object> selectFieldElement(FeishuPendingInput.Field field) {
+        List<Map<String, Object>> options = new ArrayList<>();
+        for (FeishuPendingInput.Option option : field.options()) {
+            options.add(Map.of(
+                    "text",
+                    plainText(option.label().isBlank() ? option.id() : option.label()),
+                    "value",
+                    option.value().isBlank() ? option.id() : option.value()));
+        }
+        Map<String, Object> select = new LinkedHashMap<>();
+        select.put("tag", "multi_select".equals(field.type()) ? "multi_select_static" : "select_static");
+        select.put("name", field.name());
+        select.put("required", field.required());
+        select.put(
+                "placeholder",
+                plainText(field.placeholder().isBlank() ? "请选择" : field.placeholder()));
+        select.put("options", options);
+        select.put("label", plainText(field.label().isBlank() ? field.name() : field.label()));
+        return select;
+    }
+
+    /**
+     * Feishu {@code checker} for product {@code checkbox}. Label rides the checker's own
+     * {@code text}; there is no separate label prop like {@code input}/{@code select_static}.
+     */
+    private static Map<String, Object> checkboxFieldElement(FeishuPendingInput.Field field) {
+        Map<String, Object> checker = new LinkedHashMap<>();
+        checker.put("tag", "checker");
+        checker.put("name", field.name());
+        checker.put("checked", false);
+        checker.put("text", plainText(field.label().isBlank() ? field.name() : field.label()));
+        return checker;
+    }
+
+    /** Feishu {@code date_picker}; callback values are normalized to {@code YYYY-MM-DD}. */
+    private static Map<String, Object> dateFieldElement(FeishuPendingInput.Field field) {
+        Map<String, Object> picker = new LinkedHashMap<>();
+        picker.put("tag", "date_picker");
+        picker.put("name", field.name());
+        picker.put("required", field.required());
+        picker.put("width", "fill");
+        picker.put(
+                "placeholder",
+                plainText(field.placeholder().isBlank() ? "请选择日期" : field.placeholder()));
+        return picker;
+    }
+
+    private static Map<String, Object> plainText(String content) {
+        return Map.of("tag", "plain_text", "content", content == null ? "" : content);
     }
 
     /**
@@ -689,7 +736,38 @@ public final class FeishuInteraction {
         if (value instanceof List<?> list) {
             return list.isEmpty();
         }
+        // Boolean false is a real answer ("no") for optional checkboxes — not empty.
         return false;
+    }
+
+    private static Object formFieldValue(FeishuPendingInput.Field field, Map<String, Object> values) {
+        Object raw = values.get(field.name());
+        if (raw == null && "checkbox".equals(field.type())) {
+            return false;
+        }
+        return raw;
+    }
+
+    private static Object normalizeFormFieldValue(FeishuPendingInput.Field field, Object value) {
+        if ("date".equals(field.type())) {
+            return normalizeDateValue(value);
+        }
+        return normalizeFormValue(value);
+    }
+
+    /**
+     * Feishu date_picker submits {@code "YYYY-MM-DD +ZZZZ"}; the web card and model-facing JSON
+     * use a plain {@code YYYY-MM-DD} date string.
+     */
+    private static String normalizeDateValue(Object value) {
+        String text = String.valueOf(value == null ? "" : value).trim();
+        if (text.length() >= 10
+                && text.charAt(4) == '-'
+                && text.charAt(7) == '-'
+                && Character.isDigit(text.charAt(0))) {
+            return text.substring(0, 10);
+        }
+        return text;
     }
 
     private static Object normalizeFormValue(Object value) {
@@ -703,6 +781,8 @@ public final class FeishuInteraction {
             }
             return out;
         }
+        // Feishu multi_select occasionally arrives as a comma-joined string; keep a single string
+        // when the product field is not multi_select (handled via List above when SDK gives arrays).
         return String.valueOf(value).trim();
     }
 

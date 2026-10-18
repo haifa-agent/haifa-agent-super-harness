@@ -73,7 +73,10 @@ public record FeishuPendingInput(
         }
     }
 
-    /** Form v2 field subset Feishu can render (text / textarea / number / select). */
+    /**
+     * Form v2 field Feishu Card 2.0 can render: text / textarea / number / select / multi_select /
+     * checkbox / date.
+     */
     public record Field(
             String name, String label, String type, boolean required, String placeholder, List<Option> options) {
         public Field {
