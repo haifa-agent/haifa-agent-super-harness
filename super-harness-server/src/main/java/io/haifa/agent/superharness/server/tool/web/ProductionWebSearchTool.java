@@ -66,7 +66,12 @@ public final class ProductionWebSearchTool
                 .title("Search the web")
                 .description(ToolDescriptions.load("web_search"))
                 .networkAccess(networkHost);
-        if (config.searchProvider() == WebToolConfig.WebSearchProvider.DEEPSEEK) {
+        // Declare the SDK credential requirement only when the product has no key of its own:
+        // a declared requirement is resolved before the Tool runs, and a stale Runtime binding
+        // then fails the call without ever reaching invoke. With a configured key the Tool reads
+        // it itself, so the requirement would only add that gate.
+        if (config.searchProvider() == WebToolConfig.WebSearchProvider.DEEPSEEK
+                && config.deepseekToolApiKey().isEmpty()) {
             builder.credentialRequirements(new CredentialRequirement(
                     WebToolConfig.DEEPSEEK_TOOL_API_KEY_CREDENTIAL));
         }

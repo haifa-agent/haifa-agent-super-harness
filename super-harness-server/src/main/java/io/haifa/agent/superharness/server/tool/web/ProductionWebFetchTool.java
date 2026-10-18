@@ -73,7 +73,10 @@ public final class ProductionWebFetchTool
                 .description(ToolDescriptions.load("web_fetch"))
                 .networkAccess(networkHost);
         if (config.fetchProvider() == WebToolConfig.WebFetchProvider.DEEPSEEK) {
-            builder.credentialRequirements(new CredentialRequirement(DEEPSEEK_TOOL_API_KEY_CREDENTIAL));
+            // Same rule as web_search: only require an SDK credential when the product has no key.
+            if (config.deepseekToolApiKey().isEmpty()) {
+                builder.credentialRequirements(new CredentialRequirement(DEEPSEEK_TOOL_API_KEY_CREDENTIAL));
+            }
         } else if (config.jinaApiKey().isPresent()) {
             builder.credentialRequirements(new CredentialRequirement(JINA_API_KEY_CREDENTIAL));
         }
