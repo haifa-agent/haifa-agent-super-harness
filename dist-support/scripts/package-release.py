@@ -48,6 +48,11 @@ FORBIDDEN_PORTS = (80, 443)
 RESERVED_PORTS = (2026, 3000, 8001, 8002)
 DEFAULT_GATEWAY_PORT = 18018
 DEFAULT_FRONTEND_PORT = 33018
+OFFICIAL_SKILLS_RELATIVE = ("deer-flow", "skills", "public")
+# Product choice: these upstream skills are shipped from deer-flow/skills/public but excluded
+# from the official list. Pass --exclude-official-skills "" to keep full deer-flow alignment.
+DEFAULT_EXCLUDED_OFFICIAL_SKILLS = ("consulting-analysis", "skill-creator", "skill-reviewer")
+EMPTY_SKILLS_MANIFEST = '{\n  "schema_version": 1,\n  "packages": []\n}\n'
 
 FRONTEND_IGNORE = shutil.ignore_patterns(
     "node_modules", ".next", ".turbo", ".vercel", "coverage",
@@ -271,6 +276,69 @@ def copy_frozen_resources(repo_root, stage, console):
         raise PackageError("frozen DeerFlow resources are missing: %s" % source)
     shutil.copytree(str(source), str(target), symlinks=False)
     console.log("[stage] frozen resources copied: repo/third-party/deerflow")
+    prune_bundled_skills(stage, console)
+
+
+def prune_bundled_skills(stage, console):
+    """Drop the 3 frozen bundled Skill packages; official skills come from skills/public."""
+    skills_dir = stage / "repo" / "third-party" / "deerflow" / "skills"
+    if skills_dir.exists():
+        shutil.rmtree(str(skills_dir))
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    (skills_dir / "manifest.json").write_text(EMPTY_SKILLS_MANIFEST, encoding="utf-8",
+                                              newline="\n")
+    console.log("[stage] bundled frozen Skill packages removed; "
+                "repo/third-party/deerflow/skills/manifest.json reset to empty")
+
+
+def frozen_upstream_commit(repo_root):
+    manifest = Path(repo_root) / "third-party" / "deerflow" / "manifest.json"
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise PackageError("cannot read frozen DeerFlow manifest: %s" % error)
+    commit = str((payload.get("upstream") or {}).get("commit") or "").strip()
+    if not commit:
+        raise PackageError("frozen DeerFlow commit is missing from %s" % manifest)
+    return commit
+
+
+def copy_official_skills(repo_root, stage, source_dir, excluded, console):
+    source = Path(source_dir).resolve()
+    if not source.is_dir():
+        raise PackageError("official skills source is missing: %s" % source)
+    expected = frozen_upstream_commit(repo_root)
+    checkout = source.parents[1] if len(source.parents) > 1 else source
+    actual = ""
+    if (checkout / ".git").exists():
+        actual = git(checkout, "rev-parse", "HEAD")
+        if actual != expected:
+            raise PackageError("official skills checkout %s is at %s but the frozen DeerFlow "
+                               "commit is %s" % (checkout, actual, expected))
+    target = stage / "skills" / "public"
+    target.mkdir(parents=True, exist_ok=True)
+    copied = []
+    skipped = []
+    available = set()
+    for directory in sorted(source.iterdir()):
+        if not directory.is_dir() or not (directory / "SKILL.md").is_file():
+            continue
+        available.add(directory.name)
+        if directory.name in excluded:
+            skipped.append(directory.name)
+            continue
+        shutil.copytree(str(directory), str(target / directory.name), symlinks=False)
+        copied.append(directory.name)
+    unknown = sorted(set(excluded) - available)
+    if unknown:
+        console.log("[stage] WARNING excluded official skills not found upstream: %s"
+                    % ", ".join(unknown))
+    if not copied:
+        raise PackageError("official skills source contains no skill packages: %s" % source)
+    console.log("[stage] official skills copied: %d -> skills/public (source=%s); excluded=%s"
+                % (len(copied), source, ", ".join(sorted(skipped)) or "none"))
+    return {"count": len(copied), "source": str(source), "commit": actual or expected,
+            "excluded": sorted(skipped)}
 
 
 def copy_tooling(stage, console):
@@ -391,6 +459,13 @@ def do_assemble(args, console):
     console.log("[stage] app/%s sha256=%s" % (source_jar.name, jar_sha))
 
     copy_frozen_resources(repo_root, stage, console)
+    official_source = args.official_skills_dir or repo_root.joinpath(*OFFICIAL_SKILLS_RELATIVE)
+    if args.exclude_official_skills is None:
+        excluded = set(DEFAULT_EXCLUDED_OFFICIAL_SKILLS)
+    else:
+        excluded = {item.strip() for item in args.exclude_official_skills.split(",")
+                    if item.strip()}
+    official = copy_official_skills(repo_root, stage, official_source, excluded, console)
     if need_frontend:
         frontend_root = copy_frontend(repo_root, stage, args.with_node_modules, console)
         if args.skip_frontend_build:
@@ -421,6 +496,8 @@ def do_assemble(args, console):
         "gatewayPort": args.gateway_port, "frontendPort": args.frontend_port,
         "jar": source_jar.name, "jarSha256": jar_sha,
         "frontendBundled": need_frontend, "nodeModulesBundled": bool(args.with_node_modules),
+        "officialSkills": official["count"], "officialSkillsCommit": official["commit"],
+        "officialSkillsExcluded": official["excluded"],
         "host": socket.gethostname(), "python": sys.version.split()[0],
     })
     render_install_md(stage, version, commit, built_at, args.gateway_port, args.frontend_port)
@@ -472,6 +549,11 @@ def build_parser():
     parser.add_argument("--skip-frontend", action="store_true")
     parser.add_argument("--skip-frontend-build", action="store_true",
                         help="复用源检出的 frontend/.next，不执行 pnpm build")
+    parser.add_argument("--official-skills-dir", default=None,
+                        help="官方技能来源（默认 <repo-root>/deer-flow/skills/public）")
+    parser.add_argument("--exclude-official-skills", default=None,
+                        help="逗号分隔的官方技能名；默认排除 %s（传空串表示与 deer-flow 全量对齐）"
+                             % ",".join(DEFAULT_EXCLUDED_OFFICIAL_SKILLS))
     parser.add_argument("--with-node-modules", action="store_true",
                         help="把 node_modules 一并打包（同平台离线安装用，体积大）")
     parser.add_argument("--force-frontend-install", action="store_true")

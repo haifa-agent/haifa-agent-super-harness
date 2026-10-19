@@ -318,6 +318,7 @@ def write_env_file(ctx, gateway, frontend, console):
         "gateway_port": gateway,
         "frontend_port": frontend,
         "data_root": str(ctx.data).replace("\\", "/"),
+        "skills_dir": str(ctx.prefix / "skills").replace("\\", "/"),
     })
     managed = set()
     lines = []

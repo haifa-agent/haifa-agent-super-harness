@@ -45,6 +45,13 @@ python scripts/install-service.py uninstall
   `frontend/.next`，不执行 `pnpm install/build`。日常只验证 Gateway 时用前者，最快。
 - 收集 `third-party/deerflow` 冻结资源 + `frontend/`（源码与预构建 `.next`，默认**不**带
   `node_modules`）；`--with-node-modules` 才一并打包（同平台离线安装用，体积大）。
+- 官方技能来自 `deer-flow/skills/public`（默认路径，可用 `--official-skills-dir` 覆盖），复制到
+  包内 `skills/public/`；同时删除 `repo/third-party/deerflow/skills/<sha>` 下原有的 3 个冻结技能，
+  并把 `repo/third-party/deerflow/skills/manifest.json` 重置为空 packages（保留文件本身供服务端校验）。
+  打包前会核对 `deer-flow` 检出 HEAD 与冻结的 DeerFlow commit 一致。
+- 默认**排除** `consulting-analysis`、`skill-creator`、`skill-reviewer`（它们在上游 public 目录中，
+  但作为产品子集不随包发布）：`--exclude-official-skills "a,b"` 自定义，`--exclude-official-skills ""`
+  表示与 `deer-flow` 全量对齐。排除项记入 `VERSION.officialSkillsExcluded`。
 - 默认在暂存目录里跑 `pnpm install --offline --frozen-lockfile` + `pnpm build`（gateway 地址由
   `--gateway-port` 固化）；`--skip-frontend-build` 复用源检出的 `.next`。
 - 生成 `VERSION`、`manifest.sha256`（逐文件 SHA-256）与 `INSTALL.md`，再输出 `.tar.gz` 与 `.zip`，
@@ -55,7 +62,8 @@ python scripts/install-service.py uninstall
 
 - **单前缀 + 可外置数据**：默认前缀是脚本上一层目录，`--data-root` 可指到包外单独备份。
 - **配置**：从 `config/gateway.env.tmpl` 渲染 `config/gateway.env`（0600）；首次生成
-  continuation key 后**永不轮换**，重复 install 保留已有 key 与 operator 额外键。
+  continuation key 后**永不轮换**，重复 install 保留已有 key 与 operator 额外键。同时写入
+  `HAIFA_SUPER_HARNESS_SKILLS_DIR=<prefix>/skills`，让服务端加载 `skills/public` 官方技能。
 - **Linux**：渲染 `service/systemd/*.tmpl` 到 `/etc/systemd/system/`，`enable --now`；覆盖前把旧 unit
   备份到 `config/unit-backup/`。需要 root。
 - **Windows**：需要 `--winsw-exe <WinSW.exe>`；按 WinSW 约定把 exe 复制为
@@ -72,14 +80,24 @@ python scripts/install-service.py uninstall
 super-harness-<version>/
   app/        预构建 exec JAR
   repo/       Gateway 工作目录：third-party/deerflow 冻结资源 + frontend/ 预构建产物
+  skills/
+    public/     官方技能（随包只读，来源 deer-flow/skills/public）
+    community/  社区技能归档（可选；仅 .skill/.zip，不自动加载）
   config/     gateway.env.tmpl（安装时渲染为 gateway.env）
-  data/       默认数据根（可用 --data-root 外置）
+  data/       默认数据根（可用 --data-root 外置）；我的技能在 data/skills/custom/
   logs/       gateway.log / frontend.log
   scripts/    install-service.py（+ .ps1/.sh）
   service/    systemd/ 与 winsw/ 服务模板
   quick-start.bat / quick-start.sh / quick-stop.bat / quick-stop.sh
   VERSION / manifest.sha256 / INSTALL.md
 ```
+
+技能分类（与 UI 一致）：
+
+- **官方技能**：`skills/public/`，服务端按 `HAIFA_SUPER_HARNESS_SKILLS_DIR` 只读加载。
+- **我的技能**：`<data-root>/skills/custom/`，由 UI 创建/导入，随数据根备份，不随包分发。
+- **社区技能**：UI「社区」是导入入口；`skills/community/` 只存放可导入的归档，导入后进入「我的技能」。
+  当前服务端只扫描一个外部根（`<root>/public`），因此社区技能不做自动加载。
 
 ## 已知边界
 

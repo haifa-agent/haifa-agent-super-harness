@@ -12,6 +12,9 @@
 ```text
 app\          预构建 exec JAR
 repo\         Gateway 工作目录：third-party/deerflow 冻结资源 + frontend 预构建产物
+skills\       技能目录
+  public\     官方技能（随包只读，来源 deer-flow/skills/public）
+  community\  社区技能归档（仅作为可导入的 .skill/.zip，不自动加载；可选）
 config\       gateway.env.tmpl（安装时渲染为 gateway.env，含 continuation key，0600）
 data\         默认数据根：runtime/haifa-agent.sqlite、owners/default/*、workspace\ 等
 logs\         gateway.log / frontend.log
@@ -22,6 +25,14 @@ quick-stop.bat  / quick-stop.sh    停止上面启动的进程
 VERSION       version/commit/端口/构建时间
 manifest.sha256  每个文件的 SHA-256
 ```
+
+技能位置：
+
+- **官方技能**：`skills\public\`，由 `HAIFA_SUPER_HARNESS_SKILLS_DIR` 指向 `skills\`，服务端只读加载。
+  这是 `deer-flow/skills/public` 的产品子集（打包时按配置排除个别技能）。
+- **我的技能**：`data\skills\custom\`，通过 UI 创建/导入，随 `data` 备份。
+- **社区技能**：UI「社区」页是导入入口；把 `.skill`/`.zip` 放在 `skills\community\` 仅作为分发归档，
+  需要用户在 UI 中导入后才会出现在「我的技能」。
 
 ## 快速体验（不注册服务）
 
