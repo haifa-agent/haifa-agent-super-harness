@@ -963,11 +963,47 @@ class MainServiceTest(unittest.TestCase):
         self.assertNotIn("persisted-key", summary)
         self.assertNotIn("persisted-jina", summary)
 
+    def test_gateway_environment_owns_the_profile_and_keeps_credentials_off_the_caller(self):
+        base = {"PATH": "C:/bin", "DEER_FLOW_AUTH_DISABLED": "1",
+                "HAIFA_SUPER_HARNESS_LOCAL_AUTH": "stale",
+                "HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS": "stale"}
+        original = dict(base)
+        persisted = {"DEEPSEEK_TOOL_API_KEY": ("persisted-key", "user")}
+        environment, sources = main_service.gateway_environment(
+            Path("D:/data"), 18018, 33018, base=base, lookup=persisted.get)
+        self.assertEqual(base, original)
+        self.assertEqual(environment["DEEPSEEK_TOOL_API_KEY"], "persisted-key")
+        self.assertEqual(sources, {"DEEPSEEK_TOOL_API_KEY": "user"})
+        self.assertEqual(environment["SUPER_HARNESS_PORT"], "18018")
+        self.assertEqual(environment["SUPER_HARNESS_DATA_DIR"], str(Path("D:/data")))
+        self.assertEqual(environment["DEER_FLOW_TRUSTED_ORIGINS"], "http://127.0.0.1:33018")
+        # The default profile bypasses auth and drops any leftover local-auth switch.
+        self.assertEqual(environment["DEER_FLOW_AUTH_DISABLED"], "1")
+        self.assertNotIn("HAIFA_SUPER_HARNESS_LOCAL_AUTH", environment)
+        self.assertNotIn("HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS", environment)
+        # The local profile is the opposite: no auth bypass, same-origin allow list set.
+        local, _ = main_service.gateway_environment(
+            Path("D:/data"), 18018, 33018, local_auth=True, base=base, lookup=persisted.get)
+        self.assertNotIn("DEER_FLOW_AUTH_DISABLED", local)
+        self.assertEqual(local["HAIFA_SUPER_HARNESS_LOCAL_AUTH"], "1")
+        self.assertEqual(local["HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS"], "http://127.0.0.1:33018")
+
     def test_product_environment_is_unchanged_without_a_persisted_value(self):
         environment = {"PATH": "/usr/bin"}
         resolved, sources = main_service.resolve_product_environment(environment, lookup=lambda key: None)
         self.assertEqual(resolved, environment)
         self.assertEqual(sources, {})
+
+    def test_start_wrapper_delegates_the_gateway_environment_to_python(self):
+        script = (Path(__file__).resolve().parents[3] / "scripts/start-main-super-harness.ps1").read_text(
+            encoding="utf-8")
+        # No credential rule and no process-wide environment mutation in the wrapper: the
+        # Gateway child environment is built once in main_service.gateway_environment, and
+        # only that child mapping carries the persisted keys.
+        self.assertNotIn("DEEPSEEK_TOOL_API_KEY", script)
+        self.assertNotIn("SetEnvironmentVariable", script)
+        self.assertIn("lib/main_service.py", script)
+        self.assertIn(" start --jar ", script)
 
     def test_scope_enforcement(self):
         with tempfile.TemporaryDirectory() as directory:

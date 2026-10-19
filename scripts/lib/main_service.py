@@ -5,6 +5,12 @@ production frontend from another checkout. This module owns the logic; the Power
 wrappers (``scripts/refresh-main-service.ps1`` and ``scripts/start-main-super-harness.ps1``)
 only resolve paths, set the process environment and pass arguments through.
 
+``start`` launches the Gateway for ``start-main-super-harness.ps1``: the local profile, the
+persisted product key fallback and the readiness contract (``/health`` plus the expected
+``/api/v1/auth/me`` profile) live here, and the call reports the pid, readiness, log paths
+and the scope each product key came from. The wrapper keeps only the environment it shares
+with the frontend child, so credentials never reach the frontend process.
+
 ``status`` only reads: the listening PIDs on both ports, whether each command line is the
 main service, the running Gateway JAR and the source commit from the build stamp next to it,
 ``/health``, ``/api/v1/auth/me``, the frontend home page and the frontend-proxied Gateway.
@@ -331,20 +337,30 @@ def wait_for_frontend(frontend_url: str, timeout: int,
     return False, time.monotonic() - started
 
 
-def gateway_ready(base: str) -> bool:
+def auth_ready(base: str, auth: str = "default") -> bool:
+    """``unauthorized`` expects 401 from ``/api/v1/auth/me``; ``default`` the seeded admin."""
+    status, me = http_json(f"{base}/api/v1/auth/me")
+    if auth == "unauthorized":
+        return status == 401
+    return (status == 200 and isinstance(me, dict) and me.get("id") == "default"
+            and me.get("email") == "default@test.local" and me.get("system_role") == "admin"
+            and me.get("needs_setup") is False)
+
+
+def gateway_ready(base: str, auth: str = "default") -> bool:
     status, health = http_json(f"{base}/health")
     if status != 200 or not isinstance(health, dict) or health.get("status") != "ok":
         return False
-    status, me = http_json(f"{base}/api/v1/auth/me")
-    return status == 200 and isinstance(me, dict) and me.get("id") == "default"
+    return auth_ready(base, auth)
 
 
-def wait_for_gateway(base: str, timeout: int, process: subprocess.Popen | None = None) -> tuple[bool, float]:
+def wait_for_gateway(base: str, timeout: int, process: subprocess.Popen | None = None,
+                     auth: str = "default") -> tuple[bool, float]:
     started = time.monotonic()
     while time.monotonic() - started < timeout:
         if process is not None and process.poll() is not None:
             return False, time.monotonic() - started
-        if gateway_ready(base):
+        if gateway_ready(base, auth):
             return True, time.monotonic() - started
         time.sleep(0.5)
     return False, time.monotonic() - started
@@ -485,12 +501,16 @@ def describe_product_environment(sources: dict) -> str:
     return ",".join(f"{key}:{sources[key]}" for key in sorted(sources))
 
 
-def start_gateway(jar: Path, worktree: Path, data_root: Path, gateway_port: int, frontend_port: int,
-                  log_dir: Path, stamp: str) -> tuple[subprocess.Popen, list[str], dict]:
-    log_dir.mkdir(parents=True, exist_ok=True)
-    out = log_dir / f"gateway-{stamp}.out.log"
-    err = log_dir / f"gateway-{stamp}.err.log"
-    environment, product_env = resolve_product_environment(os.environ)
+def gateway_environment(data_root: Path, gateway_port: int, frontend_port: int,
+                        local_auth: bool = False, base=None, lookup=None) -> tuple[dict, dict]:
+    """The Gateway child environment: the caller's plus the local profile and product keys.
+
+    ``local_auth`` selects between the two auth profiles the launch entry points offer.
+    Only the returned mapping is handed to the Java child, so a credential filled from the
+    persisted scope never reaches the frontend process that the same wrapper starts, and
+    the caller's own environment is never mutated.
+    """
+    environment, sources = resolve_product_environment(os.environ if base is None else base, lookup)
     environment.update({
         "SUPER_HARNESS_GATEWAY_KIND": "haifa",
         "SUPER_HARNESS_PROFILE": "local",
@@ -499,13 +519,29 @@ def start_gateway(jar: Path, worktree: Path, data_root: Path, gateway_port: int,
         "SUPER_HARNESS_DATA_ROOT": str(data_root),
         "SUPER_HARNESS_DATA_DIR": str(data_root),
         "SUPER_HARNESS_ENVIRONMENT": "development",
-        "DEER_FLOW_AUTH_DISABLED": "1",
         "DEER_FLOW_ENV": "development",
         "ENVIRONMENT": "development",
         "DEER_FLOW_TRUSTED_ORIGINS": f"http://127.0.0.1:{frontend_port}",
         "NO_PROXY": "127.0.0.1,localhost",
         "no_proxy": "127.0.0.1,localhost",
     })
+    environment.pop("HAIFA_SUPER_HARNESS_LOCAL_AUTH", None)
+    environment.pop("HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS", None)
+    if local_auth:
+        environment.pop("DEER_FLOW_AUTH_DISABLED", None)
+        environment["HAIFA_SUPER_HARNESS_LOCAL_AUTH"] = "1"
+        environment["HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS"] = f"http://127.0.0.1:{frontend_port}"
+    else:
+        environment["DEER_FLOW_AUTH_DISABLED"] = "1"
+    return environment, sources
+
+
+def start_gateway(jar: Path, worktree: Path, data_root: Path, gateway_port: int, frontend_port: int,
+                  log_dir: Path, stamp: str, local_auth: bool = False) -> tuple[subprocess.Popen, list[str], dict]:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    out = log_dir / f"gateway-{stamp}.out.log"
+    err = log_dir / f"gateway-{stamp}.err.log"
+    environment, product_env = gateway_environment(data_root, gateway_port, frontend_port, local_auth)
     handle_out = out.open("w", encoding="utf-8")
     handle_err = err.open("w", encoding="utf-8")
     process = subprocess.Popen([java_executable(), "-jar", str(jar)], cwd=str(worktree),
@@ -640,6 +676,34 @@ def live_smoke(gateway_url: str, timeout: float = 120.0) -> dict:
         "hasError": outcome["hasError"],
         "tokenUsage": token_usage if token_status == 200 else None,
     }
+
+
+def start_impl(args) -> tuple[int, dict]:
+    """Start the Gateway for ``scripts/start-main-super-harness.ps1`` and report readiness.
+
+    The wrapper still resolves paths and prepares the environment it shares with the
+    frontend child; this module owns the local profile, the persisted product key fallback
+    and the readiness contract, so a direct start and a refresh cannot drift apart and the
+    credentials filled from the persisted scope only ever reach the Java child.
+    """
+    jar = args.jar.resolve()
+    if not jar.is_file():
+        raise MainServiceError(f"server executable JAR is missing: {jar}")
+    process, logs, product_env = start_gateway(
+        jar, args.worktree.resolve(), args.data_root.resolve(), args.gateway_port,
+        args.frontend_port, args.log_dir.resolve(), args.stamp, local_auth=args.local_auth)
+    ready, elapsed = wait_for_gateway(f"http://127.0.0.1:{args.gateway_port}",
+                                      args.ready_timeout_seconds, process, args.auth)
+    summary = {
+        "pid": process.pid,
+        "ready": ready,
+        "readyMs": int(elapsed * 1000),
+        "exited": process.poll() is not None,
+        "logs": logs,
+        # Key names and the scope that supplied them; never the values.
+        "productEnvironment": product_env,
+    }
+    return (0 if ready else 1), summary
 
 
 def refresh_impl(args) -> tuple[int, dict]:
@@ -892,12 +956,25 @@ def main(argv: list[str] | None = None) -> int:
     refresh.add_argument("--gateway-only", action="store_true")
     refresh.add_argument("--ready-timeout-seconds", type=int, default=READY_TIMEOUT_SECONDS)
 
+    start = sub.add_parser("start")
+    start.add_argument("--jar", required=True, type=Path)
+    start.add_argument("--data-root", required=True, type=Path)
+    start.add_argument("--log-dir", required=True, type=Path)
+    start.add_argument("--stamp", required=True)
+    start.add_argument("--ready-timeout-seconds", type=int, default=READY_TIMEOUT_SECONDS)
+    start.add_argument("--local-auth", action="store_true")
+    start.add_argument("--auth", choices=("default", "unauthorized"), default="default")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "status":
             result = status_impl(args.gateway_port, args.frontend_port, args.gateway_only)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             return 0 if result["ok"] else 1
+        if args.command == "start":
+            code, started = start_impl(args)
+            print(json.dumps(started, indent=2, ensure_ascii=False))
+            return code
         code, summary = refresh_impl(args)
         print(json.dumps(summary, indent=2, ensure_ascii=False))
         return code
