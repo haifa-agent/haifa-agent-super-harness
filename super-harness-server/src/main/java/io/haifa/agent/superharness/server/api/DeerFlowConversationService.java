@@ -673,18 +673,23 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         if (thread == null || !AccessOwner.current().equals(thread.ownerId)) {
             throw ConversationException.notFound("Thread not found");
         }
-        if (activeRunId(threadId).isPresent()) {
-            throw ConversationException.conflict(
-                    "Thread has work in flight. Delete it after the work finishes.");
-        }
-        threads.remove(threadId);
-        ThreadOwners.forget(threadId);
-        try {
-            threadCatalog.remove(threadId);
-        } catch (IOException failure) {
-            threads.put(threadId, thread);
-            ThreadOwners.remember(threadId, thread.ownerId);
-            throw new IllegalStateException("Thread catalog delete failed", failure);
+        // Serialize with every other thread mutation (state writes, admission, terminal stream
+        // cleanup, title finalizer): they all synchronize on this record, so after this block no
+        // stale mutation can re-add the retired catalog entry.
+        synchronized (thread) {
+            if (activeRunId(threadId).isPresent()) {
+                throw ConversationException.conflict(
+                        "Thread has work in flight. Delete it after the work finishes.");
+            }
+            threads.remove(threadId);
+            ThreadOwners.forget(threadId);
+            try {
+                threadCatalog.remove(threadId);
+            } catch (IOException failure) {
+                threads.put(threadId, thread);
+                ThreadOwners.remember(threadId, thread.ownerId);
+                throw new IllegalStateException("Thread catalog delete failed", failure);
+            }
         }
         return Map.of("success", true, "message", "Deleted local thread data for " + threadId);
     }
@@ -2477,6 +2482,11 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
 
     private void persistThread(ThreadRecord thread) throws IOException {
         synchronized (thread) {
+            // A thread retired by DELETE must not be resurrected by a late mutation that still holds
+            // its record (title finalizer, terminal stream cleanup, background admission).
+            if (threads.get(thread.threadId) != thread) {
+                return;
+            }
             threadCatalog.save(new PersistentThreadCatalog.Entry(
                     thread.threadId,
                     thread.metadata,
