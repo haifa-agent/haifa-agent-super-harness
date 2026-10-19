@@ -662,6 +662,39 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     }
 
     /**
+     * Product-level thread delete for the frozen {@code DELETE /api/threads/{id}} and
+     * {@code DELETE /api/langgraph/threads/{id}} routes. It retires the thread catalog entry so the
+     * thread disappears from {@code /api/threads/search} and every owner-scoped read returns 404,
+     * which is the contract the frozen frontend relies on. The SDK owns the session/checkpoint/event
+     * rows and exposes no delete for them yet, so those durable rows are intentionally retained.
+     */
+    public Map<String, Object> deleteThread(String threadId) throws ConversationException {
+        ThreadRecord thread = threads.get(threadId);
+        if (thread == null || !AccessOwner.current().equals(thread.ownerId)) {
+            throw ConversationException.notFound("Thread not found");
+        }
+        // Serialize with every other thread mutation (state writes, admission, terminal stream
+        // cleanup, title finalizer): they all synchronize on this record, so after this block no
+        // stale mutation can re-add the retired catalog entry.
+        synchronized (thread) {
+            if (activeRunId(threadId).isPresent()) {
+                throw ConversationException.conflict(
+                        "Thread has work in flight. Delete it after the work finishes.");
+            }
+            threads.remove(threadId);
+            ThreadOwners.forget(threadId);
+            try {
+                threadCatalog.remove(threadId);
+            } catch (IOException failure) {
+                threads.put(threadId, thread);
+                ThreadOwners.remember(threadId, thread.ownerId);
+                throw new IllegalStateException("Thread catalog delete failed", failure);
+            }
+        }
+        return Map.of("success", true, "message", "Deleted local thread data for " + threadId);
+    }
+
+    /**
      * Bounded wait for this Thread's active Run to reach a terminal status, keeping its projection
      * caught up while waiting. A channel adapter whose live observation ended early (replay gap,
      * transport hiccup) needs the finished Run before it projects the durable answer; otherwise it
@@ -2449,6 +2482,11 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
 
     private void persistThread(ThreadRecord thread) throws IOException {
         synchronized (thread) {
+            // A thread retired by DELETE must not be resurrected by a late mutation that still holds
+            // its record (title finalizer, terminal stream cleanup, background admission).
+            if (threads.get(thread.threadId) != thread) {
+                return;
+            }
             threadCatalog.save(new PersistentThreadCatalog.Entry(
                     thread.threadId,
                     thread.metadata,

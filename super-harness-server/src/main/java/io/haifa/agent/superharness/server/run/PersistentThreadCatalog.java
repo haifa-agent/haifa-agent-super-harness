@@ -69,6 +69,20 @@ public final class PersistentThreadCatalog {
         }
     }
 
+    /** Removes a thread from the catalog and persists the change; a failed write restores it. */
+    public synchronized void remove(String threadId) throws IOException {
+        Entry previous = entries.remove(threadId);
+        if (previous == null) {
+            return;
+        }
+        try {
+            persist();
+        } catch (IOException | RuntimeException | Error failure) {
+            entries.put(threadId, previous);
+            throw failure;
+        }
+    }
+
     private void load() throws IOException {
         if (!Files.exists(catalog)) return;
         if (Files.size(catalog) > MAXIMUM_CATALOG_BYTES) {
