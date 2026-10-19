@@ -27,7 +27,7 @@
     log and reports are copied to local-tmp/verify-full/<name>-first-fail/ regardless.
 
     Maven output goes to a log file under local-tmp. The JSON summary is written to stdout
-    and next to the log (same name, .json) for scripts/governance/shpm_record_gates.py.
+    and next to the log (same name, .json) for ``shpm verify ingest``.
     No stamp is written when the gate fails or when server sources are uncommitted.
 
 .EXAMPLE

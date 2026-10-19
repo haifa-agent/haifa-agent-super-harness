@@ -6,7 +6,7 @@ SHPM（Super Harness Project Manager）管理本项目的工作包、任务、�
 
 ## 1. 准备环境
 
-在 PowerShell 7 中明确选择本项目的已有数据库，并检查环境：
+在 PowerShell 7 中明确选择本项目已有的数据库，并检查环境。本地模式直接读写 SQLite：
 
 ```powershell
 $env:SHPM_DB='C:\Users\wangr\.shpm\data\project.db'
@@ -19,7 +19,17 @@ shpm doctor --json
 shpm status --json
 ```
 
-`doctor` 应返回 `HEALTHY`；否则停止状态写入并报告人工。命令也可用 `--db <绝对路径>` 显式选择数据库。不要通过初始化新库替代已有项目库。
+远程模式不需要 CLI 直接访问数据库文件，改为声明中心服务地址：
+
+```powershell
+$env:SHPM_SERVER='http://<host>:8787'
+shpm doctor --json
+shpm status --json
+```
+
+`shpm` 客户端通过 `/api/v1` 转发全部读写命令，自动复用 `~/.shpm/auth.json` 或 `SHPM_TOKEN`，无需在每条命令上另传凭据；命令语法、JSON envelope 与退出码与本地模式一致。未设置 `SHPM_SERVER` 时仍为本地模式。
+
+`doctor` 应返回 `HEALTHY`；否则停止状态写入并报告人工。命令也可用 `--db <绝对路径>` 显式选择数据库。不要通过初始化新库替代已有项目库。派工和批量证据登记依赖 SHPM 的 `task dispatch`、`verify ingest` 与 `slot` 命令；先用 `shpm task dispatch --help`、`shpm verify ingest --help`、`shpm slot list --json` 核对当前 CLI 是否已升级到包含这些接口的版本，缺失时升级控制面，不退回已下线的仓库脚本。
 
 状态查询和写入命令使用 `--json`：成功结果在 stdout，失败结果在 stderr。写入命令带 `--idempotency-key`，同一次操作重试复用原 key；新的操作或新的验收轮次使用新 key。PowerShell 参数里的中文引号使用「」，避免弯引号被当作字符串定界符。
 
@@ -65,54 +75,34 @@ shpm sprint show $sprintId --json
 
 先在 `private-docs/prompts/39-deerflow-parity-delivery/` 对应工作包目录编写提示词。提示词包含范围、依赖、实现边界、验收条件和证据要求；文件命名与保存位置按 [AGENTS.md](../AGENTS.md)「提示词与过程文档」。
 
+派工前核对独立 branch/worktree、基线 SHA、槽位、全部端口和数据目录，并按 `AGENTS.md`「端口」完成实际绑定预检。提示词、分支、worktree、数据目录和端口在写库前由 `task dispatch` 预检；SHPM 记录资源分配，实际端口隔离仍由主控检查。
+
+槽位端口由仓库根目录跟踪的 `.shpm/slots.json` 解析；文件缺失时先运行 `shpm slot init --template default` 生成并提交。也可用 `--slots-file <路径>` 或环境变量 `SHPM_SLOTS_FILE` 指定，或用 `shpm slot list --json` 查看当前注册表。
+
 ```powershell
 $promptPath='<提示词相对仓库根的路径>'
-shpm task create $taskId --wp $wpId --title '<任务标题>' `
-    --prompt $promptPath --exit '<退出条件>' --priority P1 --next '<下一步>' `
-    --idempotency-key "$operationKey-create" --json
-
-# 仅在任务服务于该演示阶段时建立关系
-shpm sprint link $stageId --task $taskId --relation delivers --required `
-    --idempotency-key "$operationKey-link" --json
-
-shpm task start $taskId --idempotency-key "$operationKey-start" --json
-```
-
-派工前核对独立 branch/worktree、基线 SHA、槽位、全部端口和数据目录，并按 `AGENTS.md`「端口」完成实际绑定预检。SHPM 记录资源分配，实际端口隔离仍由主控检查。
-
-```powershell
-$repositoryRoot='D:\workspace\haifa-agent-super-harness'
 $worktreeRoot='<分配的 worktree 绝对路径>'
 $branchName='<开发分支>'
-$baseSha='<基线提交SHA>'
 $slot=1 # 替换为实际分配的槽位
-$ports='<Gateway端口>/<Frontend端口>'
 $dataRoot='<独立数据目录绝对路径>'
 
-shpm assign create $taskId --id $assignmentId --executor opencode `
-    --ref '<执行者引用>' --model deepseek/deepseek-flash `
-    --repo $repositoryRoot --base-sha $baseSha --branch $branchName `
-    --worktree $worktreeRoot --slot $slot --ports $ports --data-root $dataRoot `
-    --checkpoint-in 15m --idempotency-key "$operationKey-assign" --json
-```
-
-`--executor` 可选 `main`、`codex`、`opencode`、`human`，`--ref` 与 `--model` 按实际执行者填写。`assign create` 缺少 `--data-root` 或端口时会拒绝登记。
-
-上面四步（`task create`、`sprint link`、`task start`、`assign create`）用薄封装一次完成，不手工逐条拼：
-
-```powershell
-python scripts/governance/shpm_dispatch.py --task $taskId --wp $wpId --title '<任务标题>' `
-    --prompt $promptPath --exit '<退出条件>' --executor opencode `
-    --ref '<执行者引用>' --model deepseek/deepseek-flash `
+shpm task dispatch $taskId --wp $wpId --title '<任务标题>' `
+    --prompt $promptPath --exit '<退出条件>' --priority P1 --next '<下一步>' `
+    --executor opencode --ref '<执行者引用>' --model deepseek/deepseek-flash `
     --branch $branchName --worktree $worktreeRoot --slot $slot --data-root $dataRoot `
-    [--repo 'D:\workspace\haifa-agent'] [--stage $stageId] [--execute]
+    --checkpoint-in 15m --dry-run
+# 仅任务服务于演示阶段时增加 --stage '<SPRINT/STAGE>'。
+# 上游 SDK 任务的 worktree 属于 D:\workspace\haifa-agent 时增加 --repo 'D:\workspace\haifa-agent'。
+# 核对 dry-run 输出的对象、端口与 SHA 后，去掉 --dry-run 再执行。
 ```
 
-- 不带 `--execute` 只打印将执行的命令，核对后再加；带上后按顺序写入，首个失败即停。各步幂等键为 `<日期>-<任务ID>-<动作>`，派工 ID 为 `asg-<任务ID>`。
-- `--slot` 取 1–6，端口按 `AGENTS.md`「派单与子智能体调度」端口表取值（槽位 4 为 `11618/16618`，槽位 5 为 `21618/26618`，槽位 6 为 `22618/27618`，均不套用 `+10000`），不单独传端口。
-- `--slot`、`--data-root` 必填，`--worktree` 须是已创建且有提交的 Git 检出。任一项不满足时脚本以退出码 2 结束，不打印也不执行任何步骤，避免任务已 `start` 却没有派工。
-- 基线 SHA 取 `git -C <worktree> rev-parse HEAD`。
-- `--repo` 默认是本仓库主检出。上游 SDK 任务的 worktree 属于 `D:\workspace\haifa-agent`，须传 `--repo` 指向该仓库；worktree 不属于 `--repo` 所指仓库时脚本拒绝。提示词仍按本仓库主检出下的相对路径检查。
+`task dispatch` 在单个数据库事务内完成 task create（含提示词登记）、可选的 sprint link、task start 和 assign create；任一步失败整体回滚，不会留下“任务已 start 但无活动派工”的半状态。已处于 `completed`/`accepted`/`cancelled` 的任务会被拒绝（退出码 4）；参数一致的重试幂等返回。远程模式由服务端通过 `POST /api/v1/tasks/dispatch` 保持同样的单事务语义。
+
+- `--executor` 可选 `main`、`codex`、`opencode`、`human`，`--ref` 与 `--model` 按实际执行者填写。
+- `--slot` 取 1–6；未显式给端口时由 `.shpm/slots.json` 解析 Gateway/Frontend 端口，也可用 `--ports <gw>/<fe>` 或 `--gateway-port`/`--frontend-port` 覆盖。端口占用可用 `--check-ports` 在写库前预检。
+- `--worktree` 须是已创建且有提交的 Git 检出，且当前分支与 `--branch` 一致；`--repo` 默认由 worktree 推导，上游 worktree 不属于本仓库时须显式传入。
+- `--base-sha` 默认 `auto`，取 worktree 的 `HEAD`；显式 SHA 会先校验它是该仓库中的提交。
+- 派工 ID 默认为 `asg-<任务ID>`；未给 `--idempotency-key` 时按 `dispatch-<任务ID>-<槽位>` 生成。
 
 派单消息注明任务 ID、派工 ID、提示词路径、SHA、端口、数据目录及 checkpoint 要求；OpenCode 调用方法见 `AGENTS.md`「OpenCode CLI」。
 
@@ -164,14 +154,16 @@ shpm verify add --task $taskId --key '<检查名称>' --criteria '<实际断言>
 
 结果按实际情况填写 `PASS`、`FAIL`、`NOT_RUN`、`BLOCKED_EXTERNAL` 或 `UPSTREAM_UNSUPPORTED`。首次 FAIL 和未运行项均须保留；新轮次追加记录，不覆盖旧记录，不用静态检查或另一分支的结果替代真实运行证据。
 
-脚本回归和批量门禁登记用两个薄封装，不手工逐条拼 `shpm verify add`：
+脚本回归用统一入口，批量门禁结果用 SHPM 原生 `verify ingest`，不手工逐条拼 `shpm verify add`：
 
 ```powershell
 pwsh -NoProfile -File scripts/verify-scripts.ps1
-python scripts/governance/shpm_record_gates.py --task $taskId <证据组目录> [--raw-root <已归档位置>] [--execute]
+shpm verify ingest <证据组目录...> --task $taskId [--raw-root <已归档位置>] --dry-run
 ```
 
-`verify-scripts.ps1` 统一运行 `tests/checks/build/` 与 `tests/checks/ui/` 清单内的检查并写 `local-tmp/verify-scripts/`；出现清单外的检查文件时直接失败，不提供跳过单项的开关。`shpm_record_gates.py` 从证据组目录递归发现全仓门禁摘要、脚本回归摘要、UI 证据目录和主服务刷新摘要，无法识别的 JSON 忽略并列出；不带 `--execute` 时只打印一张表（检查名、结果、提交、耗时、原件路径、幂等键），加时才逐条写入、失败即停。幂等键带证据身份（摘要文件名或 UI 证据目录的 `run-*` 身份），同一份证据重复登记仍幂等；UI 检查名带 `acceptanceProfile`，同一次调用里同 profile、同提交的多份证据目录按开始时间追加 `-r1`/`-r2`。`--raw-root` 用于证据已归档到别处时改写原件路径，目标不存在则报错。结果原样登记，脚本不自动提升阶段 `PASS`/`GO`。带 `reuse` 的全仓门禁摘要把复用来源（源摘要、提交、Java 输入指纹）写进说明并如实记录耗时；带 `knownIntermittent` 的摘要登记为 `PASS` 并填实际重跑次数，同时为每个 issue 追加一条非必需的 `known-intermittent-<issue>` `FAIL` 记录（原件指向首次失败归档目录），用于累计该 issue 的发生次数。
+`verify-scripts.ps1` 统一运行 `tests/checks/build/` 与 `tests/checks/ui/` 清单内的检查并写 `local-tmp/verify-scripts/`；出现清单外的检查文件时直接失败，不提供跳过单项的开关。`verify ingest` 从证据组目录递归识别全仓门禁摘要、脚本回归摘要、UI 证据目录和主服务刷新摘要，可用 `--adapter auto|verify-full|verify-scripts|ui-evidence|main-service-refresh` 限定；无法识别的 `.json` 默认使本次以退出码 2 结束，确认可忽略时加 `--allow-unrecognized`。不带 `--dry-run` 时直接写入，因此先打印核对（检查名、结果、提交、耗时、原件路径、幂等键），确认后再去掉该开关；任一条记录校验失败时整批回滚。
+
+幂等键带证据身份（摘要文件名或 UI 证据目录的 `run-*`/`evidenceRoot` 身份），同一份证据重复登记仍幂等；UI 检查名带 `acceptanceProfile`，同一次调用里同 profile、同提交的多份证据目录按开始时间追加 `-r1`/`-r2`。`--raw-root` 用于证据已归档到别处时改写原件路径，目标不存在则报错。结果按默认归一化映射到 `PASS`/`FAIL`/`NOT_RUN` 等五值口径（`--no-normalize` 关闭），但不会自动提升阶段 `PASS`/`GO`。带 `reuse` 的全仓门禁摘要把复用来源（源摘要、提交、Java 输入指纹）写进说明并如实记录耗时；带 `knownIntermittent` 的摘要登记为 `PASS` 并填实际重跑次数，同时默认按每个 issue 追加一条非必需的 `known-intermittent-<issue>` `FAIL` 记录（原件指向首次失败归档目录），用于累计该 issue 的发生次数；`--no-known-intermittent` 关闭该扇出。远程模式下客户端在本地解析产物，统一提交到 `POST /api/v1/verifications/batch`，由服务端单事务写入。
 
 独立复审通过、改动合入且证据绑定最终主线 SHA 后接受，再确认本任务端口和子进程已清理并释放派工：
 

@@ -122,13 +122,13 @@ SDK 重新发布后重跑脚本。
 python scripts/governance/change_scope.py
 python scripts/governance/evidence_reuse.py --target <合入后提交> <证据文件或目录>
 python scripts/governance/pr_review_digest.py --repo <owner/name> --pr <编号>
-python scripts/governance/shpm_dispatch.py --task ... --execute
-python scripts/governance/shpm_record_gates.py --task ... local-tmp/verify-full/<run>.json <UI 证据目录> --execute
+shpm task dispatch <任务ID> --wp <工作包ID> --executor <执行者> --branch <分支> --worktree <worktree> --slot <1-6> --data-root <数据目录> --dry-run
+shpm verify ingest local-tmp/verify-full/<run>.json <UI 证据目录> --task <任务ID> --dry-run
 python scripts/lib/source_fingerprint.py --repo . --commit HEAD
 python -m unittest discover -s tests/checks/build -p "test_*.py"
 ```
 
-两个 SHPM 脚本不带 `--execute` 时只打印将执行的命令。提交前的 SDK 基线门禁：
+两条 SHPM 命令先加 `--dry-run` 核对将写入的对象，确认后去掉该开关；槽位端口由 `.shpm/slots.json` 解析。提交前的 SDK 基线门禁：
 
 ```powershell
 pwsh -NoProfile -File tests/checks/build/verify-haifa-version-baseline.ps1

@@ -51,7 +51,7 @@ flowchart TD
     R["需求 / Roadmap / PRD"] --> B{"能力归属明确？"}
     B -->|"否"| A["停止新增领域实现，进行架构裁决"]
     B -->|"产品层，无 SDK 缺口"| P["编写提示词；核对 SHPM 与依赖<br/>标明本任务 L1；L2 是否延后到 WP"]
-    P --> D["主控分配独立 branch/worktree、槽位和 data-root<br/>shpm_dispatch：start / assign"]
+    P --> D["主控分配独立 branch/worktree、槽位和 data-root<br/>shpm task dispatch：单事务 start / assign"]
     D --> E["完整端口组绑定预检与环境准备"]
     E --> I["实现 → 定向测试 / 合同 / 单 case 冒烟 → 集中自审"]
     I --> F{"内环是否通过？"}
@@ -229,17 +229,19 @@ gh pr create --base dev --title '<English title>' --body-file '<English PR descr
 
 ### 3.3 SHPM 派工、交付与接受
 
-主控先明确设置已有项目的 `SHPM_DB`，执行 `shpm doctor --json` 和 `shpm status --json`；非 HEALTHY 时停止写入。派工薄封装与结果薄封装不带 `--execute` 时只打印命令，确认参数与来源后再加该开关。
+主控先明确设置已有项目的 `SHPM_DB`（远程模式改为设置 `SHPM_SERVER`），执行 `shpm doctor --json` 和 `shpm status --json`；非 HEALTHY 时停止写入。派工用 SHPM 原生命令 `task dispatch`，先加 `--dry-run` 核对参数与来源；门禁结果用 `verify ingest`，同样先 `--dry-run` 核对再写入。
 
 ```powershell
-python scripts/governance/shpm_dispatch.py `
-  --task '<任务ID>' --wp '<工作包ID>' --title '<任务标题>' `
+shpm task dispatch '<任务ID>' `
+  --wp '<工作包ID>' --title '<任务标题>' `
   --prompt 'private-docs/prompts/39-deerflow-parity-delivery/<工作包>/<工作包-任务名>.md' `
   --exit '<退出条件>' --executor codex --ref '<执行者引用>' `
   --branch 'codex/<任务分支>' --worktree '<独立worktree绝对路径>' `
-  --slot 2 --data-root 'local-tmp/<任务>/data' --execute
+  --slot 2 --data-root 'local-tmp/<任务>/data' --dry-run
 # 仅任务服务于演示阶段时，派工命令增加 --stage '<SPRINT/STAGE>'。
-# --slot（1–4）和 --data-root 必填；上游 SDK 任务的 worktree 属于 D:\workspace\haifa-agent 时增加 --repo 'D:\workspace\haifa-agent'。
+# --slot（1–6）和 --data-root 必填；端口由 .shpm/slots.json 解析。
+# 上游 SDK 任务的 worktree 属于 D:\workspace\haifa-agent 时增加 --repo 'D:\workspace\haifa-agent'。
+# 核对 dry-run 输出的对象、端口与 SHA 后，去掉 --dry-run 再执行。
 
 $taskId='<任务ID>'
 $assignmentId="asg-$taskId"
@@ -251,11 +253,11 @@ shpm task deliver $taskId --assignment $assignmentId --commit '<候选SHA>' `
 # 脚本回归用统一入口，摘要写 local-tmp/verify-scripts/。
 pwsh -NoProfile -File scripts/verify-scripts.ps1
 # 门禁结果从证据组目录递归登记（全仓摘要、脚本回归摘要、UI 证据目录、主服务刷新摘要）；
-# 不带 --execute 只打印表，证据已归档时用 --raw-root 改写原件路径。
-python scripts/governance/shpm_record_gates.py --task $taskId `
-  'local-tmp/verify-full/<本轮摘要>.json' '<本轮UI证据目录>' --execute
+# 先加 --dry-run 核对，证据已归档时用 --raw-root 改写原件路径，确认后再去掉 --dry-run。
+shpm verify ingest --task $taskId `
+  'local-tmp/verify-full/<本轮摘要>.json' '<本轮UI证据目录>' --dry-run
 # 只传实际存在且适用于本任务的输入；无 UI 门禁时省略 UI 路径。
-# 薄封装覆盖不到的真实 smoke 及额外轮次，用 shpm verify add 逐项追加；不覆盖首次 FAIL。
+# 原生命令覆盖不到的真实 smoke 及额外轮次，用 shpm verify add 逐项追加；不覆盖首次 FAIL。
 
 # 主控独立复审、合入及最终 SHA / SDK / smoke 证据核对全部通过后：
 shpm task accept $taskId --assignment $assignmentId --main-commit '<最终主线SHA>' `
@@ -264,7 +266,7 @@ shpm task accept $taskId --assignment $assignmentId --main-commit '<最终主线
 shpm assign release $assignmentId --idempotency-key "$operationKey-release" --json
 ```
 
-两套薄封装不会执行 `deliver`、`accept`、阶段结算或 `GO`。门禁登记脚本并不核准 SHA/SDK 是否可合入，仍由主控核对。`shpm_record_gates.py` 的幂等键为 `<任务>-<检查名>-<提交>-<证据身份>`，不含日期，同一份证据隔天重登仍幂等，不同轮次各自写入；写入前按时间稳定排序（UI 用已解析的开始时间，摘要用文件名时间戳，解析不出时间的排在最后并保持原顺序），使 SHPM 中同一检查名的最后一条记录是最新证据。UI 检查名带 profile，同一次调用里同 profile、同提交的多轮按开始时间追加 `-r1`/`-r2`；脚本回归清单外的检查文件使本次为 `FAIL_MANIFEST` 并记为 `FAIL`。结果原样登记（`FAIL` 和 `NOT_RUN` 都不提升），各轮保留原件、不覆盖首次 FAIL。状态变化后按规则执行 `tests/checks/evidence/verify-evidence-report.ps1`；整包、阶段与 `GO` 命令见 [SHPM 使用手册](../shpm-manual.md)。
+`task dispatch` 与 `verify ingest` 都不会执行 `deliver`、`accept`、阶段结算或 `GO`。`verify ingest` 并不核准 SHA/SDK 是否可合入，仍由主控核对。其幂等键为 `<任务>-<检查名>-<提交>-<证据身份>`，不含日期，同一份证据隔天重登仍幂等，不同轮次各自写入；写入前按时间稳定排序（UI 用已解析的开始时间，摘要用文件名时间戳，解析不出时间的排在最后并保持原顺序），使 SHPM 中同一检查名的最后一条记录是最新证据。UI 检查名带 profile，同一次调用里同 profile、同提交的多轮按开始时间追加 `-r1`/`-r2`；脚本回归清单外的检查文件使本次为 `FAIL_MANIFEST` 并记为 `FAIL`。结果原样登记（`FAIL` 和 `NOT_RUN` 都不提升），各轮保留原件、不覆盖首次 FAIL。状态变化后按规则执行 `tests/checks/evidence/verify-evidence-report.ps1`；整包、阶段与 `GO` 命令见 [SHPM 使用手册](../shpm-manual.md)。
 
 ## 4. 两套流程的准入条件
 

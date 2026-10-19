@@ -6,7 +6,7 @@ Two ways to run it:
     python scripts/governance/evidence_reuse.py --reusable-summary <dir> --fingerprint <sha256>
 
 The first is the read-only checker for executors and reviewers. It discovers, recursively
-and by the same shapes as ``shpm_record_gates.py``:
+and by the same shapes as ``shpm verify ingest``:
 
 - full-gate summaries (``verify-full-*.json``) -> reusable when the Java input fingerprint
   equals the target commit's; a summary that is not PASS, or that lacks the fingerprint, is

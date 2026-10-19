@@ -101,18 +101,20 @@
 - 批次结束按根因归并问题，一次修复后重跑受影响用例及必要回归；代码与断言稳定后才运行 L2/L3 昂贵轮次。
 - 演示范围外的高级/偏门缺陷先挂 issue 和风险，不阻断无依赖的演示验证；必需 Oracle 失败仍保留 `FAIL`/`NO_GO`，演示触及故障路径时作为阻断处理。
 
-#### SHPM 登记封装
+#### SHPM 登记
 
-- 派工用 `python scripts/governance/shpm_dispatch.py`，一次完成 task create（含提示词登记）、sprint link、task start、assign create。
+- 派工用 `shpm task dispatch <任务ID> --wp <工作包ID> --executor <执行者> --branch <分支> --worktree <worktree 绝对路径> --slot <1-6> --data-root <独立数据目录> [--prompt <提示词相对路径>] [--exit <退出条件>] [--stage <SPRINT/STAGE>]`，由 SHPM 在单事务内完成 task create（含提示词登记）、sprint link、task start 和 assign create。先用 `--dry-run` 核对将写入的对象、端口和 SHA，再去掉该开关。
+- 槽位 1–6 的 Gateway/Frontend 端口来自仓库根目录跟踪的 `.shpm/slots.json`，不再由仓库脚本硬编码；新检出缺失时运行 `shpm slot init --template default` 生成并提交。上游 SDK 任务的 worktree 属于 `D:\workspace\haifa-agent` 时用 `--repo 'D:\workspace\haifa-agent'` 指定；`--base-sha` 默认由 worktree 的 `HEAD` 推导。
 - 脚本回归用 `pwsh -NoProfile -File scripts/verify-scripts.ps1`，摘要写 `local-tmp/verify-scripts/`。
-- 门禁结果用 `python scripts/governance/shpm_record_gates.py` 从证据组目录登记全仓门禁摘要、脚本回归摘要、UI 证据目录和主服务刷新摘要；默认只打印一张表，加 `--execute` 才写入，参数见 [SHPM 使用手册](docs/shpm-manual.md)。结果原样登记，`deliver`、`accept`、阶段结果和 `GO` 仍由主控手工执行。登记时区分 L1 日常门禁与 L2 差分证据，避免把 WP 出口差分误记为每个子任务的 PR 门禁。
+- 门禁结果用 `shpm verify ingest <证据组目录...> --task <任务ID> [--raw-root <已归档位置>] [--dry-run]` 登记全仓门禁摘要、脚本回归摘要、UI 证据目录和主服务刷新摘要；与旧的薄封装不同，默认即写入，先用 `--dry-run` 核对。结果原样登记，`deliver`、`accept`、阶段结果和 `GO` 仍由主控手工执行。登记时区分 L1 日常门禁与 L2 差分证据，避免把 WP 出口差分误记为每个子任务的 PR 门禁。
+- 远程模式在环境中设置 `SHPM_SERVER='http://<host>:8787'`，CLI 通过 `/api/v1` 调度并自动复用 `~/.shpm/auth.json` 或 `SHPM_TOKEN`；命令语法、输出契约和退出码与本地模式一致。参数与适配器细节见 [SHPM 使用手册](docs/shpm-manual.md)。
 
 #### 交接与等待
 
 - 每个执行 worktree 在 `local-tmp/acceptance-handoff.md` 维护短交接，模板见 `docs/acceptance-handoff-template.md`：只记录范围、源码 SHA/dirty、SDK 选择与发布来源/hash、断言/证据映射、首个 FAIL、未运行项、本任务是 L1 还是附带 L2，以及下一步。事实变化时更新，不复制长日志、密钥或 reasoning 正文；该交接不是另一份任务账本，不替代 SHPM。
 - 后台任务使用有界进程等待并在完成时合并读取结果摘要；等待期间推进不依赖它的检查，避免固定 sleep 后反复读完整日志。等待方至少每 60 秒在自己的会话输出里给出有意义的进展或卡点；这不同于子智能体向主控的 15 分钟 checkpoint（见「派单与子智能体调度」）。
 
-批准记录：2026-09-30 批量验收；2026-10-03 按改动范围定门禁、UI 默认两次暖轮、SHPM 登记封装；2026-10-05 合入后按树哈希复用、指纹复用与 UI 模型选择、已登记的偶发失败、一次启动内重复运行；2026-10-06 本节合并改写，废止「快进合入不重跑」和手工门禁映射表，门禁时点改为报告可合并前，正式门禁由主控排队，Oracle 放宽须逐项批准，槽位 4（2026-10-03 批准为附加槽位）转为常规槽位，子智能体槽位共四个；同日批准机器人审查不可用期间的替代审查流程；**2026-10-15 验收分层 L1/L2/L3：日常 PR 默认一轮暖轮、协议面 controlled、双后端改工作包出口；产品默认 x2 暖轮废止为 L1 默认 x1。**；2026-10-16 子智能体槽位由四个扩容为六个，新增槽位 5 `21618/26618`、槽位 6 `22618/27618`（经 loopback 绑定预检，均低于动态端口范围）。
+批准记录：2026-09-30 批量验收；2026-10-03 按改动范围定门禁、UI 默认两次暖轮、SHPM 登记封装；2026-10-05 合入后按树哈希复用、指纹复用与 UI 模型选择、已登记的偶发失败、一次启动内重复运行；2026-10-06 本节合并改写，废止「快进合入不重跑」和手工门禁映射表，门禁时点改为报告可合并前，正式门禁由主控排队，Oracle 放宽须逐项批准，槽位 4（2026-10-03 批准为附加槽位）转为常规槽位，子智能体槽位共四个；同日批准机器人审查不可用期间的替代审查流程；**2026-10-15 验收分层 L1/L2/L3：日常 PR 默认一轮暖轮、协议面 controlled、双后端改工作包出口；产品默认 x2 暖轮废止为 L1 默认 x1。**；2026-10-16 子智能体槽位由四个扩容为六个，新增槽位 5 `21618/26618`、槽位 6 `22618/27618`（经 loopback 绑定预检，均低于动态端口范围）；**2026-10-19 下线 `scripts/governance/shpm_dispatch.py` 与 `shpm_record_gates.py`，改用 SHPM 原生 `task dispatch` / `verify ingest`、`.shpm/slots.json` 槽位注册表和可选 `SHPM_SERVER` 远程模式。**
 
 ## Git 与 GitHub
 
@@ -322,7 +324,7 @@ try {
 
 - 派工前在 `private-docs/prompts/39-deerflow-parity-delivery/` 对应工作包目录编写任务提示词，写明冻结来源、范围与依赖、实现边界、接口及失败语义、退出条件、测试命令和证据要求；每个可独立交付的任务使用单独文件。
 - 新任务文件用 `工作包-任务名.md` 命名，如 `W05-Interaction.md`；任务名简短、无空格，不在新增目录 / 文件名中加入状态后缀。既有路径和 `show-roadmap-N` 轮次索引沿用；登记为 SHPM `prompt_path` 后不改名、不移动，任务状态在 SHPM 中维护。
-- 提示词随任务登记（见「SHPM 登记封装」）；派单消息注明任务 / 派工 ID、提示词路径、branch/worktree、端口、数据目录和 checkpoint 要求。
+- 提示词随任务登记（见「SHPM 登记」）；派单消息注明任务 / 派工 ID、提示词路径、branch/worktree、端口、数据目录和 checkpoint 要求。
 - 方案、评审和复盘放在对应私有工作包目录，交付报告放在 `private-docs/ai-coding-report/` 指定位置，原始日志、trace 和截图放在外置证据目录；SHPM 只登记路径。`docs/` 保存稳定的开发与使用手册，不新增过程文档。
 
 ## 项目管理（SHPM）
