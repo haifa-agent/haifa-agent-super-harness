@@ -65,7 +65,8 @@ python scripts/install-service.py uninstall
   continuation key 后**永不轮换**，重复 install 保留已有 key 与 operator 额外键。同时写入
   `HAIFA_SUPER_HARNESS_SKILLS_DIR=<prefix>/skills`，让服务端加载 `skills/public` 官方技能。
 - **Linux**：渲染 `service/systemd/*.tmpl` 到 `/etc/systemd/system/`，`enable --now`；覆盖前把旧 unit
-  备份到 `config/unit-backup/`。需要 root。
+  备份到 `config/unit-backup/`。需要 root。前端 unit 只用 `After=`/`Wants=`，**不** `Requires=` gateway，
+  这样后端单独更新（`systemctl stop super-harness-gateway`）不会连带停掉前端。
 - **Windows**：需要 `--winsw-exe <WinSW.exe>`；按 WinSW 约定把 exe 复制为
   `service/winsw/<service-id>.exe` 并把 `<service-id>.xml` 放其旁，再从 `gateway.env` 展开 `<env>`。
 - **uninstall** 只停止并删除服务定义，保留 `config/` `data/` `logs/`。

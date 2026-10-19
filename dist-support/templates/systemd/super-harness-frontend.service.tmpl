@@ -4,7 +4,6 @@ Description=Haifa Super Harness frozen DeerFlow frontend (loopback only)
 Documentation=file://${prefix}/INSTALL.md
 After=network-online.target ${gateway_unit}.service
 Wants=network-online.target
-Requires=${gateway_unit}.service
 
 [Service]
 Type=simple
