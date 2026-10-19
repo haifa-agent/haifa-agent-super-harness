@@ -1,0 +1,27 @@
+# Rendered by scripts/install-service.py; placeholders are substituted at install time.
+[Unit]
+Description=Haifa Super Harness frozen DeerFlow frontend (loopback only)
+Documentation=file://${prefix}/INSTALL.md
+After=network-online.target ${gateway_unit}.service
+Wants=network-online.target
+Requires=${gateway_unit}.service
+
+[Service]
+Type=simple
+User=${service_user}
+Group=${service_group}
+WorkingDirectory=${prefix}/repo/frontend
+EnvironmentFile=${prefix}/config/gateway.env
+# node/pnpm must be visible to the service account; PATH is set explicitly because the
+# service environment does not inherit the login shell.
+Environment=PATH=${node_dir}:${pnpm_dir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+ExecStart=${node_bin} ${prefix}/repo/frontend/node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port ${frontend_port}
+Restart=on-failure
+RestartSec=10
+SuccessExitStatus=143
+StandardOutput=append:${prefix}/logs/frontend.log
+StandardError=append:${prefix}/logs/frontend.log
+
+[Install]
+WantedBy=multi-user.target

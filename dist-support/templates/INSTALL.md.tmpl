@@ -1,0 +1,85 @@
+# Haifa Super Harness 安装包（super-harness-${version}）
+
+单前缀发布包：应用、冻结资源、脚本、模板、配置与数据全部收口在本目录（数据可用
+`--data-root` 外置）。目录越界文件只有一个：服务定义（Linux 的
+`/etc/systemd/system/super-harness-*.service`，Windows 的服务注册项），由安装脚本托管。
+
+构建信息：version=${version} commit=${commit} builtAt=${built_at}
+默认端口：Gateway=${gateway_port} Frontend=${frontend_port}
+
+## 目录
+
+```text
+app\          预构建 exec JAR
+repo\         Gateway 工作目录：third-party/deerflow 冻结资源 + frontend 预构建产物
+config\       gateway.env.tmpl（安装时渲染为 gateway.env，含 continuation key，0600）
+data\         默认数据根：runtime/haifa-agent.sqlite、owners/default/*、workspace\ 等
+logs\         gateway.log / frontend.log
+scripts\      install-service.py（+ .ps1/.sh 薄封装）
+service\      systemd\ 与 winsw\ 服务模板
+quick-start.bat / quick-start.sh   直接前台化启动（不注册服务，无需 root/管理员）
+quick-stop.bat  / quick-stop.sh    停止上面启动的进程
+VERSION       version/commit/端口/构建时间
+manifest.sha256  每个文件的 SHA-256
+```
+
+## 快速体验（不注册服务）
+
+```powershell
+.\quick-start.bat            # Windows：后台启动 Gateway + 前端，日志在 logs\
+.\quick-stop.bat
+```
+
+```bash
+./quick-start.sh             # Linux
+./quick-stop.sh
+```
+
+`start` 会在 `config/gateway.env` 首次生成密钥后直接启动进程，把 PID 写入 `config/run.json`；
+`quick-stop` 只停止该文件记录的进程。要长期驻留/开机自启，改用下面的服务安装。
+
+## 前置
+
+- Java 21+（运行 exec JAR）
+- 前端：Node.js 22+（pnpm 10.26.2）；若随包携带 `repo/frontend/node_modules` 则目标机无需 pnpm；
+  否则先在该目录执行 `pnpm install --frozen-lockfile`（该盘 store 已填充时可加 `--offline`）。
+  `.next` 已预构建，无需再 `pnpm build`。
+- Linux 服务：`systemd`（安装脚本需要 root/sudo）。
+- Windows 服务：WinSW 包装器 exe（见下节）。
+
+## Linux（systemd）
+
+```bash
+tar -xzf super-harness-${version}.tar.gz -C /opt
+sudo python3 /opt/super-harness-${version}/scripts/install-service.py install
+sudo python3 /opt/super-harness-${version}/scripts/install-service.py status
+```
+
+安装脚本会：创建 data/logs、从模板渲染 `config/gateway.env`（首次生成 continuation key，
+此后永不轮换）、把两个 unit 渲染到 `/etc/systemd/system/` 并 `enable --now`；覆盖旧 unit 前
+自动备份到 `config/unit-backup-*`。
+
+卸载（保留 config/data/logs）：
+
+```bash
+sudo python3 /opt/super-harness-${version}/scripts/install-service.py uninstall
+```
+
+## Windows（WinSW）
+
+1. 下载 WinSW（如 `WinSW-x64.exe`）放到本目录 `service\winsw\` 下；
+2. 以管理员身份：
+
+```powershell
+python .\scripts\install-service.py install --winsw-exe .\service\winsw\WinSW-x64.exe
+python .\scripts\install-service.py status
+```
+
+`uninstall` 停止并删除服务定义，保留 config/data/logs。WinSW 的 `<env>` 由安装脚本从
+`config\gateway.env` 展开，因此密钥不入服务定义明文以外的位置。
+
+## 首次启动后
+
+浏览器打开 `http://127.0.0.1:${frontend_port}/`（远端默认 loopback，走 SSH 隧道或前置反向代理）
+→ 设置页配置模型并填 API Key。密钥以密文写入 `data\owners\default\configuration.json`，其
+`credential.key` 与 `config\gateway.env` 的 continuation key 丢失即无法解密历史，须与数据根一起备份。

@@ -1,0 +1,24 @@
+# Rendered by scripts/install-service.py; placeholders are substituted at install time.
+[Unit]
+Description=Haifa Super Harness Gateway (loopback only)
+Documentation=file://${prefix}/INSTALL.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${service_user}
+Group=${service_group}
+# Gateway must run from the repo working directory: the Skill store resolves
+# third-party/deerflow/skills/manifest.json relative to the process cwd.
+WorkingDirectory=${prefix}/repo
+EnvironmentFile=${prefix}/config/gateway.env
+ExecStart=${java_bin} -Xms256m -Xmx768m -jar ${prefix}/app/${jar_name}
+Restart=on-failure
+RestartSec=5
+SuccessExitStatus=143
+StandardOutput=append:${prefix}/logs/gateway.log
+StandardError=append:${prefix}/logs/gateway.log
+
+[Install]
+WantedBy=multi-user.target

@@ -54,6 +54,8 @@ Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业�
 - `tests/`：`tests/checks/` 保存脚本与校验器回归，`tests/ui/` 按 `smoke/`、`files/`、`dual-backend/`
   保存浏览器用例与夹具；Java 测试在各模块 `src/test/java/`。说明见 [tests/README.md](tests/README.md)。
 - `docs/`：稳定的开发与使用手册。
+- `dist-support/`：对外发布包基础设施（`scripts/`、`templates/`，以及不入库的 `outputs/`、`releases/`），
+  说明见 [dist-support/README.md](dist-support/README.md)。
 - `contracts/`、`third-party/`、`resources/`、`frontend/`、`deer-flow/`：冻结协议、资源、前端与来源校验。
 - `private-docs/`：提示词、roadmap、评审与交付报告，正文不在本 README 展开。
 
@@ -68,6 +70,13 @@ Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业�
 全仓门禁入口为 `pwsh -NoProfile -File scripts/verify-full.ps1`，脚本回归入口为 `pwsh -NoProfile -File scripts/verify-scripts.ps1`。
 门禁先执行预检，再按 Java 输入指纹复用已有结果或运行离线构建，摘要保存在 `local-tmp/verify-full/`。
 详细命令、构建缓存、资源选择与证据复用规则见[开发与运行手册](docs/development-manual.md#构建与验证)。
+
+## 发布包（dist-support）
+
+对外下载的单前缀发布包与安装/服务化基础设施位于 `dist-support/`：`package-release.py` 生成
+`releases/super-harness-<version>.tar.gz`（含预构建 JAR、冻结资源与前端产物），包内
+`scripts/install-service.py` 把应用注册为 Linux systemd 或 Windows WinSW 服务。
+命令、目录布局、密钥/数据约定与已知边界见 [dist-support/README.md](dist-support/README.md)。
 
 ## 定向测试与 SDK 版本选择
 

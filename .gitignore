@@ -4,3 +4,8 @@ target/
 local-tmp/
 __pycache__/
 *.pyc
+
+# dist-support: 中间半成品与最终打包成品不入库
+/dist-support/outputs/
+/dist-support/releases/
+paseo.json

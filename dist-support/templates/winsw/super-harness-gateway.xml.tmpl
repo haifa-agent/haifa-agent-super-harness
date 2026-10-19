@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Rendered by scripts/install-service.py (WinSW); placeholders are substituted at install
+     time and env entries are expanded from config/gateway.env.
+     Do not commit a rendered copy: it contains HAIFA_SH_CONTINUATION_KEY. -->
+<service>
+  <id>${service_id}</id>
+  <name>Haifa Super Harness Gateway</name>
+  <description>Haifa Super Harness Gateway (loopback only). Managed by dist-support.</description>
+  <executable>${java_bin}</executable>
+  <arguments>-Xms256m -Xmx768m -jar "${prefix}\app\${jar_name}"</arguments>
+  <workingdirectory>${prefix}\repo</workingdirectory>
+  <startmode>Automatic</startmode>
+  <stoptimeout>30 sec</stoptimeout>
+  <onfailure action="restart" delay="5 sec"/>
+  <logmode>append</logmode>
+  <logpath>${prefix}\logs</logpath>
+${service_account_xml}${env_entries}</service>
