@@ -141,6 +141,32 @@ $env:DEER_FLOW_TRUSTED_ORIGINS = $frontendUrl
 $env:NO_PROXY = '127.0.0.1,localhost'
 $env:no_proxy = '127.0.0.1,localhost'
 
+# The Gateway reads its web Tool credentials and provider switches from its own process
+# environment (WebToolConfig.fromEnvironment). A shell that started before the value was
+# persisted silently strips it, and with HAIFA_SUPER_HARNESS_WEB_SEARCH_PROVIDER=deepseek
+# but no DEEPSEEK_TOOL_API_KEY every web_search/web_fetch call fails in the SDK credential
+# gate before the Tool runs. Fill only the missing product keys from the persisted Windows
+# user/machine environment; scripts/lib/main_service.py owns the same rule for the refresh
+# path. Record key names and scopes only, never values.
+$productEnvSources = [ordered]@{}
+if ($IsWindows) {
+    foreach ($productKey in @('DEEPSEEK_TOOL_API_KEY', 'JINA_API_KEY',
+            'HAIFA_SUPER_HARNESS_WEB_SEARCH_PROVIDER', 'HAIFA_SUPER_HARNESS_WEB_FETCH_PROVIDER')) {
+        if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($productKey, 'Process'))) {
+            $productEnvSources[$productKey] = 'process'
+            continue
+        }
+        foreach ($scope in @('User', 'Machine')) {
+            $persisted = [Environment]::GetEnvironmentVariable($productKey, $scope)
+            if (-not [string]::IsNullOrWhiteSpace($persisted)) {
+                [Environment]::SetEnvironmentVariable($productKey, $persisted, 'Process')
+                $productEnvSources[$productKey] = $scope.ToLowerInvariant()
+                break
+            }
+        }
+    }
+}
+
 $gatewayProcess = Start-Process -FilePath $java.Source -ArgumentList "-jar `"$jar`"" `
     -WorkingDirectory $root -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput $gatewayOut -RedirectStandardError $gatewayErr
@@ -180,6 +206,7 @@ if ($GatewayOnly) {
         dataRoot = $dataRoot
         gatewayPid = $gatewayProcess.Id
         gatewayLogs = @($gatewayOut, $gatewayErr)
+        productEnv = $productEnvSources
         health = 'PASS'
         authMe = 'PASS'
         frontend = 'EXISTING_NOT_CHECKED'
@@ -226,6 +253,7 @@ if (-not $frontendReady) {
     frontendLauncherPid = $frontendProcess.Id
     gatewayLogs = @($gatewayOut, $gatewayErr)
     frontendLogs = @($frontendOut, $frontendErr)
+    productEnv = $productEnvSources
     health = 'PASS'
     authMe = 'PASS'
     frontendReadiness = 'PASS'

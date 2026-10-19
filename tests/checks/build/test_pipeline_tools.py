@@ -934,6 +934,41 @@ class MainServiceTest(unittest.TestCase):
         self.assertEqual(main_service.rollback_decision(False, True), "rollback")
         self.assertEqual(main_service.rollback_decision(False, False), "stop")
 
+    def test_product_environment_fills_keys_the_shell_is_missing(self):
+        # A refresh started from a shell that predates DEEPSEEK_TOOL_API_KEY must not strip
+        # it: with provider=deepseek and no key every web_search call fails in the SDK
+        # credential gate before the Tool is dispatched.
+        persisted = {
+            "DEEPSEEK_TOOL_API_KEY": ("persisted-key", "user"),
+            "JINA_API_KEY": ("persisted-jina", "machine"),
+            "HAIFA_SUPER_HARNESS_WEB_SEARCH_PROVIDER": ("", "user"),
+        }
+        environment, sources = main_service.resolve_product_environment(
+            {"HAIFA_SUPER_HARNESS_WEB_SEARCH_PROVIDER": "deepseek"}, lookup=persisted.get)
+        self.assertEqual(environment["DEEPSEEK_TOOL_API_KEY"], "persisted-key")
+        self.assertEqual(environment["JINA_API_KEY"], "persisted-jina")
+        self.assertEqual(sources["DEEPSEEK_TOOL_API_KEY"], "user")
+        self.assertEqual(sources["JINA_API_KEY"], "machine")
+        # The shell value wins, and a blank persisted value never overwrites anything.
+        self.assertEqual(environment["HAIFA_SUPER_HARNESS_WEB_SEARCH_PROVIDER"], "deepseek")
+        self.assertEqual(sources["HAIFA_SUPER_HARNESS_WEB_SEARCH_PROVIDER"], "process")
+        # A key nobody set stays absent so the Gateway keeps its own default provider.
+        self.assertNotIn("HAIFA_SUPER_HARNESS_WEB_FETCH_PROVIDER", environment)
+        self.assertNotIn("HAIFA_SUPER_HARNESS_WEB_FETCH_PROVIDER", sources)
+        # The report carries scopes only; the secret values never reach it.
+        summary = main_service.describe_product_environment(sources)
+        self.assertEqual(summary, "DEEPSEEK_TOOL_API_KEY:user,"
+                                  "HAIFA_SUPER_HARNESS_WEB_SEARCH_PROVIDER:process,"
+                                  "JINA_API_KEY:machine")
+        self.assertNotIn("persisted-key", summary)
+        self.assertNotIn("persisted-jina", summary)
+
+    def test_product_environment_is_unchanged_without_a_persisted_value(self):
+        environment = {"PATH": "/usr/bin"}
+        resolved, sources = main_service.resolve_product_environment(environment, lookup=lambda key: None)
+        self.assertEqual(resolved, environment)
+        self.assertEqual(sources, {})
+
     def test_scope_enforcement(self):
         with tempfile.TemporaryDirectory() as directory:
             worktree = Path(directory).resolve()

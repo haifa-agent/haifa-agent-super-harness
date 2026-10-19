@@ -20,7 +20,9 @@ main service, the running Gateway JAR and the source commit from the build stamp
    ``active``, the stopped process's command-line JAR is kept as ``previous`` for rollback;
 4. both ports must actually accept a loopback bind within 20 seconds;
 5. the copied Gateway starts (detached from the caller) and must answer ``/health`` and
-   ``/api/v1/auth/me``;
+   ``/api/v1/auth/me``. Its environment is the caller's plus the product keys the caller
+   is missing, filled from the persisted Windows user/machine environment
+   (``PRODUCT_ENV_KEYS``); the summary records only each key's scope, never its value;
 6. the frontend checkout's ``HEAD:frontend`` tree must match ``--expect-sha``; a healthy
    frontend is reused, an unhealthy one on a free port is started in production mode from
    ``--frontend-root`` and must answer the home page and the proxied ``/api/v1/auth/me``
@@ -413,12 +415,82 @@ def creation_flags() -> int:
     return subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
 
 
+# Product keys the Gateway reads from its own process environment
+# (``WebToolConfig.fromEnvironment``). A refresh started from a shell that predates a
+# value silently strips it: with ``HAIFA_SUPER_HARNESS_WEB_SEARCH_PROVIDER=deepseek``
+# but no ``DEEPSEEK_TOOL_API_KEY`` every ``web_search``/``web_fetch`` call fails in the
+# SDK credential gate before the Tool is dispatched. The persisted Windows
+# user/machine environment is therefore the fallback authority. Values are never
+# logged; only the key name and the scope that supplied it are reported.
+PRODUCT_ENV_KEYS = (
+    "DEEPSEEK_TOOL_API_KEY",
+    "JINA_API_KEY",
+    "HAIFA_SUPER_HARNESS_WEB_SEARCH_PROVIDER",
+    "HAIFA_SUPER_HARNESS_WEB_FETCH_PROVIDER",
+)
+
+
+def persisted_environment(key: str) -> tuple[str, str] | None:
+    """``(value, scope)`` for ``key`` from the Windows user/machine environment."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+    except ImportError:  # pragma: no cover - winreg is part of CPython on Windows
+        return None
+    locations = (
+        ("user", winreg.HKEY_CURRENT_USER, "Environment"),
+        ("machine", winreg.HKEY_LOCAL_MACHINE,
+         r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+    )
+    for scope, hive, path in locations:
+        try:
+            with winreg.OpenKey(hive, path) as handle:
+                value, _kind = winreg.QueryValueEx(handle, key)
+        except OSError:
+            continue
+        if isinstance(value, str) and value.strip():
+            return value, scope
+    return None
+
+
+def resolve_product_environment(environment, lookup=None) -> tuple[dict, dict]:
+    """Fill ``PRODUCT_ENV_KEYS`` the caller's shell is missing from the persisted scope.
+
+    Returns ``(resolved, sources)`` where ``sources`` maps every key the Gateway will
+    see to ``process``/``user``/``machine``. Keys absent everywhere stay absent so the
+    Gateway keeps its own default (DuckDuckGo/Jina, no credential requirement).
+    """
+    resolve = lookup if lookup is not None else persisted_environment
+    resolved = dict(environment)
+    sources: dict[str, str] = {}
+    for key in PRODUCT_ENV_KEYS:
+        current = resolved.get(key)
+        if isinstance(current, str) and current.strip():
+            sources[key] = "process"
+            continue
+        found = resolve(key)
+        if not found:
+            continue
+        value, scope = found
+        if not isinstance(value, str) or not value.strip():
+            continue
+        resolved[key] = value
+        sources[key] = scope
+    return resolved, sources
+
+
+def describe_product_environment(sources: dict) -> str:
+    """Value-free ``key:scope`` summary for the refresh report and step details."""
+    return ",".join(f"{key}:{sources[key]}" for key in sorted(sources))
+
+
 def start_gateway(jar: Path, worktree: Path, data_root: Path, gateway_port: int, frontend_port: int,
-                  log_dir: Path, stamp: str) -> tuple[subprocess.Popen, list[str]]:
+                  log_dir: Path, stamp: str) -> tuple[subprocess.Popen, list[str], dict]:
     log_dir.mkdir(parents=True, exist_ok=True)
     out = log_dir / f"gateway-{stamp}.out.log"
     err = log_dir / f"gateway-{stamp}.err.log"
-    environment = dict(os.environ)
+    environment, product_env = resolve_product_environment(os.environ)
     environment.update({
         "SUPER_HARNESS_GATEWAY_KIND": "haifa",
         "SUPER_HARNESS_PROFILE": "local",
@@ -439,7 +511,7 @@ def start_gateway(jar: Path, worktree: Path, data_root: Path, gateway_port: int,
     process = subprocess.Popen([java_executable(), "-jar", str(jar)], cwd=str(worktree),
                                stdout=handle_out, stderr=handle_err, env=environment,
                                stdin=subprocess.DEVNULL, creationflags=creation_flags())
-    return process, [str(out), str(err)]
+    return process, [str(out), str(err)], product_env
 
 
 def start_frontend(command: list[str], worktree: Path, log_dir: Path,
@@ -649,9 +721,12 @@ def refresh_impl(args) -> tuple[int, dict]:
 
     # 5. start the copied Gateway
     started = time.monotonic()
-    process, logs = start_gateway(installed, worktree, data_root, args.gateway_port, args.frontend_port, log_dir, stamp)
+    process, logs, product_env = start_gateway(installed, worktree, data_root, args.gateway_port,
+                                               args.frontend_port, log_dir, stamp)
     ready, ready_ms = wait_for_gateway(gateway_url, args.ready_timeout_seconds, process)
-    step("start-gateway", ready, f"pid={process.pid} ready={ready} after {ready_ms:.1f}s logs={logs}",
+    step("start-gateway", ready,
+         f"pid={process.pid} ready={ready} after {ready_ms:.1f}s logs={logs} "
+         f"productEnv={describe_product_environment(product_env) or 'none'}",
          int((time.monotonic() - started) * 1000))
 
     new_pid = process.pid if ready else None
@@ -709,6 +784,8 @@ def refresh_impl(args) -> tuple[int, dict]:
         "frontend": frontend,
         "smoke": smoke,
         "liveSmoke": live,
+        # Key names and the scope that supplied them; never the values.
+        "productEnvironment": product_env,
     }
 
     # 7. rollback only when the new Gateway never became ready
@@ -780,8 +857,8 @@ def _frontend_result(args, worktree: Path, gateway_url: str, log_dir: Path, stam
 
 def _start_previous(previous_jar: Path, worktree: Path, data_root: Path, args, log_dir: Path,
                     stamp: str) -> tuple[bool, float]:
-    process, _ = start_gateway(previous_jar, worktree, data_root, args.gateway_port, args.frontend_port,
-                               log_dir, f"rollback-{stamp}")
+    process, _, _ = start_gateway(previous_jar, worktree, data_root, args.gateway_port,
+                                  args.frontend_port, log_dir, f"rollback-{stamp}")
     ready, elapsed = wait_for_gateway(f"http://127.0.0.1:{args.gateway_port}", args.ready_timeout_seconds, process)
     if not ready:
         stop_pid(process.pid)
