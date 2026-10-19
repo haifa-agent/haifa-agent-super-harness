@@ -17,4 +17,10 @@ public final class ThreadOwners {
         if (threadId == null) return AccessOwner.DEFAULT;
         return OWNERS.getOrDefault(threadId, AccessOwner.DEFAULT);
     }
+
+    /** Forgets a deleted thread so a recycled id cannot inherit the previous owner. */
+    public static void forget(String threadId) {
+        if (threadId == null || threadId.isBlank()) return;
+        OWNERS.remove(threadId);
+    }
 }

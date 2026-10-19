@@ -225,6 +225,10 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 getThread(exchange, match.group(1));
                 return;
             }
+            if (match.matches() && exchange.getRequestMethod().equals("DELETE")) {
+                deleteThread(exchange, match.group(1));
+                return;
+            }
             match = STREAM.matcher(path);
             if (match.matches() && exchange.getRequestMethod().equals("POST")) {
                 streamRun(exchange, match.group(1));
@@ -315,6 +319,10 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private void getThread(HttpExchange exchange, String threadId) throws IOException {
         sendJson(exchange, 200, conversations.getThread(threadId));
+    }
+
+    private void deleteThread(HttpExchange exchange, String threadId) throws IOException {
+        sendJson(exchange, 200, conversations.deleteThread(threadId));
     }
 
     private void getThreadState(HttpExchange exchange, String threadId) throws IOException {
