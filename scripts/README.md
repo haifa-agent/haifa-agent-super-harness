@@ -167,6 +167,14 @@ pwsh -NoProfile -File scripts/doctor/verify-customer-demo-v2-doctor.ps1
 pwsh -NoProfile -File scripts/evidence/generate-evidence-report.ps1
 ```
 
+主服务启动与刷新都会把 Gateway 需要的 Web 工具凭据与 provider 开关算进**子进程**环境：调用方环境里缺失的键从
+Windows 用户/机器环境补齐（唯一实现是 `scripts/lib/main_service.py::gateway_environment`；
+`start-main-super-harness.ps1` 只解析路径、准备与前端共享的环境并调用 `main_service.py start` 委托启动），
+摘要只记录键名与来源作用域（`process`/`user`/`machine`），绝不记录值；补进来的凭据只交给 Java 子进程，不会传给
+同一脚本随后拉起的 Node/Next 前端进程。原因：当 `HAIFA_SUPER_HARNESS_WEB_SEARCH_PROVIDER=deepseek` 而进程内没有
+`DEEPSEEK_TOOL_API_KEY` 时，SDK 会在工具派发前拒绝该调用，`web_search`/`web_fetch` 全部以
+`TOOL_INVOCATION_FAILED` 失败并终止整条 Run；从“早于该变量的终端”刷新会静默丢掉它。
+
 ## 约定
 
 - 新增入口按用途放入对应子目录；可复用逻辑放 `lib/`，不要在入口里重复实现。

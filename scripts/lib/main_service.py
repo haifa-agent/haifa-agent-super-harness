@@ -5,6 +5,12 @@ production frontend from another checkout. This module owns the logic; the Power
 wrappers (``scripts/refresh-main-service.ps1`` and ``scripts/start-main-super-harness.ps1``)
 only resolve paths, set the process environment and pass arguments through.
 
+``start`` launches the Gateway for ``start-main-super-harness.ps1``: the local profile, the
+persisted product key fallback and the readiness contract (``/health`` plus the expected
+``/api/v1/auth/me`` profile) live here, and the call reports the pid, readiness, log paths
+and the scope each product key came from. The wrapper keeps only the environment it shares
+with the frontend child, so credentials never reach the frontend process.
+
 ``status`` only reads: the listening PIDs on both ports, whether each command line is the
 main service, the running Gateway JAR and the source commit from the build stamp next to it,
 ``/health``, ``/api/v1/auth/me``, the frontend home page and the frontend-proxied Gateway.
@@ -20,7 +26,9 @@ main service, the running Gateway JAR and the source commit from the build stamp
    ``active``, the stopped process's command-line JAR is kept as ``previous`` for rollback;
 4. both ports must actually accept a loopback bind within 20 seconds;
 5. the copied Gateway starts (detached from the caller) and must answer ``/health`` and
-   ``/api/v1/auth/me``;
+   ``/api/v1/auth/me``. Its environment is the caller's plus the product keys the caller
+   is missing, filled from the persisted Windows user/machine environment
+   (``PRODUCT_ENV_KEYS``); the summary records only each key's scope, never its value;
 6. the frontend checkout's ``HEAD:frontend`` tree must match ``--expect-sha``; a healthy
    frontend is reused, an unhealthy one on a free port is started in production mode from
    ``--frontend-root`` and must answer the home page and the proxied ``/api/v1/auth/me``
@@ -329,20 +337,30 @@ def wait_for_frontend(frontend_url: str, timeout: int,
     return False, time.monotonic() - started
 
 
-def gateway_ready(base: str) -> bool:
+def auth_ready(base: str, auth: str = "default") -> bool:
+    """``unauthorized`` expects 401 from ``/api/v1/auth/me``; ``default`` the seeded admin."""
+    status, me = http_json(f"{base}/api/v1/auth/me")
+    if auth == "unauthorized":
+        return status == 401
+    return (status == 200 and isinstance(me, dict) and me.get("id") == "default"
+            and me.get("email") == "default@test.local" and me.get("system_role") == "admin"
+            and me.get("needs_setup") is False)
+
+
+def gateway_ready(base: str, auth: str = "default") -> bool:
     status, health = http_json(f"{base}/health")
     if status != 200 or not isinstance(health, dict) or health.get("status") != "ok":
         return False
-    status, me = http_json(f"{base}/api/v1/auth/me")
-    return status == 200 and isinstance(me, dict) and me.get("id") == "default"
+    return auth_ready(base, auth)
 
 
-def wait_for_gateway(base: str, timeout: int, process: subprocess.Popen | None = None) -> tuple[bool, float]:
+def wait_for_gateway(base: str, timeout: int, process: subprocess.Popen | None = None,
+                     auth: str = "default") -> tuple[bool, float]:
     started = time.monotonic()
     while time.monotonic() - started < timeout:
         if process is not None and process.poll() is not None:
             return False, time.monotonic() - started
-        if gateway_ready(base):
+        if gateway_ready(base, auth):
             return True, time.monotonic() - started
         time.sleep(0.5)
     return False, time.monotonic() - started
@@ -413,12 +431,86 @@ def creation_flags() -> int:
     return subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
 
 
-def start_gateway(jar: Path, worktree: Path, data_root: Path, gateway_port: int, frontend_port: int,
-                  log_dir: Path, stamp: str) -> tuple[subprocess.Popen, list[str]]:
-    log_dir.mkdir(parents=True, exist_ok=True)
-    out = log_dir / f"gateway-{stamp}.out.log"
-    err = log_dir / f"gateway-{stamp}.err.log"
-    environment = dict(os.environ)
+# Product keys the Gateway reads from its own process environment
+# (``WebToolConfig.fromEnvironment``). A refresh started from a shell that predates a
+# value silently strips it: with ``HAIFA_SUPER_HARNESS_WEB_SEARCH_PROVIDER=deepseek``
+# but no ``DEEPSEEK_TOOL_API_KEY`` every ``web_search``/``web_fetch`` call fails in the
+# SDK credential gate before the Tool is dispatched. The persisted Windows
+# user/machine environment is therefore the fallback authority. Values are never
+# logged; only the key name and the scope that supplied it are reported.
+PRODUCT_ENV_KEYS = (
+    "DEEPSEEK_TOOL_API_KEY",
+    "JINA_API_KEY",
+    "HAIFA_SUPER_HARNESS_WEB_SEARCH_PROVIDER",
+    "HAIFA_SUPER_HARNESS_WEB_FETCH_PROVIDER",
+)
+
+
+def persisted_environment(key: str) -> tuple[str, str] | None:
+    """``(value, scope)`` for ``key`` from the Windows user/machine environment."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+    except ImportError:  # pragma: no cover - winreg is part of CPython on Windows
+        return None
+    locations = (
+        ("user", winreg.HKEY_CURRENT_USER, "Environment"),
+        ("machine", winreg.HKEY_LOCAL_MACHINE,
+         r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+    )
+    for scope, hive, path in locations:
+        try:
+            with winreg.OpenKey(hive, path) as handle:
+                value, _kind = winreg.QueryValueEx(handle, key)
+        except OSError:
+            continue
+        if isinstance(value, str) and value.strip():
+            return value, scope
+    return None
+
+
+def resolve_product_environment(environment, lookup=None) -> tuple[dict, dict]:
+    """Fill ``PRODUCT_ENV_KEYS`` the caller's shell is missing from the persisted scope.
+
+    Returns ``(resolved, sources)`` where ``sources`` maps every key the Gateway will
+    see to ``process``/``user``/``machine``. Keys absent everywhere stay absent so the
+    Gateway keeps its own default (DuckDuckGo/Jina, no credential requirement).
+    """
+    resolve = lookup if lookup is not None else persisted_environment
+    resolved = dict(environment)
+    sources: dict[str, str] = {}
+    for key in PRODUCT_ENV_KEYS:
+        current = resolved.get(key)
+        if isinstance(current, str) and current.strip():
+            sources[key] = "process"
+            continue
+        found = resolve(key)
+        if not found:
+            continue
+        value, scope = found
+        if not isinstance(value, str) or not value.strip():
+            continue
+        resolved[key] = value
+        sources[key] = scope
+    return resolved, sources
+
+
+def describe_product_environment(sources: dict) -> str:
+    """Value-free ``key:scope`` summary for the refresh report and step details."""
+    return ",".join(f"{key}:{sources[key]}" for key in sorted(sources))
+
+
+def gateway_environment(data_root: Path, gateway_port: int, frontend_port: int,
+                        local_auth: bool = False, base=None, lookup=None) -> tuple[dict, dict]:
+    """The Gateway child environment: the caller's plus the local profile and product keys.
+
+    ``local_auth`` selects between the two auth profiles the launch entry points offer.
+    Only the returned mapping is handed to the Java child, so a credential filled from the
+    persisted scope never reaches the frontend process that the same wrapper starts, and
+    the caller's own environment is never mutated.
+    """
+    environment, sources = resolve_product_environment(os.environ if base is None else base, lookup)
     environment.update({
         "SUPER_HARNESS_GATEWAY_KIND": "haifa",
         "SUPER_HARNESS_PROFILE": "local",
@@ -427,19 +519,35 @@ def start_gateway(jar: Path, worktree: Path, data_root: Path, gateway_port: int,
         "SUPER_HARNESS_DATA_ROOT": str(data_root),
         "SUPER_HARNESS_DATA_DIR": str(data_root),
         "SUPER_HARNESS_ENVIRONMENT": "development",
-        "DEER_FLOW_AUTH_DISABLED": "1",
         "DEER_FLOW_ENV": "development",
         "ENVIRONMENT": "development",
         "DEER_FLOW_TRUSTED_ORIGINS": f"http://127.0.0.1:{frontend_port}",
         "NO_PROXY": "127.0.0.1,localhost",
         "no_proxy": "127.0.0.1,localhost",
     })
+    environment.pop("HAIFA_SUPER_HARNESS_LOCAL_AUTH", None)
+    environment.pop("HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS", None)
+    if local_auth:
+        environment.pop("DEER_FLOW_AUTH_DISABLED", None)
+        environment["HAIFA_SUPER_HARNESS_LOCAL_AUTH"] = "1"
+        environment["HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS"] = f"http://127.0.0.1:{frontend_port}"
+    else:
+        environment["DEER_FLOW_AUTH_DISABLED"] = "1"
+    return environment, sources
+
+
+def start_gateway(jar: Path, worktree: Path, data_root: Path, gateway_port: int, frontend_port: int,
+                  log_dir: Path, stamp: str, local_auth: bool = False) -> tuple[subprocess.Popen, list[str], dict]:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    out = log_dir / f"gateway-{stamp}.out.log"
+    err = log_dir / f"gateway-{stamp}.err.log"
+    environment, product_env = gateway_environment(data_root, gateway_port, frontend_port, local_auth)
     handle_out = out.open("w", encoding="utf-8")
     handle_err = err.open("w", encoding="utf-8")
     process = subprocess.Popen([java_executable(), "-jar", str(jar)], cwd=str(worktree),
                                stdout=handle_out, stderr=handle_err, env=environment,
                                stdin=subprocess.DEVNULL, creationflags=creation_flags())
-    return process, [str(out), str(err)]
+    return process, [str(out), str(err)], product_env
 
 
 def start_frontend(command: list[str], worktree: Path, log_dir: Path,
@@ -570,6 +678,34 @@ def live_smoke(gateway_url: str, timeout: float = 120.0) -> dict:
     }
 
 
+def start_impl(args) -> tuple[int, dict]:
+    """Start the Gateway for ``scripts/start-main-super-harness.ps1`` and report readiness.
+
+    The wrapper still resolves paths and prepares the environment it shares with the
+    frontend child; this module owns the local profile, the persisted product key fallback
+    and the readiness contract, so a direct start and a refresh cannot drift apart and the
+    credentials filled from the persisted scope only ever reach the Java child.
+    """
+    jar = args.jar.resolve()
+    if not jar.is_file():
+        raise MainServiceError(f"server executable JAR is missing: {jar}")
+    process, logs, product_env = start_gateway(
+        jar, args.worktree.resolve(), args.data_root.resolve(), args.gateway_port,
+        args.frontend_port, args.log_dir.resolve(), args.stamp, local_auth=args.local_auth)
+    ready, elapsed = wait_for_gateway(f"http://127.0.0.1:{args.gateway_port}",
+                                      args.ready_timeout_seconds, process, args.auth)
+    summary = {
+        "pid": process.pid,
+        "ready": ready,
+        "readyMs": int(elapsed * 1000),
+        "exited": process.poll() is not None,
+        "logs": logs,
+        # Key names and the scope that supplied them; never the values.
+        "productEnvironment": product_env,
+    }
+    return (0 if ready else 1), summary
+
+
 def refresh_impl(args) -> tuple[int, dict]:
     worktree = args.worktree.resolve()
     data_root = args.data_root.resolve()
@@ -649,9 +785,12 @@ def refresh_impl(args) -> tuple[int, dict]:
 
     # 5. start the copied Gateway
     started = time.monotonic()
-    process, logs = start_gateway(installed, worktree, data_root, args.gateway_port, args.frontend_port, log_dir, stamp)
+    process, logs, product_env = start_gateway(installed, worktree, data_root, args.gateway_port,
+                                               args.frontend_port, log_dir, stamp)
     ready, ready_ms = wait_for_gateway(gateway_url, args.ready_timeout_seconds, process)
-    step("start-gateway", ready, f"pid={process.pid} ready={ready} after {ready_ms:.1f}s logs={logs}",
+    step("start-gateway", ready,
+         f"pid={process.pid} ready={ready} after {ready_ms:.1f}s logs={logs} "
+         f"productEnv={describe_product_environment(product_env) or 'none'}",
          int((time.monotonic() - started) * 1000))
 
     new_pid = process.pid if ready else None
@@ -709,6 +848,8 @@ def refresh_impl(args) -> tuple[int, dict]:
         "frontend": frontend,
         "smoke": smoke,
         "liveSmoke": live,
+        # Key names and the scope that supplied them; never the values.
+        "productEnvironment": product_env,
     }
 
     # 7. rollback only when the new Gateway never became ready
@@ -780,8 +921,8 @@ def _frontend_result(args, worktree: Path, gateway_url: str, log_dir: Path, stam
 
 def _start_previous(previous_jar: Path, worktree: Path, data_root: Path, args, log_dir: Path,
                     stamp: str) -> tuple[bool, float]:
-    process, _ = start_gateway(previous_jar, worktree, data_root, args.gateway_port, args.frontend_port,
-                               log_dir, f"rollback-{stamp}")
+    process, _, _ = start_gateway(previous_jar, worktree, data_root, args.gateway_port,
+                                  args.frontend_port, log_dir, f"rollback-{stamp}")
     ready, elapsed = wait_for_gateway(f"http://127.0.0.1:{args.gateway_port}", args.ready_timeout_seconds, process)
     if not ready:
         stop_pid(process.pid)
@@ -815,12 +956,25 @@ def main(argv: list[str] | None = None) -> int:
     refresh.add_argument("--gateway-only", action="store_true")
     refresh.add_argument("--ready-timeout-seconds", type=int, default=READY_TIMEOUT_SECONDS)
 
+    start = sub.add_parser("start")
+    start.add_argument("--jar", required=True, type=Path)
+    start.add_argument("--data-root", required=True, type=Path)
+    start.add_argument("--log-dir", required=True, type=Path)
+    start.add_argument("--stamp", required=True)
+    start.add_argument("--ready-timeout-seconds", type=int, default=READY_TIMEOUT_SECONDS)
+    start.add_argument("--local-auth", action="store_true")
+    start.add_argument("--auth", choices=("default", "unauthorized"), default="default")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "status":
             result = status_impl(args.gateway_port, args.frontend_port, args.gateway_only)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             return 0 if result["ok"] else 1
+        if args.command == "start":
+            code, started = start_impl(args)
+            print(json.dumps(started, indent=2, ensure_ascii=False))
+            return code
         code, summary = refresh_impl(args)
         print(json.dumps(summary, indent=2, ensure_ascii=False))
         return code
