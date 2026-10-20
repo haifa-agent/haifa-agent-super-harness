@@ -22,6 +22,11 @@ param(
     # w08-delegation-chat spec. Shares the catalog profile's case mapping,
     # fresh data root and smoke environment; mutually exclusive with -W08Catalog.
     [switch]$W08Delegation,
+    # W19 scheduled-tasks profile: the frozen /workspace/scheduled-tasks page
+    # against both backends with the controlled loopback Provider (deterministic
+    # Runs). Own case mapping (no V2 Oracle deferrals) and its own fresh data root;
+    # mutually exclusive with the W08 profiles.
+    [switch]$W19ScheduledTasks,
     # Bounded diagnosis aid: run a subset of case titles by Playwright grep.
     # Never used to hide a failing case; a filtered run is not a round result.
     [string]$Grep,
@@ -96,6 +101,7 @@ function Set-W18ManagedModel([int]$Port, [string]$Name, [string]$Display, [strin
 
 if ([string]::IsNullOrWhiteSpace($Backend)) { throw '-Backend reference|haifa is required.' }
 if ($W08Catalog -and $W08Delegation) { throw '-W08Catalog and -W08Delegation are mutually exclusive W08 profiles.' }
+if (($W08Catalog -or $W08Delegation) -and $W19ScheduledTasks) { throw '-W19ScheduledTasks is mutually exclusive with the W08 profiles.' }
 if ($GatewayPort -ne 40618 -or $FrontendPort -ne 45618 -or $ProviderPort -ne 46618) {
     throw 'W18 slot 3 requires Gateway=40618, Frontend=45618 and the main-controller-assigned test-only Provider=46618.'
 }
@@ -104,11 +110,16 @@ $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 # case mapping and fresh data root; $isW08 guards every profile-specific branch.
 $w08Profile = if ($W08Catalog) { 'w08-catalog' } elseif ($W08Delegation) { 'w08-delegation' } else { $null }
 $isW08 = $null -ne $w08Profile
+# W19 scheduled-tasks is a non-V2 differential profile (frozen UI vs frozen
+# backend behavior); it has its own case mapping and shares nothing with the
+# V2 Oracle stage/deferral machinery.
+$isW19 = [bool]$W19ScheduledTasks
+$differentialProfile = if ($isW19) { 'w19-scheduled-tasks' } elseif ($isW08) { $w08Profile } else { 'differential' }
 if ($ReferenceIdentityEncoding -and ($Backend -ne 'reference' -or -not $isW08)) {
     throw '-ReferenceIdentityEncoding requires a reference W08 profile.'
 }
-# W08 has its own case mapping: no V2 Oracle deferral or stage-upgrade mapping.
-$oracleDeferrals = if ($isW08) { @{} } else {
+# W08 and W19 have their own case mappings: no V2 Oracle deferral or stage-upgrade mapping.
+$oracleDeferrals = if ($isW08 -or $isW19) { @{} } else {
     Get-W18OracleDeferrals -OraclePath (Join-Path $root 'contracts/customer-demo-v2/v2-case-oracle.json')
 }
 $source = (Resolve-Path -LiteralPath $SourceRepository).Path
@@ -119,17 +130,23 @@ if ([string]::IsNullOrWhiteSpace($ReferencePython)) {
     # Unchanged W18/V2 default: the frozen source checkout's own backend venv.
     $ReferencePython = Join-Path $source 'backend/.venv/Scripts/python.exe'
 }
-if (-not $isW08) {
+# The V2 branch whitelist names the codex V2 differential lines. W08 and W19 are
+# non-V2 differential profiles on their own feature branches, so the whitelist is
+# deliberately not extended for them (the same reasoned relaxation W08 already uses).
+if (-not $isW08 -and -not $isW19) {
     $currentBranch = (& git -C $root branch --show-current).Trim()
     Assert-W18DifferentialBranch -Branch $currentBranch
 }
 if ([string]::IsNullOrWhiteSpace($DataDirectory)) {
-    # W08 catalog/delegation persist managed subagents under DEER_FLOW_HOME, so
-    # each run gets its own fresh data root; the differential default is unchanged.
+    # W08 catalog/delegation persist managed subagents under DEER_FLOW_HOME, and the
+    # W19 scheduled-task store is durable under the data root, so each run gets its
+    # own fresh data root; the differential default is unchanged.
     $DataDirectory = if ($W08Catalog) {
         Join-Path $root ("local-tmp/slot-3-w08-catalog/data-" + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
     } elseif ($W08Delegation) {
         Join-Path $root ("local-tmp/slot-3-w08-delegation/data-" + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
+    } elseif ($isW19) {
+        Join-Path $root ("local-tmp/slot-3-w19-scheduled-tasks/data-" + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
     } else {
         Join-Path $root 'local-tmp/slot-3-demo-l2-differential'
     }
@@ -243,6 +260,15 @@ try {
         $env:SUPER_HARNESS_DATA_ROOT = $phaseRoot
         $env:SUPER_HARNESS_DATA_DIR = $phaseRoot
         $env:SUPER_HARNESS_ENVIRONMENT = 'development'
+        if ($isW19) {
+            # W19 scheduled-tasks differential: single-instance poller on (matches the
+            # W19 acceptance profile). All differential tasks use far-future schedules
+            # and are admitted through the manual trigger route, so the poller cannot
+            # inject an unpredicted occurrence on this side only.
+            $env:HAIFA_SUPER_HARNESS_SCHEDULER_ENABLED = '1'
+            $env:HAIFA_SUPER_HARNESS_SCHEDULER_POLL_SECONDS = '2'
+            $env:HAIFA_SUPER_HARNESS_SCHEDULER_MIN_ONCE_DELAY_SECONDS = '30'
+        }
         $env:HAIFA_FRONTEND_BIND_ADDRESS = '127.0.0.1'
         $env:HAIFA_FRONTEND_PORT = [string]$FrontendPort
         $env:NO_PROXY = '127.0.0.1,localhost'
@@ -335,7 +361,7 @@ try {
     [ordered]@{
         backend = $Backend
         round = $Round
-        profile = $(if ($isW08) { $w08Profile } else { 'differential' })
+        profile = $differentialProfile
         referenceIdentityEncoding = [bool]$ReferenceIdentityEncoding
         playwrightConfig = $(if ($isW08) { 'tests/ui/smoke/playwright.config.cjs' } else { 'tests/ui/dual-backend/playwright.config.cjs' })
         referencePython = $(if ($Backend -eq 'reference') { [IO.Path]::GetFullPath($ReferencePython) } else { $null })
@@ -358,6 +384,8 @@ try {
             (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/ui/smoke/w08-subagent-catalog.spec.cjs')).Hash.ToLowerInvariant()
         } elseif ($W08Delegation) {
             (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/ui/smoke/w08-delegation-chat.spec.cjs')).Hash.ToLowerInvariant()
+        } elseif ($isW19) {
+            (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/ui/dual-backend/w19-scheduled-tasks.spec.cjs')).Hash.ToLowerInvariant()
         } else {
             (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root 'tests/ui/dual-backend/differential.spec.cjs')).Hash.ToLowerInvariant()
         })
@@ -386,6 +414,16 @@ try {
         $env:W18_PLAYWRIGHT_SPEC = $(if ($W08Catalog) { 'w08-subagent-catalog.spec.cjs' } else { 'w08-delegation-chat.spec.cjs' })
         $env:W18_PLAYWRIGHT_TIMEOUT_MS = '120000'
         $env:W18_PLAYWRIGHT_TRACE = 'on'
+    }
+    if ($isW19) {
+        # The dual-backend Playwright config keeps its V2 default testMatch unless
+        # this profile selects the scheduled-tasks differential spec explicitly.
+        $env:W18_DUAL_PLAYWRIGHT_SPEC = 'w19-scheduled-tasks.spec.cjs'
+    }
+    else {
+        # A previous W19 invocation in the same PowerShell process must not shrink
+        # the next V2 differential run to the W19 spec only.
+        Remove-Item Env:W18_DUAL_PLAYWRIGHT_SPEC -ErrorAction SilentlyContinue
     }
     $env:W18_DIFFERENTIAL_BACKEND = $Backend
     $env:W18_REFERENCE_IDENTITY_ENCODING = $(if ($ReferenceIdentityEncoding) { '1' } else { '0' })
@@ -501,7 +539,7 @@ finally {
         'frontend.stdout.log', 'frontend.stderr.log', 'results.json', 'artifacts')
     $summary = [ordered]@{
         backend = $Backend; testExitCode = $testExitCode
-        profile = $(if ($isW08) { $w08Profile } else { 'differential' })
+        profile = $differentialProfile
         cases = $cases
         # Per Oracle case id: the case status for this backend/round. Legacy W18
         # differential cases without an Oracle id are omitted here (still in
