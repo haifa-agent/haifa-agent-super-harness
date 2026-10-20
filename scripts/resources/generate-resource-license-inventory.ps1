@@ -370,7 +370,5 @@ $inventory = [ordered]@{
 $json = ConvertTo-Json -InputObject $inventory -Depth 100
 [System.IO.File]::WriteAllText($OutputPath, ($json -replace "`r`n", "`n").TrimEnd() + "`n",
     [System.Text.UTF8Encoding]::new($false))
-& python -B (Join-Path $PSScriptRoot 'skill_license_inventory.py') --repository $RepositoryRoot --inventory $OutputPath
-if ($LASTEXITCODE -ne 0) { throw 'Bundled Skill license inventory reconciliation failed.' }
 Write-Host "Wrote resource license inventory: $OutputPath"
 Write-Host "Brand assets=$($brandAssets.Count); public media=$($publicMedia.Count); dependencies=$($dependencyEntries.Count); non-imported skills=$($nonImportedSkills.Count); fonts=$($inventory.fonts.vendored_font_count)"

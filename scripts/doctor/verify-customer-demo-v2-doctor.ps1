@@ -11,8 +11,8 @@ param(
     [string]$V2DecisionsPath,
     [int]$GatewayPort = 18018,
     [int]$FrontendPort = 33018,
-    [int[]]$SubSlotGatewayPorts = @(20618, 30618, 40618, 11618),
-    [int[]]$SubSlotFrontendPorts = @(25618, 35618, 45618, 16618),
+    [int[]]$SubSlotGatewayPorts = @(20618, 30618, 40618),
+    [int[]]$SubSlotFrontendPorts = @(25618, 35618, 45618),
     [int]$ProviderPort = 46618,
     [int]$L3McpPort = 8091,
     [string]$L3McpEndpoint,
@@ -120,13 +120,13 @@ catch {
     Add-Check $checks 'frozen-upstream' 'FAIL' $_.Exception.Message $null
 }
 
-# -- 4. Haifa Agent 0.1.3-SNAPSHOT BOM/JAR SHAs -----------------------------
+# -- 4. Haifa Agent 0.1.2-SNAPSHOT BOM/JAR SHAs -----------------------------
 if (-not [string]::IsNullOrWhiteSpace($MavenRepository) -and (Test-Path -LiteralPath $MavenRepository -PathType Container)) {
     try {
         $requiredSdkFiles = @(
-            'io/haifa/haifa-agent-bom/0.1.3-SNAPSHOT/haifa-agent-bom-0.1.3-SNAPSHOT.pom',
-            'io/haifa/haifa-agent-runtime-api/0.1.3-SNAPSHOT/haifa-agent-runtime-api-0.1.3-SNAPSHOT.jar',
-            'io/haifa/haifa-agent-artifact/0.1.3-SNAPSHOT/haifa-agent-artifact-0.1.3-SNAPSHOT.jar'
+            'io/haifa/haifa-agent-bom/0.1.2-SNAPSHOT/haifa-agent-bom-0.1.2-SNAPSHOT.pom',
+            'io/haifa/haifa-agent-runtime-api/0.1.2-SNAPSHOT/haifa-agent-runtime-api-0.1.2-SNAPSHOT.jar',
+            'io/haifa/haifa-agent-artifact/0.1.2-SNAPSHOT/haifa-agent-artifact-0.1.2-SNAPSHOT.jar'
         )
         $sdkHashes = [ordered]@{}
         $missingSdk = @()
@@ -136,10 +136,10 @@ if (-not [string]::IsNullOrWhiteSpace($MavenRepository) -and (Test-Path -Literal
             else { $missingSdk += $relative }
         }
         if ($missingSdk.Count -gt 0) {
-            Add-Check $checks 'haifa-sdk' 'FAIL' "Missing Haifa Agent 0.1.3-SNAPSHOT artifact(s): $($missingSdk -join ', ')" $sdkHashes
+            Add-Check $checks 'haifa-sdk' 'FAIL' "Missing Haifa Agent 0.1.2-SNAPSHOT artifact(s): $($missingSdk -join ', ')" $sdkHashes
         }
         else {
-            Add-Check $checks 'haifa-sdk' 'PASS' "version=0.1.3-SNAPSHOT; artifacts=$($requiredSdkFiles.Count); sdkCommit=record-per-round" $sdkHashes
+            Add-Check $checks 'haifa-sdk' 'PASS' "version=0.1.2-SNAPSHOT; artifacts=$($requiredSdkFiles.Count); sdkCommit=record-per-round" $sdkHashes
         }
     }
     catch {

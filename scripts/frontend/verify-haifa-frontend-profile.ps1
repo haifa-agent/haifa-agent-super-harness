@@ -69,19 +69,7 @@ $frontendRoot = (Resolve-Path -LiteralPath (Join-Path $root 'frontend')).Path
 Assert-ExactEnvironmentValue -Name 'SUPER_HARNESS_GATEWAY_KIND' -Expected 'haifa'
 Assert-ExactEnvironmentValue -Name 'SUPER_HARNESS_PROFILE' -Expected 'local'
 Assert-ExactEnvironmentValue -Name 'SUPER_HARNESS_BIND_ADDRESS' -Expected '127.0.0.1'
-$localAuth = [Environment]::GetEnvironmentVariable('HAIFA_SUPER_HARNESS_LOCAL_AUTH', 'Process')
-if ($localAuth -eq '1') {
-    $disabled = [Environment]::GetEnvironmentVariable('DEER_FLOW_AUTH_DISABLED', 'Process')
-    if (-not [string]::IsNullOrWhiteSpace($disabled)) {
-        throw 'Local auth profile must leave DEER_FLOW_AUTH_DISABLED unset.'
-    }
-    $origins = Get-RequiredEnvironmentValue -Name 'HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS'
-    if ($origins -notmatch '^https?://127\.0\.0\.1(:\d+)?$') {
-        throw 'HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS must be a loopback origin.'
-    }
-} else {
-    Assert-ExactEnvironmentValue -Name 'DEER_FLOW_AUTH_DISABLED' -Expected '1'
-}
+Assert-ExactEnvironmentValue -Name 'DEER_FLOW_AUTH_DISABLED' -Expected '1'
 Assert-ExactEnvironmentValue -Name 'DEER_FLOW_ENV' -Expected 'development'
 Assert-ExactEnvironmentValue -Name 'ENVIRONMENT' -Expected 'development'
 Assert-ExactEnvironmentValue -Name 'SUPER_HARNESS_ENVIRONMENT' -Expected 'development'
@@ -156,25 +144,17 @@ $sourceArguments = @{ RepositoryRoot = $root }
 if (-not [string]::IsNullOrWhiteSpace($SourceRepository)) {
     $sourceArguments.SourceRepository = $SourceRepository
 }
-. (Join-Path $root 'scripts/lib/frontend-gate-cache.ps1')
-$sourceGateCacheKey = Get-FrontendSourceGateCacheKey -RepositoryRoot $root -SourceRepository $SourceRepository
-$sourceGateOutput = Read-FrontendSourceGateCache -RepositoryRoot $root -Key $sourceGateCacheKey
-$sourceGateCache = if ($null -eq $sourceGateCacheKey) { 'OFF' } elseif ($sourceGateOutput) { 'HIT' } else { 'MISS' }
-if (-not $sourceGateOutput) {
-    $sourceGateOutput = (& $sourceVerifier @sourceArguments *>&1 | Out-String)
-    if ([string]::IsNullOrWhiteSpace($sourceGateOutput)) {
-        throw 'Frozen frontend source gate produced no verification evidence.'
-    }
-    Write-FrontendSourceGateCache -RepositoryRoot $root -Key $sourceGateCacheKey -Output $sourceGateOutput
+$sourceGateOutput = (& $sourceVerifier @sourceArguments *>&1 | Out-String)
+if ([string]::IsNullOrWhiteSpace($sourceGateOutput)) {
+    throw 'Frozen frontend source gate produced no verification evidence.'
 }
 
-$localAuthEnabled = [Environment]::GetEnvironmentVariable('HAIFA_SUPER_HARNESS_LOCAL_AUTH', 'Process') -eq '1'
 $configurationText = @(
     'profile=haifa-local-same-origin',
     "gateway=$($gatewayUri.AbsoluteUri.TrimEnd('/'))",
     'browserBackend=(same-origin)',
     'browserLangGraph=/api/langgraph',
-    $(if ($localAuthEnabled) { 'authDisabled=0' } else { 'authDisabled=1' }),
+    'authDisabled=1',
     'frontendBind=127.0.0.1',
     "frontendPort=$frontendPort",
     "trustedOrigin=$expectedFrontendOrigin",
@@ -192,13 +172,12 @@ $configurationHash = [Convert]::ToHexString(
     internalGatewayBaseUrl = $gatewayUri.AbsoluteUri.TrimEnd('/')
     browserBackendBaseUrl = '(same-origin)'
     browserLangGraphBaseUrl = '/api/langgraph'
-    authDisabled = -not $localAuthEnabled
+    authDisabled = $true
     frontendBindAddress = '127.0.0.1'
     frontendPort = $frontendPort
     trustedOrigin = $expectedFrontendOrigin
     dataRoot = $dataRoot
     frontendSourceGate = 'PASS'
-    frontendSourceGateCache = $sourceGateCache
     deerFlowBackendFallback = $false
     publicSecrets = $false
     configurationSha256 = $configurationHash

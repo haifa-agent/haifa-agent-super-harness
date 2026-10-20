@@ -90,10 +90,36 @@ async function runMcp(context, page, testInfo, action, expectTool = true) {
   const stream = await streamPromise;
   expect(stream.status(), await stream.text()).toBe(200);
   const identity = runIdentity(stream);
-  // Host-declared read-only MCP Tools are auto-approved on the Haifa backend: the
-  // call executes without an approval card, matching the reference backend.
-  const approval = null;
+  let approval = null;
   let resumed = null;
+  if (backend === "haifa" && expectTool) {
+    const card = page.getByTestId("human-input-card");
+    await expect(card, "Haifa read-only MCP Tool follows SDK NETWORK_ACCESS approval").toBeVisible();
+    const pending = await context.request.get(`${app}/api/langgraph/threads/${identity.threadId}/state`);
+    expect(pending.status(), await pending.text()).toBe(200);
+    const pendingState = await pending.json();
+    const request = (pendingState.values?.messages ?? []).find((message) => message?.artifact?.human_input)
+      ?.artifact?.human_input;
+    expect(request?.request_id).toBeTruthy();
+    let hidden = null;
+    const resumedPromise = page.waitForResponse((response) => {
+      if (response.request().method() !== "POST" ||
+          !/\/api\/langgraph\/threads\/[^/]+\/runs\/stream$/.test(new URL(response.url()).pathname)) return false;
+      try {
+        hidden = response.request().postDataJSON()?.input?.messages?.at(-1)?.additional_kwargs;
+        return Boolean(hidden?.human_input_response);
+      } catch { return false; }
+    }, { timeout: 25_000 });
+    await card.getByRole("button", { name: "Approve", exact: true }).click();
+    resumed = await resumedPromise;
+    expect(resumed.status(), await resumed.text()).toBe(200);
+    expect(runIdentity(resumed)).toEqual(identity);
+    expect(hidden?.hide_from_ui).toBe(true);
+    expect(hidden?.human_input_response).toMatchObject({
+      request_id: request.request_id, option_id: "approve", value: "approve",
+    });
+    approval = { requestId: request.request_id, hiddenResponse: hidden.human_input_response };
+  }
 
   let run = null;
   await expect.poll(async () => {
@@ -112,10 +138,6 @@ async function runMcp(context, page, testInfo, action, expectTool = true) {
   const call = events.find((event) => event.type === "v2_mcp" && event.action === "call");
   const result = events.find((event) => event.type === "v2_mcp" && event.action === "result");
   const streams = [await stream.text(), resumed ? await resumed.text() : ""];
-  if (expectTool) {
-    expect(streams.join("\n"), "a read-only MCP Tool must not pause for approval")
-      .not.toContain("human_input");
-  }
   const evidence = {
     backend, action, marker, ...identity, approval,
     runStatus: run.status, elapsedMs: Date.now() - startedAt,
@@ -316,10 +338,28 @@ test(`${backend}: V2-M2-11 unknown transport result is not replayed or reported 
   const stream = await streamPromise;
   expect(stream.status(), await stream.text()).toBe(200);
   const identity = runIdentity(stream);
-  // Read-only MCP is auto-approved, so no approval interaction is created before the
-  // armed transport disconnect; the single committed call below proves no blind replay.
-  const resumed = null;
-  const approvalRequestId = null;
+  let resumed = null;
+  let approvalRequestId = null;
+  if (backend === "haifa") {
+    const card = page.getByTestId("human-input-card");
+    await expect(card).toBeVisible();
+    const pending = await context.request.get(`${app}/api/langgraph/threads/${identity.threadId}/state`);
+    expect(pending.status(), await pending.text()).toBe(200);
+    const pendingState = await pending.json();
+    approvalRequestId = (pendingState.values?.messages ?? [])
+      .find((message) => message?.artifact?.human_input)?.artifact?.human_input?.request_id;
+    expect(approvalRequestId).toBeTruthy();
+    const resumedPromise = page.waitForResponse((response) => {
+      if (response.request().method() !== "POST" ||
+          !/\/api\/langgraph\/threads\/[^/]+\/runs\/stream$/.test(new URL(response.url()).pathname)) return false;
+      try { return Boolean(response.request().postDataJSON()?.input?.messages?.at(-1)
+        ?.additional_kwargs?.human_input_response); } catch { return false; }
+    }, { timeout: 25_000 });
+    await card.getByRole("button", { name: "Approve", exact: true }).click();
+    resumed = await resumedPromise;
+    expect(resumed.status(), await resumed.text()).toBe(200);
+    expect(runIdentity(resumed)).toEqual(identity);
+  }
   let run = null;
   await expect.poll(async () => {
     const response = await context.request.get(`${app}/api/langgraph/threads/${identity.threadId}/runs/${identity.runId}`);
@@ -333,8 +373,6 @@ test(`${backend}: V2-M2-11 unknown transport result is not replayed or reported 
   const after = await fixtureState(20628);
   const events = providerEvents(marker);
   const streams = [await stream.text(), resumed ? await resumed.text() : ""];
-  expect(streams.join("\n"), "the read-only MCP disconnect case must not pause for approval")
-    .not.toContain("human_input");
   await save(testInfo, "v2-m2-11-unknown-result", {
     case: "V2-M2-11", backend, marker, ...identity, approvalRequestId,
     before, after, run, state, providerEvents: events, streams,

@@ -5,222 +5,99 @@
 - 根目录 `README.md` 统一使用中文维护；新增或修改构建、启动、验收说明时同步更新中文正文，命令、路径、配置键、API 名称和依赖坐标保留原样。
 - 以 `private-docs/roadmap/35-super-harness-deerflow-parity.md` 及其产品、PRD 配套目录为范围与验收依据。
 - DeerFlow 前后端固定为 `bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294`，禁止随 `main` 漂移。
-- 直接复用冻结的 DeerFlow 前端并由 Haifa 后端兼容其真实 REST/SSE/WS/文件/auth 协议，禁止自研平行 UI 或让产品回落到 DeerFlow 后端；冻结参考后端只用于差分对照（见「冻结 DeerFlow 参考后端」）。
-- 仅通过本地 Maven 仓库消费 Haifa Agent 公开 JAR/BOM（HA 0.1.3 开发线专门承接本项目 SDK 功能缺口，见 `private-docs/prompts/038-*`），禁止源码路径依赖、复制 SDK 或依赖产品 JAR。SDK 版本规则：
-  - 上游每个 SDK worktree 发布到自己的坐标 `0.1.3-<worktree 目录名>-SNAPSHOT`；基线 `0.1.3-SNAPSHOT` 只从上游主检出的 `dev` 发布，代表已由人工合并的 SDK。
-  - `main` 只消费基线；带 worktree 标识的版本不得进入被跟踪文件（检查见 README「定向测试与 SDK 版本选择」）。
+- 直接复用冻结的 DeerFlow 前端并由 Haifa 后端兼容其真实 REST/SSE/WS/文件/auth 协议，禁止自研平行 UI 或回落 DeerFlow 后端。
+- 仅通过本地 Maven 仓库消费 Haifa Agent 公开 JAR/BOM（HA 0.1.2 开发线专门承接本项目 SDK 功能缺口，见 `private-docs/prompts/038-*`），禁止源码路径依赖、复制 SDK 或依赖产品 JAR。SDK 版本规则：
+  - 上游每个 SDK worktree 发布到自己的坐标 `0.1.2-<worktree 目录名>-SNAPSHOT`；基线 `0.1.2-SNAPSHOT` 只从上游主检出的 `dev` 发布，代表已由人工合并的 SDK。
+  - `main` 只消费基线；带 worktree 标识的版本不得进入被跟踪文件（提交前门禁见 README「定向测试与 SDK 版本选择」）。
   - 工作包 worktree 消费哪个上游 worktree 的 SDK 由主控通过 `local-tmp/sdk-selection.json` 指定；执行者不得自行更换版本或直接传 `-Dhaifa.version`。
-  - 已发布的上游 SDK worktree 只在主控验收发现 SDK 问题后才修改并重新发布。构建戳以 Java 输入指纹（含每个 Haifa JAR 的 SHA-256 身份）比较，能识别同版本重新发布的内容变化，消费方据此自动重建。
+  - 上游 SDK worktree 只在主控验收发现 SDK 问题后才修改并重新发布；重新发布后主控须让消费方不带 `-SkipBuild`/`-SkipServerBuild` 重新构建（版本号不变，构建戳看不出 SDK 已更新）。
   - 依赖尚未合入上游 `dev` 的 SDK 改动的分支不能合入 `main`：须等上游 PR 人工合并、基线从 `dev` 重新发布，删除 `local-tmp/sdk-selection.json` 后在基线上重跑门禁。带标识版本下的验证结果只证明候选分支。
 - 新增或修改能力前必须先按 `docs/runtime-product-boundary.md` 判断其归属：可复用的 Agent Runtime 语义必须上游到 Haifa Agent，并通过公开 API/SPI 与已发布 JAR/BOM 消费；Super Harness 只拥有 DeerFlow 兼容、产品语义、UI/BFF、业务集成与窄适配层，禁止实现第二套 Run/Loop/Memory/Tool/Skill/MCP/Sandbox/Artifact/Checkpoint/Permission/Multi-Agent Runtime。若归属不清，在新增领域对象、状态机或持久化表之前停止并进行架构裁决。
-- 按上一条判定须上游，或验收过程中确认必须完善上游 Haifa Agent SDK 时，只能在 `D:\workspace\haifa-agent` 仓库以 `dev`（HA `0.1.3-SNAPSHOT`，不设 baseline 分支）为起点，为每个功能创建独立 worktree 和新的 `feat-*` 开发分支；禁止直接修改或提交到 `dev`。完成后须用上游发布脚本把公开 JAR/BOM 发布到该 worktree 自己的坐标，由本项目按上面的 SDK 版本规则消费，同时记录 SDK commit（取自上游发布清单）、发布与回归证据；随后从该 `feat-*` 分支向 `dev` 发起 GitHub PR，由主控在 SHPM 登记对应任务与 PR/验证状态（`shpm verify add`/`shpm issue add`），并明确提醒人工审查合并。任何智能体不得自行合并该 PR，除非人工针对该具体 PR 另行书面授权。
+- 如验收过程中确认必须完善上游 Haifa Agent SDK，只能在 `D:\workspace\haifa-agent` 仓库以 `dev`（HA `0.1.2-SNAPSHOT`，不设 baseline 分支）为起点，为每个功能创建独立 worktree 和新的 `feat-*` 开发分支；禁止直接修改或提交到 `dev`。完成后须用上游发布脚本把公开 JAR/BOM 发布到该 worktree 自己的坐标，由本项目按上一条的 SDK 版本规则消费，同时记录 SDK commit（取自上游发布清单）、发布与回归证据；随后从该 `feat-*` 分支向 `dev` 发起 GitHub PR，由主控在 SHPM 登记对应任务与 PR/验证状态（`shpm verify add`/`shpm issue add`），并明确提醒人工审查合并。任何智能体不得自行合并该 PR，除非人工针对该具体 PR 另行书面授权。
 - 为同一功能引入的领域模型复杂度必须与冻结 DeerFlow 的对应实现保持平衡或更低，禁止为了协议兼容复制、叠加或扩张不必要的领域对象、状态机、持久化概念和抽象层。若有证据表明只有更高的领域复杂度才能实现验收范围，执行智能体必须在编码前提交包含 DeerFlow 对照、复杂度增量、不可替代原因、风险与简化备选的设计说明，先经主控 Agent 评审，再等待人工裁决，未获人工明确同意不得实施或合入。
 
 ## 开发、测试与证据
 
-- 后续新增脚本以 Python 为主，核心逻辑集中在 Python 中；如需方便不同平台调用，可提供 `.ps1` 和 `.sh` 薄封装，仅负责必要的环境准备、调用 Python、透传参数与退出码，避免在封装中重复实现核心逻辑。
-- 隔离：每个工作包使用独立 branch/worktree、端口组和数据目录；每种启动方式（profile）和每次 UI 启动使用独立的新 data-root（原因见「凭据与数据目录」）。
-- 结果口径：失败项记 `FAIL`，未运行项记 `NOT_RUN`，外部前置缺失记 `BLOCKED_EXTERNAL`，并写明首个失败签名或缺失的前置。不得用静态验证、局部冒烟、预检或旧证据替代运行证据，不得把失败或延期记成 `PASS` 或 `NOT_RUN`，脚本不得自动提升阶段 `PASS`/`GO`。不得放宽断言、缩改 Oracle 或删除失败测试换取绿灯；确需裁剪或放宽某条 Oracle 时，须经人工逐项批准并在 SHPM 登记为已知差异，批准只对该条有效。
-- 检查时点：commit/push 前运行范围内定向测试、`git diff --check`、secret scan 和 SDK 基线检查（`pwsh -NoProfile -File tests/checks/build/verify-haifa-version-baseline.ps1`）。报告可合并前必须完成「按改动范围定门禁」给出的门禁和真实 smoke，并保留真实 Run/Tool/Artifact 证据。源码、SDK 构件或断言改变后，受影响的旧 `PASS` 失效。
-- 原始证据外置：运行任何 `mvn clean` 或重跑前，须把需保留的 Playwright trace、截图及前后端/Provider 原始日志复制到该工作包的外置独立证据目录（例如 worktree 的 `local-tmp/<slot>/evidence`，不能是另一个 `target`），并记录原始与复制路径。首次失败的证据同样保留。原始日志已消失时，只能明确标注为从先前终端输出重建的摘要，不得冒充原始证据。本文件其余各处的「保存原件」均指本条。
-- Playwright 验收除功能断言外还必须报告流程健康度：各轮（冷轮仅在跑了时）的准备/构建、服务就绪、功能断言、证据归档耗时与总耗时，是否重试，首个超时或卡点，Next 动态编译时间，trace/screenshot/日志位置，以及结束后端口和子进程是否清理；复审及返工耗时另行记录。
-- 等待必须有明确对象、deadline 和超时证据，不增加原预算或自动重试；不得用无界等待掩盖启动或断言失败。
-- 回报默认给退出码、测试计数、逐 case 结果、首个失败签名、依赖影响和原始证据路径；复用明确的路径、SHA 和断言表，仅为定位问题展开必要日志片段，不反复输出同一全文。独立检索和读取合并到同一工具轮次；依赖步骤和修改顺序仍串行。
-- 仅并行执行真正独立且资源、端口、数据目录隔离的检查。不同槽位的定向 Java 测试、合同检查与 Haifa 单后端受控 UI 可以并行。重型全仓 Maven、双后端差分、正式 live UI 与共享 Provider 由主控排队，不为减少轮次而并发。
-
-### 验收分层（L1 日常 / L2 工作包差分 / L3 演示）
-
-本节是现行规则，人工批准记录见节末。把「证明切片正确」与「与冻结 DeerFlow 参考后端差分一致」「客户演示 GO」分开，避免把里程碑级差分叠进每个日常 PR。
-
-#### 三档定义
-
-| 档位 | 用途 | 默认证明 | 不默认要求 |
-| --- | --- | --- | --- |
-| **L1 日常合入** | 单个可合并切片 / PR | `change_scope.py` 给出的门禁：定向或全仓按指纹、`ui-*-round-x1`（产品/前端）、协议面可用 `controlled` + 合同/HTTP·SSE 断言 | 双后端差分、默认两轮暖轮、演示连续双轮 L3 |
-| **L2 工作包差分** | 工作包或相关合入批次出口 | 冻结前端 + Haifa / 参考后端双后端差分（如 `run-w18-dual-backend`），按 WP Oracle 攒批 | 每个日常 PR 强制双后端 |
-| **L3 客户演示** | 演示阶段 `GO` | 同一主线 SHA 连续两轮整链证据等既有演示门禁 | 用 L1/L2 单项 PASS 提升阶段 `GO` |
-
-- 日常 PR **不**强制双后端；双后端是 L2，由主控在工作包出口或相关批次安排。
-- 产品改动默认 **一轮**暖轮（`x1`）；`x2` 仅当改动落在 `tests/ui` / `scripts/ui` / `scripts/frontend`（UI 用例或 runner 自身），或主控/复审点名提升。
-- 协议/投影/REST·SSE 形状类改动（`server/api`、`server/auth`、`super-harness-events`、`super-harness-workspace` 等，以 `change_scope.py` 表为准）默认 `controlled`；真正吃模型语义的路径（`run` / `prompt` / `tool` / `config`、主资源、`pom.xml`、文件名含 `live`、SDK 身份变化、未知路径）仍为 `live`。
-- 各条 L1/L2 裁剪**不适用于**客户演示「同一主线 SHA 连续两轮 L3」。
-
-#### 流程与分工
-
-- L1 顺序：实现 → 定向测试 / 合同 / 单 case 冒烟 → 集中自审修复 → 推送并开 PR → 一次性读取机器人审查并集中处理 → 变基到最新 `main` 并固定候选 → 跑 `change_scope` 给出的 L1 门禁 → 报告可合并。
-- 内环与 L1 合并：当执行者在本槽位跑完的定向测试 + 单 case/一轮 UI **恰好覆盖** `change_scope` 输出的 gates，且证据绑定最终候选 SHA、`sourceDirty=false` 时，主控抽检通过后可计为该 PR 的正式 L1 门禁，不必为同一 gates 再整套重跑。未覆盖的项仍须补跑；L2 差分与 L3 演示不在此合并范围内。
-- UI spec 或 fixture 配置变更先用 `scripts/ui/run-w18-ui-smoke.ps1 -CaseTitle <完整标题>` 执行受影响 case，`-PreflightOnly` 仅做本轮预检。
-- 攒批：自审和审查发现的问题按根因攒批，一次修复后重跑受影响用例；禁止每修一个点就重跑全仓或 UI 整套。正式门禁失败先保存原件并定位，再按影响范围修复复验。
-- L1 的 `verify-full`、正式 UI 仍由主控排队或明确放行后在执行者槽位执行；L2 双后端与 live 重轮次优先由主控排队。执行者未获放行不启动昂贵项，未运行的记 `NOT_RUN`。
-- 变基在审查意见处理完、固定候选提交之前进行，由主控要求或执行；候选固定后不再 amend/rebase，除非主控明确要求。
-
-#### PR 与机器人审查
-
-- PR 以可审查状态打开，不用 draft：机器人只在 PR 打开、draft 转 ready 或评论 `@codex review` 时审查，不审查 draft。此时的 PR 不代表任何门禁通过，PR 描述须写明 L1 正式门禁是否已跑、L2 是否延后到工作包出口。
-- 开 PR 后最多等机器人 10 分钟，超时按 `NO_REVIEW_YET` 记录并继续；**不因等待审查而阻塞已就绪的 L1 门禁排队**。结论为 `REVIEW_FAILED` 时，可以评论一次 `@codex review` 重新触发；仍然失败就如实记录并继续。
-- 审查意见只处理一轮：正确的采纳，不采纳的各写一句理由；不再主动请求重新审查。
-- 正式门禁通过后才出现的新意见，只有确认会导致错误行为的才修改并重跑受影响门禁，其余登记为后续事项。
-- 向人工报告 PR 可合并之前，必须运行 `python scripts/governance/pr_review_digest.py --repo <owner/name> --pr <编号>` 并给出结论。
-- 机器人不可用期间（额度用尽或服务故障，以人工告知为准）：开 PR 后运行一次 `pr_review_digest.py` 记录当时状态，不再等待 10 分钟，结论照实记 `NO_REVIEW_YET`，并在 SHPM 写明原因。改动产品代码的 PR，主控在报告可合并前对完整 diff 做一次独立代码审查（`/code-review` 或等价方式），意见按上面的规则处理一轮，结论写入 PR 评论和 SHPM；只改测试、脚本或文档的 PR 沿用主控的源码复核。向人工报告时分别写明机器人结论和替代审查结论，不得把替代审查记为机器人审查。机器人恢复后，对仍未合并的 PR 评论一次 `@codex review`；已合并的不追溯，除非人工要求。
-
-#### 按改动范围定门禁
-
-- 运行 `python scripts/governance/change_scope.py`，以输出的 `gates`、`uiModel` 和 `acceptanceTier` 为准；分类表只在该脚本里维护。输出是 **L1 下限**，主控或复审可以要求更多（含提升为 `x2` 或追加 L2）。
-- 全仓门禁的结果绑定 Java 输入指纹：指纹相同且已有真实运行的通过记录时，由 `verify-full.ps1` 自动复用并注明来源。
-- UI 正式轮次：`uiModel` 为 `controlled` 时用受控模型；为 `live` 时用真实模型。
-
-#### 正式轮次前的核对
-
-- L1 小切片：任务卡保留 3～5 条原子断言即可，不必为每个 PR 写完整 Oracle 映射表。
-- 昂贵的全仓构建或 **L2 双后端** UI 开始前，仍须列出 Oracle case → 实际断言 → 必需前置 → 预期原件，主控复核关键正反例；尤其不能用“不存在资源”的 404 冒充“已存在但跨身份不可访问”的隔离证据。映射不完整时先修测试，不启动该昂贵轮次。
-- 正式 UI 前一次性核对冻结来源、SDK 实际落盘构件、前端依赖与浏览器、完整槽位端口绑定、独立 data-root/凭据引用、Provider、Gateway 和前端代理目标。预检失败先修环境或如实记 `NOT_RUN`/`BLOCKED_EXTERNAL`，不要等长轮次超时后才发现配置错误。
-
-#### UI 轮次
-
-- L1 产品/前端改动默认 **一轮**暖轮（`ui-<model>-round-x1`）；该轮失败须先用同一脚本重跑一次，再定位。`x2` 仅见于 UI 用例/runner 自身变更或主控提升。
-- 冷轮只在 `gates` 含 `ui-cold-round`，或前端依赖、槽位、代理目标变化、构建戳失效时跑。新 worktree 优先从主检出共享缓存恢复前端构建戳；无法恢复时首轮自然为冷轮。冷轮单独启动。
-- 同一提交上的重复运行可以在一次启动内完成（`-Passes 2 -SkipBuild`），仅限 runner 里已在真实运行中验证过可重复的 profile，其余 profile 分开启动。
-- 构建产物能否复用以构建戳为准（见「Maven 与构建」）。复用构建不等于复用 Run、Thread 或数据目录；测试结果能否复用只按「合入后复用」和全仓门禁的指纹复用判断。
-
-#### 合入后复用
-
-- 合入后 `main` 的源码树哈希和 SDK 身份与已验证候选相同，即可复用该候选的门禁和 UI 结果，合入方式不限。用 `python scripts/governance/evidence_reuse.py --target <合入后提交> <证据>` 核对，全部 `REUSABLE` 才复用；否则在合入后的提交上重跑。
-- **冲突感知（并行合入）**：他任务合入使 `main` 前进后，本任务变基到新 `main` 时：Java 输入指纹未变则可复用 `verify-full`；与本任务改动路径、共享协议面无交集且对应证据仍 `REUSABLE` 的 UI/脚本门禁可保留；仅对指纹变化、路径冲突或 `STALE` 的项重跑。不得在未变基、未核对的情况下用旧基线证据合入。
-- 固定端口主服务的刷新与 smoke 在每次合入后照常执行（命令见「派单与子智能体调度」）。
-
-#### 已登记的偶发失败
-
-- 全仓门禁只失败 `tests/known-intermittent.json` 内的用例（不超过两个，且本次改动未触及其覆盖范围）时，入口把失败的测试类重跑 3 次，全部通过则记通过并注明；首次失败原件照常保留并计入该 issue 的发生次数。
-- 清单只由主控增删，新增时告知人工；同一条累计三次必须安排修复。
-
-#### 批量验收与 L2 差分
-
-- L2 双后端差分按工作包或相关合入批次攒批，不边合入边对每个小 PR 跑全量差分。
-- 先跑客户演示正向主链，再按依赖拆分独立用例，通常每批 10–15 项；执行前标明前置、依赖和影响范围。
-- 批次中不边测边改产品。局部失败先保存原件、登记问题并继续不受影响的用例；共享服务/身份/数据/端口等前置失效时只停止受影响批次，主链失败后的依赖用例记 `NOT_RUN`，其他独立组继续。
-- 批次结束按根因归并问题，一次修复后重跑受影响用例及必要回归；代码与断言稳定后才运行 L2/L3 昂贵轮次。
-- 演示范围外的高级/偏门缺陷先挂 issue 和风险，不阻断无依赖的演示验证；必需 Oracle 失败仍保留 `FAIL`/`NO_GO`，演示触及故障路径时作为阻断处理。
-
-#### SHPM 登记
-
-- 派工用 `shpm task dispatch <任务ID> --wp <工作包ID> --executor <执行者> --branch <分支> --worktree <worktree 绝对路径> --slot <1-6> --data-root <独立数据目录> [--prompt <提示词相对路径>] [--exit <退出条件>] [--stage <SPRINT/STAGE>]`，由 SHPM 在单事务内完成 task create（含提示词登记）、sprint link、task start 和 assign create。先用 `--dry-run` 核对将写入的对象、端口和 SHA，再去掉该开关。
-- 槽位 1–6 的 Gateway/Frontend 端口来自仓库根目录跟踪的 `.shpm/slots.json`，不再由仓库脚本硬编码；新检出缺失时运行 `shpm slot init --template default` 生成并提交。上游 SDK 任务的 worktree 属于 `D:\workspace\haifa-agent` 时用 `--repo 'D:\workspace\haifa-agent'` 指定；`--base-sha` 默认由 worktree 的 `HEAD` 推导。
-- 脚本回归用 `pwsh -NoProfile -File scripts/verify-scripts.ps1`，摘要写 `local-tmp/verify-scripts/`。
-- 门禁结果用 `shpm verify ingest <证据组目录...> --task <任务ID> [--raw-root <已归档位置>] [--dry-run]` 登记全仓门禁摘要、脚本回归摘要、UI 证据目录和主服务刷新摘要；与旧的薄封装不同，默认即写入，先用 `--dry-run` 核对。结果原样登记，`deliver`、`accept`、阶段结果和 `GO` 仍由主控手工执行。登记时区分 L1 日常门禁与 L2 差分证据，避免把 WP 出口差分误记为每个子任务的 PR 门禁。
-- 远程模式在环境中设置 `SHPM_SERVER='http://<host>:8787'`，CLI 通过 `/api/v1` 调度并自动复用 `~/.shpm/auth.json` 或 `SHPM_TOKEN`；命令语法、输出契约和退出码与本地模式一致。参数与适配器细节见 [SHPM 使用手册](docs/shpm-manual.md)。
-
-#### 交接与等待
-
-- 每个执行 worktree 在 `local-tmp/acceptance-handoff.md` 维护短交接，模板见 `docs/acceptance-handoff-template.md`：只记录范围、源码 SHA/dirty、SDK 选择与发布来源/hash、断言/证据映射、首个 FAIL、未运行项、本任务是 L1 还是附带 L2，以及下一步。事实变化时更新，不复制长日志、密钥或 reasoning 正文；该交接不是另一份任务账本，不替代 SHPM。
-- 后台任务使用有界进程等待并在完成时合并读取结果摘要；等待期间推进不依赖它的检查，避免固定 sleep 后反复读完整日志。等待方至少每 60 秒在自己的会话输出里给出有意义的进展或卡点；这不同于子智能体向主控的 15 分钟 checkpoint（见「派单与子智能体调度」）。
-
-批准记录：2026-09-30 批量验收；2026-10-03 按改动范围定门禁、UI 默认两次暖轮、SHPM 登记封装；2026-10-05 合入后按树哈希复用、指纹复用与 UI 模型选择、已登记的偶发失败、一次启动内重复运行；2026-10-06 本节合并改写，废止「快进合入不重跑」和手工门禁映射表，门禁时点改为报告可合并前，正式门禁由主控排队，Oracle 放宽须逐项批准，槽位 4（2026-10-03 批准为附加槽位）转为常规槽位，子智能体槽位共四个；同日批准机器人审查不可用期间的替代审查流程；**2026-10-15 验收分层 L1/L2/L3：日常 PR 默认一轮暖轮、协议面 controlled、双后端改工作包出口；产品默认 x2 暖轮废止为 L1 默认 x1。**；2026-10-16 子智能体槽位由四个扩容为六个，新增槽位 5 `21618/26618`、槽位 6 `22618/27618`（经 loopback 绑定预检，均低于动态端口范围）；**2026-10-19 下线 `scripts/governance/shpm_dispatch.py` 与 `shpm_record_gates.py`，改用 SHPM 原生 `task dispatch` / `verify ingest`、`.shpm/slots.json` 槽位注册表和可选 `SHPM_SERVER` 远程模式。**
-
-## Git 与 GitHub
-
+- 每个工作包使用独立 branch/worktree、端口和数据目录。
 - Git commit message（标题与正文）以及 GitHub PR 的标题、描述和评论（含 review comment）必须使用英文；适用于本仓库及上游 `D:\workspace\haifa-agent` 的 PR。命令、路径、配置键和 API 名称保留原样。
-- `haifa-agent-super-harness` 的 GitHub PR 一律使用 squash merge。
+- 提交前须运行范围内定向测试、可执行的全仓门禁、`git diff --check`、secret scan 与真实 smoke，并保留真实 Run/Tool/Artifact 证据；失败项和未运行项分别记录为 `FAIL`/`NOT_RUN`，不得用静态验证替代运行证据，不得放宽断言或删除失败测试换取绿灯。
+- Playwright 验收除功能断言外还必须报告流程健康度：cold/warm 启动与总耗时、是否重试、首个超时或卡点、Next 动态编译时间、trace/screenshot/日志位置，以及结束后端口和子进程是否清理；至少做一次同脚本重复运行以区分稳定问题与偶发问题。不得用无界等待掩盖启动或断言失败；等待必须有明确对象、超时和失败证据。
+- 原始证据外置：运行任何 `mvn clean` 或重跑前，须把需保留的 Playwright trace、截图及前后端/Provider 原始日志复制到该工作包的外置独立证据目录（例如 worktree 的 `local-tmp/<slot>/evidence`，不能是另一个 `target`），并记录原始与复制路径。原始日志已消失时，只能明确标注为从先前终端输出重建的摘要，不得冒充原始证据。首次失败的证据同样保留，不得改记为 `NOT_RUN`。
+
+### 验收提速（不降低门禁）
+
+- 2026-09-30 人工批准批量验收：先跑客户演示正向主链，按依赖拆分独立用例，通常每批 10–15 项。执行前标明前置、依赖和影响范围。局部失败先保存原始证据、登记问题并继续不受影响的用例；批次中不边测边改产品。共享服务/身份/数据/端口等前置失效时只停止受影响批次，主链失败后的依赖用例记 NOT_RUN，其他独立组继续。
+- 批次结束按根因归并问题，一次修复后重跑受影响用例及必要回归；代码与断言稳定后才运行昂贵正式门禁。演示范围外的高级/偏门缺陷先挂 issue 和风险，不阻断无依赖的演示验证；必需 Oracle 失败仍保留 FAIL/NO_GO，演示触及故障路径时作为阻断处理，不缩改 Oracle，不把延期记 PASS。
+- 节约上下文：复用明确的路径、SHA 和断言表；回报优先给逐 case 结果、首个失败签名、依赖影响及原始证据路径，按需读日志片段。主控保持可见进展输出，子智能体每 15 分钟 checkpoint；重型构建/UI 及共享 Provider 由主控排队，避免内存和槽位冲突。
+
+- 昂贵的全仓构建或双后端 UI 轮次开始前，先由执行者列出本任务的 Oracle case → 实际断言 → 必需前置条件 → 预期原始证据对应表，主控复核关键正反例；尤其不能用“不存在资源”的 404 冒充“已存在但跨身份不可访问”的隔离证据。映射不完整时先修测试，不启动正式轮次。
+- 开发内环先运行受影响模块的定向测试、合同/语法检查和必要的单 case UI 排障；这些结果只用于快速定位，不能替代提交前全仓门禁、真实 smoke、同脚本重复运行或主控独立验收。代码或断言修改后，先保存首次 FAIL 原件，再按变更范围重跑；不得靠反复整套重跑碰运气。
+- 正式 UI 前一次性核对冻结来源、SDK 实际落盘构件、前端依赖与浏览器、完整槽位端口绑定、独立 data-root/凭据引用、Provider、Gateway 和前端代理目标。预检失败先修环境或如实记 `NOT_RUN`/`BLOCKED_EXTERNAL`，不要等长轮次超时后才发现配置错误。
+- 同一源码 SHA、前端依赖和构建时代理目标完全一致时，可在同一独立 worktree 内复用已验证的构建产物完成后续暖轮；变更代码、依赖、代理目标或槽位后必须重建并重新验证。复用构建不等于复用 Run、Thread、数据目录或测试结果，不得跳过规定的 cold/warm、双后端、连续两轮与最终主线 SHA 门禁。
+- 每轮分别记录准备/构建、服务就绪、功能断言、证据归档、复审及返工耗时和首次卡点；证据目录与 SHPM 记录可由脚本汇总，但原始日志、首次 FAIL、`NOT_RUN` 和人工裁决须保留，脚本不得自动提升阶段 `PASS`/`GO`。仅并行执行真正独立且资源、端口、数据目录隔离的检查；本机内存不足时不要并发重型 Maven/Next/Java 任务。
 
 ## 环境与排障记录
 
-软件安装、依赖准备、配置、凭据或权限问题实行“首次发现、立即沉淀、后续先查”：首次发现者须在不泄露密钥的前提下，把症状、根因、影响范围、精确检查命令、最小修复步骤和修复后验证写入本节对应主题，并在 checkpoint 中通知主控；后续智能体开工前必须先读取本节，禁止重复试错，禁止用复制 SDK/`node_modules`、全局安装、放宽系统权限或污染用户目录来绕过。本节只保留仍有效的结论：不写某次任务的证据路径、用例通过情况或处理经过，这些留在该任务的证据目录和 SHPM。
+软件安装、依赖准备、配置、凭据或权限问题实行“首次发现、立即沉淀、后续先查”：首次发现者须在不泄露密钥的前提下，把症状、根因、影响范围、精确检查命令、最小修复步骤和修复后验证写入本节对应主题，并在 checkpoint 中通知主控；后续智能体开工前必须先读取本节，禁止重复试错，禁止用复制 SDK/`node_modules`、全局安装、放宽系统权限或污染用户目录来绕过。本节只保留仍有效的结论，已解决的一次性历史不在此累积。
 
 ### Maven 与构建
 
-- 在仓库根目录使用 Java 21、Maven 3.9.15 和 PowerShell 7（`pwsh`）；也可用 `mvnw.cmd` / `./mvnw`，Wrapper 首次使用需下载分发包，之后可离线复用。
-- 新 Java 验收测试从 `ProductionWriteFileHttpTest` 黄金样例起步，复用 `testsupport` 中的模型、审批、Gateway 与进程夹具；独立数据、证据和端口的配置见 [README「定向测试与 SDK 版本选择」](README.md#定向测试与-sdk-版本选择)。
-- 定向测试：`pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'ProductionWriteFileHttpTest,AcceptanceFixturesTest' -LowMemory`。替换 `-Test` 即可选择用例，其他模块用 `-Module`；入口固定带 `-am`，匹配 0 个测试算失败，不传额外 Maven goal、`-DskipTests` 或 `-Dhaifa.version`。
-- 慢测试：单个用例固定耗时很长的测试标注 `@Tag("slow")`，全仓门禁和定向测试默认不运行它们。用 `pwsh -NoProfile -File scripts/test-targeted.ps1 -Slow` 运行全部慢测试，加 `-Test <类>` 只跑指定类里的慢测试。改动触及慢测试覆盖的代码时，以及工作包结算前，由主控运行慢测试并登记结果。新增 `slow` 标签须在交接里说明理由，不能用它回避失败的测试。
-- 全仓门禁：`pwsh -NoProfile -File scripts/verify-full.ps1`。先跑秒级预检（SDK 基线、`git diff --check`、secret scan），失败即停；同 Java 输入指纹已有真实通过摘要时复用（`-NoReuse` 强制真跑），否则运行离线 `clean verify`，生成 exec JAR、构建戳和摘要 JSON。并行进程数按空闲内存自动选择，内存不足时自动加 `-LowMemory`；`-NoKnownIntermittent` 关闭已登记偶发失败分支。执行前保存原件，并停止当前 worktree 中占用该 JAR 的精确进程。阈值、摘要字段和实测耗时见 [README「构建与验证」](README.md#构建与验证)。
-- SDK 选择由入口读取本 worktree 的 `local-tmp/sdk-selection.json`（规则见「范围与依赖」）。测试日志位于 `local-tmp/test-targeted/`、`local-tmp/verify-full/`，stdout 输出 JSON 汇总。
-- 构建复用：`scripts/ui/run-w18-ui-smoke.ps1` 按构建戳决定是否重建。后端 JAR 的构建戳是 Java 输入指纹，只改文档、脚本或 UI 用例的提交不使 JAR 失效；前端构建戳只含冻结前端源码树、lockfile 和代理目标，本地不匹配时先从主检出的共享缓存恢复，再不行才 `pnpm build`。`-SkipServerBuild`/`-SkipBuild` 强制复用，构建戳不符时失败。`flow-health.json` 的 `serverBuild`/`frontendBuild` 记录 `REUSED`/`RESTORED`/`BUILT`。缓存位置和键见 [README「构建与验证」](README.md#构建与验证)。
-- 低内存：空闲提交内存很低时，默认堆的 `mvn` 与 fixture JVM 会报 `Could not reserve enough space` / `Native memory allocation (mmap) failed ... G1 virtual space`。使用入口的 `-LowMemory`；自行启动 JVM 时，fixture 用 `JAVA_TOOL_OPTIONS=-Xmx96m -XX:+UseSerialGC`，Maven 用 `MAVEN_OPTS=-Xmx512m -XX:+UseSerialGC`，surefire 用 `-DargLine=-Xmx768m -XX:+UseSerialGC`。
-- 冻结资源字节：冻结文件必须按 Git 提交的原始字节落盘，来源 / 哈希校验必须通过。`core.autocrlf=true` 的新 worktree 可能把冻结资源检出为 CRLF，例如 `super-harness-server/src/main/resources/upstream/deerflow/w15/` 下的 Python 资源，Gateway 构造时报 `Frozen Skill scanner resource hash mismatch`。检查：逐项比对该目录 `manifest.json` 的 SHA-256 与实际字节。修复：依靠仓库 `.gitattributes` 的 `text eol=lf` 规则，在相关路径 clean 的独立 worktree 用 `git archive HEAD <路径>` 导出并解包（冻结前端对应 `frontend`、`third-party`、`contracts`），再重建。不修改 manifest 或固定哈希、不关闭校验、不改全局 Git 配置。
+- 根目录已提交 Maven Wrapper（`mvnw`/`mvnw.cmd` + `.mvn/wrapper/maven-wrapper.properties`，only-script 类型，固定 Maven 3.9.15 且带 `distributionSha256Sum`）。已有脚本与门禁直接调用系统 `mvn`/`mvn.cmd`（本机亦为 3.9.15），二者等价。wrapper 首次运行必须联网，把分发包校验哈希后解压到 `%USERPROFILE%\.m2\wrapper\dists\<distributionUrl 的 SHA-256>`，之后同一用户可离线复用（`-o` 不会阻止这次下载）。检查：`.\mvnw.cmd -v` 须输出 `Apache Maven 3.9.15` 且 Maven home 位于该 dists 目录（Git Bash 用 `./mvnw -v`）。校验值必须是小写十六进制（`mvnw.cmd` 用 `(Get-FileHash).Hash.ToLower()` 比较）；写错时退出码 1 并报 `Failed to validate Maven distribution SHA-256`，不会启动 Maven。`mvnw` 以 LF、`mvnw.cmd` 以 CRLF 提交，由根 `.gitattributes` 固定，避免 `core.autocrlf=true` 下 Git Bash 无法执行 `./mvnw`。
+- PowerShell 中带逗号的 Maven `-Dtest=...,...` 参数必须整体加引号。
+- 本项目模块间以 `0.1.0-SNAPSHOT` 互相依赖，本地仓库 `D:\DevCache\maven\repository\io\haifa\agent\superharness\` 下可能残留旧快照。症状：只用 `-pl super-harness-server` 而不加 `-am` 运行测试时，服务端线程抛出 `NoSuchMethodError`（例如 `WorkspaceChanges.sensitivePaths()`），相关测试挂起。根因：Maven 从本地仓库解析兄弟模块，而非使用当前 worktree 源码。定向测试一律使用 `scripts/test-targeted.ps1`（固定带 `-am`，用法见 README「定向测试与 SDK 版本选择」），不再手写 Maven 命令；禁止为此执行 `install` 覆盖共享快照。
+- Windows 上从模块 `target` 目录运行的主服务会锁定 `super-harness-server-*-exec.jar`，使 `mvn clean` 报 `Failed to delete`。主控执行 clean gate 前须先用 `Get-NetTCPConnection` 从主端口解析 PID，再用 `Get-CimInstance Win32_Process` 核对命令行确属当前 Super Harness JAR，停止该精确进程，完成构建后按原外置数据目录和配置重启；禁止按进程名批量结束 Java。
+- 上游 SDK 发布后若本项目编译仍提示新增公开方法不存在，或 Maven 读取 snapshot 报 `ZipException`/`EOFException`，不得改为源码依赖或复制 JAR。根因：多个上游 worktree 曾共用坐标 `0.1.2-SNAPSHOT`，后发布的分支覆盖先发布的，只发布部分模块还会造成新旧构件混合，并发 `install` 会短暂破坏文件。现行做法：上游按 worktree 分坐标发布（见「范围与依赖」的 SDK 版本规则），本项目经 `local-tmp/sdk-selection.json` 指定版本。检查：先确认该 worktree 的 `local-tmp/sdk-selection.json` 指向的版本是否正确、入口脚本输出的 `sdkSelection`/`haifaVersion` 是否符合预期；再读本地仓库 `io\haifa\haifa-agent-bom\<版本>\` 下的上游发布清单核对 SDK commit；必要时用 `javap -classpath <本地仓库>\io\haifa\<artifactId>\<版本>\<artifactId>-<版本>.jar <类全名>` 核对实际字节码。最小修复：由上游对应 worktree 用发布脚本重新全量发布，本项目不带 `-SkipBuild` 重新构建并重跑 clean gate；不得手工 `install-file`、拷贝 JAR 或直接 `mvn install` 到共享坐标。
 
-### 已有 data-root 的 Skill scanner 派生缓存
+- 2026-09-29 实测：本地仓库缺失 `maven-dependency-plugin:3.6.1`，但根 POM 管理的 `3.8.1` 可离线解析；独立小工程（不在根 reactor）的 `pom.xml` 应显式用 `3.8.1`，不要写 `3.6.1`。`org.apache.tomcat.embed:tomcat-embed-core`、`org.eclipse.jetty:jetty-server`/`jetty-ee10-servlet` 均不可离线解析。影响：MCP Java SDK 的官方 Server Streamable HTTP transport（`HttpServletStreamableServerTransportProvider`）依赖 servlet 容器，离线不可用。最小修复：本机测试 MCP fixture 的 Server 端改用 JDK `com.sun.net.httpserver` 实现最小 Streamable HTTP（`initialize`/`notifications/initialized`/`tools/list`/`tools/call`，协议 `2025-06-18`），一致性由官方 SDK 客户端（`McpClient` + `HttpClientStreamableHttpTransport`，`mcp-core:2.0.0`）真实连接证明；禁止联网下载或复制依赖。
+- 2026-09-29 实测：MCP Java SDK `2.0.0` 中 `McpSchema.CallToolRequest` 的 `new CallToolRequest(String,Map)`、`CallToolRequest.builder()` 与 `JsonNode.fields()` 已过时；离线 SDK 客户端宜用 `new CallToolRequest(McpJsonMapper, name, argumentsJson)` 与 `JsonNode.properties()`，否则 `-Dmaven.compiler.showDeprecation=true` 报 warning。
 
-- 症状：升级已审核的产品 JAR 后，Gateway 启动报 `Skill scanner cache changed`；新 data-root 测试通过不能证明旧 data-root 缓存兼容。先保存失败日志，分别从旧／新 exec JAR 的 `upstream/deerflow/w15/` 读取资源原字节，用 SHA-256 和逐字节比较核对 `skills/scanner/` 对应文件；同时核对该文件在两版本之间的实际 Git 变更。
-- 仅当缓存精确等于旧 JAR、资源确实随已审核的新 JAR 更新时，将该单个派生文件归档并移到独立证据目录，让原构造器按新 JAR 和原 manifest 校验重新生成。保留原失败，不关闭 hash 校验、不改 manifest、不移动整个 `skills/`，不触碰数据库、凭据或用户 Skill 源包。缓存不匹配旧资源、存在链接或变更来源不明时停止，不按升级处理。
-- 按原入口和原期限刷新后，核对新缓存字节、健康检查、真实模型 smoke、原 data-root／凭据及端口／PID。新版本失败需要回滚旧 JAR 时，先恢复归档的对应旧派生资源；不得在缓存不兼容时把服务回滚启动失败记为 ready。
+- 2026-09-28 实测：主工作树 `super-harness-server/target/classes` 可能被外部构建（IDE 后台编译或他人在主树的运行）改写成不一致状态。症状：同一提交在干净 worktree `mvn -o -ntp clean verify` 通过，但主树 `mvn -o -ntp -pl super-harness-server -am package -DskipTests` 在测试编译阶段报大量 `cannot find symbol`（如 `List.getFirst()`、record 访问器），`target/classes` 的时间戳晚于主控最后一次构建。影响：主控在主树重新打包并重启主端口 Gateway 会失败，期间主服务已停。检查：`Get-ChildItem super-harness-server/target/classes/... | Select LastWriteTime` 对比主控构建时间，并用 `Get-CimInstance Win32_Process` 查主树相关 java/mvn 进程。最小修复：先用原 exec JAR 立即恢复主服务；再从已通过 `clean verify` 的同提交临时 worktree 取 `super-harness-server/target/*-exec.jar`，按端口核对 PID 停止主 Gateway、备份旧 JAR 后覆盖并以 `scripts/start-main-super-harness.ps1 -GatewayOnly` 重启；不得在主服务运行时对主树执行 `mvn clean`，不得用放宽编译或跳过测试编译掩盖。修复后验证 health、`/api/v1/auth/me`、前端与本次改动的 smoke。
 
 ### 默认 Web 工具环境代理
 
-- 在启动 Gateway 的同一 PowerShell 会话中配置进程级变量，然后启动或重启 Gateway：
+- 2026-10-01 发现：Windows 的 WinINET 代理可用，不代表自建 JDK `HttpClient` 已获得同一路由；原默认 Web 客户端未映射 `HTTP_PROXY`/`HTTPS_PROXY`，请求可能仍直连。修复后的 `WebHttpClients` 只消费启动进程的环境变量并保留未配置协议的原 JDK `ProxySelector`，不自动读取 WinINET、不修改系统或 JVM 全局代理。产品显式键 `HAIFA_SUPER_HARNESS_TOOL_HTTP_PROXY` 非空时作为三种 Web 工具的 HTTP 代理并通过 CONNECT 承载 HTTPS 目标，优先于通用 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` 与 JDK 默认选择器；该键为空或缺失才回退通用环境映射。诊断时先确认这个精确大写键是否生效（只有全大写键名被读取，不参与小写优先的环境约定）。检查仅输出变量存在性，禁止打印代理值（可能带 userinfo）：`@('HAIFA_SUPER_HARNESS_TOOL_HTTP_PROXY','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy') | ForEach-Object { [pscustomobject]@{ name=$_; configured=-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) } }`。最小配置：在同一启动 PowerShell 中优先设置进程级 `HAIFA_SUPER_HARNESS_TOOL_HTTP_PROXY`（否则设置 `HTTP_PROXY`/`HTTPS_PROXY`）及 `NO_PROXY=127.0.0.1,localhost`，再启动 Gateway；不修改用户环境或硬编码本机代理端口。支持普通 HTTP 代理及 HTTPS 目标 CONNECT；SOCKS、TLS-to-proxy、userinfo 认证和 CIDR 暂不支持，必须明确失败、不静默直连。修复后先用 `WebHttpClientsTest` 的实际 loopback 计数/CONNECT 验证，再由主控运行真实网络 smoke；代理路由证明不能代替 DuckDuckGo 202/403 外部挑战解除证据。
 
-```powershell
-$env:HAIFA_SUPER_HARNESS_TOOL_HTTP_PROXY='http://<代理主机>:<端口>'
-$env:NO_PROXY='127.0.0.1,localhost'
-$env:no_proxy=$env:NO_PROXY
-```
+- 2026-10-02 实测：启动进程继承的 `NO_PROXY`/`no_proxy` 若含通配符（如 `*` 或 `*.example.invalid`），默认 Web 客户端初始化会报 `IllegalArgumentException: NO_PROXY requires comma-separated hosts/domains`，Run 请求可能返回 500；全仓测试与 Gateway 均受影响。先检查条目数量和通配符数量，不输出代理值或凭据：`@('NO_PROXY','no_proxy') | ForEach-Object { $entries=@(([Environment]::GetEnvironmentVariable($_) -split ',') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }); [pscustomobject]@{ name=$_; entries=$entries.Count; wildcardEntries=@($entries | Where-Object { $_.Contains('*') }).Count } }`。最小规避：仅在启动 Maven/Gateway 的同一 PowerShell 中设置 `$env:NO_PROXY='127.0.0.1,localhost'; $env:no_proxy='127.0.0.1,localhost'`，再执行命令；不修改用户级或系统级环境变量。修复后以同一源码重跑原失败测试与全仓门禁，并验证真实 Run stream；此前 FAIL 原件须保留。这是 loopback 验收环境规避，不证明外部 Web 请求正常，也不改变产品支持的代理语法。
 
-- 产品键必须全大写；非空时覆盖通用代理变量、`NO_PROXY` 和 JDK 默认代理。未配置产品键时，按协议读取 `HTTP_PROXY` / `HTTPS_PROXY`，再回退 `ALL_PROXY` 与 JDK 默认选择器；通用变量的小写形式优先。
-- 代理地址使用 `http://host:port`，HTTPS 目标经 CONNECT 转发；不支持 SOCKS、HTTPS 代理地址或代理认证。通用 `NO_PROXY` 使用逗号分隔的主机 / 域名，不使用通配符或 CIDR。
-- 裸 IPv6 `::1` 不能直接放进产品进程的 `NO_PROXY` / `no_proxy`：当前 `WebHttpClients.exclusions` 按 URI authority 解析，裸值触发 `NO_PROXY requires comma-separated hosts/domains...`，Web Tool 装配失败会收敛为首次聊天 HTTP 500 `Run could not start`，即使服务健康检查成功。检查本任务启动脚本：`rg -n 'NO_PROXY|no_proxy' <启动脚本>`，结合实际 Gateway 异常栈确认 `WebHttpClients.exclusions → selector → create → toolsForThread`。槽位仅绑定 IPv4 loopback 时，在启动产品的同一进程环境把两种大小写都设为 `127.0.0.1,localhost`；不修改全局代理、不放宽解析器。修复后先验证该配置可以构造产品 Web client，再按原 Oracle 跑真实聊天；构造通过不能替代 UI 验收。工具 CLI 的独立代理示例不能未经核对直接复制给产品服务。
-- 仅设置启动进程的环境变量；不自动读取 WinINET，不修改用户、系统或 JVM 全局代理。检查配置时只输出变量是否存在，不打印代理值或凭据。完整配置说明见 [README](README.md)。
+### MCP 承载（Haifa SDK 0.1.2）
 
-### MCP 承载（Haifa SDK 0.1.3）
-
-- 协议版本：公开 `io.haifa.agent.starter.McpServerSpec.streamableHttp` 默认协议版本为 `2025-11-25`，而 `scripts/mcp/start-v2-test-mcp-servers.ps1` 起的本地 fixture 只协商到 `2025-06-18`。症状：`McpToolPlatforms.connect` 成功返回（不抛异常），但 SDK `optional()` 会静默降级成 0 个 Tool，模型侧 `request.tools()` 为空，表现为“桥接成功却没有 MCP 工具”。检查：对照 fixture `initialize` 的 `protocolVersion` 与 spec 的 `protocolVersion()`。最小修复：映射时显式 `.protocolVersion("2025-06-18")`（协议常量，非服务器/Tool 名称硬编码）。
-- 只读 Tool 也要审批：只读 MCP Tool（`McpServerSpec.readOnly()`）仍会命中 `PolicyPresets.standardApproval()` 的 `NETWORK_ACCESS` 规则并进入 APPROVAL。症状：Run 首次请求工具后停在 `WAITING_APPROVAL`，不会自动执行。检查：SSE 里出现 `artifact.human_input.request_id` 卡片。集成测试须以冻结隐藏回复（`additional_kwargs.human_input_response`，`option_id=approve`）批准后 join 同一 Run 的 stream，才能拿到真实 Tool 结果。
-- `hasTools()`：仅由 MCP 提供 Tool 的 `HaifaRunBridge` 必须让 `hasTools()` 为真，否则 SDK 的 `tool.call.requested` 在冻结 transcript 投影里无法映射，SSE 直接报 `unsupported_event_projection` 并提前结束。最小修复：`hasTools = !tools.isEmpty() || !mcpSpecs.isEmpty()`。
-
-### 受信技能脚本链（SDK 0.1.3，sdkCommit 52cac0db）
-
-- Product schema 子集限制：SDK `ToolDefinitionValidator` 校验输入 schema 使用「有界 schema 子集」；`pattern` 等关键词被拒（`inputSchema pattern is outside the bounded schema subset`，在 ToolAssembly.register 时抛出）。检查：装配即报错。最小修复：产品 input schema 只使用 type/minLength/maxLength/minimum/maximum/description/enum/required/additionalProperties，格式校验移到 argumentMapper（fail closed 同款）。
-- 技能脚本启用链：`PUT /api/skills/{name}` 对含 `scripts/` 的外部技能在启用时自动跑冻结静态 screen 并记 `bundled_reviews` 证据；语义 review 默认关闭（W15 parity）。此前 `SkillReviewApprovals.evidence` 假定 screen 结果带 `decision` 字段，静态-only 模式下返回的冻结 facts 没有 `decision`，`PUT` 直接 422 `Skill review did not permit publication`。最小修复：evidence() 在缺 `decision` 时接受未 blocked 的冻结 facts（decision=allow、authorization_source=configured-skill-screen）。
-- Loader 双接缝：技能脚本平台经 `SkillContentLoader.loadResourceBytes` 读取冻结包字节做物化；SH 的 store 级 wrapper（`currentReviewLoader`）此前只实现 `load(...)`，`(binding, visibility) -> ...` lambda 使字节读取落到接口 default（派生自可读 activation content），执行入口报 `TOOL_INVOCATION_FAILED` 技术细节外无 stack、无法定位。最小修复：wrapper 实现 load 与 loadResourceBytes 两条接缝，各自先做 grant 权限校验再委托 Composite loader；诊断时优先用公开入口的直接 JVM 探针（平台 + 真实 runtime + provider.invoke）复现，投资该接缝能让失败带完整 stack。
-- Shade 签名文件：基线升级后部分依赖 JAR 带 META-INF 签名文件；maven-shade uber JAR 必须排除 `META-INF/*.SF|*.DSA|*.RSA|SIG-*`，否则 exec JAR 启动即 `SecurityException: Invalid signature file digest for Manifest main attributes`。
-- Credential Manager 饱和：本机 Credential Manager 已存在大量 `haifa:os:HAIFA_SUPER_HARNESS_*` 凭据（实测 869 条）；新建 data-root 首次启动的 continuation key 写入报 `CredWrite failed with error 8 (STORE_FAILURE)`，Extensions 现象与条数未做阈值验证。规避：该 lane 用 `HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF=env://NAME` + 进程环境注入 256-bit Base64 key（每 profile 每轮一个新 data-root + 新 key，不打印、不落盘）。该引用在 Windows 也被产品代码支持；存量凭据的清理与阈值裁决由主控处置（删除会影响对应 data-root 的重启）。
-
-- bun 运行时必须是 exact file（符号链接曾打死 Run 准入）：SDK 的 `SkillScriptPlatforms$SkillScriptRuntime.preflight` 要求声明的 bun 可执行文件是**非符号链接的普通文件**，否则 `SkillScriptPlatforms.trusted` 抛 `HaifaAgentException: trusted script runtime executable does not exist as an exact file`（`SkillScriptPlatforms.java:356/182`）。该异常发生在 `HaifaRunBridge` 构造期，被 `DeerFlowThreadRunApi` 的准入 catch 收敛为 `500 {"detail":"Run could not start"}`，Run 从未准入（无 durable 记录），被吞后日志里也看不到原因。症状矩阵：`HAIFA_SUPER_HARNESS_HOST_SHELL` 关闭、或未声明 `HAIFA_SUPER_HARNESS_BUN_PATH` 时 Run 正常（技能脚本平台不装配）；两者同时满足且 bun 路径是 symlink 时**每个**新 Run 都 500。检查：`ls -la <bun>`、`stat -c '%A %n' <bun>`。现行修复：`SkillScriptToolConfig.bunExecutable` 把声明的 symlink 解析到真实文件（`/usr/bin/bun -> ../lib/node_modules/bun/bin/bun.exe` 这类打包布局可直接使用），解析不到则保持工具关闭；准入 catch 另补一条有界诊断（frozen route + 异常类 + 有界 cause 类链，不记 reason 文本，避免客户端文本/凭据经异常消息入日志）。只能停在未含该修复的旧构件时，把 `HAIFA_SUPER_HARNESS_BUN_PATH` 写成真实文件绝对路径。
+- 2026-09-29 实测：公开 `io.haifa.agent.starter.McpServerSpec.streamableHttp` 默认协议版本为 `2025-11-25`，而 `scripts/mcp/start-v2-test-mcp-servers.ps1` 起的本地 fixture 只协商到 `2025-06-18`。症状：`McpToolPlatforms.connect` 成功返回（不抛异常），但 SDK `optional()` 会静默降级成 0 个 Tool，模型侧 `request.tools()` 为空，表现为“桥接成功却没有 MCP 工具”。检查：对照 fixture `initialize` 的 `protocolVersion` 与 spec 的 `protocolVersion()`。最小修复：映射时显式 `.protocolVersion("2025-06-18")`（协议常量，非服务器/Tool 名称硬编码）。
+- 2026-09-29 实测：只读 MCP Tool（`McpServerSpec.readOnly()`）仍会命中 `PolicyPresets.standardApproval()` 的 `NETWORK_ACCESS` 规则并进入 APPROVAL。症状：Run 首次请求工具后停在 `WAITING_APPROVAL`，不会自动执行。检查：SSE 里出现 `artifact.human_input.request_id` 卡片。集成测试须以冻结隐藏回复（`additional_kwargs.human_input_response`，`option_id=approve`）批准后 join 同一 Run 的 stream，才能拿到真实 Tool 结果。
+- 2026-09-29 实测：仅由 MCP 提供 Tool 的 `HaifaRunBridge` 必须让 `hasTools()` 为真，否则 SDK 的 `tool.call.requested` 在冻结 transcript 投影里无法映射，SSE 直接报 `unsupported_event_projection` 并提前结束。最小修复：`hasTools = !tools.isEmpty() || !mcpSpecs.isEmpty()`。
+- 2026-09-29 实测（本机 FreeCommit 曾低至约 0.4GB）：低内存时 `mvn` 与 fixture JVM 会报 `Could not reserve enough space` / `Native memory allocation (mmap) failed ... G1 virtual space`。规避：fixture 用 `JAVA_TOOL_OPTIONS=-Xmx96m -XX:+UseSerialGC`，Maven 用 `MAVEN_OPTS=-Xmx512m -XX:+UseSerialGC`，surefire 用 `-DargLine=-Xmx768m -XX:+UseSerialGC`；不要用默认堆（默认约为物理内存的 1/4，会预留数百 MB 虚拟空间）。
 
 ### 真实模型诊断
 
-- 静态 review 的 Python：W15 静态 review 使用 `python -I -B`，隔离模式不加载用户 site-packages。系统 Python 普通导入 `yaml` 成功，不能证明隔离子进程可用；检查：`<python> -I -B -c 'import yaml; print(yaml.__version__)'`。缺 PyYAML 时 review 拒绝，不能去掉 `-I` 或在线安装目标依赖绕过。以进程变量 `HAIFA_SUPER_HARNESS_SKILL_PYTHON` 指向已经具备该依赖的解释器；本机现有 `D:/agents/deer-flow/backend/.venv/Scripts/python.exe` 带 PyYAML 6.0.3（须先实际 `Test-Path` 并用该解释器 `-I -B -c 'import yaml; print(yaml.__version__)'` 核对）；`D:/workspace/haifa-agent-super-harness/deer-flow/backend/.venv/Scripts/python.exe` 当前不存在，不能因前端冻结来源在该目录就推断解释器也在，仅用于运行纯静态审查模块，不启用其后端或目标脚本。
-- `base_url` 决定 SDK 方言：`DeerFlowConfigurationApi.binding` 仅在 endpoint 精确为 `https://api.deepseek.com` 时使用 DeepSeek 方言并固定 `thinking=disabled`。把真实模型临时改到本地代理路径时，standard 方言会在发 HTTP 前拒绝（`provider endpoint path must be /v1`，Run 为 `MODEL_CALL_FAILED`）；改成 `/v1` 虽可发出本地请求，但请求缺少原 DeepSeek thinking 选项，不能视为同语义采集。检查：核对实际 model config、SDK bytecode `validateSnapshot`、原 `model.call.failed` 与 Provider 是否收到 HTTP。处理：恢复直接 HTTPS 配置，采集前置 FAIL 单独保留，不以代理改写请求或更换方言掩盖差异；后续采集须先证明保持原请求语义。
+- 2026-09-30 实测：managed model 的 `base_url` 会影响 SDK 方言；`DeerFlowConfigurationApi.binding` 仅在 endpoint 精确为 `https://api.deepseek.com` 时使用 DeepSeek 方言并固定 `thinking=disabled`。把真实模型临时改到本地 `/w16-live` 代理，实际落盘 SDK 的 standard 方言会在发 HTTP 前拒绝（`provider endpoint path must be /v1`，Run 为 `MODEL_CALL_FAILED`）；改 `/v1` 虽可发出本地请求，standard 请求缺少原 DeepSeek thinking 选项，不能视为同语义采集。检查：核对实际 model config、SDK bytecode `validateSnapshot`、原 `model.call.failed` 与 Provider 是否收到 HTTP；本地无真实凭据定向证明见 W16 `local-tmp/slot-2-w16/evidence/phase2-scheme-b-preflight-20260930-144134/a-only-capture-diagnostic/sdk-local-endpoint-proof/`。最小处理：恢复直接 HTTPS 配置并把采集前置 FAIL 单独保留，不从它解释此前 `PARTIAL_RESPONSE`，不以代理改写请求或更换方言掩盖差异；后续采集须先证明保持原请求语义。
 
 ### Windows 快照目录观察
 
-- 文件身份：Windows/JDK 21 的 `BasicFileAttributes.fileKey()` 可返回 null，不能据此把配置零写入反例退化为只比内容 hash。检查命名配置文件：`fsutil file queryfileid <data-root>/owners/default/configuration.json`，只读返回非零 128 位文件 ID，本机无需提权。测试先使用非空 JDK fileKey，缺失时仅 Windows 可用此原生观察器（有界 5 秒、exit 0、输出上限 4096 bytes、严格一个非零 32 位 hex ID）。同值 REST 更新的正控制必须实际原子替换并改变文件 ID；拒绝反例同时断言文件 ID、mtime、size 和 bytes/hash 不变。不能添加生产 Store/写计数器、忽略观察器失败、推断没有临时写尝试，或以 hash-only 冒充没有配置发布。
-- 目录句柄：Windows 上 `Files.walk` 进入正在写入的 `.completed-*` 快照目录会持有目录句柄，阻止 recorder 将其原子重命名为 `completed`（`AccessDeniedException`）；关闭遍历后同一次 rename 成功。验收观察器禁止递归扫描未发布目录，须按真实 workspace/Run 定位确切 `completed/baseline.properties` 并检查存在，再验证重启后读取；保留原有有界等待、无 lazy-read 要求与内容断言，不能延长超时或靠重跑掩盖。
+- 2026-10-01 实测：Windows/JDK 21 的 `BasicFileAttributes.fileKey()` 可返回 null，不能据此把配置零写入反例退化为只比内容 hash。检查命名配置文件：`fsutil file queryfileid <data-root>/owners/default/configuration.json`，只读返回非零 128 位文件 ID。本机无需提权即可运行；测试先使用非空 JDK fileKey，缺失时仅 Windows 可用此原生观察器（有界 5 秒、exit 0、输出上限 4096 bytes、严格一个非零 32 位 hex ID）。同值 REST 更新的正控制必须实际原子替换并改变文件 ID；拒绝反例同时断言文件 ID、mtime、size 和 bytes/hash 不变。不能添加生产 Store/写计数器、忽略观察器失败、推断没有临时写尝试，或以 hash-only 冒充没有配置发布。M3 `UpdateAgentToolTest.blankSoulCannotReplaceExistingConfiguration` 已通过真实 HTTP/SDK 正反控制，首次 fileKey 前置 FAIL 仍外置保留。
+
+- 2026-10-01 实测：Windows 上 `Files.walk` 进入正在写入的 `.completed-*` 快照目录会持有目录句柄，阻止 recorder 将其原子重命名为 `completed`（`AccessDeniedException`）；关闭遍历后同一次 rename 成功。验收观察器禁止递归扫描未发布目录，须按真实 workspace/Run 定位确切 `completed/baseline.properties` 并检查存在，再验证重启后读取；保留原有有界等待、无 lazy-read 要求与内容断言。复现：`java local-tmp/<slot>/evidence/windows-directory-probe/DirectoryMoveProbe.java <该证据目录>`，输出 `openWalkMove=AccessDeniedException`、`closedWalkMove=SUCCEEDED`；用例 `DeerFlowWorkspaceChangesApiTest.continueDisconnectCompletesInBackgroundAndSurvivesRestartWithoutLazyRead` 的首次 FAIL 仍保留，不能延长超时或靠重跑掩盖。
 
 ### PowerShell 7
 
 - 仓库 PowerShell 脚本依赖 PowerShell 7（`pwsh`，.NET Core），不能用 Windows PowerShell 5.1 代替；本机已安装 7.6.6（WindowsApps 下的 `pwsh.exe`，在 PATH 中）。5.1 下的典型症状：`scripts/frontend/start-haifa-frontend.ps1` 遇 `??` 报 ParserError；`scripts/frontend/verify-haifa-frontend-profile.ps1` 报 `[System.IO.Path]` 缺少 `IsPathFullyQualified`；`run-w04-frozen-ui-files.ps1` 的 `$PSScriptRoot` 默认参数为空，且 inventory digest 因 .NET Framework 区域排序而与 7.x 不一致（假阳性，不代表前端漂移）。因此 5.1 下的任何结果都不得记为 PASS/FAIL，只能记为 `NOT_RUN`；Maven `clean verify` 不受影响。检查：`Get-Command pwsh` 可解析，且 `pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'` 返回 7.x；启动器可用 `pwsh -NoProfile -File scripts/frontend/start-haifa-frontend.ps1 -DryRun -SourceRepository D:\workspace\haifa-agent-super-harness\deer-flow` 验证，须输出 `frontendSourceGate=PASS`、`dryRun=true`。若新环境缺 `pwsh`，经人工同意后安装官方 PowerShell 7（例如 `winget install --id Microsoft.PowerShell --source winget`）；禁止把脚本降级改写成 5.1 语法，禁止跳过 profile 校验直接运行 `pnpm dev`。
-- 脚本顶部开 `Set-StrictMode -Version Latest` 后，访问不存在的属性会抛 `PropertyNotFoundException`，**包括对空数组取 `.X`**（`@().X` 也抛）。取集合字段一律写 `@($arr | ForEach-Object { $_.X })`。另：`param([string]$Foo)` 会对变量 `$Foo` 加类型约束，后续把解析出的 `PSCustomObject` 赋给同名 `$Foo` 会被强制转成字符串并按路径误用；JSON 解析结果变量须另起名（如 `$ManifestPath` 参数 + `$manifest` 局部变量）。
-- PowerShell 7.4+ 的 `Test-Json`（JsonSchema.Net）默认拒绝文件相对的 `$ref`，报 `The JSON schema contains a reference that could not be resolved ... use the 'FetchExternalReference' parameter`。本机 7.6.7 复现：`contracts/upstream/deerflow/schemas/` 下用兄弟文件 `$ref` 的 schema（如 `projects-list-response.schema.json`、`thread-runs-list-response.schema.json`）不加 `-FetchExternalReference` 时 `Test-Json` 直接判无效，会让 `verify-deerflow-contracts.ps1` 的夹具校验假失败。检查：`pwsh -NoLogo -NoProfile -File scripts/contracts/verify-deerflow-contracts.ps1`。最小修复：给 `Test-Json` 加 `-FetchExternalReference`（该脚本已修）；不要改成复制 schema 或内联 `$ref` 绕过。
-- 本机 `pwsh.exe` 是 Store/MSIX 别名（`C:\Users\<user>\AppData\Local\Microsoft\WindowsApps\pwsh.exe`，ReparsePoint，无稳定真实路径），以 `DETACHED_PROCESS`（`0x8`）启动时**子进程丢失继承的 stdout/stderr 句柄**：日志文件 0 字节、进程可能秒退，`Get-Process` 也只在极短窗口可见。症状：把 `pwsh -File scripts/frontend/start-haifa-frontend.ps1` 脱离启动后，`frontend-*.out/err.log` 恒为空、端口始终不监听，而**同一命令同步前端运行正常**。检查：同步跑该脚本 `-DryRun` 能拿到完整 JSON，把它 `DETACHED_PROCESS` 启动并重定向到文件则为空。最小修复：不要让别名 `pwsh` 承载常驻进程——同步执行 `-DryRun` 取门禁证据与权威 launch 描述符，再用脚本解出的真实 `node.exe` 脱离启动 `next start`（见 `local-tmp/deploy/deploy-local-super-harness.py:frontend_gate/start_frontend`）。真实可执行文件（`java.exe`/`node.exe`）的 `DETACHED_PROCESS` 重定向正常。
-- Windows PowerShell 5.1 控制台默认 GBK：Python 直接 `print` 子进程输出中由 `errors="replace"` 产生的 `\ufffd` 会抛 `UnicodeEncodeError: 'gbk' codec can't encode character '\ufffd'`（Maven/pnpm 输出里常见）。最小修复：入口启动时对 `sys.stdout`/`sys.stderr` 调 `reconfigure(encoding="utf-8", errors="replace")`；不要靠写 `PYTHONIOENCODING` 环境变量（仅 `.ps1` 封装路径会设，直连 `python` 时为空）。
-
-- 经执行入口传入含中文/emoji 的 here-string 写盘会损坏编码：`$x = @'…中文…'@; Set-Content -Encoding utf8` 落盘的是"UTF-8 编码的 GBK 乱码"，读回出现 `锝滈涔` 一类字符，但 `\ufffd`（replacement char）计数仍为 0，容易被误判为正常。检查：用只含 ASCII 的探针读取文件并按 `\uXXXX` 转义比对，如 `io.open(p, encoding="utf-8").read().count("\u4eba\u8bdd\u63cf\u8ff0")`，命中 0 即已损坏。最小修复：中文/emoji 文档与源码改用文件写入工具（`file_write`/`file_patch`）直接落 UTF-8；必须走 shell 时脚本源码只用 ASCII，正文用 `\uXXXX` 转义构造，或先由文件工具写好 UTF-8 正文再按字节复制。同一原因也会让 Python 脚本里的中文模式串匹配失败（`assert` 报 0 命中），不要据此认为目标文件缺少该内容。
+- 2026-09-29 实测：脚本顶部开 `Set-StrictMode -Version Latest` 后，访问不存在的属性会抛 `PropertyNotFoundException`，**包括对空数组取 `.X`**（`@().X` 也抛）。取集合字段一律写 `@($arr | ForEach-Object { $_.X })`。另：`param([string]$Foo)` 会对变量 `$Foo` 加类型约束，后续把解析出的 `PSCustomObject` 赋给同名 `$Foo` 会被强制转成字符串并按路径误用；JSON 解析结果变量须另起名（如 `$ManifestPath` 参数 + `$manifest` 局部变量）。
 
 ### 冻结前端（pnpm / Next.js）
 
-- 每个验收 worktree 使用独立的 `frontend/node_modules` 和 `.next`（`.next` 可由 runner 从共享缓存复制恢复，但不同 worktree 不得共用同一个 `.next` 目录）；主前端继续供人工验收使用。前端来源按「范围与依赖」的冻结版本校验。
-- 在该 worktree 的 `frontend/` 目录准备依赖，先确认版本精确为 `10.26.2`，再安装：
-
-```powershell
-$env:COREPACK_ENABLE_NETWORK='0'
-corepack pnpm --version
-corepack pnpm install --offline --frozen-lockfile
-```
-
-- 安装输出须为 `downloaded 0`，并确认 `frontend/node_modules/.bin/next.cmd`、`playwright.cmd` 和 Playwright browser 可用。不使用系统 pnpm、全局安装或其他 worktree 的依赖副本；离线依赖不齐时 UI 记 `NOT_RUN`。
-- 从仓库根目录检查启动配置：`pwsh -NoProfile -File scripts/frontend/start-haifa-frontend.ps1 -DryRun -SourceRepository <冻结 DeerFlow checkout 的绝对路径>`。正式启动用同一入口去掉 `-DryRun`；UI 验收使用 `scripts/ui/` 中的对应 runner。
-- Next 构建前设置本槽位的 `DEER_FLOW_INTERNAL_GATEWAY_BASE_URL`，优先让 runner 完成构建和服务管理；构建复用见「Maven 与构建」。本地受控模型 fixture 使用 `context_window=32768`。
-- 冻结文件重新落盘的方法见「Maven 与构建」的冻结资源字节条目。完整启动与验收命令见 [README](README.md)。
+- 2026-10-02 实测：`run-w18-ui-smoke.ps1` 的受控模型若配置 `context_window=8192`，当前冻结 Lead prompt 与生产 Tool catalog 会在调用 Provider 前触发 `MODEL_CONTEXT_TOO_LONG`，默认 UI 的回复与恢复失败，取消已失败 Run 返回 409。检查原始 trace 中 Run 的 `diagnostics.error_code` 与空 `model_calls`，并核对 Provider 日志仅收到连接探针。最小修复：仅将本地受控模型 fixture 的窗口配置为 `32768`（含第二个受控模型），完整保留冻结 prompt、Tool catalog、UI 断言和原失败证据；不修改产品预算或真实模型配置。修复后先跑定向 UI 排障，再以同一最终 SHA 重跑正式冷/暖轮。
+- 每个新 worktree 的 `frontend/node_modules` 不会自动继承，运行 Next/Playwright 前先检查 `frontend/node_modules/.bin/next.cmd`、`playwright.cmd` 和 Playwright browser。
+- 系统 `pnpm --version` 可能与 `frontend/package.json` 固定的 `10.26.2` 不一致（本机实测 `10.26.1`），启动器会做 package-manager 精确版本检查，因此一律不用系统 `pnpm`。缺依赖时在该 worktree 的 `frontend/` 目录（否则会报根目录缺少 `package.json`）先执行 `$env:COREPACK_ENABLE_NETWORK='0'; corepack pnpm --version`，只有精确返回 `10.26.2` 才执行 `$env:COREPACK_ENABLE_NETWORK='0'; corepack pnpm install --offline --frozen-lockfile`。修复后须确认安装输出为 `downloaded 0`、`next.cmd` 与 `playwright.cmd` 存在，并再次验证版本。禁止联网下载、全局安装或复制其他 worktree 的依赖；离线依赖不齐则如实标记 UI `NOT_RUN` 并继续可执行的 HTTP/Java 门禁。
+- Next.js dev 对同一 `frontend/.next` 目录实行单实例保护：主工作树前端已在 `33018` 运行时，从同一主工作树再启动任何 UI runner，frontend stderr 会报 `Another next dev server is already running`，随后 runner 报 `Frozen frontend failed readiness`，功能断言并未执行。检查：读取该次 `frontend-*.stderr.log`，再用 `Get-NetTCPConnection -State Listen -LocalPort 33018,<槽位 Frontend>` 与 `Get-CimInstance Win32_Process` 核对主进程。最小修复：在独立工作包 worktree 使用独立 `frontend/.next`、槽位端口和数据目录做 UI 回归；禁止为此停止供人工验收的主前端或共享/复制 `.next`、`node_modules`。未执行的 UI 断言标为 `NOT_RUN`。
+- Next production build 会把 `frontend/next.config.js` 的 `DEER_FLOW_INTERNAL_GATEWAY_BASE_URL` 代理目标写入构建产物。若在未设置槽位环境变量时先执行 `corepack pnpm build`，再以 `run-w18-ui-smoke.ps1 -SkipBuild` 运行，前端仍代理默认 `127.0.0.1:8001`：Playwright 在首次 Run stream 前超时，页面提示 `Models couldn't be loaded`，`frontend-*.stderr.log` 记录 `/api/models` 代理 `8001` 并 `ECONNREFUSED`。检查：核对 runner `profile-*.json` 的 `internalGatewayBaseUrl` 与槽位，再查前端 stderr 的 `Failed to proxy` 目标，不能仅凭 profile 正确就认定构建产物正确。最小修复：不带 `-SkipBuild` 运行，让 runner 以 `DEER_FLOW_INTERNAL_GATEWAY_BASE_URL=http://127.0.0.1:<槽位 Gateway>` 重新构建；仅在已确认构建时使用同一槽位配置后才用 `-SkipBuild`。`run-w18-ui-smoke.ps1` 现以构建戳在启动前拦截这种复用（见 README「定向测试与 SDK 版本选择」）；`run-w18-dual-backend.ps1` 与 `run-w18-v2-m2-mcp.ps1` 沿用各自对构建产物中 BFF rewrite 目标的检查。此坑只影响错误构建产物的 UI smoke，不代表 Java/HTTP 失败。
+- Windows `core.autocrlf=true` 可能让新 worktree 的已跟踪 `frontend`、`third-party`、`contracts` 文本以 CRLF 落盘，导致冻结前端 license/lockfile/inventory digest 与固定 CSV fixture SHA-256 同时报错，虽 `git status` 仍 clean。先以 `git status --short` 确认这些路径无任何待保留改动，再用 `git hash-object <文件>` 对照工作树 `Get-FileHash -Algorithm SHA256 <文件>`；前者是 Git blob（LF），后者是磁盘字节。仅在**全新且 clean 的目标 worktree**，可用 `git archive --format=tar -o <该 worktree 内的临时 tar> HEAD frontend third-party contracts`、`tar -xf <临时 tar> -C <该 worktree 根>` 将已提交字节重新落盘；这是覆盖工作树文件的操作，dirty worktree 禁止执行。修复后重跑冻结来源/profile gate 与 CSV fixture 哈希，须与提交的固定值一致；不能放宽 hash、修改冻结资源、复制其它 worktree 的依赖或全局改 Git 配置。此为 checkout 换行问题，不代表源提交漂移。
 
 ### 端口
 
-- 端口表见「派单与子智能体调度」。
-- 绑定预检：Windows 的 Hyper-V/WSL/NAT（`winnat`）会动态排除 TCP 端口（本机动态范围从 `49152` 起，排除段覆盖端口时 Next.js 报 `listen EACCES`）；现行端口均低于 `49152`，但排除范围仍可能变化。每次派工和启动前先执行 `netsh interface ipv4 show dynamicport tcp`、`netsh interface ipv4 show excludedportrange protocol=tcp`，并对分配的全部端口逐个用 loopback `TcpListener.Start()` 做实际绑定预检；`Get-NetTCPConnection` 只能发现监听者，不能排除 NAT 保留。预检失败时保留端口/进程/排除段证据，由主控重新裁决整组槽位或把 UI 标为 `NOT_RUN`；不得私自重启 NAT、提权、随意改单个脚本端口或停止主服务。修复后按同一完整端口组重复预检、服务就绪和 Playwright，并核实端口释放。
-- 进程退出后的 `LISTEN` 残留：Windows 子进程 `waitFor` 完成且 `isAlive=false` 后，TCP 栈仍可能短暂保留该已退出 PID 的 `LISTEN`，同端口即时 `ServerSocket.bind` 会失败；不能把数秒后的空表或客户端 `TIME_WAIT` 倒推成失败瞬间的原因。验收停止阶段须在原有共享停止 deadline 内等待**同一精确端口的默认 loopback bind 实际成功**，记录首次 bind 错误、原生 TCP 状态、探测次数和释放耗时；超时仍 FAIL。不得延长原停止预算、启用 `SO_REUSEADDR` 掩盖占用、换端口、跳过绑定断言或把资源释放探测冒充功能重试。诊断只记录状态、PID 与端口，不记录请求、凭据或内容。
-- W05 测试的固定端口：`W05ExactGatewayProcessRestartApprovalTest` 默认使用 `20618`，与槽位 1 的 Gateway 相同。槽位 1 有任务运行时跑全仓门禁，用例入口 `requirePortAvailable` 会抛 `Address already in use`；事后 `Get-NetTCPConnection -LocalPort 20618` 为空不能倒推当时未占用。处理：在启动门禁的同一 PowerShell 会话把进程变量 `HAIFA_SUPER_HARNESS_W05_TEST_GATEWAY_PORT` 设为本 worktree 所分配槽位的 Gateway 端口（例如槽位 4 为 `11618`），测试的两个精确 Gateway 进程共用该端口；主检出没有槽位，由主控指定一个当时空闲槽位的 Gateway 端口。设置前先停止本槽位自己的服务并对该端口做 loopback bind 预检。不得停止其它工作包的服务或占用主服务端口；结束后确认端口释放。
+- 2026-10-01 实测：Windows 子进程 `waitFor` 完成且 `isAlive=false` 后，TCP 栈仍可能短暂保留该已退出 PID 的 `LISTEN`，同端口即时 `ServerSocket.bind` 会失败。真实 Gateway 的失败现场由现有 JNA `GetExtendedTcpTable` 在失败后 1 微秒启动采集确认；不能把约数秒后的空表或客户端 `TIME_WAIT` 倒推成失败瞬间的唯一原因。验收停止阶段须在原有共享停止 deadline 内等待**同一精确端口的默认 loopback bind 实际成功**，记录首次 bind 错误、原生安全 TCP 状态、探测次数和释放耗时；超时仍 FAIL。不得延长原停止预算、启用 `SO_REUSEADDR` 掩盖占用、换端口、跳过绑定断言或把资源释放探测冒充功能重试。诊断只记录状态、PID 与端口，不记录请求、凭据或内容。
+- Windows 的 Hyper-V/WSL/NAT（`winnat`）会动态排除 TCP 端口（本机动态范围从 `49152` 起，曾有排除段覆盖旧端口导致 Next.js `listen EACCES`）；现行子槽位均低于 `49152`，但排除范围仍可能变化。每次派工和启动前先执行 `netsh interface ipv4 show dynamicport tcp`、`netsh interface ipv4 show excludedportrange protocol=tcp`，并对分配的全部端口逐个用 loopback `TcpListener.Start()` 做实际绑定预检；`Get-NetTCPConnection` 只能发现监听者，不能排除 NAT 保留。预检失败时保留端口/进程/排除段证据，由主控重新裁决整组槽位或把 UI 标为 `NOT_RUN`；不得私自重启 NAT、提权、随意改单个脚本端口或停止主服务。修复后按同一完整端口组重复预检、服务就绪和 Playwright，并核实端口释放。
 
 ### 凭据与数据目录
 
-- 临时 HTTP 测试的 OS 凭据累积：本机普通 `GatewayFixture.production` 曾持续报 `CredWrite failed with error 8 (STORE_FAILURE)`，单类复验也失败；不能仅据错误码断言物理内存不足或随意清理凭据。普通测试使用 `GatewayFixture.productionEnvironment` 的显式测试环境密钥，保留调用方显式引用；默认 OS 首次配置、丢失与重启由 `ContinuationKeyConfigurationTest` 验证。检查：`pwsh -NoProfile -File scripts/test-targeted.ps1 -Test "PlanModeLifecycleHttpTest,ContinuationKeyConfigurationTest,AcceptanceFixturesTest" -LowMemory`；只输出凭据存在性和计数，不输出值，不删已有数据库或主服务凭据。
-- 持久 SQLite Runtime 的 model continuation 使用 AES-GCM 稳定密钥。Windows 默认使用**单个固定** Windows Credential Manager target：`haifa:os:HAIFA_SUPER_HARNESS_CONTINUATION_KEY`（不再按 data-root 分槽）。历史实现曾按规范化绝对 data-root 的 SHA-256 前 16 个十六进制字符分槽（`haifa:os:HAIFA_SUPER_HARNESS_CONTINUATION_KEY_<data-root-hash>`），每个 data-root 写一条凭据并最终写满 Windows Credential Manager，故已废止。仅当该固定凭据尚不存在时首次启动可生成并写入，已有凭据不得覆盖；已有数据库但凭据丢失必须启动失败，禁止静默换钥；固定凭据缺失时会回退读取旧的按 data-root 分槽凭据（只读复用、不改动其 key、也不迁移）以兼容既存数据库。由此，本机新建 data-root 共用同一把密钥。显式 `os://NAME` 属于外部托管引用，缺失时即使数据库尚不存在也必须失败。Linux/CI 必须通过 `HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF=env://NAME` 指向外部注入的 Base64 256-bit key。症状：启动前报 continuation key unavailable/invalid。检查：`Test-Path <data-root>/runtime/haifa-agent.sqlite` 确认数据库是否存在，`cmdkey /list` 只检查 `haifa:os:HAIFA_SUPER_HARNESS_CONTINUATION_KEY` 是否存在（不得输出 secret），并查看 `server-*.stderr.log`。最小修复：恢复该固定 OS 凭据或原外部 secret 引用，不能删除数据库或生成替代 key；修复后以同一数据目录完成关闭重启并验证 transcript/history/runs 可读。
+- 持久 SQLite Runtime 的 model continuation 使用 AES-GCM 稳定密钥。Windows 默认使用按规范化绝对 data-root 的 SHA-256 前 16 个十六进制字符分槽的 Windows Credential Manager target：`haifa:os:HAIFA_SUPER_HARNESS_CONTINUATION_KEY_<data-root-hash>`；仅当该数据目录尚无 `runtime/haifa-agent.sqlite` 时首次启动可生成并写入，已有凭据不得覆盖；已有数据库但对应凭据丢失必须启动失败，禁止静默换钥。显式 `os://NAME` 属于外部托管引用，缺失时即使数据库尚不存在也必须失败。Linux/CI 必须通过 `HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF=env://NAME` 指向外部注入的 Base64 256-bit key。症状：启动前报 continuation key unavailable/invalid。检查：`Test-Path <data-root>/runtime/haifa-agent.sqlite` 确认数据库是否存在，`cmdkey /list` 只检查对应 target 是否存在（不得输出 secret），并查看 `server-*.stderr.log`。最小修复：恢复该 data-root 原 OS 凭据或原外部 secret 引用，不能删除数据库或生成替代 key；修复后以同一数据目录完成关闭重启并验证 transcript/history/runs 可读。
 - 由上一条推出：不同启动方式不得共用同一 data-root。例如 W05 Playwright 的 Interaction 测试 classpath profile 与生产 JAR ActiveReconnect profile 混用时，后者会报 `continuation key credential is unavailable for the existing Runtime database`。从首次运行起就为每种 profile 分配独立的新 data-root 子目录。
 
 ### 冻结 DeerFlow 参考后端
@@ -229,118 +106,60 @@ corepack pnpm install --offline --frozen-lockfile
 
 ### OpenCode CLI
 
-- 主控确认任务的独立 branch/worktree、端口、数据目录和验收范围，在派单提示词中提供 SDK 坐标、测试命令及证据要求。提示词正文由主控读取，作为一个位置参数传入；模型固定为 `opencode-go/deepseek-v4.1-flash`，必须在命令中显式指定。
-
-```powershell
-$taskPrompt = Get-Content -LiteralPath '<主控已确认的提示词文件>' -Raw
-Push-Location '<已分配的 worktree 根目录>'
-try {
-    New-Item -ItemType Directory -Force -Path local-tmp | Out-Null
-    opencode run --model opencode-go/deepseek-v4.1-flash $taskPrompt 2>&1 |
-        Tee-Object -FilePath local-tmp/opencode-run.log
-} finally {
-    Pop-Location
-}
-```
-
-- OpenCode 只读取分配的 worktree；命令、文件清单和哈希清单使用相对该根目录的路径，不使用 `..`，不读取 `~/.m2` 等外部目录。Maven 通过仓库入口使用已配置的本地仓库。
-- `private-docs` 的提示词正文内联传入；需要的冻结源码由主控将最小只读副本放到 `local-tmp/<slot>/frozen-deerflow/`，注明路径和冻结 SHA。提示词中不包含密钥、SDK 源码或依赖副本。
-- 任务需要 SDK 类型事实时，主控在派工前运行 `python scripts/governance/sdk_api_digest.py --worktree <worktree>`，并在提示词里写明摘要位于 `local-tmp/sdk-api/<版本>/`。执行者在该目录检索公开签名；摘要里没有的信息在交接里写明并停下。SDK 重新发布后主控重新运行脚本。
-- 验收服务优先由仓库 runner 管理；自行启动的常驻服务在同一次 shell 调用的 `try/finally` 中启动、使用和清理，避免继承调用方管道后留存。CLI 直接运行或交给既有后台执行器，不使用 PowerShell `Start-Job` 承载。
-- 用 `opencode-run.log`、Git 改动、checkpoint 和真实测试证据检查进展与交付；退出码 0 不能单独判定完成。权限拒绝或上下文不足时交回主控，不放宽外部目录权限绕过；检查和清理只针对本任务的精确进程。
-- 有界调用需要续接已读上下文时，先确认原 CLI 的精确进程已终止并保存原件；从本任务 `--format json` 原始日志核对唯一 `sessionID`，用 `opencode run --session <sessionID> --model opencode-go/deepseek-v4.1-flash` 在同一 worktree 续接，仍设置独立 deadline。不得以默认 `--continue` 猜测全局最近会话；续接不改变功能验收预算，也不把先前 deadline 或 FAIL 改为 PASS。
-`- Windows 下 Python `subprocess` 不通过 `opencode.cmd` 传递多行提示词：`.cmd` 的 `%*` 转发可截断换行后的正文，使模型仅收到首段但仍退出 0。使用已安装 shim 指向的原生 `opencode.exe`，以参数数组、明确 `cwd` 和单个完整正文参数调用，不拼接 shell 命令、不改全局配置。首次使用派单封装时，用该任务的 `opencode export <sessionId>` 保存首条 user text 的原始字节数和 SHA-256；若 CLI 使用带外层引号的参数包裹格式，先按该格式解码，再核对正文与提示词字节数和 SHA-256 完全一致；导出仅存本任务外置证据目录，不能只凭 CLI 0 或模型自行描述判断提示词完整。忽略目录中的上下文文件须提供准确绝对路径直接读取，不能因 glob 默认过滤 `local-tmp` 就越界搜索或放宽权限。
-- 继承的 `PWD`：OpenCode 以环境变量 `PWD` 为工作目录，优先于进程 `cwd`。从 Git Bash 等会导出 `PWD` 的 shell 用 `subprocess.Popen(..., cwd=worktree)` 启动时，子进程仍带着调用方的 `PWD`。症状：执行者把调用方所在仓库当成当前目录，访问已分配 worktree 时 stderr 报 `permission requested: external_directory (...); auto-rejecting`，十几秒内以退出码 0 结束且没有任何改动。检查：stdout 里第一条 `pwd` 的输出。修复：启动前从子进程环境中移除 `PWD` 和 `OLDPWD`，或按上面的示例在 PowerShell 7 会话里用 `Push-Location` 启动。修复后用同一提示词重新启动，并核对 `pwd` 输出为已分配的 worktree。
-
-- OpenCode 提示词传输保真：Windows 原生 executable 的位置参数在会话导出中**始终**比传入正文多出两个外层双引号；正文内的双引号还会被转义为 `\"`（2026-10-17 用原生 `.exe` + Python `subprocess` 参数数组复现，排除 PowerShell 绑定因素）。因此长提示词不要走位置参数：把精确提示词原样放到该 worktree 的 `local-tmp/<slot>/prompt.md`，位置参数只传一句不含引号的短指令指向该文件（已用有界探针验证模型会读取文件并输出文件中的标记）。仍须以 `sessionID` 执行 `opencode export <sessionID>`，对照 user/text part；位置参数正文不相同就记保真 `FAIL`，外层引号/转义归一化只能作诊断，不能冒充精确通过；提示词文件的字节数和 SHA-256 作为正文保真证据。不得读取无关会话，不使用 `--continue`，不以退出码或保真检查替代源码交付和运行验收。
-
-### agy CLI（Antigravity）
-
-- 固定使用 `--model gemini-3.8-flash-high`；任务隔离、SDK 摘要、提示词与验收边界沿用 OpenCode 章节。
-- 执行目录由进程 `cwd` 指定：PowerShell 用 `Push-Location`，Python 用 `subprocess.Popen(..., cwd=worktree)`；`--add-dir` 仅添加目录。提示词文件先按 UTF-8 读取正文，再传给 `--print`（别名 `--prompt`），不能把文件路径当作正文。
-- 在专用 PowerShell 7 启动会话注入 HTTP 代理，仅作用于进程。单轮调用：
-
-```powershell
-$env:HTTP_PROXY='http://127.0.0.1:2081'
-$env:HTTPS_PROXY=$env:HTTP_PROXY
-$env:ALL_PROXY=$env:HTTP_PROXY
-$env:NO_PROXY='127.0.0.1,localhost,::1'
-$taskPrompt = Get-Content -LiteralPath '<提示词文件绝对路径>' -Raw -Encoding utf8
-Push-Location '<已分配的 worktree 根目录>'
-try {
-    agy --model gemini-3.8-flash-high --output-format json --print $taskPrompt
-} finally {
-    Pop-Location
-}
-```
-
-- 流式调用用 `agy --model gemini-3.8-flash-high --input-format stream-json --output-format stream-json --print ""`。stdin 逐行写 `{"event":"user","message":{"role":"user","content":"提示词正文"}}` 并 flush；stdout 逐行解析 `init`、`step_update`、`result`，可实时读取文本增量与工具结果，stderr 单独保存。追加消息实测排队到下一轮，不是当前轮即时 steering。
-- 写权限：无头模式（`--print`）无法弹出权限确认，需要写文件的任务不加模式参数时，`write_file` 会被自动拒绝，stderr 报 `no output produced — a tool required the "write_file" permission that headless mode cannot prompt for`，最终回复为空。需要写文件或执行命令的任务在每次调用时加 `--mode accept-edits`；2026-10-06 实测该模式下可在 worktree 内写文件，并可执行 `git status`、`pwsh -NoProfile -Command ...`。不修改 agy 的 `settings.json`，不使用 `--dangerously-skip-permissions`。该模式下 JSON 结果可能出现 `status=ERROR`（`The stream was interrupted`）而各步骤实际已完成，以文件和实际改动为准。
-- 调用方设置独立 deadline，保留 stdout/stderr 与 `--log-file` 日志；不能仅依赖 `--print-timeout`。只读任务加 `--mode plan`；交付须核对最终状态、文件改动和真实验收证据，不能只看退出码。
-- 需要续接时，先确认原精确进程已终止并保存原件；只从本任务 `--log-file` 中核对唯一 `Created conversation <ID>`，用 `agy --conversation <ID> --model gemini-3.8-flash-high` 在同一 worktree 续接，写入交接文件时仍须 `--mode accept-edits`。不得默认续接全局最近会话，且每次续接须有独立 deadline、原会话归属和新交付证据。
-
-### SHPM 写入与文件工具
-
-- SHPM 正文含非 ASCII 时不要经命令行参数或 PowerShell 管道传递。症状：`shpm issue add --detail '<中文>'`，
-  或 `shpm ... --json | python -c ...` 回读时出现 `'�\udc80'`、孤立代理字符或乱码，看起来像数据库被写坏；
-  实际是命令行/控制台编码转换。检查：在**一个** Python 进程里
-  `subprocess.run(['shpm','issue','show',ID,'--json'], capture_output=True).stdout.decode('utf-8')`，
-  统计 CJK 字符数与 `0xd800..0xdfff` 代理数，只打印 ASCII 结论（如 `equal True`、`cjk 865`、`surrogates 0`），
-  不要把中文经控制台回显后再比对。最小修复：正文先落 UTF-8 文件，用 `--body-file <路径>` 写入
-  （`issue add` 与 `issue edit` 都支持）；需要非阻断时先 `add` 再 `issue edit --no-blocking`
-  （`issue add --blocking` 只能置真）。
-- 同一轮里并发发起多个文件写入调用时，工具可能只落盘截断占位文本：首行形如
-  `[Code content truncated (N chars); file written to <路径>]`，字节数远小于预期，后续编译/执行会报语法错误。
-  检查：写完立刻核对首行、字节数和 `sha256`（或 `python -c` 断言内容里不含该占位串）。最小修复：一次只写
-  一个文件，命中占位符就整文件重写，不要在其上打补丁；长中文改动优先"UTF-8 片段文件 + Python 拼接，
-  拼接后逐字核对"，不要整段放进 `file_patch`。
+- 本机 `opencode` 1.18.32 在独立 worktree 中默认拒绝读取 worktree 外的主目录 `AGENTS.md` 或 `private-docs/prompts/...`，非交互 `opencode run` 提示 `permission requested: external_directory ... auto-rejecting`；用 `--auto` 关闭审批不是修复。`--file PATH` 与后续位置消息同用时会把整段消息误当文件名并报 `File not found`。检查：`opencode --version`、`opencode run --help`、目标 worktree 的 `git status --short`。工作法：主控在启动命令所在的 PowerShell 中以 `Get-Content -Raw` 读取提示词及必要的冻结源码摘录，作为**一个位置参数字符串**交给 `opencode run --model deepseek/deepseek-flash`；OpenCode 只读取自身 worktree 的 `AGENTS.md` 和代码，不授权外部目录、不复制 SDK/依赖、不传任何密钥。启动后须从输出确认它已核对 branch/worktree、在预期目录内读取代码；无法安全获取必要上下文则标记阻塞并由主控改派。
+- 2026-09-28 实测：OpenCode 在 worktree 内执行含 `cd ..`、`../` 或 `..\` 的 shell 命令（即使最终仍落在 worktree 内，例如 `sha256sum -c ../x.SHA256SUMS`）也会被判为访问上级目录，触发 `external_directory (<worktrees 父目录>\*)` 自动拒绝，非交互运行随即在未修改任何文件的情况下以 exit 0 结束。检查：在 `opencode-run.log` 中搜索 `permission requested`，并核对 `git log`/`checkpoints.md` 是否真有进展（exit 0 不代表完成）。最小修复：主控提供的上下文目录与 `SHA256SUMS` 一律使用**相对 worktree 根目录**的路径，派单提示词明确禁止 `..` 路径，然后原样重派；不得授权外部目录或用 `--auto` 绕过。PowerShell `Start-Job` 启动的 `opencode run` 会随工具调用的 host 退出而被终止，须改用后台任务直接运行。
+- 2026-09-29 实测（1.18.33）：OpenCode 读取 `$env:USERPROFILE\.m2\settings.xml` 等 worktree 外文件同样触发 `external_directory (C:\Users\<user>\.m2\*)` 自动拒绝，随后在未改动文件的情况下以 exit 0 结束；Maven 子进程自身读取本地仓库不受影响（`mvn -o` 可正常用）。最小修复：派单消息直接写明所需环境事实（本地仓库 `D:\DevCache\maven\repository`、相关构件的可用版本），并明确禁止读取或列出 worktree 外路径（含 `~/.m2`、Maven 本地仓库目录），依赖是否齐全一律以 worktree 内 `mvn -o -ntp` 的结果判断；然后原样重派。
+- 2026-09-29 实测（两次）：OpenCode 的 shell 工具要等所有继承了其 stdout/stderr 管道句柄的进程退出才返回。Windows 上 `Start-Process` 以句柄继承方式创建进程，**即使 `-RedirectStandardOutput/-RedirectStandardError` 到文件，子进程仍会继承 OpenCode 的管道句柄**；因此任何在一次 shell 调用里启动、调用返回后仍存活的常驻进程（如单独执行 `scripts/mcp/start-v2-test-mcp-servers.ps1`、Gateway），都会让 OpenCode 无限期挂住：`opencode-run.log` 停更、`opencode.exe` 存活、子进程仍在监听。另：OpenCode 按工具调用整段刷新输出，长命令期间日志静默本身是正常的。检查：看 worktree 内 evidence/target 文件 mtime，并用 `Get-CimInstance Win32_Process` 查该 worktree 命令行下的子进程、创建时间与端口；静默且无文件进展超过 15 分钟才按失联处理。规避（派单必须写明）：启动、使用、停止常驻进程必须在**同一次** shell 调用内完成（例如 `pwsh -NoProfile -Command "& start...; try { mvn ... test } finally { & start... -Stop }"`），或在 Java 测试内用 `ProcessBuilder` 启动、重定向到文件并在 `@AfterAll`/`finally` 中销毁；禁止单独调用只启动不停止的脚本。修复：主控先把证据复制到 `local-tmp/<slot>/controller-intervention-<时间>/`，核对命令行确属该 worktree 与分配端口后停止残留子进程。若 OpenCode 之后仍会依赖这些进程（只杀进程会让它对着已停的服务继续并可能再次挂住），则同时结束该 `opencode.exe` 回合（仅限本 lane 的精确 PID），带上述规避原样重派；不得结束其它槽位进程。
+- 2026-09-29 实测：`scripts/mcp/start-v2-test-mcp-servers.ps1` 已通过 CIM `Win32_Process.Create` 加 `cmd /c ... > 日志 2> 日志` 以「不继承调用方句柄」的方式启动两个测试 MCP Server，`manifest.json` 的 `pid` 记录实际监听端口的 Java 进程 PID（另记 `wrapperPid` 包装 cmd，`-Stop` 核对命令行后一并停止）；因此该脚本可被管道捕获的调用方单独启动并在就绪后立即返回。上一条“启动/停止常驻进程必须同一次 shell 调用内完成”的规避自此不再适用于本脚本（仍适用于未接入该启动方式的其他常驻进程）。回归：`tests/checks/customer-demo-v2/verify-v2-test-mcp-launcher-detach.ps1`。2026-10-02：启动函数提取到 `scripts/lib/run-fixture.ps1`；W18 runner 的 Provider、Gateway 和 Next 也使用该函数，进程级环境经 `Win32_ProcessStartup.EnvironmentVariables` 传入，不写入命令行。共享库登记实际/包装 PID 并按命令身份清理；外置 run 目录保留 stdout/stderr、流程健康度和实际绑定释放结果。捕获管道的调用方启动阶段必须按对应回归证明及时退出；未接入的脚本继续遵守上一条规避。
+- 2026-09-29 实测：`/deer-flow/` 与 `/private-docs/` 被根 `.gitignore` 忽略，新建 worktree 中不存在；OpenCode 又不能读 worktree 外路径，因此无法自行查看冻结 DeerFlow 后端源码或提示词正文。工作法：提示词正文随派单消息内联传入（链接到 private-docs 的相对路径在 worktree 内不可解析，需在消息中说明）；所需冻结后端文件由主控从主工作树 `deer-flow/` 复制到该 worktree 的 `local-tmp/<slot>/frozen-deerflow/`（保持原相对路径、只读参考、不提交），并在消息中给出这些相对路径及冻结 SHA。冻结前端 `frontend/` 与 `contracts/` 为跟踪文件，可直接读取。
 
 # 主控 Agent 规则
 
 ## 授权与客户演示
 
 - 2026-09-27 起，人工已对本项目后续开发、回归与客户演示所需的真实模型调用给出持续授权，不限制调用次数或预算，主控无需再逐次申请；该授权不等于任何演示阶段已执行或通过。主控仍须限定调用在当前任务范围内，使用已托管凭据引用，记录实际模型、Provider、时间、Usage、失败与重试，保留 W24 原始证据，并遵守密钥脱敏、客户数据隔离、无隐藏重试和阶段门禁规则。
-- 客户演示按轮次推进，每轮的派工索引与阶段退出标准放在 `private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-N/README.md`；各轮各阶段的当前状态和决策以 SHPM 为准，本文件不记录。实现任务一律落回 W00–W24，不创建平行工作包。
-  - 客户演示 v0（用户亦称 V1，路线图 `private-docs/roadmap/36-super-harness-customer-demo-v0.md`，索引 `show-roadmap-1`）的 `GO` 只证明“真实模型 + 生产 `write_file` + Approval + Artifact + Reload/Reconnect + 同 Run Steer”在冻结 DeerFlow UI 上的本地纵向链，不等于 PRD D01–D05 的完整 Customer Demo Gate 或 Full Parity，也不关闭任何 W00–W24 工作包。
-  - 客户演示 V2 以 `show-roadmap-2` 为派工总索引。
-  - 任何一轮的 `GO` 作出后，若同一整链回归失败，须如实记录并重新评估该决策，不得保留过期 `GO`。
-- 各轮通用门禁：主控把每个新任务映射到当前轮次的阶段、真实缺口和退出门槛，并在 SHPM 中登记（`shpm sprint link <SPRINT>/<阶段> --task <ID> --relation delivers --required`）。L1/L2 受控 Provider、测试 Tool、静态合同、组件测试、旧轮次证据或分开的单项 PASS，都不能替代同一主线 SHA 的连续两轮 L3 整链证据；任一产品修复合入后，后续差分和 L3 须基于新的主线 SHA 重新开始连续轮次。两轮不得隐匿失败或重试；真实 Artifact 必须有可信 ID/provenance 与可核验下载字节。阶段 `workStatus` 只表示执行状态，`result` 独立使用 PASS/FAIL/NOT_RUN 等 case 口径；未执行的阶段为 `NOT_RUN`、总体 `NO_GO`，已有分项证据不得提升阶段门禁。只有该轮全部阶段 PASS、同一主线 SHA、人工验收记录齐全，才可把演示决策改为 `GO`。W04 等已知范围外风险须披露，演示脚本实际触及其故障路径则如实 FAIL。
+- 客户演示按轮次推进，每轮的派工索引与阶段退出标准放在 `private-docs/prompts/39-deerflow-parity-delivery/show-roadmap-N/README.md`：
+  - 客户演示 v0（用户亦称 V1，路线图 `private-docs/roadmap/36-super-harness-customer-demo-v0.md`，索引 `show-roadmap-1`）已于 2026-09-28 在 `main@c112012` 结算 M0–M4 `PASS`、人工验收通过、决策 `GO`。它只证明“真实模型 + 生产 `write_file` + Approval + Artifact + Reload/Reconnect + 同 Run Steer”在冻结 DeerFlow UI 上的本地纵向链，不等于 PRD D01–D05 的完整 Customer Demo Gate 或 Full Parity，也不关闭任何 W00–W24 工作包。后续若同一整链回归失败，须如实记录并重新评估该决策，不得保留过期 `GO`。
+  - 客户演示 V2 以 `show-roadmap-2` 为派工总索引，未派工前全部阶段为 `NOT_RUN`、总体 `NO_GO`；实现任务仍落回 W00–W24，不创建平行工作包。
+- 各轮通用门禁：主控把每个新任务映射到当前轮次的阶段、真实缺口和退出门槛，并在 SHPM 中登记（`shpm sprint link <SPRINT>/<阶段> --task <ID> --relation delivers --required`）。L1/L2 受控 Provider、测试 Tool、静态合同、组件测试、旧轮次证据或分开的单项 PASS，都不能替代同一主线 SHA 的连续两轮 L3 整链证据；任一产品修复合入后，后续差分和 L3 须基于新的主线 SHA 重新开始连续轮次。两轮不得隐匿失败或重试；真实 Artifact 必须有可信 ID/provenance 与可核验下载字节。阶段 `workStatus` 只表示执行状态，`result` 独立使用 PASS/FAIL/NOT_RUN 等 case 口径；已有分项证据不得提升阶段门禁。只有该轮全部阶段 PASS、同一主线 SHA、人工验收记录齐全，才可把演示决策改为 `GO`。W04 等已知范围外风险须披露，演示脚本实际触及其故障路径则如实 FAIL，不为追演示绿灯放宽门禁。
 - 执行采用“双轨交付”：SHPM sprint 阶段（`shpm sprint show/gate <SPRINT> --json`）是客户演示阶段门禁，W00–W24 是不变的长期能力工作包台账。开发仍按工作包 task 提示词、独立 worktree、定向测试和主控验收交付；演示任务卡另外标注 `demoStages` 和该阶段原子断言。工作包切片/整包完成不自动使演示阶段 PASS，演示 `GO` 也不自动关闭工作包或 PRD D01–D05。W00 等长期横切工作只消费演示实际触及的来源，不因整包未完成而阻断正向演示。
 
 ## 派单与子智能体调度
 
 - 主控每次开工、派单或向人工汇报前运行 `pwsh -NoProfile -File scripts/governance/audit-work-package-delivery.ps1`，并同时运行 `shpm reconcile --json`（只报告不修改），检查演示阶段、工作包、worktree、checkpoint、端口和实际子智能体列表；二者都无法读取智能体状态，须另行人工核对。主控在每次派工、复审、合入、失败或门禁变更时同次核对 SHPM 记录与实际 worktree；失败史保留。
-- 端口表（每次使用前按「端口」做绑定预检）：
-  - 主目录：Gateway `18018`、Frontend `33018`，供人工验收，不因子槽冲突迁移，不参与子槽公式。
-  - 子智能体槽位共六个，槽内 Frontend=Gateway+`5000`：槽位 1 Gateway `20618`、Frontend `25618`；槽位 2 Gateway `30618`、Frontend `35618`；槽位 3 Gateway `40618`、Frontend `45618`；槽位 4 Gateway `11618`、Frontend `16618`；槽位 5 Gateway `21618`、Frontend `26618`；槽位 6 Gateway `22618`、Frontend `27618`。槽位 1–3 逐组 `+10000`；槽位 4–6 不沿用该公式，以避开 `49152` 起的动态端口范围。
-  - W18 差分 runner 的受控测试 Provider 独占 `46618`，不属于槽位。
-- 派单前须确认目标 worktree 的启动器与端口表一致，否则从当前 main 新建独立 worktree，不得用旧默认端口运行。派单必须声明槽位、完整端口组和独立数据目录；同一时刻每槽仅一任务，完成后释放。每个需要启动服务的子智能体（含 OpenCode 进程）独占一个槽位，因此同时运行的此类子智能体最多 6 个。
-- 主线合入后主控用 `pwsh -NoProfile -File scripts/refresh-main-service.ps1 -Status` 检查、用 `-Jar <exec JAR> -ExpectSha <提交> [-LiveSmoke]` 刷新固定端口服务并做 smoke。
-- 选择执行者：范围清楚、无需频繁与主控交互、可凭最终提交和独立门禁验收的任务优先交给 OpenCode；需要持续协商失败语义、架构或跨仓边界的任务优先交给可交互子智能体。不设 OpenCode 派单比例。模型按「OpenCode CLI」「agy CLI」固定，checkpoint 与交付证据须记录实际模型。主控在 `shpm assign create` 中记录实际执行者（`--executor`/`--ref`）与模型（`--model`），分配理由写入首个 `shpm assign checkpoint`；工具选择不放宽设计提示词、代码评审、自动门禁、真实证据、密钥和外部目录边界，隔离、checkpoint 和失联恢复规则对所有执行者相同。执行者无法安全取得上下文或执行门禁时由主控收回或改派，不算已完成派单。
+- 端口：主目录固定 Gateway `18018`、Frontend `33018`，供人工验收，不因子槽冲突迁移，不参与子槽公式。三个子智能体槽位：槽位 1 Gateway `20618`、Frontend `25618`；槽位 2 Gateway `30618`、Frontend `35618`；槽位 3 Gateway `40618`、Frontend `45618`（逐组 `+10000`，槽内 Frontend=Gateway+`5000`）。W18 差分 runner 的受控测试 Provider 独占 `46618`，不属于槽位，也需绑定预检。每次均须按公共规则预检。派单前须确认目标 worktree 的启动器与本端口表一致，否则从当前 main 新建独立 worktree，不得用旧默认端口运行。派单必须声明槽位、完整端口组和独立数据目录；同一时刻每槽仅一任务，完成后释放。主线合入后主控刷新或重启固定端口服务并做 smoke。
+- 并发上限：每个需要启动服务的子智能体（含 OpenCode 进程）必须独占一个子槽位，因此同时运行的此类子智能体最多 3 个。
+- 选择执行者：范围清楚、无需频繁与主控交互、可凭最终提交和独立门禁验收的任务优先交给 OpenCode；需要持续协商失败语义、架构或跨仓边界的任务优先交给可交互子智能体。不设 OpenCode 派单比例。派给 OpenCode 时必须在启动命令中显式指定 `--model deepseek/deepseek-flash`，不得依赖默认模型，checkpoint 与交付证据须记录实际模型。主控在 `shpm assign create` 中记录实际执行者（`--executor`/`--ref`）与模型（`--model`），分配理由写入首个 `shpm assign checkpoint`；工具选择不放宽设计提示词、代码评审、自动门禁、真实证据、密钥和外部目录边界。OpenCode 同样遵守独立 worktree/端口/数据目录与 15 分钟 checkpoint/失联恢复规则；无法安全取得上下文或执行门禁时由主控收回或改派，不算已完成派单。
 - 多智能体执行采用“15 分钟无声上限”：每个运行中的子智能体至少每 15 分钟向主控回报一次 checkpoint，至少包含当前工作包、已完成证据、正在执行的命令或步骤、首个失败或阻塞、worktree 变更及下一交付点；长时间命令须在启动前说明目的，并在结束后立即回报。若距上次有效回报或可观察进展达到 15 分钟，主控必须发送一次非中断式点名消息，不得因智能体状态仍显示 `running` 而无限等待。
 - 点名后 5 分钟仍无应答，或主控通过 worktree、测试进程、端口与日志审计确认任务停滞、跑偏、越界或反复等待无结果时，按“失联/失控 lane”恢复：先保留未提交变更、日志、数据目录和进程证据，只中止受影响智能体的当前回合，再用原 worktree 恢复同一任务或明确交接给替代智能体，并收紧范围、端口与下一 checkpoint；禁止打断正常推进的其他智能体。主控须用 `shpm assign lost` / `shpm assign recover --preserve-worktree` 和 `shpm assign checkpoint` 及时登记该 lane 的实际工作包映射、恢复动作、可验证进展和仍为 `NOT_RUN` 的项目，避免用旧智能体名称误报任务进度。
 
 ## 提示词与过程文档
 
-- 派工前在 `private-docs/prompts/39-deerflow-parity-delivery/` 对应工作包目录编写任务提示词，写明冻结来源、范围与依赖、实现边界、接口及失败语义、退出条件、测试命令和证据要求；每个可独立交付的任务使用单独文件。
-- 新任务文件用 `工作包-任务名.md` 命名，如 `W05-Interaction.md`；任务名简短、无空格，不在新增目录 / 文件名中加入状态后缀。既有路径和 `show-roadmap-N` 轮次索引沿用；登记为 SHPM `prompt_path` 后不改名、不移动，任务状态在 SHPM 中维护。
-- 提示词随任务登记（见「SHPM 登记」）；派单消息注明任务 / 派工 ID、提示词路径、branch/worktree、端口、数据目录和 checkpoint 要求。
-- 方案、评审和复盘放在对应私有工作包目录，交付报告放在 `private-docs/ai-coding-report/` 指定位置，原始日志、trace 和截图放在外置证据目录；SHPM 只登记路径。`docs/` 保存稳定的开发与使用手册，不新增过程文档。
+- 每个 Super Harness 工作包任务交给子智能体开发前，主控必须先编写可执行的设计文档提示词，放在 `private-docs/prompts/39-deerflow-parity-delivery/` 下对应工作包目录，并以该文档作为派单依据；不得只靠聊天消息口头分派。提示词至少写明冻结 DeerFlow 对照、roadmap/产品/PRD 范围、现状与依赖、明确的实现边界和领域复杂度约束、接口/数据/失败语义、验收条件、定向及全仓门禁、真实运行证据与 `NOT_RUN` 边界。一个工作包需拆分时，每个可独立开发和验收的任务使用单独 Markdown 文件；派单消息引用具体文件，并补充本次 branch/worktree、端口槽位、数据目录与 checkpoint 要求。
+- 不得在 `docs/development/` 新增方案、设计、review、裁决草案或开发过程复盘等过程文档；这类内容一律维护在 `private-docs/prompts/39-deerflow-parity-delivery/` 的对应工作包目录。`docs/development/` 只承载面向使用者的稳定开发、运行说明；既有过程文档归档在各工作包的 `references/` 子目录，属于历史证据而非任务提示词，不以文件名推断任务状态或占用任务名额。主控派单与评审时负责检查文档落点，子智能体不得自行在公开目录新增过程文档。
+- 命名与路径冻结：提示词文件一旦登记进 SHPM（`prompt_path`），就不再改名或移动；已有带 `Pending`/`Developing`/`Finished` 后缀的目录和文件保持原名。新建任务文件用 `工作包-任务名.md` 命名（例如 `W05-Interaction.md`），不带状态后缀；新建工作包目录同样不带状态后缀，此后也不改名。任务名采用稳定、简短、无空格的英文标识。客户演示轮次索引目录 `show-roadmap-N` 沿用原名。任务状态只看 SHPM，目录名和文件名不表示状态。
+- 登记：`shpm task create <Wxx-task-N> --wp <Wxx> --title .. --prompt <private-docs/...md 相对路径> --exit .. --priority P0|P1 --next ..`；没有 `--prompt` 的任务无法 start 或派工。SHPM 没有修改 `prompt_path` 的命令，`reconcile` 也不检查路径是否存在，因此必须遵守路径冻结。子智能体只报告状态建议与证据，不写 SHPM、不宣布验收完成。
+- 子智能体的交付报告继续写到 `private-docs/ai-coding-report/...` 的指定路径；原始 trace、日志和截图继续放在外置证据目录。SHPM 只登记路径：报告放在 `shpm task deliver --handoff`，或放进 `shpm verify add --raw`/`--summary`。
 
 ## 项目管理（SHPM）
 
-- 工作包、任务、派工、checkpoint、证据和演示门禁统一在 SHPM 管理；只有主控通过 `shpm` 写入，子智能体报告进展与证据，人工在 http://127.0.0.1:8787/ 只读查看。正文和原始证据保留在各自目录，SHPM 登记路径。
-- 操作前明确设置 `SHPM_DB`，运行 `shpm doctor --json` 和 `shpm status --json`；环境异常时停止写入。状态与写入命令使用 `--json`，写入带 `--idempotency-key`，同一次操作重试复用原 key。
-- 按「登记提示词与任务 → start / assign → checkpoint → deliver → verify → 主控独立验收 → accept / release」推进；`deliver` 只进入 `ready_for_acceptance`。接手先用 `show`、`assign list`、`verify list` 查看状态和证据。
-- 每次验收登记结果与实际 SHA、命令、原始证据；任务、工作包和阶段完成须满足各自门禁及人工验收要求，`GO` 通过 `sprint decide` 设置。状态变化后运行 `tests/checks/evidence/verify-evidence-report.ps1` 检查证据聚合。
-
-未覆盖的操作、参数、状态恢复和门禁说明，请看 [SHPM 使用手册](docs/shpm-manual.md)。
+- 任务状态、派工、checkpoint、验收证据和演示门禁由 SHPM（Super Harness Project Manager）维护，只能通过 `shpm` 命令写入；人工通过 http://127.0.0.1:8787/ 只读查看。提示词、roadmap、交付报告和原始证据的正文仍在原位置（`private-docs`、`contracts`、worktree 的 `local-tmp` 等），SHPM 只保存路径。
+- 开工自检：在 pwsh 中先执行 `$env:SHPM_DB='C:\Users\wangr\.shpm\data\project.db'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; $env:PYTHONIOENCODING='utf-8'`（不设 `SHPM_DB` 时 PATH 中的 `shpm` 会在当前目录新建空的 `local-data/project.db`；不设编码时中文 JSON 乱码）。再运行 `shpm doctor --json`（`status` 应为 `HEALTHY`）与 `shpm status --json`；不符合时停下报告人工，不自行修复数据。
+- 一律加 `--json`：成功输出到 stdout，失败 JSON 输出到 stderr。退出码：0 成功；2 校验失败或门禁未过；3 对象不存在；4 状态或资源冲突；5 环境漂移；10 内部错误（遇到时停止并报告）。所有写命令带 `--idempotency-key <日期>-<对象>-<动作>`，重试复用同一 key。PowerShell 会把中文弯引号当作字符串定界符，写入参数的文本改用「」。
+- 导航：接手或恢复任务先运行 `shpm show <任务ID> --json`，`prompt_path`（相对仓库根）是派单和复审依据，`state`/`next_action`/`exit_criteria` 给出现状；派工信息看 `shpm assign list --task <ID> --json`；历史验收与原始证据路径看 `shpm verify list --task <ID> --json` 的 `raw_path`；演示范围看 `shpm sprint show <SPRINT> --json` 的 `roadmap_path`；工作包全貌看 `shpm wp show <Wxx> --json`（依赖在 `relations`，kind=requires）。登记路径不存在或与实际文件不符时停下报告人工，不得猜测。
+- 派工流程：写好提示词 → `shpm task create` → 服务于演示阶段时 `shpm sprint link <SPRINT>/<阶段> --task <ID> --relation delivers --required` → `shpm task start <ID>` → 按端口规则预检 → `shpm assign create <ID> --id asg-<ID> --executor opencode|codex|main|human --ref .. --model .. --repo D:\workspace\haifa-agent-super-harness --base-sha <main SHA> --branch .. --worktree .. --slot N --ports <gw>/<fe> --data-root .. --checkpoint-in 15m`。派单消息写明“提示词见 <prompt_path>；SHPM 任务 <ID>，派工 asg-<ID>”。
+- 过程中：每收到一次 checkpoint 或每 15 分钟执行 `shpm assign checkpoint asg-.. --completed .. --current .. --failure .. --next .. --command .. --next-in 15m`；失联用 `shpm assign lost` / `shpm assign recover --preserve-worktree`；阻塞用 `shpm task block --reason ..`，需长期挂账的用 `shpm issue add`。
+- 交付与验收：子智能体不写 SHPM，由主控执行 `shpm task deliver <ID> --assignment asg-.. --commit <候选SHA> [--handoff <报告路径>]`，任务只进入 `ready_for_acceptance`。每一次门禁执行（含 FAIL 和 NOT_RUN）单独追加 `shpm verify add --task <ID> --key <check> --criteria .. --result PASS|FAIL|NOT_RUN|BLOCKED_EXTERNAL|UPSTREAM_UNSUPPORTED --required --command .. --repo-sha .. --raw <原始证据路径> --duration .. --retry-count N --summary ..`。独立复审并合入后执行 `shpm task accept <ID> --assignment asg-.. --main-commit <main SHA>`，再 `shpm assign release asg-..` 并确认端口已释放；验收失败执行 `shpm task reopen`。
+- 工作包：状态用 `shpm wp state`；完成用 `shpm wp complete`，要求所有任务已完成且仍须满足整包退出条件和人工验收规则。`ready_for_acceptance` 表示该对象的退出条件、提交、自动测试和真实证据均已具备、等待复验或人工验收；无可验证代码或测试证据不得完成。
+- 演示阶段：`shpm sprint stage result <SPRINT>/<阶段> <RESULT> --status <work_status> --reason ..`；里程碑用 `shpm sprint milestone <SPRINT> --title .. --detail ..`；`GO` 只能通过 `shpm sprint decide <SPRINT> GO --reason ..` 设置，门禁不过时以退出码 2 拒绝，不存在 `--force`。
+- SHPM 已知缺口，靠自律遵守、不得利用：不检查不同槽位共用端口，派工前仍按端口表和绑定预检人工核对；不阻止阶段跳关，也不要求 PASS 前先有 Verification——前置阶段未 PASS 不推进后续阶段，标 PASS 前必须先有对应 `verify add` 原始证据；无修改 `prompt_path` 的命令。`shpm task reopen` 当前仅接受 `finished`，对复审失败的 `ready_for_acceptance` 返回 `STATE_CONFLICT`；此时保留必需验证 FAIL 和阻断 issue，不得先虚假 accept 再 reopen，须停下该任务并报告人工决定合法状态恢复方式。禁止对线上库执行 `shpm migrate *`（apply 为 upsert，会用旧文件覆盖状态）；禁止直接写 SQL 或改 SHPM 代码/数据文件，命令表达不了的操作停下报告人工。
+- 门禁：原 `work-packages.js`、`docs/todo.md`、`dashboard.html` 与 `work-package-dag.html` 已于 2026-09-28 删除，不得重建或手工维护平行进度文件，也不再使用 `shpm render`。证据门禁 `scripts/evidence/generate-evidence-report.ps1` 与审计 `scripts/governance/audit-work-package-delivery.ps1` 通过 `shpm export snapshot` 读取 SHPM（共享规则在 `scripts/lib/shpm-governance.ps1`），显式传 `--db`，数据库缺失时 fail closed。任务、派工、阶段或工作包状态变更后运行 `pwsh -NoProfile -File tests/checks/evidence/verify-evidence-report.ps1`；证据门禁失败时不得播报 PASS 或更新 `GO`。人工只读视图为 SHPM 网页 http://127.0.0.1:8787/。
 
 # 子智能体规则
 
 - 接单后先完整阅读本文件、工作包对应 roadmap/产品/PRD、冻结 DeerFlow 源码与已有证据；首个 checkpoint 必须复述实际工作包、branch/worktree、槽位端口、数据目录、范围边界和下一交付点。子智能体不得执行任何 `shpm` 写命令，不得重建已删除的进度文件，也不得改动主目录服务。
-- 只能使用主控分配的 worktree、数据目录和端口组。启动服务前须检查已分配端口；若被占用，先查明 PID 并核对命令行：确认是本 worktree 自己遗留的进程才可以直接终止；占用者属于其他 worktree、其他槽位、主服务或归属无法确认时，保留证据并报告主控，不得终止。不得仅按进程名批量结束进程。任务结束时须清理自己启动的服务并验证端口释放。
+- 只能使用主控分配的 worktree、数据目录和端口组。启动服务前须检查已分配端口；若被占用，可以查明 PID 并核对命令行后直接终止占用该组端口的进程，但不得终止主端口、其他槽位、未分配端口或仅按进程名批量结束进程。任务结束时须清理自己启动的服务并验证端口释放。
 - 按主控规则的“15 分钟无声上限”回报 checkpoint；收到主控非中断式点名后，应在当前安全命令边界立即应答，不得为回报而破坏正在运行的测试或写入。
 - 发现软件安装、依赖、配置、凭据或权限新坑位时，先保存可复现证据，再按“环境与排障记录”更新本文件；涉及密钥只能记录凭据引用、存在性和脱敏结果，禁止输出或提交密钥值。若问题需要全局安装、联网取依赖、提升权限或改变用户/系统配置，先停止扩张并报告主控，不得自行绕过。
-- 编码前按公共规则对照冻结实现评估领域复杂度，需要更高复杂度时停在编码前提交设计说明。commit/push 前运行公共规则「检查时点」列出的检查；正式门禁须经主控放行后才启动，未运行的记 `NOT_RUN`。
+- 编码前按公共规则对照冻结实现评估领域复杂度，需要更高复杂度时停在编码前提交设计说明；提交前按公共规则运行门禁并记录 `FAIL`/`NOT_RUN`。
 - 交付 checkpoint 必须包含分支、最终 commit SHA、变更文件、测试/Playwright 次数与耗时、真实 Run/Tool/Artifact 或 HTTP/SSE 证据、已释放端口、worktree clean 状态、明确 `NOT_RUN` 清单以及建议的下一切片；提交后不得 amend/rebase 已交给主控评审的 SHA，除非主控明确要求。

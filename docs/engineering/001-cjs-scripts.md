@@ -89,11 +89,11 @@ node tests\ui\smoke\loopback-openai-provider.cjs 0 target\provider-manual.ready.
 
 ### 3.2 推荐入口：仓库的 PowerShell runner
 
-runner 负责端口预检、构建、起服务、注入全部 env、跑 Playwright、结束清理。**槽位端口按端口表校验，参数写错会直接抛错**：槽位 1–3 为 Gateway = `10618 + 10000×slot`、Frontend = `15618 + 10000×slot`；槽位 4 固定为 `11618`/`16618`，不套用该公式（见 `AGENTS.md`「派单与子智能体调度」端口表）。
+runner 负责端口预检、构建、起服务、注入全部 env、跑 Playwright、结束清理。**默认槽位端口按公式校验，参数写错会直接抛错**：Gateway = `10618 + 10000×slot`，Frontend = `15618 + 10000×slot`。
 
 | runner | 覆盖用例 | 缺省槽位端口 | 关键参数 |
 | --- | --- | --- | --- |
-| `scripts/ui/run-w18-ui-smoke.ps1` | `tests/ui/smoke/<profile>.spec.cjs` | slot 2 → `30618`/`35618`；受控 Provider 用 OS 分配端口（`-ProviderPort` 必须为 0） | `-AgentSlot 1..4`、`-GatewayPort`、`-FrontendPort`、`-SourceRepository`、`-DataDirectory`、`-SkipBuild`，profile 开关见下 |
+| `scripts/ui/run-w18-ui-smoke.ps1` | `tests/ui/smoke/<profile>.spec.cjs` | slot 2 → `30618`/`35618`；受控 Provider 用 OS 分配端口（`-ProviderPort` 必须为 0） | `-AgentSlot 1..3`、`-GatewayPort`、`-FrontendPort`、`-SourceRepository`、`-DataDirectory`、`-SkipBuild`，profile 开关见下 |
 | `scripts/ui/run-w05-demo-artifact-ui.ps1` | `w05-demo-artifact.spec.cjs`（`-DemoArtifact`） | slot 1 → `20618`/`25618` | 数据目录 `local-tmp/slot-1-w05-m2` |
 | `scripts/ui/run-w05-interaction-smoke.ps1` | `w05-interaction.spec.cjs`（`-Interaction`，走 Maven 测试 classpath fixture，不需要 exec JAR） | slot 2 → `30618`/`35618` | 数据目录 `target/agent-slot-2-interaction-data` |
 | `scripts/ui/run-w03-input-polish-ui.ps1` | `w03-input-polish.spec.cjs`，同脚本连跑两轮独立 data-root | slot 1 → `20618`/`25618` | 证据 `local-tmp/slot-1-w03-input-polish-ui/evidence` |
@@ -177,7 +177,7 @@ node frontend\node_modules\@playwright\test\cli.js test --config tests/ui/smoke\
 ### 3.5 常见坑
 
 - **前端构建时代理目标**：`frontend/next.config.js` 的 rewrite 读 `DEER_FLOW_INTERNAL_GATEWAY_BASE_URL`，缺省回落到 `http://127.0.0.1:8001`。未带槽位变量先 `corepack pnpm build`，再 `-SkipBuild` 跑用例，页面会提示 `Models couldn't be loaded`、前端 stderr 出现 `/api/models` 代理 `8001` 的 `ECONNREFUSED`；只能在同一槽位配置下重新构建，或确认产物就是本次槽位构建的。
-- **裸跑不会清理**：直接调 Playwright 不会结束网关/前端/Provider，也不会释放端口；请按 PID 关闭并确认本轮所用槽位端口（`20618/25618`、`30618/35618`、`40618/45618`、`11618/16618` 之一）与本轮 Provider 端口已释放。
+- **裸跑不会清理**：直接调 Playwright 不会结束网关/前端/Provider，也不会释放端口；请按 PID 关闭并确认 `20618/25618`、`30618/35618`、`40618/45618` 与本轮 Provider 端口已释放。
 - **`-SkipBuild` 的前提**：只能复用在**同一源码 SHA、同一槽位网关地址**下已构建的 exec JAR 与 `.next`；换槽位或改代码后必须重建。
 - **数据目录隔离**：不同启动方式/不同 profile 不得共用 data-root，否则会报 continuation key 不可用（数据库已存在但凭据缺失时必须失败，禁止静默换钥）。
 - **`-LiveDeepSeek`**：会真实调用 `https://api.deepseek.com`（凭据引用 `os://DEEPSEEK_API_KEY`），只在明确授权时运行，且不得作为受控用例的替代。
@@ -188,7 +188,7 @@ node frontend\node_modules\@playwright\test\cli.js test --config tests/ui/smoke\
 | 用途 | 端口 |
 | --- | --- |
 | 主目录（人工验收，不参与子槽公式） | Gateway `18018`、Frontend `33018` |
-| 子槽 1 / 2 / 3 / 4 | `20618`/`25618`、`30618`/`35618`、`40618`/`45618`、`11618`/`16618` |
+| 子槽 1 / 2 / 3 | `20618`/`25618`、`30618`/`35618`、`40618`/`45618` |
 | W18 差分与 M2-MCP 的受控 Provider | `46618`（不属于任何槽位，也需绑定预检） |
 | M2-MCP 报告/区域/失败 fixture | `20628`、`20629`、`20630` |
 

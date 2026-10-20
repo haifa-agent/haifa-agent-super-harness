@@ -33,7 +33,7 @@ full/Range responses use one bounded verified file snapshot and one SHA-256 pass
 written from that snapshot without a second range-sized copy. Unknown filename types use DeerFlow's
 8 KiB no-NUL content sniff so extensionless text remains previewable.
 
-The run endpoint calls the public `haifa-agent-sdk-starter:0.1.3-SNAPSHOT` JAR. Its SSE IDs are
+The run endpoint calls the public `haifa-agent-sdk-starter:0.1.2-SNAPSHOT` JAR. Its SSE IDs are
 derived from the durable public `AgentRunEvent.sequence`, not a process-local counter. The server
 projects the authoritative completed output as a LangGraph-compatible `messages-tuple`, preserves
 distinct terminal status through the run resource, and invokes the public `AgentRunHandle.cancel()`

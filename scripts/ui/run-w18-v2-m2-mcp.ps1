@@ -126,10 +126,10 @@ if (-not (Test-Path -LiteralPath (Join-Path $frontendRoot 'node_modules/.bin/pla
 }
 $sdkRoot = 'D:\DevCache\maven\repository\io\haifa'
 $sdkFiles = [ordered]@{
-    bomPom = Join-Path $sdkRoot 'haifa-agent-bom/0.1.3-SNAPSHOT/haifa-agent-bom-0.1.3-SNAPSHOT.pom'
-    starterJar = Join-Path $sdkRoot 'haifa-agent-sdk-starter/0.1.3-SNAPSHOT/haifa-agent-sdk-starter-0.1.3-SNAPSHOT.jar'
-    mcpJar = Join-Path $sdkRoot 'haifa-agent-mcp/0.1.3-SNAPSHOT/haifa-agent-mcp-0.1.3-SNAPSHOT.jar'
-    skillCoreJar = Join-Path $sdkRoot 'haifa-agent-skill-core/0.1.3-SNAPSHOT/haifa-agent-skill-core-0.1.3-SNAPSHOT.jar'
+    bomPom = Join-Path $sdkRoot 'haifa-agent-bom/0.1.2-SNAPSHOT/haifa-agent-bom-0.1.2-SNAPSHOT.pom'
+    starterJar = Join-Path $sdkRoot 'haifa-agent-sdk-starter/0.1.2-SNAPSHOT/haifa-agent-sdk-starter-0.1.2-SNAPSHOT.jar'
+    mcpJar = Join-Path $sdkRoot 'haifa-agent-mcp/0.1.2-SNAPSHOT/haifa-agent-mcp-0.1.2-SNAPSHOT.jar'
+    skillCoreJar = Join-Path $sdkRoot 'haifa-agent-skill-core/0.1.2-SNAPSHOT/haifa-agent-skill-core-0.1.2-SNAPSHOT.jar'
 }
 $sdkHashes = [ordered]@{}
 foreach ($entry in $sdkFiles.GetEnumerator()) {
@@ -169,9 +169,6 @@ $mcpConfigPath = Join-Path $evidenceRoot 'mcp-config.json'
 $mcpStarted = $false
 # A public, fixture-only sentinel. No customer or provider credential is used.
 $fixtureBearer = 'Bearer w18-fixture-only'
-# read_only = $true makes the Haifa bridge auto-approve these host-trusted MCP Tools
-# (SDK read-only network preset), so the spec expects no approval card on either
-# backend; the reference profile ignores the flag and already executes them directly.
 $mcpServers = [ordered]@{
     'v2-reporting' = [ordered]@{
         type = 'http'; url = "http://127.0.0.1:$ReportingPort/mcp"
@@ -355,7 +352,7 @@ try {
         sourceSha = (& git -C $source rev-parse HEAD).Trim()
         harnessSha = (& git -C $root rev-parse HEAD).Trim()
         mainBaselineSha = $mainBaselineSha
-        sdkVersion = '0.1.3-SNAPSHOT'
+        sdkVersion = '0.1.2-SNAPSHOT'
         sdkArtifactSha256 = $sdkHashes
         gatewayUrl = "http://127.0.0.1:$GatewayPort"
         gatewayPid = $gatewayProcess.Id

@@ -187,30 +187,6 @@ class V2McpTransportIntegrationTest {
     }
 
     @Test
-    @Order(4)
-    void readOnlyMcpToolRunsWithoutApproval() throws Exception {
-        HttpResponse<String> configured = postJson(
-                "/api/mcp/config/servers",
-                """
-                {"mcp_servers":{"v2-reading":{"type":"http","url":"%s","read_only":true,
-                  "tool_name_prefix":true,"session_init_timeout":20,"tool_call_timeout":20,
-                  "tools":{"get_reporting_policy":{}}}}}
-                """
-                        .formatted(REPORTING_URL));
-        assertThat(configured.statusCode()).as(configured.body()).isEqualTo(200);
-
-        createThread("mcp-readonly-auto");
-        HttpResponse<String> run = postJson(
-                "/api/threads/mcp-readonly-auto/runs/stream", buildRunBody("call get_reporting_policy {}", null));
-        assertThat(run.statusCode()).as(run.body()).isEqualTo(200);
-        assertThat(humanInputRequestId(run.body()))
-                .as("a host-declared read-only MCP tool must execute without an approval card")
-                .isEmpty();
-        assertThat(run.body()).contains("event: end", "v2-pilot-reporting-001");
-        assertThat(countToolResults(run.body(), "get_reporting_policy")).isEqualTo(1);
-    }
-
-    @Test
     @Order(2)
     void disablingAServerRevokesOnlyThatServerOnLaterRuns() throws Exception {
         configureBothServers();
@@ -255,10 +231,10 @@ class V2McpTransportIntegrationTest {
         configureBothServers();
         createThread("mcp-signature");
         assertThat(run("mcp-signature", null, "list tools")).contains("get_reporting_policy");
-        long afterFirst = api.threadRunApi().conversations().bridgeBuildCount();
+        long afterFirst = api.threadRunApi().bridgeBuildCount();
 
         assertThat(run("mcp-signature", null, "list tools")).contains("get_reporting_policy");
-        assertThat(api.threadRunApi().conversations().bridgeBuildCount())
+        assertThat(api.threadRunApi().bridgeBuildCount())
                 .as("an identical MCP projection must not rebuild the bridge")
                 .isEqualTo(afterFirst);
 
@@ -268,7 +244,7 @@ class V2McpTransportIntegrationTest {
                  "tools":{"get_reporting_policy":{},"get_status":{}}}
                 """.formatted(REPORTING_URL));
         assertThat(run("mcp-signature", null, "list tools")).contains("get_reporting_policy");
-        assertThat(api.threadRunApi().conversations().bridgeBuildCount())
+        assertThat(api.threadRunApi().bridgeBuildCount())
                 .as("a tool_call_timeout change must rebuild with the new declaration")
                 .isEqualTo(afterFirst + 1);
 
@@ -279,7 +255,7 @@ class V2McpTransportIntegrationTest {
                  "tools":{"get_reporting_policy":{},"get_status":{}}}
                 """.formatted(REPORTING_URL));
         assertThat(run("mcp-signature", null, "list tools")).contains("get_reporting_policy");
-        assertThat(api.threadRunApi().conversations().bridgeBuildCount())
+        assertThat(api.threadRunApi().bridgeBuildCount())
                 .as("a header change must rebuild with the new declaration")
                 .isEqualTo(afterFirst + 2);
     }
@@ -294,7 +270,7 @@ class V2McpTransportIntegrationTest {
         HttpResponse<java.io.InputStream> started = postStream(
                 "/api/threads/mcp-reuse/runs/stream", buildRunBody("list tools", null), null, null);
         assertThat(started.statusCode()).isEqualTo(200);
-        long mounted = api.threadRunApi().conversations().bridgeBuildCount();
+        long mounted = api.threadRunApi().bridgeBuildCount();
         assertThat(model.awaitEntered()).as("model must enter its first call").isTrue();
 
         HttpResponse<java.io.InputStream> steer = postStream(
@@ -303,7 +279,7 @@ class V2McpTransportIntegrationTest {
                 "X-Haifa-Run-Input",
                 "steer");
         assertThat(steer.statusCode()).as("an active steer must be accepted").isEqualTo(200);
-        assertThat(api.threadRunApi().conversations().bridgeBuildCount())
+        assertThat(api.threadRunApi().bridgeBuildCount())
                 .as("a steer must never rebuild the mounted bridge")
                 .isEqualTo(mounted);
 
@@ -311,17 +287,17 @@ class V2McpTransportIntegrationTest {
         drain(started.body());
         drain(steer.body());
         assertThat(run("mcp-reuse", null, "list tools")).contains("get_reporting_policy");
-        assertThat(api.threadRunApi().conversations().bridgeBuildCount())
+        assertThat(api.threadRunApi().bridgeBuildCount())
                 .as("the MCP tool stays mounted after a steer")
                 .isEqualTo(mounted);
 
-        // Non-read-only MCP tools still traverse the SDK approval policy. The pending card and
+        // Read-only MCP tools still traverse the SDK approval policy. The pending card and
         // the approval must both reuse the same mounted bridge.
         HttpResponse<String> pending = postJson(
                 "/api/threads/mcp-reuse/runs/stream", buildRunBody("call get_reporting_policy {}", null));
         assertThat(pending.statusCode()).as(pending.body()).isEqualTo(200);
         String requestId = humanInputRequestId(pending.body()).orElseThrow();
-        assertThat(api.threadRunApi().conversations().bridgeBuildCount())
+        assertThat(api.threadRunApi().bridgeBuildCount())
                 .as("a pending approval must not rebuild the bridge")
                 .isEqualTo(mounted);
 
@@ -330,7 +306,7 @@ class V2McpTransportIntegrationTest {
         assertThat(approved.statusCode()).as(approved.body()).isEqualTo(200);
         assertThat(approved.body()).contains("v2-pilot-reporting-001");
         assertThat(countToolResults(approved.body(), "get_reporting_policy")).isEqualTo(1);
-        assertThat(api.threadRunApi().conversations().bridgeBuildCount())
+        assertThat(api.threadRunApi().bridgeBuildCount())
                 .as("approval must reuse the mounted bridge")
                 .isEqualTo(mounted);
     }
@@ -460,10 +436,10 @@ class V2McpTransportIntegrationTest {
                 "/api/mcp/config/servers",
                 """
                 {"mcp_servers":{
-                  "v2-reporting":{"type":"http","url":"%s","read_only":false,
+                  "v2-reporting":{"type":"http","url":"%s","read_only":true,
                     "tool_name_prefix":true,"session_init_timeout":20,"tool_call_timeout":20,
                     "tools":{"get_reporting_policy":{},"get_status":{}}},
-                  "v2-region":{"type":"http","url":"%s","read_only":false,
+                  "v2-region":{"type":"http","url":"%s","read_only":true,
                     "tool_name_prefix":true,"session_init_timeout":20,"tool_call_timeout":20,
                     "tools":{"get_region_label":{},"get_status":{}}}}}
                 """
@@ -478,9 +454,9 @@ class V2McpTransportIntegrationTest {
         assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
         String runId = response.headers().firstValue("content-location").orElseThrow();
         assertThat(runId).contains("/runs/");
-        // Non-read-only MCP tools still traverse the SDK approval policy (a network side effect
-        // plus external mutation), so a real call pauses once with a frozen human-input card.
-        // Approve it and join the resumed stream so the real MCP payload reaches the model.
+        // Read-only MCP tools still traverse the SDK approval policy (a network side effect),
+        // so a real call pauses once with a frozen human-input card. Approve it and join the
+        // resumed stream so the real MCP payload reaches the model.
         java.util.Optional<String> requestId = humanInputRequestId(response.body());
         if (requestId.isEmpty()) {
             return response.body();

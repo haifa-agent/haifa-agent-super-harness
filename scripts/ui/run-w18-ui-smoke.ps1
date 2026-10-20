@@ -2,7 +2,7 @@
 param(
     [string]$RepositoryRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)),
     [string]$SourceRepository = 'D:\workspace\haifa-agent-super-harness\deer-flow',
-    [ValidateRange(1, 5)]
+    [ValidateRange(1, 3)]
     [int]$AgentSlot = 2,
     [int]$GatewayPort = 30618,
     [int]$FrontendPort = 35618,
@@ -17,23 +17,7 @@ param(
     [switch]$V2FileContext,
     [switch]$V2Skill,
     [switch]$V2Diagnostics,
-    [switch]$W08Catalog,
-    [switch]$W08Delegation,
-    # W05 live-rendering: hold a controlled Run mid-flight and assert the page.
-    [switch]$LiveRendering,
     [switch]$LiveDeepSeek,
-    # Real frozen Ultra delegation, using the same managed live provider.
-    [switch]$W08LiveDelegation,
-    # W15 representative managed Skill and evaluation-result chain using the real provider.
-    [switch]$W15LiveSkill,
-    [switch]$W15PackageDifferential,
-    # W19 scheduled tasks: the frozen /workspace/scheduled-tasks page against the real model.
-    [switch]$W19ScheduledTasks,
-    # W19 restart round: reopens the same data root and checks startup recovery and rescheduling.
-    [switch]$W19ScheduledTasksRestart,
-    # W04 skill admission seed: host shell Tool on, isolated baoyu-image-gen seed directory,
-    # the deferred 038-32 assertion table, and the live DeepSeek managed model.
-    [switch]$W04ImageGen,
     # UX-V1 joint acceptance: the live DeepSeek model with the DeerFlow default tool chains.
     [switch]$UxV1DefaultTools,
     # UX-V1 M3: the frozen new-agent conversation/save flow with the live managed model.
@@ -42,13 +26,7 @@ param(
     [switch]$DeferUxV1Web,
     # Reuse the same-source reactor JAR after the controller's full gate; still build Next cold.
     [switch]$SkipServerBuild,
-    [switch]$SkipBuild,
-    [ValidateNotNullOrEmpty()]
-    [string]$CaseTitle,
-    # Repeat the selected spec in one service start. Only valid on a warm round.
-    [ValidateRange(1, 5)]
-    [int]$Passes = 1,
-    [switch]$PreflightOnly
+    [switch]$SkipBuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -56,84 +34,38 @@ Set-StrictMode -Version Latest
 if ($DeferUxV1Web -and -not $UxV1DefaultTools) {
     throw 'DeferUxV1Web requires the UX-V1 default-tools profile.'
 }
-if ($SkipServerBuild -and $Interaction) {
-    throw 'SkipServerBuild cannot reuse an executable JAR for the Interaction test-classpath profile.'
-}
 
 $expectedGatewayPort = 10618 + (10000 * $AgentSlot)
 $expectedFrontendPort = 15618 + (10000 * $AgentSlot)
-# W15 controller: additional isolated slot authorized by the user on 2026-10-03.
-if ($AgentSlot -eq 4) { $expectedGatewayPort = 11618; $expectedFrontendPort = 16618 }
-if ($AgentSlot -eq 5) { $expectedGatewayPort = 21618; $expectedFrontendPort = 26618 }
 if ($GatewayPort -ne $expectedGatewayPort -or $FrontendPort -ne $expectedFrontendPort -or $ProviderPort -ne 0) {
     throw "W18 slot $AgentSlot requires Gateway=$expectedGatewayPort and Frontend=$expectedFrontendPort; controlled Provider must use OS-assigned port 0."
 }
-if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $LiveDeepSeek, $W08LiveDelegation, $W15PackageDifferential, $W04ImageGen).Where({ $_ }).Count -gt 1) {
-    throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, V2 model-switch, V2 file-context, V2 Skill, V2 diagnostics, W08 catalog, W08 delegation, live rendering, W15 package differential, the W04 imagegen profile, and live DeepSeek are mutually exclusive.'
+if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $LiveDeepSeek).Where({ $_ }).Count -gt 1) {
+    throw 'Active reconnect, Interaction, demo-artifact, title/suggestions, input-polish, V2 model-switch, V2 file-context, V2 Skill, V2 diagnostics, and live DeepSeek profiles are mutually exclusive.'
 }
-if ($W15PackageDifferential) { $V2Skill = $true }
-if (@($UxV1DefaultTools, $UxV1AgentSoul, $W15LiveSkill, $W04ImageGen).Where({ $_ }).Count -gt 1) {
-    throw 'The UX-V1, W15 live-skill and W04 imagegen profiles are mutually exclusive.'
+if ($UxV1DefaultTools -and $UxV1AgentSoul) {
+    throw 'The UX-V1 default-tools and Agent SOUL profiles are mutually exclusive.'
 }
-if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill) {
-    if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $LiveDeepSeek, $W08LiveDelegation).Where({ $_ }).Count -gt 0) {
+if ($UxV1DefaultTools -or $UxV1AgentSoul) {
+    if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $LiveDeepSeek).Where({ $_ }).Count -gt 0) {
         throw 'The UX-V1 profiles are mutually exclusive with the other profiles.'
     }
     # Reuses the live DeepSeek managed model and skips the controlled loopback provider.
-    $LiveDeepSeek = $true
-}
-if ($W08LiveDelegation) { $LiveDeepSeek = $true }
-if ($W04ImageGen) {
-    if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $W08LiveDelegation, $W15PackageDifferential).Where({ $_ }).Count -gt 0) {
-        throw 'The W04 imagegen profile is mutually exclusive with the other profiles.'
-    }
-    # Reuses the live DeepSeek managed model and skips the controlled loopback provider. With the
-    # declared bun runtime A1-A8 all assert real behaviour; without it only A0/A8 run and the rest
-    # stay in the AllowedNotRun list sourced from w04-imagegen-deferred.json.
-    $LiveDeepSeek = $true
-}
-if (@($W19ScheduledTasks, $W19ScheduledTasksRestart).Where({ $_ }).Count -gt 1) {
-    throw 'The W19 scheduled-task profiles are mutually exclusive.'
-}
-if ($W19ScheduledTasks -or $W19ScheduledTasksRestart) {
-    if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $LiveDeepSeek, $W08LiveDelegation, $W15LiveSkill, $W15PackageDifferential, $UxV1DefaultTools, $UxV1AgentSoul, $W04ImageGen).Where({ $_ }).Count -gt 0) {
-        throw 'The W19 scheduled-task profiles are mutually exclusive with the other profiles.'
-    }
-    # W19 runs the real managed model (scheduled Runs resolve the default executable model).
     $LiveDeepSeek = $true
 }
 
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 . (Join-Path $PSScriptRoot '../lib/sdk-selection.ps1')
 . (Join-Path $PSScriptRoot '../lib/build-stamp.ps1')
-. (Join-Path $PSScriptRoot '../lib/preflight.ps1')
-Use-SafeNoProxy
-. (Join-Path $PSScriptRoot '../lib/smoke-preflight.ps1')
-$controlledContextWindow = 32768
 $sdk = [pscustomobject]@{ Status = 'NOT_RUN'; HaifaVersion = $null }
 $internalGatewayBaseUrl = "http://127.0.0.1:$GatewayPort"
  . (Join-Path $PSScriptRoot '../lib/run-fixture.ps1')
-$tag = if ($W19ScheduledTasksRestart) { 'w19-scheduled-tasks-restart' } elseif ($W19ScheduledTasks) { 'w19-scheduled-tasks' } elseif ($W15PackageDifferential) { 'w15-package-differential' } elseif ($W15LiveSkill) { 'w15-live-skill' } elseif ($UxV1AgentSoul) { 'ux-v1-soul' } elseif ($UxV1DefaultTools) { 'ux-v1' }
-    elseif ($W04ImageGen) { 'w04-imagegen' }
-    elseif ($W08LiveDelegation) { 'w08-live-delegation' }
+$tag = if ($UxV1AgentSoul) { 'ux-v1-soul' } elseif ($UxV1DefaultTools) { 'ux-v1' }
     elseif ($LiveDeepSeek) { 'w18-deepseek' } elseif ($ActiveReconnect) { 'w05-active-reconnect' }
     elseif ($Interaction) { 'w05-interaction' } elseif ($DemoArtifact) { 'w05-demo-artifact' }
     elseif ($TitleSuggestions) { 'w03-title-suggestions' } elseif ($InputPolish) { 'w03-input-polish-ui' }
     elseif ($V2ModelSwitch) { 'w03-v2-model-switch' } elseif ($V2FileContext) { 'w04-v2-file-context' }
-    elseif ($V2Skill) { 'w15-v2-skill' } elseif ($V2Diagnostics) { 'w21-diagnostics' }
-    elseif ($W08Catalog) { 'w08-catalog' } elseif ($W08Delegation) { 'w08-delegation' }
-    elseif ($LiveRendering) { 'w05-live-rendering' } else { 'w18-ui-smoke' }
-if ($Passes -gt 1) {
-    # The planner owns the option rules (warm only; never with -CaseTitle/-PreflightOnly) so
-    # the runner and its unit tests cannot drift.
-    $validate = @('-B', (Join-Path $PSScriptRoot '../lib/ui_round_plan.py'), 'validate', '--passes', [string]$Passes)
-    if ($CaseTitle) { $validate += @('--case-title', $CaseTitle) }
-    if ($PreflightOnly) { $validate += @('--preflight-only') }
-    if ($SkipBuild) { $validate += @('--skip-build') }
-    $validate += @('--profile', $tag)
-    & python @validate
-    if ($LASTEXITCODE -ne 0) { throw "Invalid -Passes $Passes options for the W18 UI runner." }
-}
+    elseif ($V2Skill) { 'w15-v2-skill' } elseif ($V2Diagnostics) { 'w21-diagnostics' } else { 'w18-ui-smoke' }
 $fixture = New-RunFixture -RepositoryRoot $root -Slot $AgentSlot -TaskTag $tag `
     -BuildMode $(if ($SkipBuild) { 'warm-reuse' } else { 'cold-build' }) -Ports @($GatewayPort, $FrontendPort)
 $evidenceRoot = $fixture.Evidence
@@ -145,102 +77,6 @@ $dataRoot = [IO.Path]::GetFullPath($DataDirectory).TrimEnd('\', '/')
 $rootPrefix = $root.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
 if (-not $dataRoot.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'W18 data directory must remain inside this worktree.'
-}
-
-# W04 imagegen setup, before any service or build: materialize the real upstream
-# baoyu-image-gen package (the controller-staged local-tmp/w04-real-skill copy) inside
-# this profile's isolated data root (never the user home), record the cached bun
-# directory and the codex CLI directory for the Gateway PATH, and snapshot the profile
-# facts for the spec. The deferred A1-A8 gate and the runner AllowedNotRun list read
-# tests/ui/smoke/w04-imagegen-deferred.json.
-$w04 = $null
-$w04Deferred = @()
-if ($W04ImageGen) {
-    $w04SeedSource = Join-Path $root 'local-tmp/w04-real-skill/baoyu-image-gen'
-    $w04SourceManifest = Join-Path $root 'local-tmp/w04-real-skill/MANIFEST.sha256'
-    if (-not (Test-Path -LiteralPath (Join-Path $w04SeedSource 'scripts/main.ts') -PathType Leaf) -or
-        -not (Test-Path -LiteralPath $w04SourceManifest -PathType Leaf)) {
-        throw 'The staged real baoyu-image-gen copy is missing: the controller must stage local-tmp/w04-real-skill inside this worktree.'
-    }
-    $w04SkillsDirectory = Join-Path $dataRoot 'skills-fixture'
-    $w04SeedPackage = Join-Path $w04SkillsDirectory 'baoyu-image-gen'
-    $w04SeedManifest = Join-Path $dataRoot 'skill-seed-manifest.json'
-    $w04ExtendDirectory = Join-Path $dataRoot '.baoyu-skills'
-    Push-Location $root
-    try {
-        & python -B (Join-Path $root 'tests/ui/fixtures/w04/baoyu_imagegen_seed.py') `
-            --package $w04SeedPackage --extend $w04ExtendDirectory --manifest $w04SeedManifest `
-            --source $w04SeedSource --source-manifest $w04SourceManifest 2>&1 |
-            Tee-Object -FilePath (Join-Path $evidenceRoot 'w04-seed.raw.log')
-        if ($LASTEXITCODE -ne 0) { throw 'W04 imagegen seed materialization failed; inspect w04-seed.raw.log.' }
-    }
-    finally { Pop-Location }
-    if (-not (Test-Path -LiteralPath (Join-Path $w04SeedPackage 'SKILL.md') -PathType Leaf)) {
-        throw 'W04 imagegen seed is incomplete: SKILL.md is missing after materialization.'
-    }
-    $w04BunHome = $null
-    $w04BunCandidate = [Environment]::GetEnvironmentVariable('W04_BUN_HOME', 'Process')
-    if ($w04BunCandidate) {
-        # The controller supplies an already-provisioned bun directory; the runner never installs,
-        # fetches or substitutes one and only passes it through to the Gateway (its PATH prefix,
-        # plus the declared HAIFA_SUPER_HARNESS_BUN_PATH executable below).
-        $candidate = [IO.Path]::GetFullPath($w04BunCandidate).TrimEnd('\', '/')
-        if (Test-Path -LiteralPath (Join-Path $candidate 'bun.exe') -PathType Leaf) { $w04BunHome = $candidate }
-    }
-    $w04BunPath = if ($w04BunHome) { (Join-Path $w04BunHome 'bun.exe') } else { $null }
-    # The real package's codex-cli provider resolves `bun` and the wrapper resolves `codex`
-    # from the process PATH, so the codex CLI directory joins the same one-round PATH prefix.
-    # The controller may pin it through W04_CODEX_HOME; otherwise this session's PATH decides.
-    $w04CodexHome = $null
-    $w04CodexCandidate = [Environment]::GetEnvironmentVariable('W04_CODEX_HOME', 'Process')
-    if (-not $w04CodexCandidate) {
-        $codexResolved = Get-Command codex -ErrorAction SilentlyContinue
-        if ($codexResolved) { $w04CodexCandidate = Split-Path -Parent $codexResolved.Source }
-    }
-    if ($w04CodexCandidate) {
-        $codexCandidate = [IO.Path]::GetFullPath($w04CodexCandidate).TrimEnd('\', '/')
-        if (Test-Path -LiteralPath (Join-Path $codexCandidate 'codex.exe') -PathType Leaf) { $w04CodexHome = $codexCandidate }
-    }
-    if ($w04BunHome -and -not $w04CodexHome) {
-        throw 'W04 imagegen round requires the codex CLI next to the declared bun runtime: set W04_CODEX_HOME or put codex.exe on PATH.'
-    }
-    # The W04 profile starts a brand-new data root every round. The per-data-root Credential
-    # Manager provisioning can be unavailable on a host whose Credential Manager is full, so this
-    # profile injects the Runtime continuation key as an external process-environment reference:
-    # one random 256-bit key per round, referenced through HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF
-    # and carried only in the Gateway's process environment. The value is never logged, printed,
-    # recorded in evidence or written to disk by this script.
-    $w04KeyBytes = New-Object byte[] 32
-    [Security.Cryptography.RandomNumberGenerator]::Fill($w04KeyBytes)
-    $w04 = [ordered]@{
-        hostShell = 'on'
-        runtime = $(if ($w04BunPath) { 'declared' } else { 'undeclared' })
-        toolName = 'baoyu_image_gen'
-        skillsDirectory = $w04SkillsDirectory
-        seedPackage = $w04SeedPackage
-        extendPath = (Join-Path $w04ExtendDirectory 'baoyu-image-gen/EXTEND.md')
-        manifest = $w04SeedManifest
-        bunHome = $w04BunHome
-        bunPath = $w04BunPath
-        bunHomeCandidate = $w04BunCandidate
-        codexHome = $w04CodexHome
-        codexPath = $(if ($w04CodexHome) { Join-Path $w04CodexHome 'codex.exe' } else { $null })
-        stagedSource = $w04SeedSource
-        stagedSourceManifest = $w04SourceManifest
-        codexCacheDirectory = $(if ($W04ImageGen) { Join-Path $dataRoot 'baoyu-codex-cache' } else { $null })
-        codexImagegenLog = $(if ($W04ImageGen) { Join-Path $evidenceRoot 'w04-codex-imagegen.jsonl' } else { $null })
-        workspaceStorageRoot = (Join-Path $dataRoot 'workspace')
-    }
-    $w04 | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'w04-profile.json') -Encoding utf8
-    $w04SeedStatus = & python -B (Join-Path $root 'tests/ui/fixtures/w04/baoyu_imagegen_seed.py') `
-        --package $w04SeedPackage --extend $w04ExtendDirectory --manifest $w04SeedManifest `
-        --source $w04SeedSource --source-manifest $w04SourceManifest --verify 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "W04 imagegen seed verification failed: $w04SeedStatus" }
-    $w04DeferredManifest = Get-Content -Raw -LiteralPath (Join-Path $root 'tests/ui/smoke/w04-imagegen-deferred.json') |
-        ConvertFrom-Json
-    # Declared rounds may not defer anything; the undeclared-runtime round defers exactly the
-    # execution cases while A8 alone proves the fail-closed surface.
-    $w04Deferred = if ($w04BunPath) { @() } else { @($w04DeferredManifest.undeclaredRuntimeCases) }
 }
 $serverOut = Join-Path $evidenceRoot "server-$stamp.stdout.log"
 $serverErr = Join-Path $evidenceRoot "server-$stamp.stderr.log"
@@ -273,46 +109,11 @@ $managedEnvironment = @{
     COREPACK_ENABLE_NETWORK = '0'
     W18_PROVIDER_URL = $null
     UXV1_DEFER_WEB = $(if ($DeferUxV1Web) { '1' } else { $null })
-    W15_DIFFERENTIAL_BACKEND = $(if ($W15PackageDifferential) { 'haifa' } else { $null })
-    # W04 imagegen profile: host shell Tool on plus the isolated Skill directory. The recorded bun
-    # directory joins the Gateway PATH below and the declared HAIFA_SUPER_HARNESS_BUN_PATH carries
-    # the exact executable into the product configuration; neither goes through this shared table.
-    HAIFA_SUPER_HARNESS_HOST_SHELL = $(if ($W04ImageGen) { 'on' } else { $null })
-    HAIFA_SUPER_HARNESS_SKILLS_DIR = $(if ($W04ImageGen) { $w04.skillsDirectory } else { $null })
-    HAIFA_SUPER_HARNESS_BUN_PATH = $(if ($W04ImageGen) { $w04.bunPath } else { $null })
-    # The real codex-cli provider resolves bun and codex from the process PATH (the runner joins
-    # both directories there); these BAOYU_* variables only redirect the wrapper's own idempotency
-    # cache and JSONL log into this round's data root and evidence directory, so no user home is
-    # written and no cached image from an earlier round can ever be returned.
-    BAOYU_CODEX_IMAGEGEN_CACHE_DIR = $(if ($W04ImageGen) { Join-Path $dataRoot 'baoyu-codex-cache' } else { $null })
-    BAOYU_CODEX_IMAGEGEN_LOG_FILE = $(if ($W04ImageGen) { Join-Path $evidenceRoot 'w04-codex-imagegen.jsonl' } else { $null })
-    # W04 profile continuation key: external env reference (see the seed block above). The value
-    # table is never persisted; the key itself is only tracked in the process environment.
-    HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF = $(if ($W04ImageGen) { 'env://W04_IMAGEGEN_CONTINUATION_KEY' } else { $null })
-    W04_IMAGEGEN_CONTINUATION_KEY = $(if ($W04ImageGen) { [Convert]::ToBase64String($w04KeyBytes) } else { $null })
-    # W19 scheduled-task profiles: enable the single-instance scheduler worker with a 2s poll so the
-    # bounded UI round observes a real occurrence. The 60s interval floor is the frozen DeerFlow
-    # default and the frozen UI clamps interval edits to >= 60s, so the round waits for one cadence.
-    HAIFA_SUPER_HARNESS_SCHEDULER_ENABLED = $(if ($W19ScheduledTasks -or $W19ScheduledTasksRestart) { '1' } else { $null })
-    HAIFA_SUPER_HARNESS_SCHEDULER_POLL_SECONDS = $(if ($W19ScheduledTasks -or $W19ScheduledTasksRestart) { '2' } else { $null })
-    HAIFA_SUPER_HARNESS_SCHEDULER_MIN_ONCE_DELAY_SECONDS = $(if ($W19ScheduledTasks -or $W19ScheduledTasksRestart) { '30' } else { $null })
     W18_MODEL_NAME = $(if ($LiveDeepSeek) { 'w18-deepseek-live' } else { 'w18-controlled' })
-    W18_PLAYWRIGHT_SPEC = $(if ($W19ScheduledTasksRestart) {
-        'w19-scheduled-tasks-restart.spec.cjs'
-    } elseif ($W19ScheduledTasks) {
-        'w19-scheduled-tasks.spec.cjs'
-    } elseif ($W15PackageDifferential) {
-        'w15-package-differential.spec.cjs'
-    } elseif ($W15LiveSkill) {
-        'w15-live-skill.spec.cjs'
-    } elseif ($UxV1AgentSoul) {
+    W18_PLAYWRIGHT_SPEC = $(if ($UxV1AgentSoul) {
         'ux-v1-agent-soul.spec.cjs'
     } elseif ($UxV1DefaultTools) {
         'ux-v1-default-tools-live.spec.cjs'
-    } elseif ($W04ImageGen) {
-        'w04-skill-imagegen.spec.cjs'
-    } elseif ($W08LiveDelegation) {
-        'w08-delegation-live.spec.cjs'
     } elseif ($LiveDeepSeek) {
         'w18-deepseek-live.spec.cjs'
     } elseif ($ActiveReconnect) {
@@ -333,62 +134,26 @@ $managedEnvironment = @{
         'w15-v2-skill.spec.cjs'
     } elseif ($V2Diagnostics) {
         'w21-v2-diagnostics.spec.cjs'
-    } elseif ($W08Catalog) {
-        'w08-subagent-catalog.spec.cjs'
-    } elseif ($W08Delegation) {
-        'w08-delegation-chat.spec.cjs'
-    } elseif ($LiveRendering) {
-        'w05-live-rendering.spec.cjs'
     } else {
         'w18-ui-smoke.spec.cjs'
     })
-    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill -or $W04ImageGen -or $W19ScheduledTasks -or $W19ScheduledTasksRestart) { '360000' } elseif ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation -or $LiveRendering) { '120000' } else { '60000' })
-    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation -or $LiveRendering) { 'on' } else { 'retain-on-failure' })
-    # Pass index handed to the spec; restored with the rest at the end.
-    W18_PASS_INDEX = '1'
+    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($UxV1DefaultTools -or $UxV1AgentSoul) { '360000' } elseif ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { '120000' } else { '60000' })
+    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics) { 'on' } else { 'retain-on-failure' })
     # Kept disabled through the ordinary build/test gate. The runner enables it
     # only immediately before launching the dedicated guarded test process.
     W05_INTERACTION_ACCEPTANCE = $null
 }
 $savedEnvironment = @{}
 $testExitCode = 1
-$expectedCases = @()
-$selectedCases = @()
-$passesSummary = @()
-$frontendBuild = 'NOT_RUN'
-$providerProcess = $null
-$serverBuild = $(if ($SkipBuild -or $SkipServerBuild) { 'REUSED' } else { 'NOT_RUN' })
-$preflight = [ordered]@{ result = 'NOT_RUN'; assertions = 'NOT_RUN'; servicesStartedDuringPreflight = $false }
+$expectedCases = @([regex]::Matches((Get-Content -Raw (Join-Path $root "tests/ui/smoke/$($managedEnvironment.W18_PLAYWRIGHT_SPEC)")), 'test(?:\.skip|\.only)?\(\s*"([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
 try {
-    $selection = Resolve-SmokeCaseSelection -SpecPath (Join-Path $root "tests/ui/smoke/$($managedEnvironment.W18_PLAYWRIGHT_SPEC)") -CaseTitle $CaseTitle
-    $expectedCases = $selection.All
-    $selectedCases = $selection.Selected
-    Assert-SmokeEnvironment -Environment $managedEnvironment -DataRoot $dataRoot -GatewayBaseUrl $internalGatewayBaseUrl `
-        -Controlled (-not $LiveDeepSeek) -ContextWindow $controlledContextWindow
-    $preflight.dependencies = Assert-SmokeDependencies -RepositoryRoot $root
     # Reject the complete pair before starting any process, including build commands.
     Assert-FixturePortsBindable -Ports @($GatewayPort, $FrontendPort) -EvidenceDirectory $evidenceRoot
     $sdk = Resolve-HaifaSdkSelection -RepositoryRoot $root
     $null = New-Item -ItemType Directory -Force -Path $dataRoot
     foreach ($name in $managedEnvironment.Keys) {
         $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
-        $managedValue = $managedEnvironment[$name]
-        if ([string]::IsNullOrEmpty($managedValue)) {
-            # SetEnvironmentVariable($null) leaves an already-empty variable set. An empty
-            # continuation-key reference is not env:// or os:// and the Gateway rejects it.
-            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
-        } else {
-            [Environment]::SetEnvironmentVariable($name, $managedValue, 'Process')
-        }
-    }
-    if ($W04ImageGen -and $w04.bunHome) {
-        # Only ever a PATH prefix for this round; the save/restore loop below restores it. The
-        # codex directory joins the prefix so the package's codex-cli provider can resolve `bun`
-        # and its wrapper can resolve `codex` from the process PATH.
-        $savedEnvironment['PATH'] = [Environment]::GetEnvironmentVariable('PATH', 'Process')
-        $pathPrefix = $w04.bunHome
-        if ($w04.codexHome) { $pathPrefix = "$($w04.codexHome);$pathPrefix" }
-        [Environment]::SetEnvironmentVariable('PATH', "$pathPrefix;$($savedEnvironment['PATH'])", 'Process')
+        [Environment]::SetEnvironmentVariable($name, $managedEnvironment[$name], 'Process')
     }
     $profile = & (Join-Path $root 'scripts/frontend/verify-haifa-frontend-profile.ps1') `
         -RepositoryRoot $root `
@@ -397,7 +162,9 @@ try {
         throw 'W18 Haifa frontend profile verification failed.'
     }
     $profile | Set-Content -LiteralPath (Join-Path $evidenceRoot "profile-$stamp.json") -Encoding utf8
-    # Warm-build checks are also preflight checks; no build or process has started.
+    Set-FixturePhase $fixture 'build'
+
+    # The Interaction profile runs the Gateway from the test classpath, not the exec JAR.
     $reuseServerBuild = ($SkipBuild -or $SkipServerBuild) -and -not $Interaction
     if ($reuseServerBuild) {
         Assert-ServerBuildStamp -RepositoryRoot $root -HaifaVersion $sdk.HaifaVersion
@@ -405,34 +172,8 @@ try {
     if ($SkipBuild) {
         Assert-FrontendBuildStamp -RepositoryRoot $root -InternalGatewayBaseUrl $internalGatewayBaseUrl
     }
-    $preflight.result = 'PASS'
-    $preflight.sdkSelection = $sdk.Status
-    $preflight.haifaVersion = $sdk.HaifaVersion
-    $preflight.selectedCases = $selectedCases
-    $preflight.w04 = $(if ($W04ImageGen) { $w04 } else { $null })
-    if ($PreflightOnly) {
-        $preflight | ConvertTo-Json -Depth 5 | Write-Output
-        return
-    }
-    Set-FixturePhase $fixture 'build'
-
-    # The Interaction profile runs the Gateway from the test classpath, not the exec JAR.
     if (-not $SkipBuild) {
-        $serverReusable = $false
-        if (-not $SkipServerBuild -and -not $Interaction) {
-            # Same source and SDK as the stamped JAR (for example the previous round or the full
-            # gate): packaging again would only reproduce it.
-            try {
-                Assert-ServerBuildStamp -RepositoryRoot $root -HaifaVersion $sdk.HaifaVersion
-                $serverReusable = $true
-                $serverBuild = 'REUSED'
-            }
-            catch {
-                $serverReusable = $false
-            }
-        }
-        if (-not $SkipServerBuild -and -not $serverReusable) {
-            $serverBuild = 'BUILT'
+        if (-not $SkipServerBuild) {
         Remove-BuildStamp (Get-ServerBuildStampPath $root)
         Push-Location $root
         try {
@@ -445,41 +186,21 @@ try {
         finally {
             Pop-Location
         }
-            Write-ServerBuildStamp -RepositoryRoot $root -HaifaVersion $sdk.HaifaVersion
+        Write-ServerBuildStamp -RepositoryRoot $root -HaifaVersion $sdk.HaifaVersion
         }
 
-        # The frozen frontend almost never changes: reuse this worktree's build when its stamp still
-        # matches, else restore the shared cached build, and only run `pnpm build` when neither exists.
+        Remove-BuildStamp (Get-FrontendBuildStampPath $root)
+        Push-Location (Join-Path $root 'frontend')
         try {
-            Assert-FrontendBuildStamp -RepositoryRoot $root -InternalGatewayBaseUrl $internalGatewayBaseUrl
-            $frontendBuild = 'REUSED'
-        }
-        catch {
-            Remove-BuildStamp (Get-FrontendBuildStampPath $root)
-            $buildCache = Join-Path $root 'scripts/lib/frontend_build_cache.py'
-            $null = & python $buildCache restore --repo $root --gateway $internalGatewayBaseUrl
-            if ($LASTEXITCODE -eq 0) {
-                $frontendBuild = 'RESTORED'
+            & corepack pnpm build 2>&1 | Tee-Object -FilePath (Join-Path $evidenceRoot 'frontend-build.raw.log')
+            if ($LASTEXITCODE -ne 0) {
+                throw "Frozen frontend build failed with exit code $LASTEXITCODE."
             }
-            else {
-                Push-Location (Join-Path $root 'frontend')
-                try {
-                    & corepack pnpm build 2>&1 | Tee-Object -FilePath (Join-Path $evidenceRoot 'frontend-build.raw.log')
-                    if ($LASTEXITCODE -ne 0) {
-                        throw "Frozen frontend build failed with exit code $LASTEXITCODE."
-                    }
-                }
-                finally {
-                    Pop-Location
-                }
-                $null = & python $buildCache store --repo $root --gateway $internalGatewayBaseUrl
-                $frontendBuild = 'BUILT'
-            }
-            Write-FrontendBuildStamp -RepositoryRoot $root -InternalGatewayBaseUrl $internalGatewayBaseUrl
         }
-    }
-    else {
-        $frontendBuild = 'REUSED'
+        finally {
+            Pop-Location
+        }
+        Write-FrontendBuildStamp -RepositoryRoot $root -InternalGatewayBaseUrl $internalGatewayBaseUrl
     }
     Set-FixturePhase $fixture 'readiness'
 
@@ -493,7 +214,6 @@ try {
     }
 
     $providerUrl = $null
-    $providerProcess = $null
     if (-not $LiveDeepSeek) {
         $providerScript = Join-Path $root 'tests/ui/smoke/loopback-openai-provider.cjs'
         $providerProcess = Start-FixtureProcess -Fixture $fixture -Name Provider -FilePath (Get-Command node.exe).Source `
@@ -522,7 +242,7 @@ try {
     if ($Interaction) {
         [Environment]::SetEnvironmentVariable('W05_INTERACTION_ACCEPTANCE', '1', 'Process')
         $gatewayFile = (Get-Command mvn.cmd).Source
-        $gatewayArgs = @('-o', '-ntp', '-pl', 'super-harness-server', '-am', '-Dtest=InteractionAcceptanceServerTest', '-Dsurefire.failIfNoSpecifiedTests=false', '-DforkCount=1') + @(@($sdk.MavenArgument) -ne $null) + @('test')
+        $gatewayArgs = @('-o', '-ntp', '-pl', 'super-harness-server', '-am', '-Dtest=InteractionAcceptanceServerTest', '-Dsurefire.failIfNoSpecifiedTests=false', '-DforkCount=0') + @(@($sdk.MavenArgument) -ne $null) + @('test')
     } else {
         $gatewayFile = (Get-Command java.exe).Source
         $gatewayArgs = @('-jar', $jar)
@@ -563,7 +283,7 @@ try {
                 # The full frozen Lead prompt, production Tool catalog and optional Skill
                 # body must fit together. 8192 rejects even the default smoke before
                 # any Provider request with MODEL_CONTEXT_TOO_LONG.
-                context_window = $controlledContextWindow
+                context_window = 32768
                 max_tokens = 1024
                 api_key = 'w18-loopback-only'
             }
@@ -611,7 +331,7 @@ try {
                 base_url = "$providerUrl/v1"
                 enabled = $true
                 supports_vision = $false
-                context_window = $controlledContextWindow
+                context_window = 32768
                 max_tokens = 1024
                 api_key = 'w18-loopback-only'
             }
@@ -663,94 +383,22 @@ try {
         evidenceRoot = $evidenceRoot
     } | ConvertTo-Json
 
-    if ($Passes -gt 1) {
-        # One service start, several independent Playwright processes. A failing pass does not
-        # stop the later ones unless the service itself is no longer healthy (a pass that cannot
-        # launch still only fails itself; readiness was already asserted before the loop).
-        $allowedNotRun = @($(if ($DeferUxV1Web) { 'C web: web_search -> web_fetch without approval' }) + $w04Deferred)
-        for ($passIndex = 1; $passIndex -le $Passes; $passIndex++) {
-            $passDir = Join-Path $evidenceRoot "pass-$passIndex"
-            $null = New-Item -ItemType Directory -Force -Path $passDir
-            [Environment]::SetEnvironmentVariable('W18_PASS_INDEX', [string]$passIndex, 'Process')
-            # Playwright's own report (results.json, artifacts/) goes to this pass's directory so
-            # one pass cannot overwrite another. W18_EVIDENCE_DIR stays the round directory:
-            # several specs read the Provider log that the runner writes there.
-            [Environment]::SetEnvironmentVariable('W18_PLAYWRIGHT_OUTPUT_DIR', $passDir, 'Process')
-            $passStartMs = $fixture.Watch.ElapsedMilliseconds
-            $passExit = $null
-            $passFailure = $null
-            Push-Location $root
-            try {
-                $playwrightArguments = @((Join-Path $root 'frontend/node_modules/@playwright/test/cli.js'), 'test', '--config', 'tests/ui/smoke/playwright.config.cjs')
-                if ($selection.Grep) { $playwrightArguments += @('--grep', $selection.Grep) }
-                $playwright = Start-FixtureProcess -Fixture $fixture -Name "Playwright$passIndex" -FilePath (Get-Command node.exe).Source `
-                    -ArgumentList $playwrightArguments `
-                    -WorkingDirectory $root -StdoutPath (Join-Path $passDir 'playwright.raw.log') -StderrPath (Join-Path $passDir 'playwright.stderr.log')
-                $passExit = Wait-FixtureExit -Entry $playwright `
-                    -TimeoutSec ([Math]::Max(1, $selectedCases.Count) * ([int]$managedEnvironment.W18_PLAYWRIGHT_TIMEOUT_MS / 1000) + 60)
-            }
-            catch { $passFailure = $_.Exception.Message }
-            finally { Pop-Location }
-            try {
-                Write-FixtureCaseResults -EvidenceDirectory $passDir -ExpectedCases $expectedCases
-                $passCases = @(Get-Content -Raw (Join-Path $passDir 'case-results.json') | ConvertFrom-Json)
-                Assert-SmokeCaseResults -Rows $passCases -SelectedCases $selectedCases -AllowedNotRun $allowedNotRun
-                if ($passExit -ne 0) { throw "Playwright exit code $passExit." }
-            }
-            catch {
-                if ($null -eq $passFailure) { $passFailure = $_.Exception.Message }
-                if ($null -eq $fixture.FirstFailure) { $fixture.FirstFailure = [ordered]@{ phase = 'assertions'; message = $passFailure; pass = $passIndex } }
-            }
-            # The round's exit code must stay non-zero once any pass failed: a later green pass
-            # must not make flow-health report testExitCode 0 for a failed repeated run.
-            $passCode = if ($null -ne $passFailure -and ($null -eq $passExit -or $passExit -eq 0)) { 1 } else { $passExit }
-            if ($passIndex -eq 1 -or $null -eq $fixture.TestExitCode -or $fixture.TestExitCode -eq 0) {
-                $fixture.TestExitCode = $passCode
-            }
-            $passesSummary += [ordered]@{
-                profile = $tag; pass = $passIndex
-                assertionMs = $fixture.Watch.ElapsedMilliseconds - $passStartMs
-                exitCode = $passExit; firstFailure = $passFailure
-                caseResults = "pass-$passIndex/case-results.json"
-            }
-        }
-        [Environment]::SetEnvironmentVariable('W18_PLAYWRIGHT_OUTPUT_DIR', $null, 'Process')
-        [ordered]@{ root = $evidenceRoot; runs = @($passesSummary | ForEach-Object {
-            [ordered]@{ profile = $_.profile; pass = $_.pass; directory = (Join-Path $evidenceRoot "pass-$($_.pass)")
-                relativeDirectory = "pass-$($_.pass)"; caseResults = $_.caseResults
-                assertionMs = $_.assertionMs; exitCode = $_.exitCode; firstFailure = $_.firstFailure } }) } |
-            ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'ui-round-plan.json') -Encoding utf8
-        $failedPasses = @($passesSummary | Where-Object { $_.exitCode -ne 0 -or $_.firstFailure })
-        if ($failedPasses.Count) { throw "W18 UI smoke: $($failedPasses.Count) of $Passes passes failed." }
-        [ordered]@{ passes = $Passes; results = @($passesSummary | ForEach-Object { [ordered]@{ pass = $_.pass; exitCode = $_.exitCode; firstFailure = $_.firstFailure; caseResults = $_.caseResults } }) } | ConvertTo-Json -Compress | Write-Output
+    Push-Location $root
+    try {
+        $playwright = Start-FixtureProcess -Fixture $fixture -Name Playwright -FilePath (Get-Command node.exe).Source `
+            -ArgumentList @((Join-Path $root 'frontend/node_modules/@playwright/test/cli.js'), 'test', '--config', 'tests/ui/smoke/playwright.config.cjs') `
+            -WorkingDirectory $root -StdoutPath (Join-Path $evidenceRoot 'playwright.raw.log') -StderrPath (Join-Path $evidenceRoot 'playwright.stderr.log')
+        $testExitCode = Wait-FixtureExit -Entry $playwright `
+            -TimeoutSec ([Math]::Max(1, $expectedCases.Count) * ([int]$managedEnvironment.W18_PLAYWRIGHT_TIMEOUT_MS / 1000) + 60)
+        Get-Content -LiteralPath (Join-Path $evidenceRoot 'playwright.raw.log')
+        $fixture.TestExitCode = $testExitCode
+        if ($testExitCode -ne 0) { throw "W18 UI smoke failed with exit code $testExitCode." }
     }
-    else {
-        Push-Location $root
-        try {
-            $playwrightArguments = @((Join-Path $root 'frontend/node_modules/@playwright/test/cli.js'), 'test', '--config', 'tests/ui/smoke/playwright.config.cjs')
-            if ($selection.Grep) { $playwrightArguments += @('--grep', $selection.Grep) }
-            $playwright = Start-FixtureProcess -Fixture $fixture -Name Playwright -FilePath (Get-Command node.exe).Source `
-                -ArgumentList $playwrightArguments `
-                -WorkingDirectory $root -StdoutPath (Join-Path $evidenceRoot 'playwright.raw.log') -StderrPath (Join-Path $evidenceRoot 'playwright.stderr.log')
-            $testExitCode = Wait-FixtureExit -Entry $playwright `
-                -TimeoutSec ([Math]::Max(1, $selectedCases.Count) * ([int]$managedEnvironment.W18_PLAYWRIGHT_TIMEOUT_MS / 1000) + 60)
-            $fixture.TestExitCode = $testExitCode
-            if ($testExitCode -ne 0) { throw "W18 UI smoke failed with exit code $testExitCode." }
-            Write-FixtureCaseResults -EvidenceDirectory $evidenceRoot -ExpectedCases $expectedCases
-            $actualCases = @(Get-Content -Raw (Join-Path $evidenceRoot 'case-results.json') | ConvertFrom-Json)
-            $allowedNotRun = @($(if ($DeferUxV1Web) { 'C web: web_search -> web_fetch without approval' }) + $w04Deferred)
-            Assert-SmokeCaseResults -Rows $actualCases -SelectedCases $selectedCases -AllowedNotRun $allowedNotRun
-            [ordered]@{ selected = $selectedCases.Count; passed = @($actualCases | Where-Object result -eq 'PASS').Count
-                notRun = @($actualCases | Where-Object result -eq 'NOT_RUN').Count; exitCode = $testExitCode
-                rawLog = (Join-Path $evidenceRoot 'playwright.raw.log') } | ConvertTo-Json -Compress | Write-Output
-        }
-        finally {
-            Pop-Location
-        }
+    finally {
+        Pop-Location
     }
 }
 catch {
-    if ($preflight.result -ne 'PASS') { $preflight.result = 'FAIL' }
     $fixture.FirstFailure = [ordered]@{ phase = $fixture.Phase; message = $_.Exception.Message }
     throw
 }
@@ -762,7 +410,6 @@ finally {
         throw
     }
     finally {
-        $preflight | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'preflight.json') -Encoding utf8
         foreach ($name in $savedEnvironment.Keys) {
             [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
         }
@@ -770,18 +417,7 @@ finally {
         Write-FixtureFlowHealth $fixture -ExpectedCases $expectedCases -Extra @{
             acceptanceProfile = $tag; sdkSelection = $sdk.Status; haifaVersion = $sdk.HaifaVersion
             serverBuildReused = [bool]($SkipBuild -or $SkipServerBuild); webDeferred = [bool]$DeferUxV1Web
-            frontendBuild = $frontendBuild
-            serverBuild = $serverBuild
             dataRoot = $dataRoot
-            executionScope = $(if ($PreflightOnly) { 'preflight-only' } elseif ($CaseTitle) { 'selected-case' } else { 'full-profile' })
-            selectedCases = $selectedCases
-            passes = $passesSummary
-        }
-        if ($Passes -gt 1) {
-            # Merge the per-pass case results into the top-level file and record the passes array
-            # in flow-health (already set from $passesSummary above when the file is valid JSON).
-            & python -B (Join-Path $root 'scripts/lib/ui_round_plan.py') merge --root $evidenceRoot --runs (Join-Path $evidenceRoot 'ui-round-plan.json')
-            if ($LASTEXITCODE -ne 0) { Write-Host 'run-w18-ui-smoke: repeated-pass evidence merge failed.' }
         }
         Write-Output "flowHealth=$evidenceRoot/flow-health.json"
     }
