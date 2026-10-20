@@ -21,10 +21,13 @@ $frontendPort = 25618
 $null = New-Item -ItemType Directory -Force -Path $evidence
 
 . (Join-Path $PSScriptRoot '../lib/run-fixture.ps1')
-function Get-OwnedRuntimeProcesses { param([string]$Root) Get-FixtureOwnedRuntimeProcesses $Root }
+function Get-OwnedRuntimeProcesses {
+    param([string]$Root, [DateTime]$Since = [DateTime]::MinValue)
+    Get-FixtureOwnedRuntimeProcesses $Root $Since
+}
 function Assert-RoundReleased {
-    param([string]$Root, [int[]]$Ports, [string]$RoundName)
-    Assert-FixtureRoundReleased $Root $Ports $RoundName
+    param([string]$Root, [int[]]$Ports, [string]$RoundName, [DateTime]$Since = [DateTime]::MinValue)
+    Assert-FixtureRoundReleased -Root $Root -Ports $Ports -RoundName $RoundName -Since $Since
 }
 
 $rounds = @(
@@ -53,8 +56,8 @@ foreach ($round in $rounds) {
     $runEvidence = $newRuns[0].FullName
 
     # Automatic, failing cleanup gate for this round's own slot processes.
-    Assert-RoundReleased -Root $root -Ports @($gatewayPort, $frontendPort) -RoundName $round.name
-    $ownedAfter = @(Get-OwnedRuntimeProcesses -Root $root)
+    Assert-RoundReleased -Root $root -Ports @($gatewayPort, $frontendPort) -RoundName $round.name -Since $started
+    $ownedAfter = @(Get-OwnedRuntimeProcesses -Root $root -Since $started)
 
     # Remove only this round's exact evidence directory before re-preserving it, so a
     # rerun cannot leave stale/nested round results behind.

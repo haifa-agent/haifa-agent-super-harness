@@ -53,7 +53,7 @@ Check 'real-provider-and-dead-child-finally-cleanup' {
         }
         if (-not $failed -or $watch.Elapsed.TotalSeconds -ge 5) { throw 'Dead child was not rejected promptly with stderr evidence' }
     } finally { Stop-FixtureProcesses $f; Write-FixtureFlowHealth $f -ExpectedCases @('diagnostic: no UI assertions') }
-    if (-not $f.Cleanup.success -or @(Get-FixtureOwnedRuntimeProcesses $root).Count) { throw 'Managed processes remained after finally' }
+    if (-not $f.Cleanup.success -or @(Get-FixtureOwnedRuntimeProcesses $root $f.StartedAt).Count) { throw 'Managed processes remained after finally' }
 }
 Check 'case-results-preserve-fail-and-not-run' {
     $report = @{ suites = @(@{ specs = @(
@@ -91,6 +91,25 @@ Check 'release-waits-for-tracked-child-without-runtime-or-ports' {
         if (-not $child.HasExited -or [Diagnostics.Stopwatch]::GetElapsedTime($started).TotalMilliseconds -lt 1000) {
             throw 'Release returned while a tracked non-runtime child was still exiting'
         }
+    } finally { if (-not $child.HasExited) { $child.Kill(); $child.WaitForExit() }; $child.Dispose() }
+}
+Check 'pre-existing-runtime-is-not-owned-by-a-later-fixture' {
+    $scriptFile = Join-Path $EvidenceDirectory 'pre-existing-runtime.cjs'
+    [IO.File]::WriteAllText($scriptFile, 'setTimeout(() => {}, 15000);')
+    $child = Start-Process -FilePath (Get-Command node.exe).Source -ArgumentList @($scriptFile, $root) `
+        -WorkingDirectory $root -WindowStyle Hidden -PassThru
+    try {
+        # The node process predates the fixture but its command line contains the repository
+        # root, so ownership must be bounded by the fixture start time (as with the main service).
+        Start-Sleep -Milliseconds 300
+        $fixture = New-RunFixture $root 1 eng-runner-library diagnostic @()
+        $started = [Diagnostics.Stopwatch]::GetTimestamp()
+        $null = Wait-FixturePortsReleased -Ports @() -Started $started -TimeoutSec 2 -Root $root -Since $fixture.StartedAt
+        if (@(Get-FixtureOwnedRuntimeProcesses $root $fixture.StartedAt).Count -ne 0) {
+            throw 'Pre-existing runtime was treated as fixture-owned'
+        }
+        $child.Refresh()
+        if ($child.HasExited) { throw 'Pre-existing runtime was stopped' }
     } finally { if (-not $child.HasExited) { $child.Kill(); $child.WaitForExit() }; $child.Dispose() }
 }
 Check 'tracked-child-timeout-retains-original-deadline' {

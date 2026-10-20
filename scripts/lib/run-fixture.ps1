@@ -94,6 +94,7 @@ function New-RunFixture {
     $null = New-Item -ItemType Directory -Force -Path $evidence
     [pscustomobject]@{
         Root = $root; Base = $base; Evidence = $evidence; BuildMode = $BuildMode
+        StartedAt = [DateTime]::UtcNow
         Ports = [Collections.Generic.List[int]]::new([int[]]$Ports)
         Processes = [Collections.Generic.List[object]]::new()
         Watch = [Diagnostics.Stopwatch]::StartNew(); Timings = [ordered]@{}
@@ -234,9 +235,12 @@ function Get-FixtureProcessSnapshot {
 }
 
 function Get-FixtureOwnedRuntimeProcesses {
-    param([string]$Root)
+    param([string]$Root, [DateTime]$Since = [DateTime]::MinValue)
     @(Get-CimInstance Win32_Process -Filter "Name='java.exe' or Name='node.exe'" -ErrorAction Stop |
-        Where-Object { $_.CommandLine -and $_.CommandLine.Contains($Root, [StringComparison]::OrdinalIgnoreCase) })
+        Where-Object {
+            $_.CommandLine -and $_.CommandLine.Contains($Root, [StringComparison]::OrdinalIgnoreCase) -and
+            ($Since -eq [DateTime]::MinValue -or $_.CreationDate.ToUniversalTime() -ge $Since.ToUniversalTime())
+        })
 }
 
 function Wait-FixtureExit {
@@ -263,7 +267,8 @@ function Wait-FixtureExit {
 }
 
 function Wait-FixturePortsReleased {
-    param([int[]]$Ports, [long]$Started, [int]$TimeoutSec, [string]$Root = '', [object[]]$OwnedFacts = @())
+    param([int[]]$Ports, [long]$Started, [int]$TimeoutSec, [string]$Root = '', [object[]]$OwnedFacts = @(),
+        [DateTime]$Since = [DateTime]::MinValue)
     $facts = @{}; $first = @{}
     do {
         foreach ($port in $Ports) {
@@ -284,7 +289,9 @@ function Wait-FixturePortsReleased {
         if ($Root) {
             $owned = @(foreach ($process in $snapshot.Values) {
                 if ($process.Name -in @('java.exe', 'node.exe') -and $process.CommandLine -and
-                    $process.CommandLine.Contains($Root, [StringComparison]::OrdinalIgnoreCase)) { $process }
+                    $process.CommandLine.Contains($Root, [StringComparison]::OrdinalIgnoreCase) -and
+                    ($Since -eq [DateTime]::MinValue -or
+                        $process.CreationDate.ToUniversalTime() -ge $Since.ToUniversalTime())) { $process }
             })
         }
         $remaining = @(foreach ($fact in $OwnedFacts) {
@@ -309,9 +316,9 @@ function Wait-FixturePortsReleased {
 }
 
 function Assert-FixtureRoundReleased {
-    param([string]$Root, [int[]]$Ports, [string]$RoundName)
+    param([string]$Root, [int[]]$Ports, [string]$RoundName, [DateTime]$Since = [DateTime]::MinValue)
     $started = [Diagnostics.Stopwatch]::GetTimestamp()
-    $null = Wait-FixturePortsReleased -Ports $Ports -Started $started -TimeoutSec 15 -Root $Root
+    $null = Wait-FixturePortsReleased -Ports $Ports -Started $started -TimeoutSec 15 -Root $Root -Since $Since
 }
 
 function Stop-FixtureProcesses {
@@ -365,7 +372,7 @@ function Stop-FixtureProcesses {
     $released = @()
     try {
         if ($Fixture.Processes.Count) {
-            $released = @(Wait-FixturePortsReleased -Ports $ports -Started $started -TimeoutSec $budget -Root $Fixture.Root -OwnedFacts $ownedFacts)
+            $released = @(Wait-FixturePortsReleased -Ports $ports -Started $started -TimeoutSec $budget -Root $Fixture.Root -OwnedFacts $ownedFacts -Since $Fixture.StartedAt)
         } else {
             # Preflight can reject another owner's port. We created no process and must not stop that owner.
             $released = @(foreach ($port in $ports) { @{ port = $port; bindable = Test-FixtureLoopbackBind $port; managed = $false } })
