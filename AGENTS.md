@@ -104,7 +104,7 @@
 #### SHPM 登记
 
 - 派工用 `shpm task dispatch <任务ID> --wp <工作包ID> --executor <执行者> --branch <分支> --worktree <worktree 绝对路径> --slot <1-6> --data-root <独立数据目录> [--prompt <提示词相对路径>] [--exit <退出条件>] [--stage <SPRINT/STAGE>]`，由 SHPM 在单事务内完成 task create（含提示词登记）、sprint link、task start 和 assign create。先用 `--dry-run` 核对将写入的对象、端口和 SHA，再去掉该开关。
-- 槽位 1–6 的 Gateway/Frontend 端口来自仓库根目录跟踪的 `.shpm/slots.json`，不再由仓库脚本硬编码；新检出缺失时运行 `shpm slot init --template default` 生成并提交。上游 SDK 任务的 worktree 属于 `D:\workspace\haifa-agent` 时用 `--repo 'D:\workspace\haifa-agent'` 指定；`--base-sha` 默认由 worktree 的 `HEAD` 推导。
+- 槽位 1–6 的 Gateway/Frontend 端口来自仓库根目录跟踪的 `.shpm/slots.json`，不再由仓库脚本硬编码；新检出缺失时运行 `shpm slot init --template default` 生成并提交。`--template default` 的槽位 4 为 `50618/55618`，与本仓库端口表不符，须用 `shpm slot set 4 --gateway-port 11618 --frontend-port 16618` 改正后以 `.shpm/slots.json` 为准。上游 SDK 任务的 worktree 属于 `D:\workspace\haifa-agent` 时用 `--repo 'D:\workspace\haifa-agent'` 指定；`--base-sha` 默认由 worktree 的 `HEAD` 推导。
 - 脚本回归用 `pwsh -NoProfile -File scripts/verify-scripts.ps1`，摘要写 `local-tmp/verify-scripts/`。
 - 门禁结果用 `shpm verify ingest <证据组目录...> --task <任务ID> [--raw-root <已归档位置>] [--dry-run]` 登记全仓门禁摘要、脚本回归摘要、UI 证据目录和主服务刷新摘要；与旧的薄封装不同，默认即写入，先用 `--dry-run` 核对。结果原样登记，`deliver`、`accept`、阶段结果和 `GO` 仍由主控手工执行。登记时区分 L1 日常门禁与 L2 差分证据，避免把 WP 出口差分误记为每个子任务的 PR 门禁。
 - 远程模式在环境中设置 `SHPM_SERVER='http://<host>:8787'`，CLI 通过 `/api/v1` 调度并自动复用 `~/.shpm/auth.json` 或 `SHPM_TOKEN`；命令语法、输出契约和退出码与本地模式一致。参数与适配器细节见 [SHPM 使用手册](docs/shpm-manual.md)。

@@ -77,7 +77,7 @@ shpm sprint show $sprintId --json
 
 派工前核对独立 branch/worktree、基线 SHA、槽位、全部端口和数据目录，并按 `AGENTS.md`「端口」完成实际绑定预检。提示词、分支、worktree、数据目录和端口在写库前由 `task dispatch` 预检；SHPM 记录资源分配，实际端口隔离仍由主控检查。
 
-槽位端口由仓库根目录跟踪的 `.shpm/slots.json` 解析；文件缺失时先运行 `shpm slot init --template default` 生成并提交。也可用 `--slots-file <路径>` 或环境变量 `SHPM_SLOTS_FILE` 指定，或用 `shpm slot list --json` 查看当前注册表。
+槽位端口由仓库根目录跟踪的 `.shpm/slots.json` 解析；文件缺失时先运行 `shpm slot init --template default` 生成并提交。注意模板的槽位 4 为 `50618/55618`，本仓库须执行 `shpm slot set 4 --gateway-port 11618 --frontend-port 16618` 修正。也可用 `--slots-file <路径>` 或环境变量 `SHPM_SLOTS_FILE` 指定，或用 `shpm slot list --json` 查看当前注册表。
 
 ```powershell
 $promptPath='<提示词相对仓库根的路径>'

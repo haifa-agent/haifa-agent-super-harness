@@ -1,0 +1,26 @@
+{
+  "1": {
+    "frontend": 25618,
+    "gateway": 20618
+  },
+  "2": {
+    "frontend": 35618,
+    "gateway": 30618
+  },
+  "3": {
+    "frontend": 45618,
+    "gateway": 40618
+  },
+  "4": {
+    "frontend": 16618,
+    "gateway": 11618
+  },
+  "5": {
+    "frontend": 26618,
+    "gateway": 21618
+  },
+  "6": {
+    "frontend": 27618,
+    "gateway": 22618
+  }
+}

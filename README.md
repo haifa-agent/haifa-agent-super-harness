@@ -169,7 +169,7 @@ SHPM 的治理侧交付任务上限为 32（人工 2026-10-09 决策）；已登
 
 派工和门禁证据登记使用 SHPM 原生 `shpm task dispatch` / `shpm verify ingest`，不再维护仓库内的薄封装脚本。
 槽位 1–6 的 Gateway/Frontend 端口由仓库根目录跟踪的 `.shpm/slots.json` 解析；新检出缺失时运行
-`shpm slot init --template default` 生成并提交。远程模式设置 `SHPM_SERVER='http://<host>:8787'`，CLI 通过
+`shpm slot init --template default` 生成并提交，再用 `shpm slot set 4 --gateway-port 11618 --frontend-port 16618` 修正模板的槽位 4。远程模式设置 `SHPM_SERVER='http://<host>:8787'`，CLI 通过
 `/api/v1` 调度并自动复用 `~/.shpm/auth.json` 或 `SHPM_TOKEN`；本地模式不设置该变量。环境准备和完整操作流程见
 [SHPM 使用手册](docs/shpm-manual.md)。
 
