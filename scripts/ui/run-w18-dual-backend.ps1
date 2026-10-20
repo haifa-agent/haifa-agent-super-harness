@@ -420,6 +420,11 @@ try {
         # this profile selects the scheduled-tasks differential spec explicitly.
         $env:W18_DUAL_PLAYWRIGHT_SPEC = 'w19-scheduled-tasks.spec.cjs'
     }
+    else {
+        # A previous W19 invocation in the same PowerShell process must not shrink
+        # the next V2 differential run to the W19 spec only.
+        Remove-Item Env:W18_DUAL_PLAYWRIGHT_SPEC -ErrorAction SilentlyContinue
+    }
     $env:W18_DIFFERENTIAL_BACKEND = $Backend
     $env:W18_REFERENCE_IDENTITY_ENCODING = $(if ($ReferenceIdentityEncoding) { '1' } else { '0' })
     $env:W18_DIFFERENTIAL_EVIDENCE = $evidenceRoot
