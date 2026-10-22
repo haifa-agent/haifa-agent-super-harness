@@ -54,6 +54,21 @@ class FeishuFormSchemaTest {
     }
 
     @Test
+    void numberTextInputsRejectInvalidValuesAndPreserveWebSubmissionStrings() {
+        FeishuPendingInput pending = form(List.of(field("count", "数量", "number")));
+        for (String invalid : List.of("abc", "NaN", "Infinity", "1e999", "0x10", "1,000")) {
+            assertThat(FeishuInteraction.formValidationError(pending, Map.of("count", invalid)))
+                    .as("reject numeric value %s", invalid).isEqualTo(FeishuInteraction.INVALID_NUMBER);
+        }
+        for (String valid : List.of("0", "-12.5", ".25", "1e3")) {
+            assertThat(FeishuInteraction.formValidationError(pending, Map.of("count", valid))).isEmpty();
+        }
+        assertThat(FeishuInteraction.formValidationError(pending, Map.of())).isEqualTo(FeishuInteraction.EMPTY_FORM);
+        assertThat(FeishuInteraction.buildFormSubmissionValue(pending, Map.of("count", "12.5")))
+                .contains("\"count\":\"12.5\"");
+    }
+
+    @Test
     void contractRejectsHistoricalUndocumentedPropertiesAndInputType() {
         assertThatThrownBy(() -> assertComponent(json.valueToTree(Map.of(
                         "tag", "select_static", "name", "one", "label", Map.of("tag", "plain_text", "content", "x")))))

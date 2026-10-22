@@ -10,11 +10,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.UUID;
 
 /** Parses frozen human-input cards and builds the Feishu card plus the uplink human message. */
 public final class FeishuInteraction {
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final Pattern FORM_NUMBER =
+            Pattern.compile("-?(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?");
     /**
      * Clarification Form v2 field types Feishu Card 2.0 can render natively. Matches the product
      * form vocabulary in {@code ClarificationRequestNormalizer}; each type maps to one Card element
@@ -37,6 +40,7 @@ public final class FeishuInteraction {
     public static final String FORM_SUBMIT = "form_submit";
     public static final String EMPTY_OTHER = "请输入回答后再提交。";
     public static final String EMPTY_FORM = "请填写必填字段后再提交。";
+    public static final String INVALID_NUMBER = "请在数字字段中填写有效数字后再提交。";
     /**
      * Legacy text ACK when reactions are disabled ({@code HAIFA_SUPER_HARNESS_FEISHU_REACTIONS=false})
      * or the reaction API is unavailable. Hermes-aligned default uses {@link #REACTION_IN_PROGRESS}.
@@ -303,6 +307,25 @@ public final class FeishuInteraction {
             }
         }
         return false;
+    }
+
+    /** Feishu text inputs must enforce the numeric constraint supplied by the Web number input. */
+    public static String formValidationError(FeishuPendingInput pending, Map<String, Object> formValues) {
+        if (formMissingRequired(pending, formValues)) {
+            return EMPTY_FORM;
+        }
+        Map<String, Object> values = formValues == null ? Map.of() : formValues;
+        for (FeishuPendingInput.Field field : pending.fields()) {
+            Object value = values.get(field.name());
+            if (!"number".equals(field.type()) || isEmptyFormValue(value)) {
+                continue;
+            }
+            String text = String.valueOf(value).trim();
+            if (!FORM_NUMBER.matcher(text).matches() || !Double.isFinite(Double.parseDouble(text))) {
+                return INVALID_NUMBER;
+            }
+        }
+        return "";
     }
 
     public static String formNotice(FeishuPendingInput pending) {

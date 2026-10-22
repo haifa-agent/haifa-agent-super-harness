@@ -614,8 +614,11 @@ public final class FeishuChannelWorker implements AutoCloseable {
         // so an unchecked required checkbox would otherwise settle the card and leave EMPTY_FORM
         // with no controls left to correct. Optional-only forms may still submit {}. Lookup
         // failures skip this gate and still enqueue (continueCardAction re-checks).
-        if (message.cardAction().formSubmit() && formMissingRequiredOnAccept(message)) {
-            return FeishuInteraction.EMPTY_FORM;
+        if (message.cardAction().formSubmit()) {
+            String error = formValidationErrorOnAccept(message);
+            if (!error.isBlank()) {
+                return error;
+            }
         }
         enqueueInbound(message);
         return FeishuInteraction.PROCESSING;
@@ -648,34 +651,34 @@ public final class FeishuChannelWorker implements AutoCloseable {
     }
 
     /**
-     * Synchronous Form v2 required-field gate for the card callback toast. Returns false when the
+     * Synchronous Form v2 validation gate for the card callback toast. Returns empty when the
      * pending card cannot be read so the action is still enqueued rather than dropped.
      */
-    private boolean formMissingRequiredOnAccept(FeishuInboundMessage message) {
+    private String formValidationErrorOnAccept(FeishuInboundMessage message) {
         try {
             Optional<ObjectNode> bound = connections.findConnectionByExternalIdentity(
                     "feishu", message.openId(), message.chatId());
             if (bound.isEmpty()) {
-                return false;
+                return "";
             }
             ObjectNode connection = bound.get();
             String owner = connection.path("owner_user_id").asText(AccessOwner.DEFAULT);
             String connectionId = connection.path("id").asText("");
             String threadId = resolveThread(connectionId, message, false);
             if (threadId == null || threadId.isBlank()) {
-                return false;
+                return "";
             }
             FeishuPendingInput pending = agentBridge.currentPending(owner, threadId).orElse(null);
             return pending != null
                     && pending.formSupported()
                     && pending.requestId().equals(message.cardAction().requestId())
-                    && FeishuInteraction.formMissingRequired(pending, message.cardAction().formValues());
+                    ? FeishuInteraction.formValidationError(pending, message.cardAction().formValues()) : "";
         } catch (Exception failure) {
             LOG.log(
                     System.Logger.Level.WARNING,
-                    "Feishu form required check failed; queueing the card action",
+                    "Feishu form validation failed; queueing the card action",
                     failure);
-            return false;
+            return "";
         }
     }
 
@@ -710,8 +713,9 @@ public final class FeishuChannelWorker implements AutoCloseable {
                 reply(message.messageId(), FeishuInteraction.formNotice(pending, threadId));
                 return;
             }
-            if (FeishuInteraction.formMissingRequired(pending, action.formValues())) {
-                reply(message.messageId(), FeishuInteraction.EMPTY_FORM);
+            String error = FeishuInteraction.formValidationError(pending, action.formValues());
+            if (!error.isBlank()) {
+                reply(message.messageId(), error);
                 return;
             }
             String submitted = FeishuInteraction.buildFormSubmissionValue(pending, action.formValues());
