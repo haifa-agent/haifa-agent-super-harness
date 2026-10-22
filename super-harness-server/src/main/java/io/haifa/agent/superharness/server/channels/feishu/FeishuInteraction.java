@@ -64,6 +64,7 @@ public final class FeishuInteraction {
      * Distinct from the intentional unsupported-form Web handoff ({@link #formNotice}).
      */
     public static final String CARD_DELIVERY_FAILED = "⚠️ 交互卡片发送失败，请直接以文字回复，以免遗漏本次请求。";
+    public static final String FORM_CARD_DELIVERY_FAILED = "⚠️ 表单卡片发送失败。";
     public static final String NEW_THREAD_STARTED = "已开启新会话。Thread: ";
     public static final String NEW_THREAD_IN_TOPIC = "该话题已有会话，未切换；回复本话题仍进入原会话。";
     public static final String NO_ACTIVE_THREAD = "当前没有进行中的会话。";
@@ -312,7 +313,7 @@ public final class FeishuInteraction {
     public static String formNotice(FeishuPendingInput pending, String threadId) {
         String body = pending == null || pending.content().isBlank()
                 ? (pending == null ? "" : pending.question())
-                : pending.content();
+                : formDisplayContent(pending.content());
         StringBuilder notice = new StringBuilder();
         if (body != null && !body.isBlank()) {
             notice.append(body.strip()).append("\n\n");
@@ -336,7 +337,7 @@ public final class FeishuInteraction {
             return CARD_DELIVERY_FAILED;
         }
         if (pending.formSupported() || pending.formUnsupported()) {
-            return CARD_DELIVERY_FAILED + "\n\n" + formNotice(pending, threadId);
+            return FORM_CARD_DELIVERY_FAILED + "\n\n" + formNotice(pending, threadId);
         }
         StringBuilder body = new StringBuilder(CARD_DELIVERY_FAILED);
         if (!pending.content().isBlank()) {
@@ -494,7 +495,9 @@ public final class FeishuInteraction {
             body.append(pending.preface().strip()).append("\n\n");
         }
         if (!pending.content().isBlank()) {
-            body.append(FeishuCardPresenter.presentMarkdown(pending.content().strip()));
+            String content = pending.formSupported() || pending.formUnsupported()
+                    ? formDisplayContent(pending.content()) : pending.content();
+            body.append(FeishuCardPresenter.presentMarkdown(content.strip()));
         }
         appendApprovalMetadata(body, pending);
         if (!pending.formUnsupported()
@@ -559,12 +562,26 @@ public final class FeishuInteraction {
         return "可点按钮，或精确回复序号 / 选项原文。";
     }
 
+    /** Keep the frozen tool payload intact; adapt only the channel's reply instructions. */
+    private static String formDisplayContent(String content) {
+        String text = content.stripTrailing();
+        String fallback = "\nPlease reply with a value for each field.";
+        return text.endsWith(fallback)
+                ? text.substring(0, text.length() - fallback.length()).stripTrailing() : text;
+    }
+
     /** Schema 2.0 Form v2 card for the approved Feishu field subset. */
     private static Map<String, Object> formCard(FeishuPendingInput pending) {
         List<Map<String, Object>> elements = new ArrayList<>();
         elements.add(Map.of("tag", "markdown", "content", markdown(pending)));
         List<Map<String, Object>> formElements = new ArrayList<>();
         for (FeishuPendingInput.Field field : pending.fields()) {
+            // Selects and date_picker have no label property in Card 2.0. Keep their title as a
+            // separate plain-text component, rather than borrowing input's label attribute.
+            if (Set.of("select", "multi_select", "date").contains(field.type())) {
+                String label = field.label().isBlank() ? field.name() : field.label();
+                formElements.add(Map.of("tag", "div", "text", plainText(label + (field.required() ? " *" : ""))));
+            }
             formElements.add(formFieldElement(field));
         }
         Map<String, Object> value = buttonValue(pending);
@@ -640,7 +657,6 @@ public final class FeishuInteraction {
                 "placeholder",
                 plainText(field.placeholder().isBlank() ? "请选择" : field.placeholder()));
         select.put("options", options);
-        select.put("label", plainText(field.label().isBlank() ? field.name() : field.label()));
         return select;
     }
 
@@ -676,14 +692,12 @@ public final class FeishuInteraction {
 
     /**
      * Card 2.0 {@code input_type} for the supported field subset. {@code textarea} renders as a
-     * multiline text input; {@code number} keeps numeric semantics; everything else is plain text.
+     * multiline text input. Feishu has no numeric input_type; number fields use text, like the
+     * string values collected by the frozen web form, and keep the numeric placeholder hint.
      */
     private static String inputType(String fieldType) {
         if ("textarea".equals(fieldType)) {
             return "multiline_text";
-        }
-        if ("number".equals(fieldType)) {
-            return "number";
         }
         return "text";
     }

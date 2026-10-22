@@ -39,6 +39,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
 
 /**
  * Official {@code com.larksuite.oapi:oapi-sdk} WebSocket long-connection transport. No public
@@ -50,6 +51,9 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
     /** Bounded attempts for a reply: one initial send plus at most one duplicate-safe retry. */
     private static final int REPLY_MAX_ATTEMPTS = 2;
     private static final long REPLY_RETRY_BACKOFF_MILLIS = 300L;
+    private static final Pattern CARD_ERROR_CODE = Pattern.compile("\\bErrCode:\\s*([0-9]{1,9})(?![0-9])");
+    private static final Pattern CARD_ERROR_PROPERTY = Pattern.compile(
+            "\\bproperty:\\s*(label|label_position|input_type|required|options|width|name|tag|form_action_type|behaviors|rows|auto_resize)(?![a-zA-Z0-9_])");
 
     private final Object lock = new Object();
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -318,13 +322,15 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
             last = failure;
             LOG.log(
                     System.Logger.Level.WARNING,
-                    "feishu.reply.rejected messageType={0} failure={1} code={2} logId={3} attempt={4} of={5}",
+                    "feishu.reply.rejected messageType={0} failure={1} code={2} logId={3} attempt={4} of={5} cardErrorCode={6} invalidProperty={7}",
                     messageType,
                     failure.failure(),
                     failure.code(),
                     failure.logId(),
                     attempt,
-                    REPLY_MAX_ATTEMPTS);
+                    REPLY_MAX_ATTEMPTS,
+                    cardErrorCode(response == null ? null : response.getMsg()),
+                    cardErrorProperty(response == null ? null : response.getMsg()));
             if (failure.retryable() && attempt < REPLY_MAX_ATTEMPTS) {
                 backoff();
                 continue;
@@ -381,6 +387,21 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
         return null;
     }
 
+    /** Only numeric subcodes and known schema keys may leave the provider's error message. */
+    static int cardErrorCode(String message) {
+        var matcher = CARD_ERROR_CODE.matcher(boundedErrorMessage(message));
+        return matcher.find() ? Integer.parseInt(matcher.group(1)) : -1;
+    }
+
+    static String cardErrorProperty(String message) {
+        var matcher = CARD_ERROR_PROPERTY.matcher(boundedErrorMessage(message));
+        return matcher.find() ? matcher.group(1) : "";
+    }
+
+    private static String boundedErrorMessage(String message) {
+        return message == null ? "" : message.substring(0, Math.min(message.length(), 2048));
+    }
+
     /**
      * Classifies a provider rejection so retries and diagnostics stay bounded and distinct. Business
      * codes are checked before the generic HTTP status so a rate-limit or invalid-parameter
@@ -390,7 +411,7 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
         if (code == 99991400 || code == 99991401) {
             return FeishuDeliveryException.Failure.RATE_LIMIT;
         }
-        if (code == 200830 || code == 230001 || code == 230002 || code == 230006 || code == 230009) {
+        if (code == 200830 || code == 230001 || code == 230002 || code == 230006 || code == 230009 || code == 230099) {
             return FeishuDeliveryException.Failure.INVALID;
         }
         if (httpStatus == 429) {
