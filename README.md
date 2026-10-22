@@ -18,7 +18,7 @@ Haifa Super Harness 是一个可在本地部署的 AI 助手工作台，帮助�
 ## 架构边界
 
 本仓库是独立的 Java 21 产品工程，仅通过 Maven 仓库中已发布的
-`io.haifa:haifa-agent-bom:0.1.3-SNAPSHOT` 及公开 JAR 消费 Haifa Agent，不依赖其源码目录。
+`io.haifa:haifa-agent-bom:0.1.4-SNAPSHOT` 及公开 JAR 消费 Haifa Agent，不依赖其源码目录。
 DeerFlow 固定为 `bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294`，不随 `main` 漂移；
 项目直接复用该版本前端，以 Haifa Agent 作为唯一 Agent Runtime，兼容其真实 REST/SSE/WS/文件/auth 协议。
 
@@ -82,7 +82,7 @@ Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业�
 
 定向测试使用 `pwsh -NoProfile -File scripts/test-targeted.ps1 -Test <测试类>`，可加 `-Module`、`-LowMemory` 或 `-Slow`，匹配 0 个测试算失败。
 测试日志保存在 `local-tmp/test-targeted/`，入口输出 JSON 汇总，默认跳过标注为 `slow` 的用例。
-`main` 只消费 `0.1.3-SNAPSHOT`，工作包候选 SDK 由主控通过该 worktree 的 `local-tmp/sdk-selection.json` 指定，执行者不得自行换版或直接传 `-Dhaifa.version`。
+`main` 只消费 `0.1.4-SNAPSHOT`，工作包候选 SDK 由主控通过该 worktree 的 `local-tmp/sdk-selection.json` 指定，执行者不得自行换版或直接传 `-Dhaifa.version`。
 测试示例、SDK 摘要、基线检查与交付辅助命令见[开发与运行手册](docs/development-manual.md#定向测试与-sdk-版本选择)。
 
 ## 冻结前端本地准备与启动

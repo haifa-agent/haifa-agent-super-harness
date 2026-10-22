@@ -71,9 +71,9 @@ try {
     $null = New-Item -ItemType Directory -Force -Path (Join-Path $fakeRoot 'local-tmp'), $fakeRepo
 
     $absent = Resolve-HaifaSdkSelection -RepositoryRoot $fakeRoot -LocalRepository $fakeRepo
-    Set-Case 'V1-absent-uses-baseline' $(if ($absent.Status -eq 'ABSENT' -and $absent.HaifaVersion -eq '0.1.3-SNAPSHOT' -and $null -eq $absent.MavenArgument) { 'PASS' } else { 'FAIL' })
+    Set-Case 'V1-absent-uses-baseline' $(if ($absent.Status -eq 'ABSENT' -and $absent.HaifaVersion -eq '0.1.4-SNAPSHOT' -and $null -eq $absent.MavenArgument) { 'PASS' } else { 'FAIL' })
 
-    $labelled = '0.1.3-some-worktree-SNAPSHOT'
+    $labelled = '0.1.4-some-worktree-SNAPSHOT'
     $fakeSelection = Join-Path $fakeRoot 'local-tmp/sdk-selection.json'
     @{ haifaVersion = $labelled } | ConvertTo-Json | Set-Content -LiteralPath $fakeSelection -Encoding utf8
     Set-Case 'V3-unpublished-version-rejected' $(if (Test-Throws { Resolve-HaifaSdkSelection -RepositoryRoot $fakeRoot -LocalRepository $fakeRepo } 'is not published') { 'PASS' } else { 'FAIL' })
@@ -99,7 +99,7 @@ try {
         $null = New-Item -ItemType Directory -Force -Path (Join-Path $gateRoot $module)
         Copy-Item -LiteralPath (Join-Path $repoRoot "$module/pom.xml") -Destination (Join-Path $gateRoot "$module/pom.xml")
     }
-    (Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'pom.xml')).Replace('<haifa.version>0.1.3-SNAPSHOT</haifa.version>', "<haifa.version>$labelled</haifa.version>") |
+    (Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'pom.xml')).Replace('<haifa.version>0.1.4-SNAPSHOT</haifa.version>', "<haifa.version>$labelled</haifa.version>") |
         Set-Content -LiteralPath (Join-Path $gateRoot 'pom.xml') -Encoding utf8
     $gate = Invoke-Entry $baselineGate @('-RepositoryRoot', $gateRoot)
     Set-Case 'V4-labelled-root-version-fails' $(if ($gate.ExitCode -ne 0 -and $gate.Text.Contains($labelled)) { 'PASS' } else { 'FAIL' })
@@ -130,13 +130,13 @@ try {
 
     Set-Case 'S4-missing-frontend-stamp-fails' $(if (Test-Throws { Assert-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA } 'stamp is missing') { 'PASS' } else { 'FAIL' })
     Write-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA
-    Write-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.3-SNAPSHOT' -MavenRepo $stampMavenRepo
+    Write-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.4-SNAPSHOT' -MavenRepo $stampMavenRepo
     $stampWritten = (Test-Path -LiteralPath (Get-FrontendBuildStampPath $stampRoot)) -and (Test-Path -LiteralPath (Get-ServerBuildStampPath $stampRoot))
     Set-Case 'S1-stamps-written' $(if ($stampWritten) { 'PASS' } else { 'FAIL' })
     $reuseError = ''
     try {
         Assert-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA
-        Assert-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.3-SNAPSHOT' -MavenRepo $stampMavenRepo
+        Assert-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.4-SNAPSHOT' -MavenRepo $stampMavenRepo
     }
     catch { $reuseError = $_.Exception.Message }
     Set-Case 'S2-same-inputs-reusable' $(if ($reuseError -eq '') { 'PASS' } else { 'FAIL' }) $reuseError
@@ -160,20 +160,20 @@ try {
     Write-FrontendBuildStamp -RepositoryRoot $stampRoot -InternalGatewayBaseUrl $gatewayA
     Set-Case 'S5b-dirty-build-leaves-no-stamp' $(if (-not (Test-Path -LiteralPath (Get-FrontendBuildStampPath $stampRoot))) { 'PASS' } else { 'FAIL' })
     & git -C $stampRoot -c user.name=t -c user.email=t@example.invalid commit -q -am 'lockfile'
-    Write-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.3-SNAPSHOT' -MavenRepo $stampMavenRepo
+    Write-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.4-SNAPSHOT' -MavenRepo $stampMavenRepo
     $null = New-Item -ItemType Directory -Force -Path (Join-Path $stampRoot 'docs')
     Set-Content -LiteralPath (Join-Path $stampRoot 'docs/guide.md') -Value 'doc' -Encoding utf8
     & git -C $stampRoot add -A
     & git -C $stampRoot -c user.name=t -c user.email=t@example.invalid commit -q -m 'docs only'
-    Set-Case 'S6-docs-only-commit-keeps-server-stamp' $(if (Test-Throws { Assert-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.3-SNAPSHOT' -MavenRepo $stampMavenRepo } 'does not match') { 'FAIL' } else { 'PASS' })
+    Set-Case 'S6-docs-only-commit-keeps-server-stamp' $(if (Test-Throws { Assert-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.4-SNAPSHOT' -MavenRepo $stampMavenRepo } 'does not match') { 'FAIL' } else { 'PASS' })
     $null = New-Item -ItemType Directory -Force -Path (Join-Path $stampRoot 'super-harness-server/src/main/java')
     Set-Content -LiteralPath (Join-Path $stampRoot 'super-harness-server/src/main/java/App.java') -Value 'class App {}' -Encoding utf8
     & git -C $stampRoot add -A
     & git -C $stampRoot -c user.name=t -c user.email=t@example.invalid commit -q -m 'java input'
-    Set-Case 'S7-java-input-commit-invalidates-server-stamp' $(if (Test-Throws { Assert-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.3-SNAPSHOT' -MavenRepo $stampMavenRepo } "field 'javaInputFingerprint'") { 'PASS' } else { 'FAIL' })
+    Set-Case 'S7-java-input-commit-invalidates-server-stamp' $(if (Test-Throws { Assert-ServerBuildStamp -RepositoryRoot $stampRoot -HaifaVersion '0.1.4-SNAPSHOT' -MavenRepo $stampMavenRepo } "field 'javaInputFingerprint'") { 'PASS' } else { 'FAIL' })
 
     Write-Output 'test-targeted.ps1 argument guards'
-    foreach ($forbidden in @('install', 'clean', '-DskipTests', '-Dhaifa.version=0.1.3-x-SNAPSHOT')) {
+    foreach ($forbidden in @('install', 'clean', '-DskipTests', '-Dhaifa.version=0.1.4-x-SNAPSHOT')) {
         $run = Invoke-Entry $testTargeted @('-Test', $FastTestClass, $forbidden)
         Set-Case "T3-rejects-$forbidden" $(if ($run.ExitCode -ne 0 -and -not $run.Text.Contains('"status"')) { 'PASS' } else { 'FAIL' })
     }

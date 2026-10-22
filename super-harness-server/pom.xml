@@ -112,7 +112,7 @@
                             <shadedClassifierName>exec</shadedClassifierName>
                             <filters>
                                 <filter>
-                                    <!-- The 0.1.3 baseline JARs carry signature files; a shaded
+                                    <!-- The 0.1.4 baseline JARs carry signature files; a shaded
                                          uber jar must drop them or the JVM verifier rejects the
                                          Manifest main attribute digest at startup. -->
                                     <artifact>*:*</artifact>

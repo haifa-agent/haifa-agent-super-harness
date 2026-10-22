@@ -144,8 +144,8 @@ function Test-CdeOracle {
     if ((Get-CdeValue $plan.frozenFrontend 'fallbackAllowed') -ne $false) {
         Add-CdeViolation $Violations 'oracle must forbid DeerFlow backend fallback'
     }
-    if ([string](Get-CdeValue $plan.runtime 'sdkVersion') -ne '0.1.3-SNAPSHOT') {
-        Add-CdeViolation $Violations 'oracle must consume Haifa Agent 0.1.3-SNAPSHOT'
+    if ([string](Get-CdeValue $plan.runtime 'sdkVersion') -ne '0.1.4-SNAPSHOT') {
+        Add-CdeViolation $Violations 'oracle must consume Haifa Agent 0.1.4-SNAPSHOT'
     }
     if ((Get-CdeValue $plan.budget 'authorizationRequired') -ne $true -or
         (Get-CdeValue $plan.budget 'paidRunAllowedByThisFile') -ne $false) {

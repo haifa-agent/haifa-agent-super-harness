@@ -14,7 +14,7 @@
     "note": "Same SHA for frontend and backend. The frontend carries two documented Haifa patches (third-party/deerflow/manifest.json): 0001-memory-bff-use-server-gateway and 0002-active-steer-composer. Anything not backed by the frozen snapshot is contract/inventory only, never interop PASS."
   },
   "haifaDependency": {
-    "coordinates": "io.haifa.agent:...-bom:0.1.3-SNAPSHOT",
+    "coordinates": "io.haifa.agent:...-bom:0.1.4-SNAPSHOT",
     "sourceOrCopyAllowed": false,
     "sdkCommitAndJarShaRecordedPerRound": true
   },

@@ -38,7 +38,7 @@ metadata are revalidated before use.
 
 ## Public Haifa API audit
 
-The implementation consumes only local Maven artifacts at `0.1.3-SNAPSHOT`:
+The implementation consumes only local Maven artifacts at `0.1.4-SNAPSHOT`:
 
 - `haifa-agent-project-api`: `WorkspaceId`, `WorkspacePath`, `ProjectPath`, filesystem records, the
   public read-side `WorkspaceFileService`, `FileChange`, `FileVersion`, `DiffFile`, `DiffRequest`, and

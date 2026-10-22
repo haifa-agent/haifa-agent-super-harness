@@ -126,10 +126,10 @@ if (-not (Test-Path -LiteralPath (Join-Path $frontendRoot 'node_modules/.bin/pla
 }
 $sdkRoot = 'D:\DevCache\maven\repository\io\haifa'
 $sdkFiles = [ordered]@{
-    bomPom = Join-Path $sdkRoot 'haifa-agent-bom/0.1.3-SNAPSHOT/haifa-agent-bom-0.1.3-SNAPSHOT.pom'
-    starterJar = Join-Path $sdkRoot 'haifa-agent-sdk-starter/0.1.3-SNAPSHOT/haifa-agent-sdk-starter-0.1.3-SNAPSHOT.jar'
-    mcpJar = Join-Path $sdkRoot 'haifa-agent-mcp/0.1.3-SNAPSHOT/haifa-agent-mcp-0.1.3-SNAPSHOT.jar'
-    skillCoreJar = Join-Path $sdkRoot 'haifa-agent-skill-core/0.1.3-SNAPSHOT/haifa-agent-skill-core-0.1.3-SNAPSHOT.jar'
+    bomPom = Join-Path $sdkRoot 'haifa-agent-bom/0.1.4-SNAPSHOT/haifa-agent-bom-0.1.4-SNAPSHOT.pom'
+    starterJar = Join-Path $sdkRoot 'haifa-agent-sdk-starter/0.1.4-SNAPSHOT/haifa-agent-sdk-starter-0.1.4-SNAPSHOT.jar'
+    mcpJar = Join-Path $sdkRoot 'haifa-agent-mcp/0.1.4-SNAPSHOT/haifa-agent-mcp-0.1.4-SNAPSHOT.jar'
+    skillCoreJar = Join-Path $sdkRoot 'haifa-agent-skill-core/0.1.4-SNAPSHOT/haifa-agent-skill-core-0.1.4-SNAPSHOT.jar'
 }
 $sdkHashes = [ordered]@{}
 foreach ($entry in $sdkFiles.GetEnumerator()) {
@@ -355,7 +355,7 @@ try {
         sourceSha = (& git -C $source rev-parse HEAD).Trim()
         harnessSha = (& git -C $root rev-parse HEAD).Trim()
         mainBaselineSha = $mainBaselineSha
-        sdkVersion = '0.1.3-SNAPSHOT'
+        sdkVersion = '0.1.4-SNAPSHOT'
         sdkArtifactSha256 = $sdkHashes
         gatewayUrl = "http://127.0.0.1:$GatewayPort"
         gatewayPid = $gatewayProcess.Id

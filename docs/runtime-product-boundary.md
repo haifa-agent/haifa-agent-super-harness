@@ -117,7 +117,7 @@ Compatibility DTO、Projection、Cache、Adapter 可以存在，但前提是它�
 
 ### 5. 缺的是 Haifa 的公开能力怎么办？
 
-先明确记录 Haifa Agent 的具体能力缺口，在 Haifa Agent 上游补齐公开 API/SPI 和实现，发布新的 `0.1.3-SNAPSHOT` JAR/BOM，再由 Super Harness 消费。
+先明确记录 Haifa Agent 的具体能力缺口，在 Haifa Agent 上游补齐公开 API/SPI 和实现，发布新的 `0.1.4-SNAPSHOT` JAR/BOM，再由 Super Harness 消费。
 
 不要用 Super Harness 内部的第二套实现“临时补上”，最后形成两套长期并存的 Runtime。
 

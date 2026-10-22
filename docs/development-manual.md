@@ -104,7 +104,7 @@ SDK 版本规则见 `AGENTS.md`「范围与依赖」。工作包 worktree 消费
 跟踪的 `local-tmp/sdk-selection.json`：
 
 ```json
-{ "haifaVersion": "0.1.3-<worktree>-SNAPSHOT" }
+{ "haifaVersion": "0.1.4-<worktree>-SNAPSHOT" }
 ```
 
 `test-targeted.ps1` 与 UI runner 读取它并传 `-Dhaifa.version`；文件不存在时使用基线并输出

@@ -120,7 +120,7 @@ function New-GoBundle([string]$Root) {
         $round.modelId = 'main-deepseek'
         $round.mainSha = $mainSha
         $round.frozenFrontendSha = 'e545c28ac301e6f9feae247c513d8ea8f83df294'
-        $round.sdkVersion = '0.1.3-SNAPSHOT'
+        $round.sdkVersion = '0.1.4-SNAPSHOT'
         $round.configSha256 = $bundle.configSha256
         $round.inputSha256 = $bundle.inputSha256
         $round.dataRoot = $bundle.dataRoot

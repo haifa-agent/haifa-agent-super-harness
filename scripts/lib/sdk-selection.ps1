@@ -8,7 +8,7 @@
     worktree that must consume the SDK published by one upstream worktree gets an
     untracked local-tmp/sdk-selection.json written by the controller:
 
-        { "haifaVersion": "0.1.3-<upstream worktree directory>-SNAPSHOT" }
+        { "haifaVersion": "0.1.4-<upstream worktree directory>-SNAPSHOT" }
 
     Build entry points dot-source this file, call Resolve-HaifaSdkSelection and
     append the returned MavenArgument (if any) to their Maven command line.
@@ -18,8 +18,8 @@
 #>
 Set-StrictMode -Version Latest
 
-$script:HaifaBaselineVersion = '0.1.3-SNAPSHOT'
-$script:HaifaSelectedVersionPattern = '^0\.1\.3-[A-Za-z0-9.-]+-SNAPSHOT$'
+$script:HaifaBaselineVersion = '0.1.4-SNAPSHOT'
+$script:HaifaSelectedVersionPattern = '^0\.1\.4-[A-Za-z0-9.-]+-SNAPSHOT$'
 
 function Get-HaifaBaselineVersion {
     return $script:HaifaBaselineVersion
@@ -61,7 +61,7 @@ function Resolve-HaifaSdkSelection {
     }
     $version = $haifaVersion[0].Trim()
     if ($version -ne $script:HaifaBaselineVersion -and $version -notmatch $script:HaifaSelectedVersionPattern) {
-        throw "SDK selection '$selectionPath' has unsupported haifaVersion '$version'; expected $script:HaifaBaselineVersion or 0.1.3-<worktree>-SNAPSHOT."
+        throw "SDK selection '$selectionPath' has unsupported haifaVersion '$version'; expected $script:HaifaBaselineVersion or 0.1.4-<worktree>-SNAPSHOT."
     }
 
     if ([string]::IsNullOrWhiteSpace($LocalRepository)) {

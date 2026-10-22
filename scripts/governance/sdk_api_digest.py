@@ -33,8 +33,8 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
-BASELINE_VERSION = "0.1.3-SNAPSHOT"
-SELECTED_PATTERN = re.compile(r"^0\.1\.3-[A-Za-z0-9.-]+-SNAPSHOT$")
+BASELINE_VERSION = "0.1.4-SNAPSHOT"
+SELECTED_PATTERN = re.compile(r"^0\.1\.4-[A-Za-z0-9.-]+-SNAPSHOT$")
 ANONYMOUS_PATTERN = re.compile(r"\$\d")
 DECLARATION_PATTERN = re.compile(r"^(public|protected)\s")
 MANIFEST_NAMES = ("haifa-sdk-publish-manifest.json", "publish-manifest.json", "sdk-publish-manifest.json",
