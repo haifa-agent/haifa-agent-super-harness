@@ -22,7 +22,8 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `start-haifa-frontend.ps1` | 校验冻结前端来源/profile 并启动；`-DryRun` 只校验 |
+| `start-haifa-frontend.ps1` | 校验冻结前端来源/profile 并启动；`-DryRun` 只校验；就绪后自动预热工作区路由，`-NoWarmup` 关闭 |
+| `warm-frontend-routes.mjs` | 后台按 RSC 预取协议预热工作区路由的首次渲染，由启动脚本调用 |
 | `verify-deerflow-frontend.ps1` | 冻结前端来源哈希校验 |
 | `verify-haifa-frontend-profile.ps1` | Haifa 前端启动 profile 校验 |
 

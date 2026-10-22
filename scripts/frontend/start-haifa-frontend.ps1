@@ -7,7 +7,8 @@ param(
     [string]$SourceRepository,
     [switch]$Production,
     [switch]$DryRun,
-    [switch]$LocalAuth
+    [switch]$LocalAuth,
+    [switch]$NoWarmup
 )
 
 $ErrorActionPreference = 'Stop'
@@ -198,6 +199,48 @@ try {
 }
 catch {
     throw "Haifa gateway bootstrap preflight failed at $GatewayBaseUrl. Start the W02 gateway first. $($_.Exception.Message)"
+}
+
+# Warm the first render of the routes the workspace sidebar prefetches, so the
+# cold server render happens at startup instead of on the first user visit.
+# Best effort: the helper logs to <dataRoot>/logs and never blocks the launch.
+if (-not $NoWarmup) {
+    $warmScript = Join-Path $root 'scripts/frontend/warm-frontend-routes.mjs'
+    if (Test-Path -LiteralPath $warmScript -PathType Leaf) {
+        $warmPaths = if ($LocalAuth) {
+            @('/', '/login')
+        }
+        else {
+            @(
+                '/',
+                '/workspace',
+                '/workspace/chats',
+                '/workspace/agents',
+                '/workspace/scheduled-tasks',
+                '/workspace/capabilities',
+                '/workspace/trash'
+            )
+        }
+        $warmLogRoot = Join-Path $dataRoot 'logs'
+        $null = New-Item -ItemType Directory -Force -Path $warmLogRoot
+        $warmStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $warmOut = Join-Path $warmLogRoot "frontend-warmup-$warmStamp.out.log"
+        $warmErr = Join-Path $warmLogRoot "frontend-warmup-$warmStamp.err.log"
+        $warmArguments = @(
+            ('"{0}"' -f $warmScript),
+            '--base-url', "http://127.0.0.1:$FrontendPort",
+            '--paths', ('"{0}"' -f ($warmPaths -join ',')),
+            '--ready-timeout-ms', '180000',
+            '--request-timeout-ms', '120000'
+        ) -join ' '
+        $null = Start-Process -FilePath $nodeCommand.Source `
+            -ArgumentList $warmArguments `
+            -WorkingDirectory $root `
+            -RedirectStandardOutput $warmOut `
+            -RedirectStandardError $warmErr `
+            -WindowStyle Hidden `
+            -PassThru
+    }
 }
 
 Push-Location $frontendRoot

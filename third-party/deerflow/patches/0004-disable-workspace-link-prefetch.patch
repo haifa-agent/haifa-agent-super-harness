@@ -1,0 +1,29 @@
+diff --git a/frontend/src/components/workspace/projects-section.tsx b/frontend/src/components/workspace/projects-section.tsx
+index 2c50c064..f70aa466 100644
+--- a/frontend/src/components/workspace/projects-section.tsx
++++ b/frontend/src/components/workspace/projects-section.tsx
+@@ -320 +320 @@ export function ProjectsSection() {
+-            <Link href="/workspace/trash">
++            <Link href="/workspace/trash" prefetch={false}>
+diff --git a/frontend/src/components/workspace/workspace-nav-chat-list.tsx b/frontend/src/components/workspace/workspace-nav-chat-list.tsx
+index 643e320f..505e4953 100644
+--- a/frontend/src/components/workspace/workspace-nav-chat-list.tsx
++++ b/frontend/src/components/workspace/workspace-nav-chat-list.tsx
+@@ -35 +35,5 @@ export function WorkspaceNavChatList() {
+-            <Link className="text-muted-foreground" href="/workspace/chats">
++            <Link
++              className="text-muted-foreground"
++              href="/workspace/chats"
++              prefetch={false}
++            >
+@@ -47 +51,5 @@ export function WorkspaceNavChatList() {
+-              <Link className="text-muted-foreground" href="/workspace/agents">
++              <Link
++                className="text-muted-foreground"
++                href="/workspace/agents"
++                prefetch={false}
++              >
+@@ -90,0 +99 @@ export function WorkspaceNavChatList() {
++              prefetch={false}
+@@ -104,0 +114 @@ export function WorkspaceNavChatList() {
++              prefetch={false}

@@ -317,7 +317,7 @@ export function ProjectsSection() {
             asChild
             data-testid="projects-trash-link"
           >
-            <Link href="/workspace/trash">
+            <Link href="/workspace/trash" prefetch={false}>
               <Trash2 />
             </Link>
           </Button>

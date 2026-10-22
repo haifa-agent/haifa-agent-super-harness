@@ -62,11 +62,21 @@
           "frontend/tests/unit/components/workspace/messages/human-input-card.test.ts",
           "frontend/tests/unit/core/messages/human-input.test.ts"
         ]
+      },
+      {
+        "id": "0004-disable-workspace-link-prefetch",
+        "file": "third-party/deerflow/patches/0004-disable-workspace-link-prefetch.patch",
+        "sha256": "af84be76b671fce06e5e228aaf8bf064bf86c863b53709f33cb98f8b55e3199c",
+        "reason": "Stop the workspace sidebar and projects header from prefetching every dynamic workspace route on mount: each prefetch is a full server render of the force-dynamic workspace layout, so a burst of them delays the first page load.",
+        "affectedFiles": [
+          "frontend/src/components/workspace/workspace-nav-chat-list.tsx",
+          "frontend/src/components/workspace/projects-section.tsx"
+        ]
       }
     ],
     "fileCount": 985,
-    "totalBytes": 21207461,
-    "contentInventorySha256": "1af850ed11813c5a6b64aaf0a96d8bf85aca0dc7ccc4af7eee864f97566d238d"
+    "totalBytes": 21207692,
+    "contentInventorySha256": "f09ecb89e59b919cd4352860495895b3750022d15a33b27ddc73163d86b05445"
   },
   "build": {
     "node": ">=22",
