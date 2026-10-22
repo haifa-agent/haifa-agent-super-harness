@@ -285,6 +285,33 @@ class FeishuPhase2InteractionTest {
     }
 
     @Test
+    void invalidNumberKeepsCardOpenAndDoesNotSubmitAResponse() throws Exception {
+        ArrayNode messages = json.createArrayNode();
+        messages.add(toolForm("req-number", List.of(field("count", "数量", "number", true))));
+        FeishuPendingInput pending = FeishuInteraction.pendingFromMessages(messages).orElseThrow();
+        Harness harness = harness();
+        bindRequest(harness, "req-number");
+        harness.bridge.pending = pending;
+        try {
+            FeishuInboundMessage invalid = new FeishuInboundMessage("oc_chat", "om_num", "ou_owner", "", "p2p",
+                    new FeishuInboundMessage.CardAction("ask_clarification", "req-number",
+                            FeishuInteraction.FORM_SUBMIT, "", "2.0", Map.of("count", "abc")));
+            assertThat(harness.worker.acceptCardAction(invalid)).isEqualTo(FeishuInteraction.INVALID_NUMBER);
+            assertThat(FeishuInteraction.settledCard(invalid, FeishuInteraction.INVALID_NUMBER)).isNull();
+            harness.worker.handleInbound(invalid);
+            assertThat(harness.bridge.turns.get()).isZero();
+            FeishuInboundMessage valid = new FeishuInboundMessage("oc_chat", "om_num_ok", "ou_owner", "", "p2p",
+                    new FeishuInboundMessage.CardAction("ask_clarification", "req-number",
+                            FeishuInteraction.FORM_SUBMIT, "", "2.0", Map.of("count", "12.5")));
+            harness.worker.handleInbound(valid);
+            assertThat(harness.bridge.turns.get()).isEqualTo(1);
+            assertThat(harness.bridge.responses.get().value()).contains("\"count\":\"12.5\"");
+        } finally {
+            harness.worker.close();
+        }
+    }
+
+    @Test
     void requiredCheckboxMissingRejectsBeforeSettlingCard() throws Exception {
         ArrayNode messages = json.createArrayNode();
         messages.add(toolForm(

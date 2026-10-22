@@ -114,7 +114,7 @@ class FeishuCard2MigrationTest {
         assertThat(byName.get("notes").get("input_type")).isEqualTo("multiline_text");
         assertThat(byName.get("notes").get("rows")).isEqualTo(4);
         assertThat(byName.get("notes").get("required")).isEqualTo(false);
-        assertThat(byName.get("count").get("input_type")).isEqualTo("number");
+        assertThat(byName.get("count").get("input_type")).isEqualTo("text");
         assertThat(byName.get("count").get("required")).isEqualTo(true);
         assertThat(byName.get("env").get("tag")).isEqualTo("select_static");
         assertThat(byName.get("env").get("required")).isEqualTo(true);
@@ -154,6 +154,20 @@ class FeishuCard2MigrationTest {
     // ---- delivery validation ---------------------------------------------------------------
 
     @Test
+    void providerCardDiagnosticsExposeOnlySubcodesAndKnownPropertyNames() {
+        String message = "Failed to create card content, ext=ErrCode: 200621; "
+                + "ErrMsg: unknown property, property: label; ErrorValue: private-user-text";
+        assertThat(LarkSdkFeishuTransport.cardErrorCode(message)).isEqualTo(200621);
+        assertThat(LarkSdkFeishuTransport.cardErrorProperty(message)).isEqualTo("label");
+        assertThat(LarkSdkFeishuTransport.cardErrorProperty("property: user_secret")).isEmpty();
+        assertThat(LarkSdkFeishuTransport.cardErrorProperty("property: label_secret")).isEmpty();
+        assertThat(LarkSdkFeishuTransport.cardErrorCode("ErrCode: 12345678901234")).isEqualTo(-1);
+        assertThat(LarkSdkFeishuTransport.cardErrorCode(null)).isEqualTo(-1);
+        assertThat(LarkSdkFeishuTransport.cardErrorProperty(null)).isEmpty();
+        assertThat(LarkSdkFeishuTransport.cardErrorCode("x".repeat(2048) + " ErrCode: 200621")).isEqualTo(-1);
+    }
+
+    @Test
     void validateReplyRejectsUnsuccessfulResponses() {
         assertThat(LarkSdkFeishuTransport.validateReply(response(0, "om_out"), "interactive", "2.0"))
                 .isNull();
@@ -190,6 +204,8 @@ class FeishuCard2MigrationTest {
         assertThat(LarkSdkFeishuTransport.classifyFailure(99991400, 400))
                 .isEqualTo(FeishuDeliveryException.Failure.RATE_LIMIT);
         assertThat(LarkSdkFeishuTransport.classifyFailure(200830, 400))
+                .isEqualTo(FeishuDeliveryException.Failure.INVALID);
+        assertThat(LarkSdkFeishuTransport.classifyFailure(230099, 0))
                 .isEqualTo(FeishuDeliveryException.Failure.INVALID);
         assertThat(new FeishuDeliveryException(
                                 FeishuDeliveryException.Failure.RATE_LIMIT, 99991400, "", "interactive", "2.0", "")

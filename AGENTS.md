@@ -136,6 +136,7 @@
 - 构建复用：`scripts/ui/run-w18-ui-smoke.ps1` 按构建戳决定是否重建。后端 JAR 的构建戳是 Java 输入指纹，只改文档、脚本或 UI 用例的提交不使 JAR 失效；前端构建戳只含冻结前端源码树、lockfile 和代理目标，本地不匹配时先从主检出的共享缓存恢复，再不行才 `pnpm build`。`-SkipServerBuild`/`-SkipBuild` 强制复用，构建戳不符时失败。`flow-health.json` 的 `serverBuild`/`frontendBuild` 记录 `REUSED`/`RESTORED`/`BUILT`。缓存位置和键见 [README「构建与验证」](README.md#构建与验证)。
 - 低内存：空闲提交内存很低时，默认堆的 `mvn` 与 fixture JVM 会报 `Could not reserve enough space` / `Native memory allocation (mmap) failed ... G1 virtual space`。使用入口的 `-LowMemory`；自行启动 JVM 时，fixture 用 `JAVA_TOOL_OPTIONS=-Xmx96m -XX:+UseSerialGC`，Maven 用 `MAVEN_OPTS=-Xmx512m -XX:+UseSerialGC`，surefire 用 `-DargLine=-Xmx768m -XX:+UseSerialGC`。
 - 冻结资源字节：冻结文件必须按 Git 提交的原始字节落盘，来源 / 哈希校验必须通过。`core.autocrlf=true` 的新 worktree 可能把冻结资源检出为 CRLF，例如 `super-harness-server/src/main/resources/upstream/deerflow/w15/` 下的 Python 资源，Gateway 构造时报 `Frozen Skill scanner resource hash mismatch`。检查：逐项比对该目录 `manifest.json` 的 SHA-256 与实际字节。修复：依靠仓库 `.gitattributes` 的 `text eol=lf` 规则，在相关路径 clean 的独立 worktree 用 `git archive HEAD <路径>` 导出并解包（冻结前端对应 `frontend`、`third-party`、`contracts`），再重建。不修改 manifest 或固定哈希、不关闭校验、不改全局 Git 配置。
+  - 恢复原字节后，若 `git status --porcelain` 仍显示这些文件修改而 `git diff --name-only` 为空，先逐文件核对落盘原字节与 `git show HEAD:<路径>` 一致；仅对已核对的冻结路径运行 `git add --renormalize -- <路径>` 刷新索引，并确认 `git diff --cached --name-only` 仍为空。不得提交批量换行变化或隐藏真实改动。
 
 ### 已有 data-root 的 Skill scanner 派生缓存
 
