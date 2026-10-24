@@ -909,6 +909,7 @@ export const zhCN: Translations = {
 
   // Conversation
   conversation: {
+    runFailed: "本轮执行失败。上方消息可能来自之前的执行。",
     noMessages: "还没有消息",
     startConversation: "开始新的对话以查看消息",
     branchCreated: "已创建分叉对话",

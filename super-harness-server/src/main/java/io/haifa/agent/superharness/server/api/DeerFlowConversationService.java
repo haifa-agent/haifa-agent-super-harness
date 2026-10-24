@@ -1016,9 +1016,10 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 .forEach(run -> cached.put(run.runId.value(), run));
         Set<String> supportProjectedRuns = new HashSet<>();
         Set<String> supportProjectedMessages = new HashSet<>();
-        Map<String, String> visibleAssistantTexts = new HashMap<>();
+        Map<String, Map<String, Object>> visibleAssistantTexts = new HashMap<>();
         turns.stream().filter(turn -> turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT)
-                .forEach(turn -> visibleAssistantTexts.put(turn.messageId(), turn.text()));
+                .forEach(turn -> visibleAssistantTexts.put(turn.messageId(),
+                        messageForTurn(thread, turn, ordinals.getOrDefault(turn.sequence(), 0), true)));
         // Native chronology of a settled Run's Tool rounds is partitioned per USER turn: the window
         // opens after this USER turn's native sequence and closes before the next same-Run Steer
         // USER turn's native sequence (exclusive), so a Steer keeps its own later rounds after it.
@@ -1046,16 +1047,15 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 AgentRunId runId = turn.runId().orElseThrow();
                 // The SDK turn scan keeps only User/Assistant turns: native Tool messages and pure
                 // Tool assistants produce no durable ConversationTurn at all, so a settled Run's
-                // task round vanishes from the page feed even when a final assistant answer exists.
-                // Keep the existing unanswered-terminal projection and include completed delegation
-                // Runs. Terminal eligibility is remembered once per Run, but a later same-Run Steer
+                // Tool round vanishes from the page feed even when a final assistant answer exists.
+                // Project all settled Tool rounds, including narration and failed Runs.
+                // Terminal eligibility is remembered once per Run, but a later same-Run Steer
                 // USER turn must still replay only its own Tool rounds, so this is never a skip.
                 // Native public message IDs own the identity; the visibleAssistantTexts /
                 // supportProjectedMessages dedup keeps ordinary Tool-assistant text on its round.
                 if (supportProjectedRuns.contains(runId.value())
                         || (isTerminalRun(thread, runId, cached.get(runId.value()))
-                                && (!hasDurableFinalAssistant(thread, runId, cached.get(runId.value()))
-                                        || hasTaskRound(thread, runId, cached.get(runId.value()))))) {
+                                && !cachedToolCalls(thread, runId, cached.get(runId.value())).isEmpty())) {
                     supportProjectedRuns.add(runId.value());
                     supportSlots = appendRunSupportRows(
                             thread, runId, cached.get(runId.value()), sequence + 1, turn.createdAt(), rows,
@@ -1082,7 +1082,49 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             offset += appendInteractionRows(thread, cards, sequence, rows);
             latest = baseSequence;
         }
+        // Authoritative Run metadata keeps the latest failure visible after a page reload.
+        // One authoritative snapshot per projection, rather than one per historical human.
+        Map<String, Object> latestHuman = null;
+        for (Map<String, Object> row : rows) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> content = (Map<String, Object>) row.get("content");
+            if ("human".equals(content.get("type"))
+                    && (!(content.get("additional_kwargs") instanceof Map<?, ?> metadata)
+                            || !Boolean.TRUE.equals(metadata.get("hide_from_ui")))) latestHuman = content;
+        }
+        if (latestHuman != null && latestHuman.get("run_id") instanceof String value) {
+            AgentRunId runId = new AgentRunId(value);
+            RunRecord cachedRun = runs.get(value);
+            HaifaRunBridge bridge = cachedRun == null ? bridgeForPersistedThread(thread) : cachedRun.bridge;
+            AgentRunSnapshot snapshot = bridge.snapshot(runId);
+            if (snapshot.status() == AgentRunStatus.FAILED || snapshot.status() == AgentRunStatus.TIMEOUT) {
+                Map<String, Object> failure = new LinkedHashMap<>();
+                failure.put("run_id", value);
+                snapshot.error().ifPresent(error -> {
+                    failure.put("code", error.code().wireCode());
+                    error.optionalDiagnosticId().ifPresent(id -> failure.put("diagnostic_id", id));
+                });
+                @SuppressWarnings("unchecked")
+                Map<String, Object> existing = (Map<String, Object>) latestHuman.getOrDefault("additional_kwargs", Map.of());
+                Map<String, Object> metadata = new LinkedHashMap<>(existing);
+                metadata.put("run_error", failure);
+                latestHuman.put("additional_kwargs", metadata);
+            }
+        }
+        for (Map<String, Object> row : rows) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> content = (Map<String, Object>) row.get("content");
+            stampMessagePosition(content, (Long) row.get("seq"));
+        }
         return rows;
+    }
+
+    private static void stampMessagePosition(Map<String, Object> content, long sequence) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> existing = (Map<String, Object>) content.getOrDefault("additional_kwargs", Map.of());
+        Map<String, Object> metadata = new LinkedHashMap<>(existing);
+        metadata.put("deerflow_seq", sequence);
+        content.put("additional_kwargs", metadata);
     }
 
     private long appendInteractionRows(
@@ -1102,39 +1144,20 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     }
 
     /**
-     * The Run has no durable assistant turn and the authoritative SDK Run is terminal, so its Tool
-     * round will never gain an assistant turn to carry it into the page feed.
+     * The public SDK Run state decides whether its Tool transcript has settled.
      */
     private boolean isTerminalRun(ThreadRecord thread, AgentRunId runId, RunRecord cached) {
         HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
         return isKnownTerminal(() -> bridge.findRun(runId));
     }
 
-    private boolean hasDurableFinalAssistant(
-            ThreadRecord thread, AgentRunId runId, RunRecord cached) {
+    private List<ToolCallView> cachedToolCalls(ThreadRecord thread, AgentRunId runId, RunRecord cached) {
         HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
-        RunMessageCursor cursor = RunMessageCursor.beforeFirst(runId);
-        int pages = 0;
-        // Read after observing the terminal Run. The SDK commits final output and terminal
-        // state atomically, whereas the earlier ConversationTurn scan may predate completion.
-        // A native Tool assistant (including ordinary text) is not a final assistant answer.
-        while (true) {
-            RunMessagePage page = bridge.messages(runId, cursor, MESSAGE_ROUND_SCAN_PAGE_SIZE);
-            if (page.items().stream().anyMatch(message -> "ASSISTANT".equals(message.role())
-                    && message.toolCalls().isEmpty())) return true;
-            if (!page.hasMore()) return false;
-            requireAnotherScanPage(++pages);
-            cursor = page.nextCursor();
-        }
-    }
-
-    private boolean hasTaskRound(ThreadRecord thread, AgentRunId runId, RunRecord cached) {
-        HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
-        return bridge.toolCalls(runId).stream().anyMatch(call -> "task".equals(call.toolName()));
+        return bridge.toolCalls(runId);
     }
 
     /**
-     * Page rows for an unanswered terminal Run or completed delegation, windowed per USER turn.
+     * Page rows for settled Tool rounds, windowed per USER turn.
      * Mirrors the history overlay's one-AI-message-per-model-round projection (that round's whole
      * Tool call list, then each call's result), retaining each Interaction before that round's
      * results and reserving both of its display slots even when hidden. Rounds are placed by the
@@ -1145,7 +1168,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     private long appendRunSupportRows(
             ThreadRecord thread, AgentRunId runId, RunRecord cached, long startSequence,
             Instant createdAt, List<Map<String, Object>> rows,
-            Map<String, String> visibleAssistantTexts, Set<String> supportProjectedMessages,
+            Map<String, Map<String, Object>> visibleAssistantTexts, Set<String> supportProjectedMessages,
             long afterNativeSequence, Long beforeNativeSequence) {
         HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
         List<ToolCallView> calls = DeerFlowToolTranscriptProjection.upToClarificationBoundary(
@@ -1196,7 +1219,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             // Carry only the user-visible conversation text owned by this exact native Tool
             // message; its ordinary turn is then represented here once, before the results.
             if (visibleAssistantTexts.containsKey(roundMessage.messageId())) {
-                request.put("content", visibleAssistantTexts.get(roundMessage.messageId()));
+                rows.add(messageRow(runId.value(), startSequence + slot, Instant.ofEpochMilli(roundMessage.createdAtEpochMillis()),
+                        visibleAssistantTexts.get(roundMessage.messageId())));
+                slot++;
                 supportProjectedMessages.add(roundMessage.messageId());
             }
             rows.add(messageRow(runId.value(), startSequence + slot, createdAt, request));
@@ -3163,7 +3188,14 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                     .error()
                     .map(value -> value.message())
                     .orElse("Run failed");
-            sink.event("error", Map.of("message", message), null);
+            Map<String, Object> failure = new LinkedHashMap<>();
+            failure.put("message", message);
+            terminalSnapshot.error().ifPresent(error -> {
+                failure.put("code", error.code().wireCode());
+                error.optionalDiagnosticId().ifPresent(diagnosticId -> failure.put("diagnostic_id", diagnosticId));
+            });
+            failure.put("run_id", run.runId.value());
+            sink.event("error", failure, null);
         }
         // The frozen UI refreshes thread metadata as soon as this stream ends. Finalize the
         // fallback before publishing the title/end frames, otherwise that refresh can race the
@@ -4403,6 +4435,42 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 }
             }
         }
+        // Use the page feed's positions for every durable identity, including narration that
+        // accompanies Tool calls. A stale checkpoint can then be merged with a newer history page.
+        List<ConversationTurn> allTurns = scanTurns(thread, Integer.MAX_VALUE);
+        Map<Object, Long> positions = new HashMap<>();
+        Map<Object, Object> failures = new HashMap<>();
+        for (Map<String, Object> row : paginatedMessageRows(thread, allTurns, ordinals)) {
+            Map<?, ?> content = (Map<?, ?>) row.get("content");
+            positions.put(content.get("id"), (Long) row.get("seq"));
+            if (content.get("additional_kwargs") instanceof Map<?, ?> metadata
+                    && metadata.containsKey("run_error")) {
+                failures.put(content.get("id"), metadata.get("run_error"));
+            }
+        }
+        for (Map<String, Object> message : messages) {
+            Long sequence = positions.get(message.get("id"));
+            if (sequence != null) stampMessagePosition(message, sequence);
+            if (failures.containsKey(message.get("id"))) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> metadata = (Map<String, Object>) message.get("additional_kwargs");
+                metadata.put("run_error", failures.get(message.get("id")));
+            }
+        }
+        // Pending Tool requests have no page row yet. Keep the active Run's established
+        // request/card order together instead of moving its unpositioned rows to the tail.
+        Map<String, Long> activeAnchors = new HashMap<>();
+        for (Map<String, Object> message : messages) {
+            if (!(message.get("run_id") instanceof String runId)
+                    || !"human".equals(message.get("type")) || activeAnchors.containsKey(runId)) continue;
+            RunRecord run = cached.get(runId);
+            if (run != null && !run.bridge.snapshot(run.runId).status().isTerminal()) {
+                activeAnchors.put(runId, positions.getOrDefault(message.get("id"), Long.MAX_VALUE));
+            }
+        }
+        messages.sort(java.util.Comparator.comparingLong(message ->
+                activeAnchors.getOrDefault(message.get("run_id"),
+                        positions.getOrDefault(message.get("id"), Long.MAX_VALUE))));
         return messages;
     }
 

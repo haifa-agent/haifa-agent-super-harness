@@ -262,6 +262,17 @@ export function mergeMessages(
     collectTrustedSeq(message);
   }
 
+  const lastCanonicalSeqByRun = new Map<string, number>();
+  for (const message of historyMessages) {
+    const runId = getMessageRunId(message);
+    const seq = trustedMessageSeq(message);
+    if (runId && seq !== undefined) {
+      lastCanonicalSeqByRun.set(
+        runId,
+        Math.max(lastCanonicalSeqByRun.get(runId) ?? 0, seq),
+      );
+    }
+  }
   const canonical = dedupeMessagesByIdentity(historyMessages);
   const live = dedupeMessagesByIdentity(threadMessages);
   const canonicalByIdentity = new Map(
@@ -379,7 +390,18 @@ export function mergeMessages(
       ? trailingAnchorSeq
       : Number.POSITIVE_INFINITY;
   for (const message of trailingPending) {
-    entries.push({ message, major: trailingMajor, minor: 0.5 });
+    // A stale checkpoint may end in unpositioned narration from an older Run.
+    // Its last persisted same-Run row anchors it before a newer human turn.
+    const runId = getMessageRunId(message);
+    const runSeq = runId ? lastCanonicalSeqByRun.get(runId) : undefined;
+    entries.push({
+      message,
+      major:
+        runSeq !== undefined && runSeq >= firstCanonicalSeq
+          ? runSeq
+          : trailingMajor,
+      minor: 0.5,
+    });
   }
   for (const message of optimisticMessages) {
     entries.push({

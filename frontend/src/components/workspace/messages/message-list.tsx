@@ -103,6 +103,7 @@ import {
   MessageTokenUsageList,
 } from "./message-token-usage";
 import { RunActivity, RunDuration } from "./run-duration";
+import { RunFailureNotice } from "./run-failure-notice";
 import { MessageListSkeleton } from "./skeleton";
 import { SubtaskCard } from "./subtask-card";
 import {
@@ -1447,6 +1448,12 @@ export function MessageList({
               <RunActivity startTime={turnStartTime} />
             </div>
           )}
+          <RunFailureNotice
+            messages={thread.messages}
+            error={thread.error}
+            isLoading={thread.isLoading}
+            label={t.conversation.runFailed}
+          />
           <div style={{ height: `${paddingBottom}px` }} />
         </ConversationContent>
       </Conversation>

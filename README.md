@@ -107,6 +107,8 @@ pwsh -NoProfile -File tests/checks/frontend/verify-haifa-frontend-profile.ps1
 
 不带 `-DryRun` 正式启动时，脚本会在前端就绪后自动后台预热工作区路由（`/`、`/workspace` 及 `chats`、`agents`、`scheduled-tasks`、`capabilities`、`trash`），把 Next.js 首次动态渲染的冷启动成本从用户首次点击移到启动阶段；日志写入 `<DataDirectory>/logs/frontend-warmup-*.log`，可用 `-NoWarmup` 关闭。
 
+Gateway 的可执行 JAR 内置 SLF4J 日志实现。运行失败时，可用会话中的诊断 ID 对照 Gateway 日志里的 `event=runtime.failure`，查看 `errorCode`、`failureTypes` 和 `contextFailure`；仅凭同一时刻的搜索投影警告不能认定失败根因。
+
 ### W08 真实委托 UI profile
 
 `scripts/ui/run-w18-ui-smoke.ps1` 新增 `-W08LiveDelegation` 开关，运行 `tests/ui/smoke/w08-delegation-live.spec.cjs`

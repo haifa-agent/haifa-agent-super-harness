@@ -13,6 +13,13 @@
     <name>Super Harness DeerFlow Compatibility Server</name>
 
     <dependencies>
+        <!-- Enable the SDK's safe runtime.failure diagnostics in the executable Gateway. -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>2.0.17</version>
+            <scope>runtime</scope>
+        </dependency>
         <dependency>
             <groupId>io.haifa</groupId>
             <artifactId>haifa-agent-sdk-starter</artifactId>

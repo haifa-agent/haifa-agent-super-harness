@@ -3,7 +3,6 @@ package io.haifa.agent.superharness.server.api;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.haifa.agent.core.tool.ProviderToolCallCorrelationId;
 import io.haifa.agent.model.api.ModelFinishReason;
 import io.haifa.agent.model.api.ModelToolCall;
@@ -186,7 +185,7 @@ class W08CompletedDelegationPageTest {
                 DelegationHttpFixture.execute(http, gateway.base, thread, DelegationHttpFixture.input(true));
                 JsonNode state = http.get(gateway.base, "/api/threads/" + thread + "/state", "settled-state.json");
                 original = assertPageAndCursors(http, gateway.base, thread, "before-restart");
-                assertThat(original).hasSize(6);
+                assertThat(original).hasSize(withText ? 8 : 6);
                 List<JsonNode> stateMessages = DelegationHttpFixture.messages(state);
                 List<JsonNode> taskRequests = stateMessages.stream()
                         .filter(message -> !message.path("tool_calls").isEmpty()).toList();
@@ -197,10 +196,8 @@ class W08CompletedDelegationPageTest {
                     String id = request.path("tool_calls").get(0).path("id").asText();
                     taskIds.add(id);
                     assertThat(id).isNotBlank().doesNotStartWith("provider-task-");
-                    // State's Tool overlay omits the native ordinary text; the page folds that
-                    // exact accepted message's text onto its request while preserving its IDs.
-                    ObjectNode expectedRequest = request.deepCopy();
-                    expectedRequest.put("content", withText ? "Delegating round " + (round + 1) + "." : "");
+                    // Narration retains its own canonical identity in both sources.
+                    JsonNode expectedRequest = request;
                     List<JsonNode> pageRequests = contents(original).stream()
                             .filter(message -> message.path("id").equals(request.path("id"))).toList();
                     assertThat(pageRequests).containsExactly(expectedRequest);
@@ -211,11 +208,12 @@ class W08CompletedDelegationPageTest {
                     assertThat(contents(original).stream()
                             .filter(message -> id.equals(message.path("tool_call_id").asText())).toList())
                             .containsExactly(result);
-                    assertThat(original.get(1 + round * 2).path("content")).isEqualTo(expectedRequest);
-                    assertThat(original.get(2 + round * 2).path("content")).isEqualTo(result);
+                    assertThat(original.get(1 + round * (withText ? 3 : 2) + (withText ? 1 : 0)).path("content")).isEqualTo(expectedRequest);
+                    assertThat(original.get(2 + round * (withText ? 3 : 2) + (withText ? 1 : 0)).path("content")).isEqualTo(result);
                 }
+                assertThat(stateMessages).containsExactlyElementsOf(contents(original));
                 assertThat(taskIds).doesNotHaveDuplicates();
-                assertThat(original.get(5).path("content").path("content").asText()).isEqualTo("PARENT-FINAL");
+                assertThat(original.get(original.size() - 1).path("content").path("content").asText()).isEqualTo("PARENT-FINAL");
                 assertThat(contents(original).stream().map(message -> message.path("id").asText()).toList())
                         .doesNotHaveDuplicates();
             }
