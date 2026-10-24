@@ -87,6 +87,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.function.BiFunction;
+import java.util.function.Supplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -97,6 +98,12 @@ import javax.crypto.SecretKey;
 
 /** Frozen DeerFlow thread/run compatibility routes backed by the public Haifa Agent SDK. */
 public class DeerFlowConversationService implements AutoCloseable, ScheduledRunLauncher {
+    // Product display cache only. SDK facts remain authoritative; no message body is retained.
+    private final Map<ThreadRecord, FeedPrefix> feedPrefixes = new LinkedHashMap<>(8, 0.75f, true);
+    private final java.util.concurrent.atomic.AtomicLong positionMessagePageReads = new java.util.concurrent.atomic.AtomicLong();
+
+    long positionMessagePageReads() { return positionMessagePageReads.get(); }
+
     private static final System.Logger INTERACTION_LOG =
             System.getLogger(DeerFlowConversationService.class.getName() + ".interaction");
     /** Frozen route an admission failure belongs to; a server constant, never the client path. */
@@ -994,17 +1001,114 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
      */
     private List<Map<String, Object>> paginatedMessageRows(
             ThreadRecord thread, List<ConversationTurn> turns, Map<Long, Integer> ordinals) {
+        FeedRows output = new FeedRows(false);
+        projectMessageRows(thread, turns.stream().map(DisplayTurn::body).toList(), ordinals, output);
+        applyLatestRunFailure(thread, output.rows.stream().map(row -> {
+            @SuppressWarnings("unchecked") Map<String, Object> content = (Map<String, Object>) row.get("content");
+            return content;
+        }).toList());
+        return output.rows;
+    }
+
+    /** Request-local metadata only: no historical text, Tool arguments or result bodies. */
+    private record DisplayTurn(String messageId, io.haifa.agent.core.message.MessageRole role,
+            Optional<AgentRunId> runId, long sequence, Instant createdAt, ConversationTurn content) {
+        static DisplayTurn body(ConversationTurn turn) {
+            return new DisplayTurn(turn.messageId(), turn.role(), turn.runId(), turn.sequence(), turn.createdAt(), turn);
+        }
+        static DisplayTurn position(ConversationTurn turn) {
+            return new DisplayTurn(turn.messageId(), turn.role(), turn.runId(), turn.sequence(), turn.createdAt(), null);
+        }
+    }
+
+    /** The existing global ordinal scan also supplies lightweight feed-position inputs. */
+    private static final class TurnIndex extends HashMap<Long, Integer> {
+        final List<DisplayTurn> turns = new ArrayList<>();
+        Map<Object, Long> positions;
+        FeedPrefix reusedPrefix;
+    }
+
+    private record FeedPrefix(List<DisplayTurn> turns, Map<Object, Long> positions, long offset,
+            Object interactions, Object clarifications, Set<String> runIds) {}
+
+    private FeedPrefix usablePrefix(ThreadRecord thread, List<DisplayTurn> turns, List<Map<String, Object>> wanted) {
+        FeedPrefix prefix;
+        synchronized (feedPrefixes) { prefix = feedPrefixes.get(thread); }
+        if (prefix == null || !prefix.interactions().equals(thread.interactionDisplays.stream()
+                        .filter(display -> prefix.runIds().contains(display.runId())).toList())
+                || !prefix.clarifications().equals(thread.clarificationDisplays.stream()
+                        .filter(display -> prefix.runIds().contains(display.runId())).toList())
+                || prefix.turns().size() > turns.size()
+                || !prefix.turns().equals(turns.subList(0, prefix.turns().size()))) return null;
+        return containsWantedPrefix(prefix, wanted) ? prefix : null;
+    }
+
+    private static boolean containsWantedPrefix(FeedPrefix prefix, List<Map<String, Object>> wanted) {
+        return wanted.stream().noneMatch(message -> (message.get("run_id") == null
+                || prefix.runIds().contains(message.get("run_id")))
+                && !prefix.positions().containsKey(message.get("id")));
+    }
+
+    private void rememberPrefix(ThreadRecord thread, List<DisplayTurn> turns, int boundary, FeedRows output, long offset) {
+        Map<Object, Long> retained = new HashMap<>();
+        output.positions.entrySet().stream().sorted(Map.Entry.<Object, Long>comparingByValue().reversed())
+                .limit(8192).forEach(entry -> retained.put(entry.getKey(), entry.getValue()));
+        List<DisplayTurn> source = List.copyOf(turns.subList(0, boundary));
+        Set<String> runIds = source.stream().flatMap(turn -> turn.runId().stream()).map(AgentRunId::value)
+                .collect(java.util.stream.Collectors.toSet());
+        FeedPrefix prefix = new FeedPrefix(source, Map.copyOf(retained), offset,
+                thread.interactionDisplays.stream().filter(display -> runIds.contains(display.runId())).toList(),
+                thread.clarificationDisplays.stream().filter(display -> runIds.contains(display.runId())).toList(), runIds);
+        synchronized (feedPrefixes) {
+            feedPrefixes.put(thread, prefix);
+            while (feedPrefixes.size() > 8) feedPrefixes.remove(feedPrefixes.keySet().iterator().next());
+        }
+    }
+
+    private final class FeedRows {
+        final boolean positionsOnly;
+        final List<Map<String, Object>> rows = new ArrayList<>();
+        final Map<Object, Long> positions = new HashMap<>();
+        String supportRun;
+        List<SupportRound> supportRounds;
+        FeedPrefix prefix;
+        boolean prefixSafe = true;
+
+        FeedRows(boolean positionsOnly) { this.positionsOnly = positionsOnly; }
+
+        void add(String runId, long sequence, Instant createdAt, String id, Supplier<Map<String, Object>> content) {
+            positions.put(id, sequence);
+            if (!positionsOnly) {
+                Map<String, Object> message = content.get();
+                stampMessagePosition(message, sequence);
+                rows.add(messageRow(runId, sequence, createdAt, message));
+            }
+        }
+
+        void add(String runId, long sequence, Instant createdAt, Map<String, Object> content) {
+            add(runId, sequence, createdAt, (String) content.get("id"), () -> content);
+        }
+    }
+
+    private String displayTurnId(ThreadRecord thread, DisplayTurn turn, int ordinal) {
+        boolean human = turn.role() == io.haifa.agent.core.message.MessageRole.USER;
+        return turn.runId().map(runId -> human ? humanWireId(thread, runId, ordinal, true)
+                : wireMessageId(runId.value(), "ai", ordinal)).orElse(turn.messageId());
+    }
+
+    private void projectMessageRows(ThreadRecord thread, List<DisplayTurn> turns,
+            Map<Long, Integer> ordinals, FeedRows output) {
         List<PersistentThreadCatalog.InteractionDisplay> displays;
         synchronized (thread) { displays = List.copyOf(thread.interactionDisplays); }
         Map<Long, List<PersistentThreadCatalog.InteractionDisplay>> anchored = new HashMap<>();
         Set<String> anchoredRequests = new HashSet<>();
         for (var display : displays) {
-            List<ConversationTurn> humans = turns.stream()
+            List<DisplayTurn> humans = turns.stream()
                     .filter(turn -> turn.role() == io.haifa.agent.core.message.MessageRole.USER
                             && turn.runId().map(AgentRunId::value).filter(display.runId()::equals).isPresent())
                     .toList();
             if (humans.isEmpty()) continue;
-            ConversationTurn anchor = humans.stream()
+            DisplayTurn anchor = humans.stream()
                     .filter(turn -> !turn.createdAt().isAfter(display.createdAt()))
                     .reduce((left, right) -> right).orElse(humans.getFirst());
             anchored.computeIfAbsent(anchor.sequence(), ignored -> new ArrayList<>()).add(display);
@@ -1016,58 +1120,76 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 .forEach(run -> cached.put(run.runId.value(), run));
         Set<String> supportProjectedRuns = new HashSet<>();
         Set<String> supportProjectedMessages = new HashSet<>();
-        Map<String, String> visibleAssistantTexts = new HashMap<>();
+        Map<String, DisplayTurn> visibleAssistantTexts = new HashMap<>();
         turns.stream().filter(turn -> turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT)
-                .forEach(turn -> visibleAssistantTexts.put(turn.messageId(), turn.text()));
+                .forEach(turn -> visibleAssistantTexts.put(turn.messageId(), turn));
         // Native chronology of a settled Run's Tool rounds is partitioned per USER turn: the window
         // opens after this USER turn's native sequence and closes before the next same-Run Steer
         // USER turn's native sequence (exclusive), so a Steer keeps its own later rounds after it.
         Map<Long, Long> runSteerCeilings = new HashMap<>();
         {
             Map<String, Long> lastUserSequenceByRun = new HashMap<>();
-            for (ConversationTurn scan : turns) {
+            for (DisplayTurn scan : turns) {
                 if (scan.role() != io.haifa.agent.core.message.MessageRole.USER) continue;
                 Long previous = lastUserSequenceByRun.put(
                         scan.runId().map(AgentRunId::value).orElse(""), scan.sequence());
                 if (previous != null) runSteerCeilings.put(previous, scan.sequence());
             }
         }
-        List<Map<String, Object>> rows = new ArrayList<>();
-        long offset = 0;
-        for (ConversationTurn turn : turns) {
+        int boundary = 0;
+        if (!turns.isEmpty() && turns.getLast().runId().isPresent()) {
+            AgentRunId newest = turns.getLast().runId().orElseThrow();
+            while (boundary < turns.size() && !turns.get(boundary).runId().filter(newest::equals).isPresent()) boundary++;
+        }
+        int start = output.prefix == null ? 0 : output.prefix.turns().size();
+        long offset = output.prefix == null ? 0 : output.prefix.offset();
+        if (output.prefix != null) output.positions.putAll(output.prefix.positions());
+        for (int turnIndex = start; turnIndex < turns.size(); turnIndex++) {
+            if (output.positionsOnly && turnIndex == boundary && boundary > 0 && output.prefixSafe
+                    && (output.prefix == null || output.prefix.turns().size() != boundary)) {
+                rememberPrefix(thread, turns, boundary, output, offset);
+            }
+            DisplayTurn turn = turns.get(turnIndex);
             if (supportProjectedMessages.contains(turn.messageId())) continue;
             long sequence = turn.sequence() + offset;
-            Map<String, Object> row = messageRow(thread, turn, ordinals.getOrDefault(turn.sequence(), 0));
-            row.put("seq", sequence);
-            rows.add(row);
+            int ordinal = ordinals.getOrDefault(turn.sequence(), 0);
+            output.add(turn.runId().map(AgentRunId::value).orElse(null), sequence, turn.createdAt(),
+                    displayTurnId(thread, turn, ordinal),
+                    () -> messageForTurn(thread, turn.content(), ordinal, true));
+            if (turn.role() == io.haifa.agent.core.message.MessageRole.USER && turn.runId().isPresent()) {
+                output.positions.put(wireMessageId(turn.runId().orElseThrow().value(), "human", ordinal), sequence);
+            }
             long supportSlots = 0;
             if (turn.role() == io.haifa.agent.core.message.MessageRole.USER
                     && turn.runId().isPresent()) {
                 AgentRunId runId = turn.runId().orElseThrow();
                 // The SDK turn scan keeps only User/Assistant turns: native Tool messages and pure
                 // Tool assistants produce no durable ConversationTurn at all, so a settled Run's
-                // task round vanishes from the page feed even when a final assistant answer exists.
-                // Keep the existing unanswered-terminal projection and include completed delegation
-                // Runs. Terminal eligibility is remembered once per Run, but a later same-Run Steer
+                // Tool round vanishes from the page feed even when a final assistant answer exists.
+                // Project all settled Tool rounds, including narration and failed Runs.
+                // Terminal eligibility is remembered once per Run, but a later same-Run Steer
                 // USER turn must still replay only its own Tool rounds, so this is never a skip.
                 // Native public message IDs own the identity; the visibleAssistantTexts /
                 // supportProjectedMessages dedup keeps ordinary Tool-assistant text on its round.
-                if (supportProjectedRuns.contains(runId.value())
-                        || (isTerminalRun(thread, runId, cached.get(runId.value()))
-                                && (!hasDurableFinalAssistant(thread, runId, cached.get(runId.value()))
-                                        || hasTaskRound(thread, runId, cached.get(runId.value()))))) {
+                boolean terminal = supportProjectedRuns.contains(runId.value())
+                        || isTerminalRun(thread, runId, cached.get(runId.value()));
+                if (!terminal) output.prefixSafe = false;
+                if (terminal && !prepareSupportRounds(thread, runId, cached.get(runId.value()), output).isEmpty()) {
                     supportProjectedRuns.add(runId.value());
                     supportSlots = appendRunSupportRows(
-                            thread, runId, cached.get(runId.value()), sequence + 1, turn.createdAt(), rows,
-                            visibleAssistantTexts, supportProjectedMessages,
+                            thread, runId, cached.get(runId.value()), sequence + 1, turn.createdAt(), output,
+                            visibleAssistantTexts, ordinals, supportProjectedMessages,
                             turn.sequence(), runSteerCeilings.get(turn.sequence()));
                 }
             }
             List<PersistentThreadCatalog.InteractionDisplay> cards = anchored.getOrDefault(turn.sequence(), List.of())
                     .stream().filter(display -> !supportProjectedRuns.contains(display.runId())).toList();
-            offset += supportSlots + appendInteractionRows(thread, cards, sequence + supportSlots, rows);
+            offset += supportSlots + appendInteractionRows(thread, cards, sequence + supportSlots, output);
         }
-        Set<String> durableHumanRuns = durableHumanRunIds(turns);
+        Set<String> durableHumanRuns = turns.stream()
+                .filter(turn -> turn.role() == io.haifa.agent.core.message.MessageRole.USER)
+                .flatMap(turn -> turn.runId().stream()).map(AgentRunId::value)
+                .collect(java.util.stream.Collectors.toSet());
         long latest = turns.isEmpty() ? 0 : turns.getLast().sequence();
         for (RunRecord run : runs.values().stream()
                 .filter(candidate -> candidate.threadId.equals(thread.threadId))
@@ -1075,66 +1197,79 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             if (!isInFlightWithoutDurableHuman(run, durableHumanRuns)) continue;
             long baseSequence = Math.max(run.humanSequence, latest + 1);
             long sequence = baseSequence + offset;
-            rows.add(messageRow(run, sequence, run.createdAt, pendingHumanMessage(run)));
+            output.add(run.runId.value(), sequence, run.createdAt, pendingHumanMessage(run));
             List<PersistentThreadCatalog.InteractionDisplay> cards = displays.stream()
                     .filter(display -> display.runId().equals(run.runId.value())
                             && !anchoredRequests.contains(display.requestId())).toList();
-            offset += appendInteractionRows(thread, cards, sequence, rows);
+            offset += appendInteractionRows(thread, cards, sequence, output);
             latest = baseSequence;
         }
-        return rows;
+    }
+
+    private void applyLatestRunFailure(ThreadRecord thread, List<Map<String, Object>> rows) {
+        // Authoritative Run metadata keeps the latest failure visible after a page reload.
+        // One authoritative snapshot per projection, rather than one per historical human.
+        Map<String, Object> latestHuman = null;
+        for (Map<String, Object> content : rows) {
+            if ("human".equals(content.get("type"))
+                    && (!(content.get("additional_kwargs") instanceof Map<?, ?> metadata)
+                            || !Boolean.TRUE.equals(metadata.get("hide_from_ui")))) latestHuman = content;
+        }
+        if (latestHuman != null && latestHuman.get("run_id") instanceof String value) {
+            AgentRunId runId = new AgentRunId(value);
+            RunRecord cachedRun = runs.get(value);
+            HaifaRunBridge bridge = cachedRun == null ? bridgeForPersistedThread(thread) : cachedRun.bridge;
+            AgentRunSnapshot snapshot = bridge.snapshot(runId);
+            if (snapshot.status() == AgentRunStatus.FAILED || snapshot.status() == AgentRunStatus.TIMEOUT) {
+                Map<String, Object> failure = new LinkedHashMap<>();
+                failure.put("run_id", value);
+                snapshot.error().ifPresent(error -> {
+                    failure.put("code", error.code().wireCode());
+                    error.optionalDiagnosticId().ifPresent(id -> failure.put("diagnostic_id", id));
+                });
+                @SuppressWarnings("unchecked")
+                Map<String, Object> existing = (Map<String, Object>) latestHuman.getOrDefault("additional_kwargs", Map.of());
+                Map<String, Object> metadata = new LinkedHashMap<>(existing);
+                metadata.put("run_error", failure);
+                latestHuman.put("additional_kwargs", metadata);
+            }
+        }
+    }
+
+    private static void stampMessagePosition(Map<String, Object> content, long sequence) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> existing = (Map<String, Object>) content.getOrDefault("additional_kwargs", Map.of());
+        Map<String, Object> metadata = new LinkedHashMap<>(existing);
+        metadata.put("deerflow_seq", sequence);
+        content.put("additional_kwargs", metadata);
     }
 
     private long appendInteractionRows(
             ThreadRecord thread, List<PersistentThreadCatalog.InteractionDisplay> displays,
-            long humanSequence, List<Map<String, Object>> rows) {
+            long humanSequence, FeedRows rows) {
         long offset = 0;
         for (var display : displays) {
             long requestSequence = humanSequence + offset + 1;
             offset += 2;
             if (!isVisibleInteractionDisplay(thread, display)) continue;
-            rows.add(messageRow(display.runId(), requestSequence, display.createdAt(), requestMessage(display)));
+            rows.add(display.runId(), requestSequence, display.createdAt(), requestMessage(display));
             if (display.answeredOption() != null) {
-                rows.add(messageRow(display.runId(), requestSequence + 1, display.createdAt(), responseMessage(display)));
+                rows.add(display.runId(), requestSequence + 1, display.createdAt(), responseMessage(display));
             }
         }
         return offset;
     }
 
     /**
-     * The Run has no durable assistant turn and the authoritative SDK Run is terminal, so its Tool
-     * round will never gain an assistant turn to carry it into the page feed.
+     * The public SDK Run state decides whether its Tool transcript has settled.
      */
     private boolean isTerminalRun(ThreadRecord thread, AgentRunId runId, RunRecord cached) {
         HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
         return isKnownTerminal(() -> bridge.findRun(runId));
     }
 
-    private boolean hasDurableFinalAssistant(
-            ThreadRecord thread, AgentRunId runId, RunRecord cached) {
-        HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
-        RunMessageCursor cursor = RunMessageCursor.beforeFirst(runId);
-        int pages = 0;
-        // Read after observing the terminal Run. The SDK commits final output and terminal
-        // state atomically, whereas the earlier ConversationTurn scan may predate completion.
-        // A native Tool assistant (including ordinary text) is not a final assistant answer.
-        while (true) {
-            RunMessagePage page = bridge.messages(runId, cursor, MESSAGE_ROUND_SCAN_PAGE_SIZE);
-            if (page.items().stream().anyMatch(message -> "ASSISTANT".equals(message.role())
-                    && message.toolCalls().isEmpty())) return true;
-            if (!page.hasMore()) return false;
-            requireAnotherScanPage(++pages);
-            cursor = page.nextCursor();
-        }
-    }
-
-    private boolean hasTaskRound(ThreadRecord thread, AgentRunId runId, RunRecord cached) {
-        HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
-        return bridge.toolCalls(runId).stream().anyMatch(call -> "task".equals(call.toolName()));
-    }
-
     /**
-     * Page rows for an unanswered terminal Run or completed delegation, windowed per USER turn.
+     * Page rows for settled Tool rounds, windowed per USER turn.
      * Mirrors the history overlay's one-AI-message-per-model-round projection (that round's whole
      * Tool call list, then each call's result), retaining each Interaction before that round's
      * results and reserving both of its display slots even when hidden. Rounds are placed by the
@@ -1142,33 +1277,60 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
      * driving USER turn's native sequence and strictly before the next same-Run Steer USER turn's
      * native sequence when one exists. The ordinary turn loop does not emit these rows again.
      */
-    private long appendRunSupportRows(
-            ThreadRecord thread, AgentRunId runId, RunRecord cached, long startSequence,
-            Instant createdAt, List<Map<String, Object>> rows,
-            Map<String, String> visibleAssistantTexts, Set<String> supportProjectedMessages,
-            long afterNativeSequence, Long beforeNativeSequence) {
-        HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
-        List<ToolCallView> calls = DeerFlowToolTranscriptProjection.upToClarificationBoundary(
-                bridge.toolCalls(runId));
-        List<List<ToolCallView>> rounds = toolCallRounds(bridge, runId, calls);
-        // Same temporary SDK map supplies the native identity and the durable position.
-        Map<String, RunMessageView> nativeAssistantMessages = new HashMap<>();
+    private List<SupportRound> prepareSupportRounds(ThreadRecord thread, AgentRunId runId,
+            RunRecord cached, FeedRows output) {
+        if (!runId.value().equals(output.supportRun)) {
+            output.supportRun = runId.value();
+            HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
+            output.supportRounds = supportRounds(bridge, runId);
+        }
+        return output.supportRounds;
+    }
+
+    private record SupportRound(String messageId, long sequence, Instant createdAt, List<ToolCallView> calls) {}
+
+    private List<SupportRound> supportRounds(HaifaRunBridge bridge, AgentRunId runId) {
+        List<ToolCallView> calls = DeerFlowToolTranscriptProjection.upToClarificationBoundary(bridge.toolCalls(runId));
+        if (calls.isEmpty()) return List.of();
+        Map<String, ToolCallView> visible = new HashMap<>();
+        calls.forEach(call -> visible.put(call.id().value(), call));
+        Set<String> placed = new HashSet<>();
+        List<SupportRound> rounds = new ArrayList<>();
         RunMessageCursor cursor = RunMessageCursor.beforeFirst(runId);
         int pages = 0;
         while (true) {
+            positionMessagePageReads.incrementAndGet();
             RunMessagePage page = bridge.messages(runId, cursor, MESSAGE_ROUND_SCAN_PAGE_SIZE);
             for (RunMessageView message : page.items()) {
                 if (!"ASSISTANT".equals(message.role())) continue;
-                for (ToolCallView call : message.toolCalls())
-                    nativeAssistantMessages.put(call.id().value(), message);
+                List<ToolCallView> round = message.toolCalls().stream().map(call -> visible.get(call.id().value()))
+                        .filter(java.util.Objects::nonNull).toList();
+                if (round.isEmpty()) continue;
+                round.forEach(call -> placed.add(call.id().value()));
+                rounds.add(new SupportRound(message.messageId(), message.sequence(),
+                        Instant.ofEpochMilli(message.createdAtEpochMillis()), round));
             }
             if (!page.hasMore()) break;
             requireAnotherScanPage(++pages);
             cursor = page.nextCursor();
         }
+        if (!placed.containsAll(visible.keySet())) {
+            throw new IllegalStateException("Tool round native message position is unavailable");
+        }
+        return rounds;
+    }
+
+    private long appendRunSupportRows(
+            ThreadRecord thread, AgentRunId runId, RunRecord cached, long startSequence,
+            Instant createdAt, FeedRows output, Map<String, DisplayTurn> visibleAssistantTexts,
+            Map<Long, Integer> ordinals, Set<String> supportProjectedMessages,
+            long afterNativeSequence, Long beforeNativeSequence) {
+        // A Steer can reference the same Run several times. Read its public message
+        // pages once, and release the prior Run's plan as the feed advances.
+        List<SupportRound> rounds = prepareSupportRounds(thread, runId, cached, output);
         Map<String, Integer> roundByCall = new HashMap<>();
         for (int index = 0; index < rounds.size(); index++) {
-            for (ToolCallView call : rounds.get(index)) roundByCall.put(call.id().value(), index);
+            for (ToolCallView call : rounds.get(index).calls()) roundByCall.put(call.id().value(), index);
         }
         Map<Integer, List<PersistentThreadCatalog.InteractionDisplay>> cardsByRound = new HashMap<>();
         synchronized (thread) {
@@ -1181,33 +1343,27 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         }
         long slot = 0;
         for (int index = 0; index < rounds.size(); index++) {
-            List<ToolCallView> round = rounds.get(index);
-            if (round.isEmpty()) continue;
-            RunMessageView roundMessage = nativeAssistantMessages.get(round.getFirst().id().value());
-            if (roundMessage == null) {
-                throw new IllegalStateException("Tool round native message position is unavailable");
+            SupportRound round = rounds.get(index);
+            if (round.sequence() <= afterNativeSequence
+                    || (beforeNativeSequence != null && round.sequence() >= beforeNativeSequence)) continue;
+            DisplayTurn narration = visibleAssistantTexts.get(round.messageId());
+            if (narration != null) {
+                int ordinal = ordinals.getOrDefault(narration.sequence(), 0);
+                output.add(runId.value(), startSequence + slot++, round.createdAt(),
+                        displayTurnId(thread, narration, ordinal),
+                        () -> messageForTurn(thread, narration.content(), ordinal, true));
+                supportProjectedMessages.add(round.messageId());
             }
-            if (roundMessage.sequence() <= afterNativeSequence
-                    || (beforeNativeSequence != null
-                            && roundMessage.sequence() >= beforeNativeSequence)) {
-                continue;
-            }
-            Map<String, Object> request = DeerFlowToolTranscriptProjection.requestMessage(round);
-            // Carry only the user-visible conversation text owned by this exact native Tool
-            // message; its ordinary turn is then represented here once, before the results.
-            if (visibleAssistantTexts.containsKey(roundMessage.messageId())) {
-                request.put("content", visibleAssistantTexts.get(roundMessage.messageId()));
-                supportProjectedMessages.add(roundMessage.messageId());
-            }
-            rows.add(messageRow(runId.value(), startSequence + slot, createdAt, request));
-            slot++;
+            output.add(runId.value(), startSequence + slot++, createdAt,
+                    DeerFlowToolTranscriptProjection.requestMessageId(round.calls().getFirst()),
+                    () -> DeerFlowToolTranscriptProjection.requestMessage(round.calls()));
             slot += appendInteractionRows(thread, cardsByRound.getOrDefault(index, List.of()),
-                    startSequence + slot - 1, rows);
-            for (ToolCallView call : round) {
-                Optional<Map<String, Object>> result = DeerFlowToolTranscriptProjection.resultMessage(call);
-                if (result.isPresent()) {
-                    rows.add(messageRow(runId.value(), startSequence + slot, createdAt, result.orElseThrow()));
-                    slot++;
+                    startSequence + slot - 1, output);
+            for (ToolCallView call : round.calls()) {
+                Optional<String> id = DeerFlowToolTranscriptProjection.resultMessageId(call);
+                if (id.isPresent()) {
+                    output.add(runId.value(), startSequence + slot++, createdAt, id.orElseThrow(),
+                            () -> DeerFlowToolTranscriptProjection.resultMessage(call).orElseThrow());
                 }
             }
         }
@@ -3163,7 +3319,14 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                     .error()
                     .map(value -> value.message())
                     .orElse("Run failed");
-            sink.event("error", Map.of("message", message), null);
+            Map<String, Object> failure = new LinkedHashMap<>();
+            failure.put("message", message);
+            terminalSnapshot.error().ifPresent(error -> {
+                failure.put("code", error.code().wireCode());
+                error.optionalDiagnosticId().ifPresent(diagnosticId -> failure.put("diagnostic_id", diagnosticId));
+            });
+            failure.put("run_id", run.runId.value());
+            sink.event("error", failure, null);
         }
         // The frozen UI refreshes thread metadata as soon as this stream ends. Finalize the
         // fallback before publishing the title/end frames, otherwise that refresh can race the
@@ -4137,7 +4300,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         // Wire IDs are per-Run ordinals, not ordinals within the requested page or retained
         // state window. Scan from the first durable turn under the existing 100-page cap.
         Map<String, Integer> counts = new HashMap<>();
-        Map<Long, Integer> ordinals = new HashMap<>();
+        TurnIndex ordinals = new TurnIndex();
+        Set<String> clarificationRuns = clarificationRunIds(thread);
         Optional<ConversationTurnCursor> cursor = Optional.empty();
         int pages = 0;
         while (true) {
@@ -4150,6 +4314,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 int ordinal = counts.getOrDefault(key, 0);
                 counts.put(key, ordinal + 1);
                 ordinals.put(turn.sequence(), ordinal);
+                if (!isPostClarificationAnswer(turn, clarificationRuns)) ordinals.turns.add(DisplayTurn.position(turn));
             }
             if (page.nextCursor().isEmpty()) return ordinals;
             requireAnotherScanPage(pages);
@@ -4291,18 +4456,6 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         return runIds;
     }
 
-    private Map<String, Object> messageRow(ThreadRecord thread, ConversationTurn turn, int ordinal) {
-        Map<String, Object> row = new LinkedHashMap<>();
-        row.put("run_id", turn.runId().map(AgentRunId::value).orElse(null));
-        row.put("seq", turn.sequence());
-        // The frozen UI reads an active Run's user turn from messages/page too; apply the same
-        // in-flight client-id projection there. It is a no-op for every settled Run.
-        row.put("content", messageForTurn(thread, turn, ordinal, true));
-        row.put("metadata", Map.of("caller", "lead_agent"));
-        row.put("created_at", turn.createdAt().toString());
-        return row;
-    }
-
     private Map<String, Object> messageRow(
             RunRecord run, long sequence, Instant createdAt, Map<String, Object> content) {
         return messageRow(run.runId.value(), sequence, createdAt, content);
@@ -4403,6 +4556,43 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 }
             }
         }
+        // Reuse the caller's ordinal scan. Generate identity/sequence pairs once for
+        // this response, without retaining text or materializing old Tool result bodies.
+        Map<Object, Long> positions;
+        if (ordinals instanceof TurnIndex index) {
+            boolean evictedIdentity = index.reusedPrefix != null && !containsWantedPrefix(index.reusedPrefix, messages);
+            if (index.positions == null || evictedIdentity) {
+                FeedRows output = new FeedRows(true);
+                output.prefix = evictedIdentity ? null : usablePrefix(thread, index.turns, messages);
+                index.reusedPrefix = output.prefix;
+                projectMessageRows(thread, index.turns, ordinals, output);
+                index.positions = output.positions;
+            }
+            positions = index.positions;
+        } else {
+            FeedRows output = new FeedRows(true);
+            projectMessageRows(thread, turns.stream().map(DisplayTurn::position).toList(), ordinals, output);
+            positions = output.positions;
+        }
+        for (Map<String, Object> message : messages) {
+            Long sequence = positions.get(message.get("id"));
+            if (sequence != null) stampMessagePosition(message, sequence);
+        }
+        applyLatestRunFailure(thread, messages);
+        // Pending Tool requests have no page row yet. Keep the active Run's established
+        // request/card order together instead of moving its unpositioned rows to the tail.
+        Map<String, Long> activeAnchors = new HashMap<>();
+        for (Map<String, Object> message : messages) {
+            if (!(message.get("run_id") instanceof String runId)
+                    || !"human".equals(message.get("type")) || activeAnchors.containsKey(runId)) continue;
+            RunRecord run = cached.get(runId);
+            if (run != null && !run.bridge.snapshot(run.runId).status().isTerminal()) {
+                activeAnchors.put(runId, positions.getOrDefault(message.get("id"), Long.MAX_VALUE));
+            }
+        }
+        messages.sort(java.util.Comparator.comparingLong(message ->
+                activeAnchors.getOrDefault(message.get("run_id"),
+                        positions.getOrDefault(message.get("id"), Long.MAX_VALUE))));
         return messages;
     }
 

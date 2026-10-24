@@ -543,3 +543,61 @@ test.each(["before", "after"] as const)(
     expect(idsOf(mergeMessages(resolved, [], []))).toEqual(idsOf(previous));
   },
 );
+
+test("stale checkpoint narration stays before a newer human using its persisted Run", () => {
+  const human = msg("old-human", "human", "old question", 1, { run_id: "old" });
+  const result = msg("result", "tool", "old result", 3, {
+    run_id: "old",
+    tool_call_id: "call",
+  });
+  const newer = msg("new-human", "human", "today?", 4, { run_id: "new" });
+  const narration = msg("old-ai", "ai", "old answer", undefined, {
+    run_id: "old",
+  });
+  expect(
+    mergeMessages([human, result, newer], [human, result, narration], []).map(
+      (m) => m.id,
+    ),
+  ).toEqual(["old-human", "result", "old-ai", "new-human"]);
+});
+
+test("trusted narration seq keeps its exact place despite an older checkpoint", () => {
+  const human = msg("old-human", "human", "old", 1, { run_id: "old" });
+  const narration = msg("old-ai", "ai", "old answer", 2, { run_id: "old" });
+  const newer = msg("new-human", "human", "today?", 4, { run_id: "new" });
+  expect(
+    mergeMessages(
+      [human, narration, newer],
+      [human, msg("old-ai", "ai", "updated")],
+      [],
+    ).map((m) => m.id),
+  ).toEqual(["old-human", "old-ai", "new-human"]);
+});
+
+test("a newer live result remains the anchor for trailing same-Run narration", () => {
+  const human = msg("human", "human", "old", 1, { run_id: "run" });
+  const before = msg("before", "ai", "before", undefined, { run_id: "run" });
+  const result = msg("result", "tool", "result", 3, {
+    run_id: "run",
+    tool_call_id: "call",
+  });
+  const after = msg("after", "ai", "after", undefined, { run_id: "run" });
+  expect(
+    mergeMessages([human], [human, before, result, after], []).map((m) => m.id),
+  ).toEqual(["human", "before", "result", "after"]);
+});
+
+test("a stale checkpoint does not move narration after an unseen same-Run Steer", () => {
+  const human = msg("human", "human", "old", 1, { run_id: "run" });
+  const result = msg("result", "tool", "result", 3, {
+    run_id: "run",
+    tool_call_id: "call",
+  });
+  const steer = msg("steer", "human", "steer", 4, { run_id: "run" });
+  const after = msg("after", "ai", "after", undefined, { run_id: "run" });
+  expect(
+    mergeMessages([human, result, steer], [human, result, after], []).map(
+      (m) => m.id,
+    ),
+  ).toEqual(["human", "result", "after", "steer"]);
+});

@@ -280,11 +280,21 @@ export function mergeMessages(
   const skeletonLive: Message[] = [];
   let pending: Message[] = [];
   let trailingAnchorSeq: number | undefined;
+  // Positions observed in this checkpoint, not the maximum over a whole Run:
+  // a later same-Run Steer in refreshed history must not pull stale text past it.
+  const lastObservedSeqByRun = new Map<string, number>();
   for (const message of live) {
     const identity = messageIdentity(message);
     const canonicalMessage = identity
       ? canonicalByIdentity.get(identity)
       : undefined;
+    const runId =
+      getMessageRunId(message) ??
+      (identity ? savedRunIds.get(identity) : undefined);
+    const observedSeq = trustedSeqOf(identity);
+    if (runId && observedSeq !== undefined) {
+      lastObservedSeqByRun.set(runId, observedSeq);
+    }
     if (identity && canonicalMessage) {
       if (pending.length > 0) {
         beforeAnchor.set(identity, [
@@ -379,7 +389,18 @@ export function mergeMessages(
       ? trailingAnchorSeq
       : Number.POSITIVE_INFINITY;
   for (const message of trailingPending) {
-    entries.push({ message, major: trailingMajor, minor: 0.5 });
+    // Preserve the applicable live anchor. Only observed same-Run predecessors
+    // can pull stale narration before a new human; unseen later history cannot.
+    const runId = getMessageRunId(message);
+    const runSeq = runId ? lastObservedSeqByRun.get(runId) : undefined;
+    entries.push({
+      message,
+      major:
+        runSeq !== undefined && runSeq >= firstCanonicalSeq
+          ? runSeq
+          : trailingMajor,
+      minor: 0.5,
+    });
   }
   for (const message of optimisticMessages) {
     entries.push({

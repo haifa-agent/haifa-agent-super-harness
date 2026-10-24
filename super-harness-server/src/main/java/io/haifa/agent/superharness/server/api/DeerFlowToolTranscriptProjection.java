@@ -120,6 +120,20 @@ public final class DeerFlowToolTranscriptProjection {
         return ids.toString();
     }
 
+    static String requestMessageId(ToolCallView call) {
+        return "tool-call-" + call.id().value() + "-request";
+    }
+
+    /** Position metadata without projecting historical Tool arguments/results. */
+    static Optional<String> resultMessageId(ToolCallView call) {
+        if (call.result().isEmpty() && !terminal(call.status())) return Optional.empty();
+        if (ASK_CLARIFICATION.equals(call.toolName()) && call.status() == ToolCallStatus.COMPLETED
+                && call.result().isPresent()) {
+            return clarificationPayload(call).map(payload -> clarificationRequestId(call, payload));
+        }
+        return Optional.of("tool-call-" + call.id().value() + "-result");
+    }
+
     static Optional<Map<String, Object>> resultMessage(ToolCallView call) {
         if (call.result().isEmpty() && !terminal(call.status())) {
             return Optional.empty();

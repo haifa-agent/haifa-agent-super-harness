@@ -972,6 +972,7 @@ export const enUS: Translations = {
 
   // Conversation
   conversation: {
+    runFailed: "This run failed. The messages above may belong to earlier runs.",
     noMessages: "No messages yet",
     startConversation: "Start a conversation to see messages here",
     branchCreated: "Conversation branch created",

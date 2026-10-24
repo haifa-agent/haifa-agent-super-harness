@@ -160,14 +160,15 @@ class DeerFlowInteractionHttpApiTest {
         assertThat(getJson(location).path("status").asText()).isEqualTo("success");
 
         JsonNode page = getJson("/api/threads/interaction-thread/messages/page?limit=20");
-        assertThat(page.path("data")).hasSize(4);
+        assertThat(page.path("data")).hasSize(6);
+        assertThat(page.path("data").findValuesAsText("name")).contains("mutating_probe");
         assertThat(page.path("data").findValuesAsText("request_id"))
                 .containsExactly(requestId, requestId);
-        assertThat(page.path("data").get(1).path("content").path("artifact").path("human_input")
+        assertThat(page.path("data").get(2).path("content").path("artifact").path("human_input")
                         .path("request_id")
                         .asText())
                 .isEqualTo(requestId);
-        assertThat(page.path("data").get(2).path("content").path("additional_kwargs")
+        assertThat(page.path("data").get(3).path("content").path("additional_kwargs")
                         .path("human_input_response")
                         .path("option_id")
                         .asText())
@@ -230,11 +231,27 @@ class DeerFlowInteractionHttpApiTest {
                 .path("values").path("messages");
         assertThat(restoredMessages.findValuesAsText("request_id"))
                 .containsExactly(firstId, firstId, secondId);
+        for (JsonNode card : restoredMessages) {
+            String callId = card.path("artifact").path("human_input").path("tool_call_id").asText();
+            if (callId.isBlank()) continue;
+            JsonNode request = java.util.stream.StreamSupport.stream(restoredMessages.spliterator(), false)
+                    .filter(message -> java.util.stream.StreamSupport.stream(message.path("tool_calls").spliterator(), false)
+                            .anyMatch(call -> callId.equals(call.path("id").asText())))
+                    .findFirst().orElseThrow();
+            assertThat(indexOfMessage(restoredMessages, request)).isLessThan(indexOfMessage(restoredMessages, card));
+        }
+
         JsonNode restoredPage = getJson("/api/threads/sequential-thread/messages/page?limit=20")
                 .path("data");
         assertThat(restoredPage.findValuesAsText("seq")).doesNotHaveDuplicates();
         assertThat(restoredPage.findValuesAsText("request_id"))
                 .containsExactly(firstId, firstId, secondId);
+        Path seamEvidence = io.haifa.agent.superharness.server.testsupport.GatewayFixture.evidenceDirectory();
+        var seam = json.createObjectNode();
+        seam.set("state", restoredMessages);
+        seam.set("page", restoredPage);
+        Files.writeString(seamEvidence.resolve("active-restart-order-seam.json"), seam.toPrettyString());
+
         assertThat(postJson("/api/threads/sequential-thread/runs/stream",
                 hiddenResponseBody(firstId, "approve", "approve")).statusCode()).isEqualTo(409);
         assertThat(postJson("/api/threads/sequential-thread/runs/stream",
@@ -340,7 +357,9 @@ class DeerFlowInteractionHttpApiTest {
                 visibleWithoutCards.add(row);
             }
         }
-        assertThat(visibleWithoutCards).hasSize(2);
+        assertThat(visibleWithoutCards).hasSize(4);
+        assertThat(visibleWithoutCards.stream().filter(row -> !row.path("content").path("tool_calls").isEmpty()).toList()).hasSize(1);
+        assertThat(visibleWithoutCards.stream().filter(row -> "mutating_probe".equals(row.path("content").path("name").asText())).toList()).hasSize(1);
         api.close();
         Files.copy(staleCatalog, catalog, StandardCopyOption.REPLACE_EXISTING);
         startServer();
@@ -354,9 +373,10 @@ class DeerFlowInteractionHttpApiTest {
         assertThat(postJson("/api/threads/accepted-with-display-fault/runs/stream",
                 ordinaryRunBody("continue after stale card")).body()).contains("event: end");
         JsonNode continuedPage = getJson("/api/threads/accepted-with-display-fault/messages/page?limit=20").path("data");
-        assertThat(continuedPage).hasSize(4);
-        assertThat(continuedPage.get(0)).isEqualTo(hiddenPage.get(0));
-        assertThat(continuedPage.get(1)).isEqualTo(hiddenPage.get(1));
+        assertThat(continuedPage).hasSize(6);
+        for (int index = 0; index < hiddenPage.size(); index++) {
+            assertThat(continuedPage.get(index)).isEqualTo(hiddenPage.get(index));
+        }
         Long before = null;
         for (int index = continuedPage.size() - 1; index >= 0; index--) {
             JsonNode page = getJson("/api/threads/accepted-with-display-fault/messages/page?limit=1"
@@ -390,7 +410,7 @@ class DeerFlowInteractionHttpApiTest {
         var threadsField = DeerFlowConversationService.class.getDeclaredField("threads");
         threadsField.setAccessible(true);
         Object thread = ((Map<?, ?>) threadsField.get(api.threadRunApi().conversations())).get("in-flight-page");
-        JsonNode inFlightPage = json.valueToTree(projection.invoke(api.threadRunApi().conversations(), thread, List.of(), Map.of()));
+        JsonNode inFlightPage = json.readTree(json.writeValueAsBytes(projection.invoke(api.threadRunApi().conversations(), thread, List.of(), Map.of())));
         assertThat(inFlightPage).hasSize(2);
         for (int index = 0; index < 2; index++) {
             assertThat(inFlightPage.get(index).path("seq").asLong()).isEqualTo(durablePage.get(index).path("seq").asLong());
