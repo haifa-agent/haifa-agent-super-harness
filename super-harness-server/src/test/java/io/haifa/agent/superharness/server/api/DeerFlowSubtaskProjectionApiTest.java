@@ -606,13 +606,25 @@ class DeerFlowSubtaskProjectionApiTest {
     }
 
     private static void assertNativeToolText(JsonNode rows, String nativeText) {
-        List<JsonNode> assistants = java.util.stream.StreamSupport.stream(rows.spliterator(), false)
-                .map(row -> row.path("content")).filter(message -> "ai".equals(message.path("type").asText())).toList();
-        assertThat(assistants.stream().filter(message -> !message.path("tool_calls").isEmpty()).toList())
-                .singleElement().satisfies(message -> assertThat(message.path("content").asText()).isEqualTo(nativeText));
-        assertThat(assistants.stream().filter(message -> nativeText.equals(message.path("content").asText())).toList())
-                .as("Ordinary native assistant text appears once, with its actual task calls before results")
-                .hasSize(1);
+        List<JsonNode> contents = java.util.stream.StreamSupport.stream(rows.spliterator(), false)
+                .map(row -> row.path("content")).toList();
+        List<JsonNode> narrations = contents.stream()
+                .filter(message -> "ai".equals(message.path("type").asText())
+                        && nativeText.equals(message.path("content").asText())).toList();
+        assertThat(narrations).as("Native narration survives once under its own canonical identity").hasSize(1);
+        JsonNode narration = narrations.getFirst();
+        assertThat(narration.path("tool_calls")).isEmpty();
+        assertThat(narration.path("id").asText()).startsWith(narration.path("run_id").asText() + "-ai-");
+        List<JsonNode> requests = contents.stream().filter(message -> !message.path("tool_calls").isEmpty()).toList();
+        assertThat(requests).hasSize(1);
+        JsonNode request = requests.getFirst();
+        assertThat(request.path("content").asText()).isEmpty();
+        assertThat(request.path("id")).isNotEqualTo(narration.path("id"));
+        assertThat(contents.indexOf(narration)).isLessThan(contents.indexOf(request));
+        for (JsonNode result : contents) {
+            if ("tool".equals(result.path("type").asText()))
+                assertThat(contents.indexOf(request)).isLessThan(contents.indexOf(result));
+        }
     }
 
     /**

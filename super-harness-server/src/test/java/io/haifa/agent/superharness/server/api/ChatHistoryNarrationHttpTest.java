@@ -67,7 +67,19 @@ class ChatHistoryNarrationHttpTest extends AbstractDeerFlowThreadRunApiTest {
         assertThat(getJson(location).path("status").asText()).isEqualTo(fail ? "error" : "success");
         if (fail) assertThat(stream.body()).contains("event: error", "diagnostic_id", "run_id");
         JsonNode page = getJson("/api/threads/narrated/messages/page?limit=200").path("data");
+        awaitTitleObserversIdle();
+        api.resetTurnPageReads("narrated");
         JsonNode state = getJson("/api/threads/narrated/state").path("values").path("messages");
+        assertThat(api.turnPageReads("narrated")).as("window, shared ordinal input, and Todo scan only").isEqualTo(3);
+        JsonNode tail = api.threadRunApi().conversations().readThreadStateTail("narrated", 2)
+                .path("values").path("messages");
+        for (JsonNode message : tail) {
+            JsonNode canonical = java.util.stream.StreamSupport.stream(page.spliterator(), false)
+                    .map(row -> row.path("content")).filter(row -> row.path("id").equals(message.path("id")))
+                    .findFirst().orElseThrow();
+            assertThat(message.path("additional_kwargs").path("deerflow_seq").asLong())
+                    .isEqualTo(canonical.path("additional_kwargs").path("deerflow_seq").asLong());
+        }
         List<JsonNode> contents = new ArrayList<>();
         long lastSeq = 0;
         for (JsonNode row : page) {
@@ -99,10 +111,16 @@ class ChatHistoryNarrationHttpTest extends AbstractDeerFlowThreadRunApiTest {
                 .reduce((left, right) -> right).orElseThrow();
         assertThat(newestHuman.path("content").asText()).isEqualTo("today?");
         assertThat(newestHuman.path("additional_kwargs").has("run_error")).isFalse();
+        awaitTitleObserversIdle();
+        long readsBeforeWarmTail = api.threadRunApi().conversations().positionMessagePageReads();
+        api.threadRunApi().conversations().readThreadStateTail("narrated", 2);
+        assertThat(api.threadRunApi().conversations().positionMessagePageReads())
+                .as("warm tail does not reread the previous terminal Run's Tool message pages")
+                .isEqualTo(readsBeforeWarmTail);
+
         for (JsonNode message : refreshed) {
             if (message.path("content").asText().startsWith("Narration "))
                 assertThat(refreshed.indexOf(message)).isLessThan(refreshed.indexOf(newestHuman));
         }
-        assertThat(org.slf4j.LoggerFactory.getILoggerFactory().getClass().getSimpleName()).isNotEqualTo("NOPLoggerFactory");
     }
 }

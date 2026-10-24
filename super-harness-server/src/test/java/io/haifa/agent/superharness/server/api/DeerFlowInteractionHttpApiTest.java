@@ -231,11 +231,27 @@ class DeerFlowInteractionHttpApiTest {
                 .path("values").path("messages");
         assertThat(restoredMessages.findValuesAsText("request_id"))
                 .containsExactly(firstId, firstId, secondId);
+        for (JsonNode card : restoredMessages) {
+            String callId = card.path("artifact").path("human_input").path("tool_call_id").asText();
+            if (callId.isBlank()) continue;
+            JsonNode request = java.util.stream.StreamSupport.stream(restoredMessages.spliterator(), false)
+                    .filter(message -> java.util.stream.StreamSupport.stream(message.path("tool_calls").spliterator(), false)
+                            .anyMatch(call -> callId.equals(call.path("id").asText())))
+                    .findFirst().orElseThrow();
+            assertThat(indexOfMessage(restoredMessages, request)).isLessThan(indexOfMessage(restoredMessages, card));
+        }
+
         JsonNode restoredPage = getJson("/api/threads/sequential-thread/messages/page?limit=20")
                 .path("data");
         assertThat(restoredPage.findValuesAsText("seq")).doesNotHaveDuplicates();
         assertThat(restoredPage.findValuesAsText("request_id"))
                 .containsExactly(firstId, firstId, secondId);
+        Path seamEvidence = io.haifa.agent.superharness.server.testsupport.GatewayFixture.evidenceDirectory();
+        var seam = json.createObjectNode();
+        seam.set("state", restoredMessages);
+        seam.set("page", restoredPage);
+        Files.writeString(seamEvidence.resolve("active-restart-order-seam.json"), seam.toPrettyString());
+
         assertThat(postJson("/api/threads/sequential-thread/runs/stream",
                 hiddenResponseBody(firstId, "approve", "approve")).statusCode()).isEqualTo(409);
         assertThat(postJson("/api/threads/sequential-thread/runs/stream",

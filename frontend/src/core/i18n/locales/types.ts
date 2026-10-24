@@ -803,6 +803,7 @@ export interface Translations {
 
   // Conversation
   conversation: {
+    runFailed: string;
     noMessages: string;
     startConversation: string;
     branchCreated: string;

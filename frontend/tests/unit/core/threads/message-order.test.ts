@@ -573,3 +573,31 @@ test("trusted narration seq keeps its exact place despite an older checkpoint", 
     ).map((m) => m.id),
   ).toEqual(["old-human", "old-ai", "new-human"]);
 });
+
+test("a newer live result remains the anchor for trailing same-Run narration", () => {
+  const human = msg("human", "human", "old", 1, { run_id: "run" });
+  const before = msg("before", "ai", "before", undefined, { run_id: "run" });
+  const result = msg("result", "tool", "result", 3, {
+    run_id: "run",
+    tool_call_id: "call",
+  });
+  const after = msg("after", "ai", "after", undefined, { run_id: "run" });
+  expect(
+    mergeMessages([human], [human, before, result, after], []).map((m) => m.id),
+  ).toEqual(["human", "before", "result", "after"]);
+});
+
+test("a stale checkpoint does not move narration after an unseen same-Run Steer", () => {
+  const human = msg("human", "human", "old", 1, { run_id: "run" });
+  const result = msg("result", "tool", "result", 3, {
+    run_id: "run",
+    tool_call_id: "call",
+  });
+  const steer = msg("steer", "human", "steer", 4, { run_id: "run" });
+  const after = msg("after", "ai", "after", undefined, { run_id: "run" });
+  expect(
+    mergeMessages([human, result, steer], [human, result, after], []).map(
+      (m) => m.id,
+    ),
+  ).toEqual(["human", "result", "after", "steer"]);
+});

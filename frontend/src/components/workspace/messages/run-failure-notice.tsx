@@ -13,9 +13,14 @@ export function RunFailureNotice({
   isLoading: boolean;
   label: string;
 }) {
-  const human = messages.findLast(
-    (message) => message.type === "human" && !isHiddenFromUIMessage(message),
-  );
+  let human: Message | undefined;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!;
+    if (message.type === "human" && !isHiddenFromUIMessage(message)) {
+      human = message;
+      break;
+    }
+  }
   const failure: unknown = human?.additional_kwargs?.run_error;
   if (isLoading || (!error && (!failure || typeof failure !== "object")))
     return null;

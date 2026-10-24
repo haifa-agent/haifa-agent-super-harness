@@ -109,6 +109,8 @@ pwsh -NoProfile -File tests/checks/frontend/verify-haifa-frontend-profile.ps1
 
 Gateway 的可执行 JAR 内置 SLF4J 日志实现。运行失败时，可用会话中的诊断 ID 对照 Gateway 日志里的 `event=runtime.failure`，查看 `errorCode`、`failureTypes` 和 `contextFailure`；仅凭同一时刻的搜索投影警告不能认定失败根因。
 
+打包产物的日志可用定向探针验证：`python scripts/diagnostics/verify_packaged_run_failure.py --jar super-harness-server/target/super-harness-server-0.1.0-SNAPSHOT-exec.jar --evidence local-tmp/packaged-log-probe`。先构建当前源码的 exec JAR；探针使用独立新数据目录及本地拒绝请求的模型服务，核对失败 Run 的诊断 ID 是否出现在 JAR 进程的 stderr，并保留日志、JAR SHA-256 和清理结果，不调用真实模型。
+
 ### W08 真实委托 UI profile
 
 `scripts/ui/run-w18-ui-smoke.ps1` 新增 `-W08LiveDelegation` 开关，运行 `tests/ui/smoke/w08-delegation-live.spec.cjs`

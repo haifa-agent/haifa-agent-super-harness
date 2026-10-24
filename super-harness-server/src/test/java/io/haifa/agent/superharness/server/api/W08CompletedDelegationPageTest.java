@@ -191,6 +191,8 @@ class W08CompletedDelegationPageTest {
                         .filter(message -> !message.path("tool_calls").isEmpty()).toList();
                 assertThat(taskRequests).hasSize(2);
                 List<String> taskIds = new ArrayList<>();
+                List<String> expectedOrder = new ArrayList<>();
+                expectedOrder.add(stateMessages.getFirst().path("id").asText());
                 for (int round = 0; round < taskRequests.size(); round++) {
                     JsonNode request = taskRequests.get(round);
                     String id = request.path("tool_calls").get(0).path("id").asText();
@@ -208,9 +210,18 @@ class W08CompletedDelegationPageTest {
                     assertThat(contents(original).stream()
                             .filter(message -> id.equals(message.path("tool_call_id").asText())).toList())
                             .containsExactly(result);
-                    assertThat(original.get(1 + round * (withText ? 3 : 2) + (withText ? 1 : 0)).path("content")).isEqualTo(expectedRequest);
-                    assertThat(original.get(2 + round * (withText ? 3 : 2) + (withText ? 1 : 0)).path("content")).isEqualTo(result);
+                    if (withText) {
+                        String narrationText = "Delegating round " + (round + 1) + ".";
+                        JsonNode narration = stateMessages.stream()
+                                .filter(message -> narrationText.equals(message.path("content").asText())).findFirst().orElseThrow();
+                        expectedOrder.add(narration.path("id").asText());
+                    }
+                    expectedOrder.add(request.path("id").asText());
+                    expectedOrder.add(result.path("id").asText());
                 }
+                expectedOrder.add(stateMessages.getLast().path("id").asText());
+                assertThat(contents(original).stream().map(message -> message.path("id").asText()).toList())
+                        .containsExactlyElementsOf(expectedOrder);
                 assertThat(stateMessages).containsExactlyElementsOf(contents(original));
                 assertThat(taskIds).doesNotHaveDuplicates();
                 assertThat(original.get(original.size() - 1).path("content").path("content").asText()).isEqualTo("PARENT-FINAL");
