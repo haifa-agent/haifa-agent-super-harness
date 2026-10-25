@@ -120,7 +120,12 @@ class ParallelSubtaskStateHttpTest {
                 assertThat(roundRequest.path("id").asText())
                         .as("the round message id is derived from its first call")
                         .isEqualTo("tool-call-" + firstCallId + "-request");
-                assertThat(roundRequest.path("additional_kwargs")).hasSize(0);
+                JsonNode roundKwargs = roundRequest.path("additional_kwargs");
+                assertThat(roundKwargs).hasSize(2);
+                assertThat(roundKwargs.path("deerflow_seq").asLong()).isEqualTo(2);
+                assertThat(roundKwargs.path("usage_metadata").path("input_tokens").asLong()).isEqualTo(2);
+                assertThat(roundKwargs.path("usage_metadata").path("output_tokens").asLong()).isEqualTo(3);
+                assertThat(roundKwargs.path("usage_metadata").path("total_tokens").asLong()).isEqualTo(5);
 
                 List<String> taskCallIds = new ArrayList<>();
                 for (JsonNode message : messages) {
