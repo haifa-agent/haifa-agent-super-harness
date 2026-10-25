@@ -1163,14 +1163,11 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             if (supportProjectedMessages.contains(turn.messageId())) continue;
             long sequence = turn.sequence() + offset;
             int ordinal = ordinals.getOrDefault(turn.sequence(), 0);
-            RunUsageFacts turnUsage = turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT
-                            && turn.runId().isPresent()
-                    ? usageFactsFor(thread, turn.runId().orElseThrow(), cached.get(turn.runId().orElseThrow().value()),
-                            usageFactsByRun)
-                    : RunUsageFacts.EMPTY;
             output.add(turn.runId().map(AgentRunId::value).orElse(null), sequence, turn.createdAt(),
                     displayTurnId(thread, turn, ordinal),
-                    () -> messageForTurn(thread, turn.content(), ordinal, true, turnUsage.usageByMessageId()));
+                    () -> messageForTurn(
+                            thread, turn.content(), ordinal, true,
+                            usageForTurn(thread, turn, cached, usageFactsByRun)));
             if (turn.role() == io.haifa.agent.core.message.MessageRole.USER && turn.runId().isPresent()) {
                 output.positions.put(wireMessageId(turn.runId().orElseThrow().value(), "human", ordinal), sequence);
             }
@@ -1191,8 +1188,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 if (!terminal) output.prefixSafe = false;
                 if (terminal && !prepareSupportRounds(thread, runId, cached.get(runId.value()), output).isEmpty()) {
                     supportProjectedRuns.add(runId.value());
-                    RunUsageFacts supportUsage = usageFactsFor(
-                            thread, runId, cached.get(runId.value()), usageFactsByRun);
+                    RunUsageFacts supportUsage = output.positionsOnly
+                            ? RunUsageFacts.EMPTY
+                            : usageFactsFor(thread, runId, cached.get(runId.value()), usageFactsByRun);
                     supportSlots = appendRunSupportRows(
                             thread, runId, cached.get(runId.value()), sequence + 1, turn.createdAt(), output,
                             visibleAssistantTexts, ordinals, supportProjectedMessages,
@@ -4043,6 +4041,15 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         return requestCache.computeIfAbsent(
                 runId.value(),
                 ignored -> usageFacts(thread, cached, runId, isTerminalRun(thread, runId, cached)));
+    }
+
+    private Map<String, Map<String, Object>> usageForTurn(
+            ThreadRecord thread, DisplayTurn turn, Map<String, RunRecord> cached,
+            Map<String, RunUsageFacts> requestCache) {
+        if (turn.role() != io.haifa.agent.core.message.MessageRole.ASSISTANT
+                || turn.runId().isEmpty()) return Map.of();
+        AgentRunId runId = turn.runId().orElseThrow();
+        return usageFactsFor(thread, runId, cached.get(runId.value()), requestCache).usageByMessageId();
     }
 
     private RunUsageFacts usageFacts(ThreadRecord thread, RunRecord cached, AgentRunId runId, boolean terminal) {
