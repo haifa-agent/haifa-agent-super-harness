@@ -312,6 +312,10 @@ class ProductionWriteFileHttpTest {
             JsonNode projectedCall = firstMessageWith(completedState, "tool_calls");
             String projectedCallId = projectedCall.path("tool_calls").get(0).path("id").asText();
             assertThat(projectedCallId).isEqualTo(pendingToolCallId);
+            assertThat(projectedCall.path("additional_kwargs").path("usage_metadata").path("input_tokens").asLong())
+                    .isEqualTo(4);
+            assertThat(projectedCall.path("additional_kwargs").path("usage_metadata").path("output_tokens").asLong())
+                    .isEqualTo(3);
             JsonNode projectedResult = firstToolResult(completedState, projectedCallId);
             assertThat(projectedResult.path("name").asText()).isEqualTo("write_file");
             assertThat(projectedResult.path("content").asText()).contains("artifact:");

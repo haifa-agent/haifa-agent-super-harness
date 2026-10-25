@@ -81,6 +81,22 @@ public final class DeerFlowToolTranscriptProjection {
      * its own result message.
      */
     static Map<String, Object> requestMessage(List<ToolCallView> round) {
+        return requestMessage(round, null);
+    }
+
+    static Map<String, Object> requestMessage(List<ToolCallView> round, Map<String, Object> usage) {
+        Map<String, Object> message = roundMessage(round);
+        if (usage == null) return message;
+        Map<String, Object> additional = new LinkedHashMap<>();
+        if (message.get("additional_kwargs") instanceof Map<?, ?> existing) {
+            existing.forEach((key, value) -> additional.put(String.valueOf(key), value));
+        }
+        additional.put("usage_metadata", usage);
+        message.put("additional_kwargs", Map.copyOf(additional));
+        return message;
+    }
+
+    private static Map<String, Object> roundMessage(List<ToolCallView> round) {
         if (round.size() == 1) {
             return requestMessage(round.getFirst());
         }
