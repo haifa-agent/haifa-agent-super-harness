@@ -94,6 +94,25 @@ class ChatHistoryNarrationHttpTest extends AbstractDeerFlowThreadRunApiTest {
             List<JsonNode> narration = contents.stream().filter(message -> text.equals(message.path("content").asText())).toList();
             assertThat(narration).hasSize(1);
             assertThat(narration.getFirst().path("id").asText()).endsWith("-ai-" + (round - 1));
+            assertThat(narration.getFirst().path("additional_kwargs").path("usage_metadata").path("total_tokens").asLong())
+                    .isEqualTo(2);
+        }
+        List<JsonNode> toolRequests = contents.stream()
+                .filter(message -> "ai".equals(message.path("type").asText()))
+                .filter(message -> message.path("tool_calls").size() > 0)
+                .toList();
+        assertThat(toolRequests).hasSize(2);
+        assertThat(toolRequests).allSatisfy(message -> assertThat(
+                        message.path("additional_kwargs").has("usage_metadata"))
+                .isFalse());
+        if (!fail) {
+            JsonNode finalAnswer = contents.stream()
+                    .filter(message -> "completed".equals(message.path("content").asText()))
+                    .findFirst().orElseThrow();
+            assertThat(finalAnswer.path("additional_kwargs").path("usage_metadata").path("input_tokens").asLong())
+                    .isEqualTo(1);
+            assertThat(finalAnswer.path("additional_kwargs").path("usage_metadata").path("output_tokens").asLong())
+                    .isEqualTo(1);
         }
         JsonNode failure = contents.getFirst().path("additional_kwargs").path("run_error");
         if (fail) assertThat(failure.path("diagnostic_id").asText()).isNotBlank();

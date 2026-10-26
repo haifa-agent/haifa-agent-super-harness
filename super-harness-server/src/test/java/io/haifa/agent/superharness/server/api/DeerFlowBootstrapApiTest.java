@@ -112,7 +112,7 @@ class DeerFlowBootstrapApiTest {
         assertGetJson(
                 "/api/models",
                 """
-                {"models":[],"token_usage":{"enabled":false}}
+                {"models":[],"token_usage":{"enabled":true}}
                 """);
     }
 

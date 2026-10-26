@@ -22,6 +22,7 @@ import io.haifa.agent.runtime.api.InteractionResponseReceipt;
 import io.haifa.agent.runtime.api.InteractionState;
 import io.haifa.agent.runtime.api.InteractionView;
 import io.haifa.agent.runtime.api.RunEventCursor;
+import io.haifa.agent.runtime.api.RunEventPage;
 import io.haifa.agent.runtime.api.RunEventPayloads;
 import io.haifa.agent.runtime.api.RunMessageCursor;
 import io.haifa.agent.runtime.api.RunMessagePage;
@@ -166,6 +167,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     /** Page size for reading the SDK per-message Tool-call grouping during the round scan. */
     private static final int MESSAGE_ROUND_SCAN_PAGE_SIZE = 100;
     private static final int TERMINAL_RUN_CACHE_LIMIT = 8;
+    private static final int RUN_USAGE_CACHE_LIMIT = 512;
     /**
      * Upper bound of Turns materialized by a whole-thread state read. Channel adapters that only
      * need the newest assistant text and pending card ask for a smaller tail instead
@@ -224,6 +226,13 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     private final Long parentWallTimeMillisForTests;
     private final Map<String, ThreadRecord> threads = new ConcurrentHashMap<>();
     private final Map<String, RunRecord> runs = new ConcurrentHashMap<>();
+    private final Map<String, RunUsageFacts> runUsageFacts = Collections.synchronizedMap(
+            new LinkedHashMap<>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, RunUsageFacts> eldest) {
+                    return size() > RUN_USAGE_CACHE_LIMIT;
+                }
+            });
     // A terminal Run can leave the hot cache while its bridge still owns SDK resources.
     // Keep process-lifetime ownership separate from the bounded Run projection cache.
     private final Set<HaifaRunBridge> ownedBridges = ConcurrentHashMap.newKeySet();
@@ -1120,6 +1129,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 .forEach(run -> cached.put(run.runId.value(), run));
         Set<String> supportProjectedRuns = new HashSet<>();
         Set<String> supportProjectedMessages = new HashSet<>();
+        Map<String, RunUsageFacts> usageFactsByRun = new HashMap<>();
         Map<String, DisplayTurn> visibleAssistantTexts = new HashMap<>();
         turns.stream().filter(turn -> turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT)
                 .forEach(turn -> visibleAssistantTexts.put(turn.messageId(), turn));
@@ -1155,7 +1165,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             int ordinal = ordinals.getOrDefault(turn.sequence(), 0);
             output.add(turn.runId().map(AgentRunId::value).orElse(null), sequence, turn.createdAt(),
                     displayTurnId(thread, turn, ordinal),
-                    () -> messageForTurn(thread, turn.content(), ordinal, true));
+                    () -> messageForTurn(
+                            thread, turn.content(), ordinal, true,
+                            usageForTurn(thread, turn, cached, usageFactsByRun)));
             if (turn.role() == io.haifa.agent.core.message.MessageRole.USER && turn.runId().isPresent()) {
                 output.positions.put(wireMessageId(turn.runId().orElseThrow().value(), "human", ordinal), sequence);
             }
@@ -1176,10 +1188,13 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 if (!terminal) output.prefixSafe = false;
                 if (terminal && !prepareSupportRounds(thread, runId, cached.get(runId.value()), output).isEmpty()) {
                     supportProjectedRuns.add(runId.value());
+                    RunUsageFacts supportUsage = output.positionsOnly
+                            ? RunUsageFacts.EMPTY
+                            : usageFactsFor(thread, runId, cached.get(runId.value()), usageFactsByRun);
                     supportSlots = appendRunSupportRows(
                             thread, runId, cached.get(runId.value()), sequence + 1, turn.createdAt(), output,
                             visibleAssistantTexts, ordinals, supportProjectedMessages,
-                            turn.sequence(), runSteerCeilings.get(turn.sequence()));
+                            turn.sequence(), runSteerCeilings.get(turn.sequence()), supportUsage);
                 }
             }
             List<PersistentThreadCatalog.InteractionDisplay> cards = anchored.getOrDefault(turn.sequence(), List.of())
@@ -1324,7 +1339,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             ThreadRecord thread, AgentRunId runId, RunRecord cached, long startSequence,
             Instant createdAt, FeedRows output, Map<String, DisplayTurn> visibleAssistantTexts,
             Map<Long, Integer> ordinals, Set<String> supportProjectedMessages,
-            long afterNativeSequence, Long beforeNativeSequence) {
+            long afterNativeSequence, Long beforeNativeSequence, RunUsageFacts usageFacts) {
         // A Steer can reference the same Run several times. Read its public message
         // pages once, and release the prior Run's plan as the feed advances.
         List<SupportRound> rounds = prepareSupportRounds(thread, runId, cached, output);
@@ -1351,12 +1366,16 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 int ordinal = ordinals.getOrDefault(narration.sequence(), 0);
                 output.add(runId.value(), startSequence + slot++, round.createdAt(),
                         displayTurnId(thread, narration, ordinal),
-                        () -> messageForTurn(thread, narration.content(), ordinal, true));
+                        () -> messageForTurn(
+                                thread, narration.content(), ordinal, true, usageFacts.usageByMessageId()));
                 supportProjectedMessages.add(round.messageId());
             }
+            Map<String, Object> requestUsage = narration == null
+                    ? usageFacts.usageByToolCallId().get(round.calls().getFirst().id().value())
+                    : null;
             output.add(runId.value(), startSequence + slot++, createdAt,
                     DeerFlowToolTranscriptProjection.requestMessageId(round.calls().getFirst()),
-                    () -> DeerFlowToolTranscriptProjection.requestMessage(round.calls()));
+                    () -> DeerFlowToolTranscriptProjection.requestMessage(round.calls(), requestUsage));
             slot += appendInteractionRows(thread, cardsByRound.getOrDefault(index, List.of()),
                     startSequence + slot - 1, output);
             for (ToolCallView call : round.calls()) {
@@ -3999,8 +4018,145 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         response.put("total_runs", totalRuns);
         response.put("by_model", modelBreakdown);
         response.put("by_caller", null); // The public Run Usage has no caller attribution.
-        response.put("context_usage", null);
+        response.put("context_usage", contextUsage(thread, threadRuns));
         return response;
+    }
+
+    private Map<String, Object> contextUsage(ThreadRecord thread, List<RunRecord> threadRuns) {
+        if (threadRuns.isEmpty()) return null;
+        RunRecord latest = threadRuns.getFirst();
+        int maxContextTokens = latest.bridge.modelContextWindow();
+        if (maxContextTokens <= 0) return null;
+        RunUsageFacts facts = usageFacts(thread, latest, latest.runId, isTerminalRun(thread, latest.runId, latest));
+        long tokenCount = facts.complete() ? Math.max(0L, facts.lastInputTokens()) : 0L;
+        double percentage = Math.round((double) tokenCount / maxContextTokens * 1000.0) / 10.0;
+        return Map.of(
+                "token_count", tokenCount,
+                "max_context_tokens", (long) maxContextTokens,
+                "percentage", Math.max(0.0, percentage));
+    }
+
+    private RunUsageFacts usageFactsFor(
+            ThreadRecord thread, AgentRunId runId, RunRecord cached, Map<String, RunUsageFacts> requestCache) {
+        return requestCache.computeIfAbsent(
+                runId.value(),
+                ignored -> usageFacts(thread, cached, runId, isTerminalRun(thread, runId, cached)));
+    }
+
+    private Map<String, Map<String, Object>> usageForTurn(
+            ThreadRecord thread, DisplayTurn turn, Map<String, RunRecord> cached,
+            Map<String, RunUsageFacts> requestCache) {
+        if (turn.role() != io.haifa.agent.core.message.MessageRole.ASSISTANT
+                || turn.runId().isEmpty()) return Map.of();
+        AgentRunId runId = turn.runId().orElseThrow();
+        return usageFactsFor(thread, runId, cached.get(runId.value()), requestCache).usageByMessageId();
+    }
+
+    private RunUsageFacts usageFacts(ThreadRecord thread, RunRecord cached, AgentRunId runId, boolean terminal) {
+        RunUsageFacts known = runUsageFacts.get(runId.value());
+        if (known != null) return known;
+        HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
+        if (!terminal) {
+            return new RunUsageFacts(Map.of(), Map.of(), Map.of(), lastModelInputTokens(bridge, runId), true);
+        }
+        Map<String, String> modelCallByMessage = new LinkedHashMap<>();
+        Map<String, String> messageByToolCall = new LinkedHashMap<>();
+        RunMessageCursor messageCursor = RunMessageCursor.beforeFirst(runId);
+        boolean complete = true;
+        int pages = 0;
+        while (true) {
+            RunMessagePage page = bridge.messages(runId, messageCursor, MESSAGE_ROUND_SCAN_PAGE_SIZE);
+            for (RunMessageView message : page.items()) {
+                if (!"ASSISTANT".equals(message.role())) continue;
+                message.modelCallId().ifPresent(modelCallId -> {
+                    modelCallByMessage.put(message.messageId(), modelCallId);
+                    message.toolCalls().forEach(call -> messageByToolCall.put(call.id().value(), message.messageId()));
+                });
+            }
+            if (!page.hasMore()) break;
+            if (++pages >= MAXIMUM_TURN_SCAN_PAGES) {
+                complete = false;
+                break;
+            }
+            messageCursor = page.nextCursor();
+        }
+        Map<String, Map<String, Object>> usageByModelCall = new LinkedHashMap<>();
+        long lastInputTokens = -1L;
+        long lastSequence = -1L;
+        RunEventCursor eventCursor = bridge.beforeFirstEvent(runId);
+        pages = 0;
+        while (true) {
+            RunEventPage page = bridge.events(runId, eventCursor, DIAGNOSTIC_EVENT_PAGE_SIZE);
+            for (AgentRunEvent event : page.items()) {
+                if (event.payload() instanceof RunEventPayloads.ModelLifecycle model
+                        && "SUCCEEDED".equals(model.status())) {
+                    usageByModelCall.putIfAbsent(
+                            model.modelCallId(),
+                            Map.of(
+                                    "input_tokens", model.inputTokens(),
+                                    "output_tokens", model.outputTokens(),
+                                    "total_tokens", Math.addExact(model.inputTokens(), model.outputTokens())));
+                    if (event.sequence() > lastSequence) {
+                        lastSequence = event.sequence();
+                        lastInputTokens = model.inputTokens();
+                    }
+                }
+            }
+            if (!page.hasMore()) break;
+            if (++pages >= MAXIMUM_TURN_SCAN_PAGES) {
+                complete = false;
+                break;
+            }
+            eventCursor = page.nextCursor();
+        }
+        Map<String, Map<String, Object>> usageByMessage = new LinkedHashMap<>();
+        modelCallByMessage.forEach((messageId, modelCallId) -> {
+            Map<String, Object> usage = usageByModelCall.get(modelCallId);
+            if (usage != null) usageByMessage.put(messageId, usage);
+        });
+        Map<String, Map<String, Object>> usageByToolCall = new LinkedHashMap<>();
+        messageByToolCall.forEach((toolCallId, messageId) -> {
+            Map<String, Object> usage = usageByMessage.get(messageId);
+            if (usage != null) usageByToolCall.put(toolCallId, usage);
+        });
+        RunUsageFacts facts = new RunUsageFacts(
+                Map.copyOf(usageByMessage),
+                Map.copyOf(usageByToolCall),
+                Map.copyOf(messageByToolCall),
+                lastInputTokens,
+                complete);
+        if (terminal && complete) runUsageFacts.put(runId.value(), facts);
+        return facts;
+    }
+
+    private long lastModelInputTokens(HaifaRunBridge bridge, AgentRunId runId) {
+        long lastInputTokens = -1L;
+        long lastSequence = -1L;
+        RunEventCursor cursor = bridge.beforeFirstEvent(runId);
+        int pages = 0;
+        while (true) {
+            RunEventPage page = bridge.events(runId, cursor, DIAGNOSTIC_EVENT_PAGE_SIZE);
+            for (AgentRunEvent event : page.items()) {
+                if (event.payload() instanceof RunEventPayloads.ModelLifecycle model
+                        && "SUCCEEDED".equals(model.status())
+                        && event.sequence() > lastSequence) {
+                    lastSequence = event.sequence();
+                    lastInputTokens = model.inputTokens();
+                }
+            }
+            if (!page.hasMore()) return lastInputTokens;
+            if (++pages >= MAXIMUM_TURN_SCAN_PAGES) return -1L;
+            cursor = page.nextCursor();
+        }
+    }
+
+    private record RunUsageFacts(
+            Map<String, Map<String, Object>> usageByMessageId,
+            Map<String, Map<String, Object>> usageByToolCallId,
+            Map<String, String> messageIdByToolCallId,
+            long lastInputTokens,
+            boolean complete) {
+        static final RunUsageFacts EMPTY = new RunUsageFacts(Map.of(), Map.of(), Map.of(), -1L, true);
     }
 
     private DiagnosticScan runDiagnosticFacts(
@@ -4474,6 +4630,12 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
 
     private Map<String, Object> messageForTurn(
             ThreadRecord thread, ConversationTurn turn, int ordinal, boolean liveOverlay) {
+        return messageForTurn(thread, turn, ordinal, liveOverlay, Map.of());
+    }
+
+    private Map<String, Object> messageForTurn(
+            ThreadRecord thread, ConversationTurn turn, int ordinal, boolean liveOverlay,
+            Map<String, Map<String, Object>> usageByMessageId) {
         boolean human = turn.role() == io.haifa.agent.core.message.MessageRole.USER;
         String type = human ? "human" : "ai";
         String id = turn.runId()
@@ -4488,6 +4650,10 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 ? InputTrustBoundary.unwrapForDisplay(turn.text()) : turn.text();
         Map<String, Object> projected = message(id, type, text);
         turn.runId().ifPresent(runId -> projected.put("run_id", runId.value()));
+        if (!human) {
+            Map<String, Object> usage = usageByMessageId.get(turn.messageId());
+            if (usage != null) projected.put("additional_kwargs", Map.of("usage_metadata", usage));
+        }
         applyClarificationAnswer(thread, turn, projected);
         return projected;
     }
@@ -4536,15 +4702,28 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 .forEach(run -> cached.put(run.runId.value(), run));
         Set<String> durableHumanRuns = durableHumanRunIds(turns);
         Set<String> supportProjectedRuns = new HashSet<>();
+        Map<String, RunUsageFacts> usageFactsByRun = new HashMap<>();
+        Set<String> visibleAssistantMessageIds = turns.stream()
+                .filter(turn -> turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT)
+                .map(ConversationTurn::messageId)
+                .collect(java.util.stream.Collectors.toSet());
         List<Map<String, Object>> messages = new ArrayList<>();
         for (ConversationTurn turn : turns) {
             int ordinal = ordinals.getOrDefault(turn.sequence(), 0);
-            messages.add(messageForTurn(thread, turn, ordinal, includeInFlight));
+            RunUsageFacts turnUsage = turn.role() == io.haifa.agent.core.message.MessageRole.ASSISTANT
+                            && turn.runId().isPresent()
+                    ? usageFactsFor(thread, turn.runId().orElseThrow(), cached.get(turn.runId().orElseThrow().value()),
+                            usageFactsByRun)
+                    : RunUsageFacts.EMPTY;
+            messages.add(messageForTurn(thread, turn, ordinal, includeInFlight, turnUsage.usageByMessageId()));
             if (turn.role() == io.haifa.agent.core.message.MessageRole.USER
                     && turn.runId().isPresent()
                     && supportProjectedRuns.add(turn.runId().orElseThrow().value())) {
-                RunRecord run = cached.get(turn.runId().orElseThrow().value());
-                addRunSupportMessages(thread, turn.runId().orElseThrow(), run, messages);
+                AgentRunId runId = turn.runId().orElseThrow();
+                RunRecord run = cached.get(runId.value());
+                RunUsageFacts supportUsage = usageFactsFor(thread, runId, run, usageFactsByRun);
+                addRunSupportMessages(
+                        thread, runId, run, messages, visibleAssistantMessageIds, supportUsage);
             }
         }
         if (includeInFlight) {
@@ -4552,7 +4731,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 if (!isInFlightWithoutDurableHuman(run, durableHumanRuns)) continue;
                 messages.add(pendingHumanMessage(run));
                 if (supportProjectedRuns.add(run.runId.value())) {
-                    addRunSupportMessages(thread, run.runId, run, messages);
+                    RunUsageFacts supportUsage = usageFactsFor(thread, run.runId, run, usageFactsByRun);
+                    addRunSupportMessages(
+                            thread, run.runId, run, messages, visibleAssistantMessageIds, supportUsage);
                 }
             }
         }
@@ -4600,7 +4781,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             ThreadRecord thread,
             AgentRunId runId,
             RunRecord cached,
-            List<Map<String, Object>> messages) {
+            List<Map<String, Object>> messages,
+            Set<String> visibleAssistantMessageIds,
+            RunUsageFacts usageFacts) {
         HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
         List<ToolCallView> calls = DeerFlowToolTranscriptProjection.upToClarificationBoundary(
                 bridge.toolCalls(runId));
@@ -4614,7 +4797,11 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         for (int index = 0; index < rounds.size(); index++) {
             List<ToolCallView> round = rounds.get(index);
             if (!round.isEmpty()) {
-                messages.add(DeerFlowToolTranscriptProjection.requestMessage(round));
+                String modelMessageId = usageFacts.messageIdByToolCallId().get(round.getFirst().id().value());
+                Map<String, Object> usage = visibleAssistantMessageIds.contains(modelMessageId)
+                        ? null
+                        : usageFacts.usageByToolCallId().get(round.getFirst().id().value());
+                messages.add(DeerFlowToolTranscriptProjection.requestMessage(round, usage));
             }
             messages.addAll(interactions.getOrDefault(index, List.of()));
             round.stream()

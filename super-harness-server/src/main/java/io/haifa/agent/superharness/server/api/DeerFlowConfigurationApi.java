@@ -371,7 +371,7 @@ final class DeerFlowConfigurationApi implements HttpHandler {
         List<ModelItemResponse> models = store.executableModels().stream()
                 .map(this::toModelItemResponse)
                 .toList();
-        send(exchange, 200, new ModelsResponse(models, new TokenUsageResponse(false)));
+        send(exchange, 200, new ModelsResponse(models, new TokenUsageResponse(true)));
     }
 
     private void listManagedModels(HttpExchange exchange) throws IOException {

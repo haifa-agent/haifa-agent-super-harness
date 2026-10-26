@@ -584,6 +584,23 @@ class DeerFlowConfigurationApiTest {
                     "GET", "/api/threads/managed-run/token-usage", null).body());
             assertThat(firstThreadUsage.path("total_input_tokens").asLong()).isEqualTo(4);
             assertThat(firstThreadUsage.path("total_output_tokens").asLong()).isEqualTo(3);
+            JsonNode contextUsage = firstThreadUsage.path("context_usage");
+            assertThat(contextUsage.path("token_count").asLong()).isEqualTo(4);
+            assertThat(contextUsage.path("max_context_tokens").asLong()).isEqualTo(32768);
+            assertThat(contextUsage.path("percentage").asDouble()).isZero();
+            JsonNode managedPage = json.readTree(
+                    request("GET", "/api/threads/managed-run/messages/page", null).body());
+            JsonNode managedAnswer = java.util.stream.StreamSupport.stream(
+                            managedPage.path("data").spliterator(), false)
+                    .map(row -> row.path("content"))
+                    .filter(content -> "controlled provider response".equals(content.path("content").asText()))
+                    .findFirst().orElseThrow();
+            assertThat(managedAnswer.path("additional_kwargs").path("usage_metadata").path("input_tokens").asLong())
+                    .isEqualTo(4);
+            assertThat(managedAnswer.path("additional_kwargs").path("usage_metadata").path("output_tokens").asLong())
+                    .isEqualTo(3);
+            assertThat(managedAnswer.path("additional_kwargs").path("usage_metadata").path("total_tokens").asLong())
+                    .isEqualTo(7);
             String providerId = "super-harness-managed-openai-compatible";
             assertThat(firstThreadUsage.path("by_model")
                             .has(providerId.length() + ":" + providerId + "demo-provider-id"))
@@ -631,6 +648,18 @@ class DeerFlowConfigurationApiTest {
                     .isEqualTo("known");
             assertThat(request("GET", "/api/threads/managed-run/messages/page", null).body())
                     .contains(runView.path("run_id").asText(), switchedLocation.replaceFirst(".*/", ""));
+            JsonNode restoredPage = json.readTree(
+                    request("GET", "/api/threads/managed-run/messages/page", null).body());
+            JsonNode restoredAnswer = java.util.stream.StreamSupport.stream(
+                            restoredPage.path("data").spliterator(), false)
+                    .map(row -> row.path("content"))
+                    .filter(content -> "controlled provider response".equals(content.path("content").asText()))
+                    .findFirst().orElseThrow();
+            assertThat(restoredAnswer.path("additional_kwargs").path("usage_metadata"))
+                    .isEqualTo(managedAnswer.path("additional_kwargs").path("usage_metadata"));
+            assertThat(json.readTree(request("GET", "/api/threads/managed-run/token-usage", null).body())
+                            .path("context_usage").path("max_context_tokens").asLong())
+                    .isEqualTo(32768);
             JsonNode runList = json.readTree(request("GET", "/api/threads/managed-run/runs", null).body());
             assertThat(runList).hasSize(3);
             assertThat(runList.get(0).path("diagnostics").path("projection_complete").asBoolean())
