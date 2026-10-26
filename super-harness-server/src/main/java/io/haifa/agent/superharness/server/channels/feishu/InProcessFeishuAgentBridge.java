@@ -47,16 +47,26 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
     private final ObjectMapper json;
     private final DeerFlowConversationService threads;
     private final RestrictedWorkspaceService workspace;
+    private final FeishuChannelCatalog catalog;
 
     public InProcessFeishuAgentBridge(ObjectMapper json, DeerFlowConversationService threads) {
-        this(json, threads, null);
+        this(json, threads, null, FeishuChannelCatalog.empty());
     }
 
     public InProcessFeishuAgentBridge(
             ObjectMapper json, DeerFlowConversationService threads, RestrictedWorkspaceService workspace) {
+        this(json, threads, workspace, FeishuChannelCatalog.empty());
+    }
+
+    public InProcessFeishuAgentBridge(
+            ObjectMapper json,
+            DeerFlowConversationService threads,
+            RestrictedWorkspaceService workspace,
+            FeishuChannelCatalog catalog) {
         this.json = json;
         this.threads = threads;
         this.workspace = workspace;
+        this.catalog = catalog == null ? FeishuChannelCatalog.empty() : catalog;
     }
 
     @Override
@@ -223,6 +233,88 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
         });
     }
 
+    @Override
+    public void createThreadWithAgent(
+            String ownerUserId,
+            String threadId,
+            Map<String, Object> channelMetadata,
+            String agentName)
+            throws Exception {
+        String owner = ownerUserId == null || ownerUserId.isBlank() ? AccessOwner.DEFAULT : ownerUserId;
+        AccessOwner.call(owner, () -> {
+            try {
+                ensureThread(threadId, channelMetadata);
+                String normalized = agentName == null ? "" : agentName.trim().toLowerCase(Locale.ROOT);
+                if (FeishuInteraction.DEFAULT_ASSISTANT_ID.equalsIgnoreCase(normalized)) {
+                    normalized = "";
+                }
+                threads.pinAgentSelection(threadId, normalized, false);
+                return null;
+            } catch (Exception exception) {
+                throw new IllegalStateException("Feishu agent thread create failed", exception);
+            }
+        });
+    }
+
+    @Override
+    public List<String> listModelNames(String ownerUserId) {
+        return List.copyOf(catalog.listExecutableModelNames());
+    }
+
+    @Override
+    public List<AgentListItem> listAgents(String ownerUserId) {
+        return List.copyOf(catalog.listAgents());
+    }
+
+    @Override
+    public boolean agentExists(String ownerUserId, String agentName) {
+        if (agentName == null || agentName.isBlank()) {
+            return false;
+        }
+        return catalog.agentExists(agentName.trim().toLowerCase(Locale.ROOT));
+    }
+
+    @Override
+    public Optional<String> currentGoal(String ownerUserId, String threadId) throws Exception {
+        String owner = ownerUserId == null || ownerUserId.isBlank() ? AccessOwner.DEFAULT : ownerUserId;
+        return AccessOwner.call(owner, () -> {
+            try {
+                return threads.threadGoal(threadId);
+            } catch (DeerFlowConversationService.ConversationException missing) {
+                return Optional.empty();
+            }
+        });
+    }
+
+    @Override
+    public void setGoal(String ownerUserId, String threadId, String objective) throws Exception {
+        String owner = ownerUserId == null || ownerUserId.isBlank() ? AccessOwner.DEFAULT : ownerUserId;
+        AccessOwner.call(owner, () -> {
+            try {
+                ensureThread(threadId, Map.of("channel", "feishu"));
+                threads.setThreadGoal(threadId, objective);
+                return null;
+            } catch (Exception exception) {
+                throw new IllegalStateException("Feishu goal set failed", exception);
+            }
+        });
+    }
+
+    @Override
+    public void clearGoal(String ownerUserId, String threadId) throws Exception {
+        String owner = ownerUserId == null || ownerUserId.isBlank() ? AccessOwner.DEFAULT : ownerUserId;
+        AccessOwner.call(owner, () -> {
+            try {
+                threads.clearThreadGoal(threadId);
+                return null;
+            } catch (DeerFlowConversationService.ConversationException missing) {
+                return null;
+            } catch (Exception exception) {
+                throw new IllegalStateException("Feishu goal clear failed", exception);
+            }
+        });
+    }
+
     private void ensureThread(String threadId, Map<String, Object> channelMetadata) throws Exception {
         ObjectNode body = json.createObjectNode();
         body.put("thread_id", threadId);
@@ -260,7 +352,14 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
         body.putArray("stream_mode").add("messages-tuple").add("updates").add("custom");
         // Mode alone feeds DeerFlowReasoningSettings; do not force thinking_enabled so probe /
         // non-thinking models still admit under thinking/pro/ultra labels when the binding allows.
-        body.putObject("context").put("mode", normalizeMode(options.mode()));
+        ObjectNode context = body.putObject("context");
+        context.put("mode", normalizeMode(options.mode()));
+        if (options.bootstrap()) {
+            context.put("is_bootstrap", true);
+        }
+        if (options.agentName() != null && !options.agentName().isBlank()) {
+            context.put("agent_name", options.agentName().trim().toLowerCase(Locale.ROOT));
+        }
         String runInput = options.steer() ? "steer" : null;
         DeerFlowConversationService.AdmittedTurn turn;
         try {

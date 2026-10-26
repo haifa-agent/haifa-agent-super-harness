@@ -60,6 +60,32 @@ public final class FeishuInteraction {
             "模式无效。请使用：/mode flash | thinking | pro | ultra";
     public static final String COMMAND_WEB_ONLY =
             "该命令请在 Web 端使用（飞书侧暂未接入完整 UI）。";
+    public static final String COMMAND_HELP =
+            """
+            Available commands:
+            /bootstrap — Start a bootstrap session (enables agent setup)
+            /goal [condition|clear] — Set, show, or clear an active goal
+            /new — Start a new conversation
+            /status — Show current thread info
+            /models — List available models
+            /memory — Show memory status
+            /agent list — List your Custom Agents
+            /agent use <name> — Start a new conversation with an agent
+            /mode [flash|thinking|pro|ultra] — Show or set run mode
+            /stop — Stop the current task
+            /steer <text> — Append guidance to the active task
+            /help — Show this help""";
+    public static final String NO_MODELS = "No models configured.";
+    public static final String AGENT_USE_USAGE = "Usage: /agent list or /agent use <name>";
+    public static final String AGENT_INVALID_NAME =
+            "Invalid agent name. Use letters, digits, and hyphens only.";
+    public static final String GOAL_CLEARED = "Goal cleared.";
+    public static final String NO_ACTIVE_GOAL = "No active goal.";
+    public static final String GOAL_FETCH_FAILED = "Failed to fetch goal information.";
+    public static final String GOAL_CLEAR_FAILED = "Failed to clear goal.";
+    public static final String GOAL_SET_FAILED = "Failed to set goal.";
+    public static final String GOAL_OBJECTIVE_INVALID =
+            "Goal objective must not be empty and at most 4000 characters.";
     public static final String UNSUPPORTED_MEDIA =
             "暂不支持该类型的飞书消息。请发送文字，或发送图片 / 文件。";
     public static final String MEDIA_FAILED = "无法读取您发送的图片或文件，请重试或改用网页端上传。";
@@ -73,6 +99,11 @@ public final class FeishuInteraction {
     public static final String NEW_THREAD_IN_TOPIC = "该话题已有会话，未切换；回复本话题仍进入原会话。";
     public static final String NO_ACTIVE_THREAD = "当前没有进行中的会话。";
     public static final String ACTIVE_THREAD = "当前会话 Thread: ";
+    /** DeerFlow channel catalog caps for {@code /agent list}. */
+    public static final int MAX_CHANNEL_AGENT_LIST_ITEMS = 50;
+    public static final int MAX_CHANNEL_AGENT_DESCRIPTION_CHARS = 120;
+    public static final int MAX_GOAL_OBJECTIVE_CHARS = 4000;
+    public static final String DEFAULT_ASSISTANT_ID = "lead_agent";
 
     private FeishuInteraction() {}
 
@@ -84,6 +115,104 @@ public final class FeishuInteraction {
     /** {@code /status} answer for the thread this message resolves to (never creates one). */
     public static String statusNotice(String threadId) {
         return threadId == null || threadId.isBlank() ? NO_ACTIVE_THREAD : ACTIVE_THREAD + threadId;
+    }
+
+    /** DeerFlow-shaped {@code /models} reply. */
+    public static String modelsNotice(List<String> names) {
+        if (names == null || names.isEmpty()) {
+            return NO_MODELS;
+        }
+        StringBuilder body = new StringBuilder("Available models:");
+        for (String name : names) {
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            body.append("\n• ").append(name);
+        }
+        return body.toString();
+    }
+
+    /** DeerFlow-shaped {@code /memory} reply. */
+    public static String memoryNotice(int factCount) {
+        return "Memory contains " + Math.max(0, factCount) + " fact(s).";
+    }
+
+    /** DeerFlow-shaped {@code /agent list} reply. */
+    public static String agentListNotice(List<FeishuAgentBridge.AgentListItem> agents) {
+        List<String> rows = new ArrayList<>();
+        rows.add("• lead_agent — Default agent");
+        List<FeishuAgentBridge.AgentListItem> sorted = agents == null
+                ? List.of()
+                : agents.stream()
+                        .sorted(java.util.Comparator.comparing(FeishuAgentBridge.AgentListItem::name))
+                        .toList();
+        int shown = Math.min(sorted.size(), MAX_CHANNEL_AGENT_LIST_ITEMS);
+        for (int index = 0; index < shown; index++) {
+            FeishuAgentBridge.AgentListItem agent = sorted.get(index);
+            String description = String.join(" ", agent.description().split("\\s+")).trim();
+            if (description.length() > MAX_CHANNEL_AGENT_DESCRIPTION_CHARS) {
+                description = description.substring(0, MAX_CHANNEL_AGENT_DESCRIPTION_CHARS);
+            }
+            rows.add(description.isBlank()
+                    ? "• " + agent.name()
+                    : "• " + agent.name() + " — " + description);
+        }
+        if (sorted.size() > MAX_CHANNEL_AGENT_LIST_ITEMS) {
+            rows.add("… and " + (sorted.size() - MAX_CHANNEL_AGENT_LIST_ITEMS) + " more");
+        }
+        return "Available agents:\n" + String.join("\n", rows);
+    }
+
+    /** DeerFlow-shaped {@code /agent use} confirmation. */
+    public static String agentSelectedNotice(String agentName) {
+        String display = agentName == null || agentName.isBlank() ? DEFAULT_ASSISTANT_ID : agentName;
+        return "Agent '" + display + "' selected. New conversation started.";
+    }
+
+    /** DeerFlow-shaped {@code /goal} status reply. */
+    public static String goalStatusNotice(String objective) {
+        return objective == null || objective.isBlank() ? NO_ACTIVE_GOAL : "Goal: " + objective;
+    }
+
+    /**
+     * Parse {@code /goal} arguments the same way DeerFlow does: empty → status, clear/reset/off →
+     * clear, otherwise set.
+     */
+    public static GoalCommand parseGoalCommand(String args) {
+        String stripped = args == null ? "" : args.strip();
+        if (stripped.isEmpty()) {
+            return new GoalCommand(GoalKind.STATUS, "");
+        }
+        String lower = stripped.toLowerCase(Locale.ROOT);
+        if ("clear".equals(lower) || "reset".equals(lower) || "off".equals(lower)) {
+            return new GoalCommand(GoalKind.CLEAR, "");
+        }
+        return new GoalCommand(GoalKind.SET, stripped);
+    }
+
+    /** Normalize a goal objective: collapse whitespace and enforce the DeerFlow length cap. */
+    public static Optional<String> normalizeGoalObjective(String objective) {
+        if (objective == null) {
+            return Optional.empty();
+        }
+        String normalized = String.join(" ", objective.strip().split("\\s+")).trim();
+        if (normalized.isEmpty() || normalized.length() > MAX_GOAL_OBJECTIVE_CHARS) {
+            return Optional.empty();
+        }
+        return Optional.of(normalized);
+    }
+
+    public enum GoalKind {
+        STATUS,
+        CLEAR,
+        SET
+    }
+
+    public record GoalCommand(GoalKind kind, String objective) {
+        public GoalCommand {
+            kind = kind == null ? GoalKind.STATUS : kind;
+            objective = objective == null ? "" : objective;
+        }
     }
 
     public static Optional<FeishuPendingInput> pendingFromMessages(JsonNode messages) {

@@ -12,6 +12,7 @@ import io.haifa.agent.superharness.server.api.dto.SetupStatusResponse;
 import java.net.InetAddress;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.superharness.server.channels.feishu.FeishuAgentBridge;
+import io.haifa.agent.superharness.server.channels.feishu.FeishuChannelCatalog;
 import io.haifa.agent.superharness.server.channels.feishu.FeishuChannelWorker;
 import io.haifa.agent.superharness.server.channels.feishu.FeishuChatThreadStore;
 import io.haifa.agent.superharness.server.channels.feishu.FeishuTransport;
@@ -281,8 +282,27 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 : LarkSdkFeishuTransport::new;
         // Same RestrictedWorkspaceService as DeerFlowUploadContext / tool assembly so Feishu
         // attachments land in the Thread uploads area the web composer uses.
+        FeishuChannelCatalog feishuCatalog = new FeishuChannelCatalog() {
+            @Override
+            public java.util.List<String> listExecutableModelNames() {
+                return configurationApi.listExecutableModelNames();
+            }
+
+            @Override
+            public java.util.List<FeishuAgentBridge.AgentListItem> listAgents() {
+                return configurationApi.listAgentCatalog().stream()
+                        .map(item -> new FeishuAgentBridge.AgentListItem(item.name(), item.description()))
+                        .toList();
+            }
+
+            @Override
+            public boolean agentExists(String name) {
+                return configurationApi.agentExists(name);
+            }
+        };
         FeishuAgentBridge feishuAgentBridge =
-                new InProcessFeishuAgentBridge(objectMapper, threadRunApi.conversations(), toolWorkspace);
+                new InProcessFeishuAgentBridge(
+                        objectMapper, threadRunApi.conversations(), toolWorkspace, feishuCatalog);
         this.feishuWorker = new FeishuChannelWorker(
                 channelConnectionStore,
                 new FeishuChatThreadStore(objectMapper, dataDirectory),

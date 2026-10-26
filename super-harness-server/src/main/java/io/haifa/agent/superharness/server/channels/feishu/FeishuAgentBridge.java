@@ -51,30 +51,51 @@ public interface FeishuAgentBridge {
         }
     }
 
+    /** One Custom Agent row for {@code /agent list} (DeerFlow channel catalog shape). */
+    record AgentListItem(String name, String description) {
+        public AgentListItem {
+            name = name == null ? "" : name;
+            description = description == null ? "" : description;
+        }
+    }
+
     /**
-     * Optional Phase 2 controls for one Turn: mode, progress listener, and whether this admission is
-     * a mid-run steer.
+     * Optional Phase 2 controls for one Turn: mode, progress listener, mid-run steer, bootstrap, and
+     * an optional Custom Agent pin for this admission.
      */
     record TurnOptions(
-            String mode, FeishuRunProjector.ProgressListener progress, boolean steer) {
+            String mode,
+            FeishuRunProjector.ProgressListener progress,
+            boolean steer,
+            boolean bootstrap,
+            String agentName) {
         public static TurnOptions defaults() {
-            return new TurnOptions("flash", null, false);
+            return new TurnOptions("flash", null, false, false, null);
         }
 
         public TurnOptions {
             mode = mode == null || mode.isBlank() ? "flash" : mode.trim();
+            agentName = agentName == null || agentName.isBlank() ? null : agentName.trim();
         }
 
         public TurnOptions withMode(String nextMode) {
-            return new TurnOptions(nextMode, progress, steer);
+            return new TurnOptions(nextMode, progress, steer, bootstrap, agentName);
         }
 
         public TurnOptions withProgress(FeishuRunProjector.ProgressListener next) {
-            return new TurnOptions(mode, next, steer);
+            return new TurnOptions(mode, next, steer, bootstrap, agentName);
         }
 
         public TurnOptions asSteer() {
-            return new TurnOptions(mode, progress, true);
+            return new TurnOptions(mode, progress, true, bootstrap, agentName);
+        }
+
+        public TurnOptions asBootstrap() {
+            return new TurnOptions(mode, progress, steer, true, agentName);
+        }
+
+        public TurnOptions withAgentName(String nextAgent) {
+            return new TurnOptions(mode, progress, steer, bootstrap, nextAgent);
         }
     }
 
@@ -156,6 +177,58 @@ public interface FeishuAgentBridge {
     default void createThread(String ownerUserId, String threadId, Map<String, Object> channelMetadata)
             throws Exception {
         // No-op: test doubles route without a Runtime; production uses InProcessFeishuAgentBridge.
+    }
+
+    /**
+     * Create a thread and pin a Custom Agent (or clear to {@code lead_agent}) for {@code /agent use}.
+     * Default delegates to {@link #createThread} and ignores the agent pin so test doubles keep
+     * compiling.
+     */
+    default void createThreadWithAgent(
+            String ownerUserId,
+            String threadId,
+            Map<String, Object> channelMetadata,
+            String agentName)
+            throws Exception {
+        createThread(ownerUserId, threadId, channelMetadata);
+    }
+
+    /** Executable model names for {@code /models}. Default: empty catalog. */
+    default List<String> listModelNames(String ownerUserId) {
+        return List.of();
+    }
+
+    /**
+     * Memory fact count for {@code /memory}. Default 0 until a Haifa Memory product surface is wired;
+     * this channel command must not invent a second Memory Engine.
+     */
+    default int memoryFactCount(String ownerUserId) {
+        return 0;
+    }
+
+    /** Custom Agents for {@code /agent list}. Default: empty. */
+    default List<AgentListItem> listAgents(String ownerUserId) {
+        return List.of();
+    }
+
+    /** Whether {@code agentName} exists as a Custom Agent (not {@code lead_agent}). */
+    default boolean agentExists(String ownerUserId, String agentName) {
+        return false;
+    }
+
+    /** Current thread goal objective for {@code /goal}, if any. */
+    default Optional<String> currentGoal(String ownerUserId, String threadId) throws Exception {
+        return Optional.empty();
+    }
+
+    /** Persist a thread goal objective for {@code /goal <condition>}. */
+    default void setGoal(String ownerUserId, String threadId, String objective) throws Exception {
+        throw new UnsupportedOperationException("Feishu thread goal store is not configured");
+    }
+
+    /** Clear the thread goal for {@code /goal clear}. */
+    default void clearGoal(String ownerUserId, String threadId) throws Exception {
+        // No-op for test doubles.
     }
 
     /** Cancel the thread's active Run (Stop). Default reports no active run. */

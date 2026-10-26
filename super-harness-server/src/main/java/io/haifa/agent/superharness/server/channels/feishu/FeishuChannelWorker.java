@@ -39,14 +39,25 @@ public final class FeishuChannelWorker implements AutoCloseable {
             Pattern.compile("^/connect\\s+(\\S+)\\s*$", Pattern.CASE_INSENSITIVE);
     private static final Pattern NEW_COMMAND = Pattern.compile("^/new\\s*$", Pattern.CASE_INSENSITIVE);
     private static final Pattern STATUS_COMMAND = Pattern.compile("^/status\\s*$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern HELP_COMMAND = Pattern.compile("^/help\\s*$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern MODELS_COMMAND = Pattern.compile("^/models\\s*$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern MEMORY_COMMAND = Pattern.compile("^/memory\\s*$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern AGENT_COMMAND =
+            Pattern.compile("^/agent(?:\\s+(.*))?$", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern BOOTSTRAP_COMMAND =
+            Pattern.compile("^/bootstrap(?:\\s+(.*))?$", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern GOAL_COMMAND =
+            Pattern.compile("^/goal(?:\\s+(.*))?$", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final Pattern MODE_COMMAND =
             Pattern.compile("^/mode(?:\\s+(\\S+))?\\s*$", Pattern.CASE_INSENSITIVE);
     private static final Pattern STOP_COMMAND =
             Pattern.compile("^/(?:stop|cancel)\\s*$", Pattern.CASE_INSENSITIVE);
     private static final Pattern STEER_COMMAND =
             Pattern.compile("^/steer\\s+(.+)$", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    /** Composer-only on DeerFlow too; keep the Feishu web-handoff for {@code /compact}. */
     private static final Pattern WEB_ONLY_COMMAND =
-            Pattern.compile("^/(?:skill|goal|compact)(?:\\s.*)?$", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+            Pattern.compile("^/(?:skill|compact)(?:\\s.*)?$", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern AGENT_NAME = Pattern.compile("^[A-Za-z0-9-]+$");
     private static final String INBOUND_FAILURE_REPLY =
             "An error occurred while processing your request. Please try again.";
     private static final int MAX_ARTIFACT_IMAGES = 4;
@@ -427,6 +438,33 @@ public final class FeishuChannelWorker implements AutoCloseable {
                     FeishuInteraction.statusNotice(resolveThread(connectionId, message, false)));
             return true;
         }
+        if (HELP_COMMAND.matcher(stripped).matches()) {
+            reply(message.messageId(), FeishuInteraction.COMMAND_HELP);
+            return true;
+        }
+        if (MODELS_COMMAND.matcher(stripped).matches()) {
+            reply(message.messageId(), FeishuInteraction.modelsNotice(agentBridge.listModelNames(owner)));
+            return true;
+        }
+        if (MEMORY_COMMAND.matcher(stripped).matches()) {
+            reply(message.messageId(), FeishuInteraction.memoryNotice(agentBridge.memoryFactCount(owner)));
+            return true;
+        }
+        Matcher agent = AGENT_COMMAND.matcher(stripped);
+        if (agent.matches()) {
+            handleAgentCommand(owner, connectionId, message, connection, agent.group(1));
+            return true;
+        }
+        Matcher bootstrap = BOOTSTRAP_COMMAND.matcher(stripped);
+        if (bootstrap.matches()) {
+            handleBootstrapCommand(owner, connectionId, message, connection, bootstrap.group(1), allowNewTurn);
+            return true;
+        }
+        Matcher goal = GOAL_COMMAND.matcher(stripped);
+        if (goal.matches()) {
+            handleGoalCommand(owner, connectionId, message, connection, goal.group(1), allowNewTurn);
+            return true;
+        }
         if (STOP_COMMAND.matcher(stripped).matches()) {
             // Read-only: Stop must never create or rebind a mapping.
             String threadId = resolveThread(connectionId, message, false);
@@ -509,6 +547,192 @@ public final class FeishuChannelWorker implements AutoCloseable {
     private void handleNewCommand(
             String owner, String connectionId, FeishuInboundMessage message, ObjectNode connection)
             throws Exception {
+        rotateToNewThread(
+                owner,
+                connectionId,
+                message,
+                connection,
+                null,
+                claimed -> FeishuInteraction.newThreadNotice(claimed));
+    }
+
+    /** {@code /agent list} and {@code /agent use <name>} — DeerFlow channel catalog parity. */
+    private void handleAgentCommand(
+            String owner,
+            String connectionId,
+            FeishuInboundMessage message,
+            ObjectNode connection,
+            String args)
+            throws Exception {
+        String trimmed = args == null ? "" : args.trim();
+        if (trimmed.isEmpty()) {
+            reply(message.messageId(), FeishuInteraction.AGENT_USE_USAGE);
+            return;
+        }
+        String[] parts = trimmed.split("\\s+");
+        if (parts.length == 1 && "list".equalsIgnoreCase(parts[0])) {
+            reply(message.messageId(), FeishuInteraction.agentListNotice(agentBridge.listAgents(owner)));
+            return;
+        }
+        if (parts.length == 2 && "use".equalsIgnoreCase(parts[0])) {
+            String rawName = parts[1];
+            final String agentName;
+            if (FeishuInteraction.DEFAULT_ASSISTANT_ID.equalsIgnoreCase(rawName)) {
+                agentName = FeishuInteraction.DEFAULT_ASSISTANT_ID;
+            } else if (!AGENT_NAME.matcher(rawName).matches()) {
+                reply(message.messageId(), FeishuInteraction.AGENT_INVALID_NAME);
+                return;
+            } else {
+                String normalized = rawName.toLowerCase(Locale.ROOT);
+                if (!agentBridge.agentExists(owner, normalized)) {
+                    reply(
+                            message.messageId(),
+                            "Agent '" + normalized + "' was not found. Use /agent list to see available agents.");
+                    return;
+                }
+                agentName = normalized;
+            }
+            rotateToNewThread(
+                    owner,
+                    connectionId,
+                    message,
+                    connection,
+                    agentName,
+                    claimed -> FeishuInteraction.agentSelectedNotice(agentName));
+            return;
+        }
+        reply(message.messageId(), FeishuInteraction.AGENT_USE_USAGE);
+    }
+
+    /**
+     * {@code /bootstrap [text]}: admit a Turn with {@code is_bootstrap=true} on the resolved thread
+     * (DeerFlow ChannelManager parity). Busy path refuses opening a new Turn.
+     */
+    private void handleBootstrapCommand(
+            String owner,
+            String connectionId,
+            FeishuInboundMessage message,
+            ObjectNode connection,
+            String args,
+            boolean allowNewTurn)
+            throws Exception {
+        if (!allowNewTurn) {
+            reply(message.messageId(), FeishuInteraction.BUSY);
+            return;
+        }
+        String chatText = args == null || args.isBlank() ? "Initialize workspace" : args.trim();
+        FeishuInboundMessage rewritten = new FeishuInboundMessage(
+                message.chatId(),
+                message.messageId(),
+                message.openId(),
+                chatText,
+                message.chatType(),
+                message.messageType(),
+                message.attachments(),
+                null,
+                message.rootId(),
+                message.parentId(),
+                message.feishuThreadId());
+        runChat(
+                owner,
+                connectionId,
+                rewritten,
+                chatText,
+                FeishuAgentBridge.TurnOptions.defaults()
+                        .withMode(readMode(connection))
+                        .asBootstrap());
+    }
+
+    /**
+     * {@code /goal}: status / clear / set+start-chat, matching DeerFlow {@code parse_goal_command}.
+     */
+    private void handleGoalCommand(
+            String owner,
+            String connectionId,
+            FeishuInboundMessage message,
+            ObjectNode connection,
+            String args,
+            boolean allowNewTurn)
+            throws Exception {
+        FeishuInteraction.GoalCommand command = FeishuInteraction.parseGoalCommand(args);
+        if (command.kind() == FeishuInteraction.GoalKind.STATUS) {
+            String threadId = resolveThread(connectionId, message, false);
+            if (threadId == null || threadId.isBlank()) {
+                reply(message.messageId(), FeishuInteraction.NO_ACTIVE_GOAL);
+                return;
+            }
+            try {
+                reply(
+                        message.messageId(),
+                        FeishuInteraction.goalStatusNotice(
+                                agentBridge.currentGoal(owner, threadId).orElse(null)));
+            } catch (Exception failed) {
+                reply(message.messageId(), FeishuInteraction.GOAL_FETCH_FAILED);
+            }
+            return;
+        }
+        if (command.kind() == FeishuInteraction.GoalKind.CLEAR) {
+            String threadId = resolveThread(connectionId, message, false);
+            if (threadId == null || threadId.isBlank()) {
+                reply(message.messageId(), FeishuInteraction.GOAL_CLEARED);
+                return;
+            }
+            try {
+                agentBridge.clearGoal(owner, threadId);
+                reply(message.messageId(), FeishuInteraction.GOAL_CLEARED);
+            } catch (Exception failed) {
+                reply(message.messageId(), FeishuInteraction.GOAL_CLEAR_FAILED);
+            }
+            return;
+        }
+        if (!allowNewTurn) {
+            reply(message.messageId(), FeishuInteraction.BUSY);
+            return;
+        }
+        Optional<String> objective = FeishuInteraction.normalizeGoalObjective(command.objective());
+        if (objective.isEmpty()) {
+            reply(message.messageId(), FeishuInteraction.GOAL_OBJECTIVE_INVALID);
+            return;
+        }
+        String threadId = resolveThread(connectionId, message, true);
+        if (threadId == null || threadId.isBlank()) {
+            reply(message.messageId(), FeishuInteraction.GOAL_SET_FAILED);
+            return;
+        }
+        try {
+            agentBridge.setGoal(owner, threadId, objective.get());
+        } catch (Exception failed) {
+            reply(message.messageId(), FeishuInteraction.GOAL_SET_FAILED);
+            return;
+        }
+        FeishuInboundMessage rewritten = new FeishuInboundMessage(
+                message.chatId(),
+                message.messageId(),
+                message.openId(),
+                objective.get(),
+                message.chatType(),
+                message.messageType(),
+                message.attachments(),
+                null,
+                message.rootId(),
+                message.parentId(),
+                message.feishuThreadId());
+        // DeerFlow returns no outbound for set: the objective becomes the next chat turn.
+        runChat(owner, connectionId, rewritten, objective.get());
+    }
+
+    /**
+     * Shared {@code /new} and {@code /agent use} rotation: claim message-id alias, create (and
+     * optionally pin) the thread, switch the single-chat pointer, and confirm.
+     */
+    private void rotateToNewThread(
+            String owner,
+            String connectionId,
+            FeishuInboundMessage message,
+            ObjectNode connection,
+            String agentName,
+            java.util.function.Function<String, String> notice)
+            throws Exception {
         String chat = message.chatId();
         boolean insideTopic = message.isGroupChat()
                 && (!message.rootId().isBlank()
@@ -526,14 +750,19 @@ public final class FeishuChannelWorker implements AutoCloseable {
                 ? candidate
                 : threadMap.bindAliasIfAbsent(connectionId, chat, message.messageId(), candidate);
         if (!claimed.equals(candidate)) {
-            replyAndBind(message, connectionId, claimed, FeishuInteraction.newThreadNotice(claimed));
+            replyAndBind(message, connectionId, claimed, notice.apply(claimed));
             return;
         }
-        agentBridge.createThread(owner, claimed, channelMetadata(connectionId, message, connection));
+        if (agentName == null) {
+            agentBridge.createThread(owner, claimed, channelMetadata(connectionId, message, connection));
+        } else {
+            agentBridge.createThreadWithAgent(
+                    owner, claimed, channelMetadata(connectionId, message, connection), agentName);
+        }
         if (!message.isGroupChat()) {
             threadMap.bindCurrent(connectionId, chat, claimed);
         }
-        replyAndBind(message, connectionId, claimed, FeishuInteraction.newThreadNotice(claimed));
+        replyAndBind(message, connectionId, claimed, notice.apply(claimed));
     }
 
     private static boolean isConnectCommand(FeishuInboundMessage message) {
@@ -828,6 +1057,16 @@ public final class FeishuChannelWorker implements AutoCloseable {
     private void runChat(
             String ownerUserId, String connectionId, FeishuInboundMessage message, String strippedText)
             throws Exception {
+        runChat(ownerUserId, connectionId, message, strippedText, null);
+    }
+
+    private void runChat(
+            String ownerUserId,
+            String connectionId,
+            FeishuInboundMessage message,
+            String strippedText,
+            FeishuAgentBridge.TurnOptions turnOptions)
+            throws Exception {
         String threadId = resolveAndRemember(connectionId, message);
         Optional<ObjectNode> bound = connections.findConnectionByExternalIdentity(
                 "feishu", message.openId(), message.chatId());
@@ -864,6 +1103,9 @@ public final class FeishuChannelWorker implements AutoCloseable {
             markProcessingStart(message.messageId());
             Map<String, Object> metadata = channelMetadata(connectionId, message, connection);
             String mode = readMode(connection);
+            FeishuAgentBridge.TurnOptions options = turnOptions == null
+                    ? FeishuAgentBridge.TurnOptions.defaults()
+                    : turnOptions;
             FeishuAgentBridge.TurnResult result = agentBridge.runTurn(
                     ownerUserId,
                     threadId,
@@ -871,8 +1113,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
                     userText,
                     null,
                     files,
-                    FeishuAgentBridge.TurnOptions.defaults()
-                            .withMode(mode)
+                    options.withMode(mode)
                             .withProgress(summary -> reply(message.messageId(), summary)));
             present(message, result, threadId);
             deliverArtifactImages(message, result, ownerUserId, threadId);
