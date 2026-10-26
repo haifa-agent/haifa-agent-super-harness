@@ -187,6 +187,12 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     public static final String LEAD_SIGNATURE_METADATA_KEY = "haifa_lead_prompt_signature";
     static final String AGENT_NAME_METADATA_KEY = "haifa_agent_name";
     static final String AGENT_BOOTSTRAP_METADATA_KEY = "haifa_agent_bootstrap";
+    /**
+     * Thread-scoped goal objective for DeerFlow {@code /goal} and the future HTTP goal surface.
+     * Product compatibility state only — not a second Memory/Run engine. Server-owned; stripped from
+     * client-supplied create metadata.
+     */
+    static final String THREAD_GOAL_METADATA_KEY = "haifa_thread_goal";
     public static final String USER_INPUT_FRAMING_METADATA_KEY = "haifa_user_input_framing_from_sequence";
     static final String MCP_SELECTION_METADATA_KEY = "haifa_mcp_plugins";
     private static final String RUN_STREAM_MODES_METADATA_KEY = "haifa_run_stream_modes";
@@ -647,6 +653,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         metadata.remove(MODEL_CONFIGURATION_DIGEST_METADATA_KEY);
         metadata.remove(AGENT_NAME_METADATA_KEY);
         metadata.remove(AGENT_BOOTSTRAP_METADATA_KEY);
+        metadata.remove(THREAD_GOAL_METADATA_KEY);
         metadata.remove(USER_INPUT_FRAMING_METADATA_KEY);
         if (body.has("project_id") && !body.get("project_id").isNull()) {
             if (!body.get("project_id").isTextual() || body.get("project_id").asText().isBlank()) {
@@ -667,6 +674,89 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 threadId, ignored -> new ThreadRecord(threadId, metadata, Instant.now(), owner));
         persistThread(record);
         return threadResponse(record);
+    }
+
+    /**
+     * Pin a Custom Agent (or clear to the default lead) on an existing thread for IM {@code /agent
+     * use}. Empty {@code agentName} clears the custom pin.
+     */
+    public void pinAgentSelection(String threadId, String agentName, boolean bootstrap)
+            throws ConversationException, IOException {
+        ThreadRecord thread = requireOwnedThread(threadId);
+        String normalized = agentName == null ? "" : agentName.trim().toLowerCase(java.util.Locale.ROOT);
+        synchronized (thread) {
+            Map<String, Object> updated = new LinkedHashMap<>(thread.metadata);
+            updated.put(AGENT_NAME_METADATA_KEY, normalized);
+            updated.put(AGENT_BOOTSTRAP_METADATA_KEY, bootstrap);
+            thread.metadata = Collections.unmodifiableMap(updated);
+            thread.updatedAt = Instant.now();
+            persistThread(thread);
+        }
+    }
+
+    /**
+     * Custom Agent pin written by {@link #pinAgentSelection} or the last Run's lead-prompt
+     * selection. Empty when the thread uses the default lead agent.
+     */
+    public Optional<String> pinnedAgentName(String threadId) throws ConversationException {
+        ThreadRecord thread = requireOwnedThread(threadId);
+        synchronized (thread) {
+            Object value = thread.metadata.get(AGENT_NAME_METADATA_KEY);
+            if (!(value instanceof String name) || name.isBlank()) {
+                return Optional.empty();
+            }
+            return Optional.of(name);
+        }
+    }
+
+    /** Read the thread-scoped goal objective, if any. */
+    public Optional<String> threadGoal(String threadId) throws ConversationException {
+        ThreadRecord thread = requireOwnedThread(threadId);
+        synchronized (thread) {
+            Object value = thread.metadata.get(THREAD_GOAL_METADATA_KEY);
+            if (!(value instanceof String objective) || objective.isBlank()) {
+                return Optional.empty();
+            }
+            return Optional.of(objective);
+        }
+    }
+
+    /** Persist a thread-scoped goal objective (DeerFlow {@code /goal <condition>} surface). */
+    public void setThreadGoal(String threadId, String objective) throws ConversationException, IOException {
+        if (objective == null || objective.isBlank()) {
+            throw ConversationException.invalid("Goal objective must not be empty");
+        }
+        ThreadRecord thread = requireOwnedThread(threadId);
+        synchronized (thread) {
+            Map<String, Object> updated = new LinkedHashMap<>(thread.metadata);
+            updated.put(THREAD_GOAL_METADATA_KEY, objective);
+            thread.metadata = Collections.unmodifiableMap(updated);
+            thread.updatedAt = Instant.now();
+            persistThread(thread);
+        }
+    }
+
+    /** Clear the thread-scoped goal (DeerFlow {@code /goal clear}). */
+    public void clearThreadGoal(String threadId) throws ConversationException, IOException {
+        ThreadRecord thread = requireOwnedThread(threadId);
+        synchronized (thread) {
+            if (!thread.metadata.containsKey(THREAD_GOAL_METADATA_KEY)) {
+                return;
+            }
+            Map<String, Object> updated = new LinkedHashMap<>(thread.metadata);
+            updated.remove(THREAD_GOAL_METADATA_KEY);
+            thread.metadata = Collections.unmodifiableMap(updated);
+            thread.updatedAt = Instant.now();
+            persistThread(thread);
+        }
+    }
+
+    private ThreadRecord requireOwnedThread(String threadId) throws ConversationException {
+        ThreadRecord thread = threads.get(threadId);
+        if (thread == null || !AccessOwner.current().equals(thread.ownerId)) {
+            throw ConversationException.notFound("Thread not found");
+        }
+        return thread;
     }
 
     Map<String, Object> getThread(String threadId) throws ConversationException {

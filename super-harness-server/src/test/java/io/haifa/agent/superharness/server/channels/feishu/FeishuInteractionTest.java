@@ -11,16 +11,14 @@ import com.lark.oapi.event.cardcallback.model.CallBackContext;
 import com.lark.oapi.event.cardcallback.model.CallBackOperator;
 import com.lark.oapi.event.cardcallback.model.P2CardActionTrigger;
 import com.lark.oapi.event.cardcallback.model.P2CardActionTriggerData;
-import io.haifa.agent.superharness.server.config.ChannelConnectionStore;
+import io.haifa.agent.superharness.server.testsupport.feishu.FeishuWorkerHarness;
+import io.haifa.agent.superharness.server.testsupport.feishu.ScriptedFeishuBridge;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -141,8 +139,8 @@ class FeishuInteractionTest {
         assertThat(settled).doesNotContainKey("elements");
         assertThat(settled.get("body").toString()).contains("已提交：自定义答案").doesNotContain("button");
 
-        Harness harness = harness();
-        bindRequest(harness, "clarification:abc");
+        FeishuWorkerHarness harness = harness();
+        harness.bindRequest( "clarification:abc");
         harness.bridge.pending = pending;
         harness.worker.handleInbound(new FeishuInboundMessage(
                 "oc_chat", "om_other", "ou_owner", "", "p2p", message.cardAction()));
@@ -192,7 +190,7 @@ class FeishuInteractionTest {
                 .contains("对话 ID：thread-form-1")
                 .contains("/workspace/chats/thread-form-1");
 
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         harness.bridge.pending = pending;
         harness.worker.handleInbound(new FeishuInboundMessage(
                 "oc_chat", "om_form", "ou_owner", "1.0.0", "p2p"));
@@ -266,8 +264,8 @@ class FeishuInteractionTest {
         assertThat(updated.getCard().getType()).isEqualTo("raw");
         assertThat(updated.getCard().getData()).isSameAs(settled);
 
-        Harness harness = harness();
-        bindRequest(harness, "req-1");
+        FeishuWorkerHarness harness = harness();
+        harness.bindRequest( "req-1");
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         harness.bridge.pending = approval();
@@ -312,7 +310,7 @@ class FeishuInteractionTest {
 
     @Test
     void unmatchedApprovalTextDoesNotSubmitAndStrangerClicksAreRejected() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         harness.bridge.pending = approval();
         harness.worker.handleInbound(new FeishuInboundMessage(
                 "oc_chat", "om_text", "ou_owner", "批准一下", "p2p"));
@@ -345,7 +343,7 @@ class FeishuInteractionTest {
 
     @Test
     void duplicateClickIsToldTheActionWasAlreadyHandled() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         harness.bridge.pending = null;
         harness.worker.handleInbound(new FeishuInboundMessage(
                 "oc_chat", "om_card", "ou_owner", "", "p2p",
@@ -424,87 +422,9 @@ class FeishuInteractionTest {
         return new FeishuPendingInput.Option(id, label, value);
     }
 
-    private Harness harness() throws Exception {
-        ChannelConnectionStore connections = new ChannelConnectionStore(json, dataDirectory);
-        FeishuChatThreadStore threads = new FeishuChatThreadStore(json, dataDirectory);
-        ScriptedBridge bridge = new ScriptedBridge();
-        AtomicReference<RecordingFeishuTransport> transportRef = new AtomicReference<>();
-        FeishuChannelWorker worker = new FeishuChannelWorker(
-                connections, threads, bridge, () -> {
-                    RecordingFeishuTransport transport = new RecordingFeishuTransport();
-                    transportRef.set(transport);
-                    return transport;
-                });
-        worker.startOrRestart("cli_x", "secret_x", FeishuOpenDomain.DEFAULT);
-        String code = ChannelConnectionStore.newBindingCode();
-        connections.createOauthStateWithinCap(
-                "owner",
-                "feishu",
-                code,
-                java.time.Instant.now().plusSeconds(60),
-                ChannelConnectionStore.MAX_PENDING_CONNECT_CODES_PER_PROVIDER);
-        connections.bindFeishuFromConnectCode(code, "ou_owner", "oc_chat", Map.of());
-        return new Harness(worker, transportRef.get(), bridge, connections, threads);
-    }
 
-    private record Harness(
-            FeishuChannelWorker worker,
-            RecordingFeishuTransport transport,
-            ScriptedBridge bridge,
-            ChannelConnectionStore connections,
-            FeishuChatThreadStore threads) {}
-
-    /** Bind the immutable card request alias the way the production card-delivery path does. */
-    private static void bindRequest(Harness harness, String requestId) {
-        String connectionId = harness
-                .connections()
-                .findConnectionByExternalIdentity("feishu", "ou_owner", "oc_chat")
-                .orElseThrow()
-                .path("id")
-                .asText("");
-        harness.threads()
-                .bindAliasIfAbsent(connectionId, "oc_chat", "request:" + requestId, "feishu-test-thread");
-    }
-
-    private static final class ScriptedBridge implements FeishuAgentBridge {
-        private final AtomicInteger turns = new AtomicInteger();
-        private final AtomicReference<FeishuHumanResponse> responses = new AtomicReference<>();
-        private volatile FeishuPendingInput pending;
-        private volatile CountDownLatch blockEnter;
-        private volatile CountDownLatch blockRelease;
-
-        @Override
-        public TurnResult runTurn(
-                String ownerUserId, String threadId, Map<String, Object> channelMetadata, String userText)
-                throws Exception {
-            return runTurn(ownerUserId, threadId, channelMetadata, userText, null);
-        }
-
-        @Override
-        public TurnResult runTurn(
-                String ownerUserId,
-                String threadId,
-                Map<String, Object> channelMetadata,
-                String userText,
-                FeishuHumanResponse response)
-                throws Exception {
-            CountDownLatch enter = blockEnter;
-            if (enter != null) {
-                enter.countDown();
-            }
-            CountDownLatch release = blockRelease;
-            if (release != null) {
-                release.await(2, TimeUnit.SECONDS);
-            }
-            turns.incrementAndGet();
-            responses.set(response);
-            pending = null;
-            return new TurnResult(threadId, "continued");
-        }
-
-        @Override
-        public Optional<FeishuPendingInput> currentPending(String ownerUserId, String threadId) {
-            return Optional.ofNullable(pending);
-        }
+    private FeishuWorkerHarness harness() throws Exception {
+        return FeishuWorkerHarness.open(
+                dataDirectory, new ScriptedFeishuBridge().withBareContinuedReplies());
     }
 }

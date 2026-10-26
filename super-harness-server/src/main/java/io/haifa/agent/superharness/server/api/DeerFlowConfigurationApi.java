@@ -387,8 +387,33 @@ final class DeerFlowConfigurationApi implements HttpHandler {
     }
 
     /** Owner-visible custom Agent existence, used by the frozen scheduled-task assistant check. */
-    boolean agentExists(String name) {
+    public boolean agentExists(String name) {
         return name != null && store.agent(name).isPresent();
+    }
+
+    /** Executable model names for IM {@code /models} (same catalog as {@code GET /api/models}). */
+    public List<String> listExecutableModelNames() {
+        return store.executableModels().stream()
+                .map(model -> model.path("name").asText())
+                .filter(name -> name != null && !name.isBlank())
+                .toList();
+    }
+
+    /** Custom Agent name/description rows for IM {@code /agent list}. */
+    public List<AgentCatalogItem> listAgentCatalog() {
+        return store.agents().stream()
+                .sorted(Comparator.comparing(node -> node.path("name").asText()))
+                .map(node -> new AgentCatalogItem(
+                        node.path("name").asText(),
+                        node.path("description").asText("")))
+                .toList();
+    }
+
+    public record AgentCatalogItem(String name, String description) {
+        public AgentCatalogItem {
+            name = name == null ? "" : name;
+            description = description == null ? "" : description;
+        }
     }
 
     private void saveManagedModel(HttpExchange exchange) throws IOException {

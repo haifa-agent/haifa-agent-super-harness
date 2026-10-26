@@ -4,16 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.haifa.agent.superharness.server.config.ChannelConnectionStore;
+import io.haifa.agent.superharness.server.testsupport.feishu.FeishuWorkerHarness;
+import io.haifa.agent.superharness.server.testsupport.feishu.ScriptedFeishuBridge;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -31,116 +29,116 @@ class FeishuMultiThreadRoutingTest {
 
     @Test
     void p2pFirstMessageCreatesAndReusesCurrentThread() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         String chat = "oc_chat";
         worker(harness).handleInbound(p2p(harness, "om-1", "hello"));
-        String first = harness.threads().find(connectionId(harness), chat).orElseThrow();
+        String first = harness.threads.find(connectionId(harness), chat).orElseThrow();
         worker(harness).handleInbound(p2p(harness, "om-2", "again"));
-        assertThat(harness.bridge().turnThreads).containsExactly(first, first);
-        harness.worker().close();
+        assertThat(harness.bridge.turnThreads).containsExactly(first, first);
+        harness.worker.close();
     }
 
     // ---- FT-02 -----------------------------------------------------------------------------
 
     @Test
     void twoNewCommandsRotateCurrentPointerAndKeepOldThreads() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         String connectionId = connectionId(harness);
         worker(harness).handleInbound(p2p(harness, "om-1", "hello"));
-        String threadA = harness.threads().find(connectionId, "oc_chat").orElseThrow();
+        String threadA = harness.threads.find(connectionId, "oc_chat").orElseThrow();
 
         worker(harness).handleInbound(p2p(harness, "om-new-1", "/new"));
-        String threadB = harness.threads().find(connectionId, "oc_chat").orElseThrow();
+        String threadB = harness.threads.find(connectionId, "oc_chat").orElseThrow();
         worker(harness).handleInbound(p2p(harness, "om-new-2", "/new"));
-        String threadC = harness.threads().find(connectionId, "oc_chat").orElseThrow();
+        String threadC = harness.threads.find(connectionId, "oc_chat").orElseThrow();
 
         assertThat(List.of(threadA, threadB, threadC)).doesNotHaveDuplicates();
-        assertThat(harness.bridge().createdThreads).contains(threadB, threadC);
-        assertThat(harness.threads().find(connectionId, "oc_chat")).contains(threadC);
+        assertThat(harness.bridge.createdThreads).contains(threadB, threadC);
+        assertThat(harness.threads.find(connectionId, "oc_chat")).contains(threadC);
         // The first thread's own message alias survives both rotations.
-        assertThat(harness.threads().findAlias(connectionId, "oc_chat", "om-1")).contains(threadA);
-        harness.worker().close();
+        assertThat(harness.threads.findAlias(connectionId, "oc_chat", "om-1")).contains(threadA);
+        harness.worker.close();
     }
 
     // ---- FT-03 -----------------------------------------------------------------------------
 
     @Test
     void statusIsReadOnlyAndResolvesOldMessages() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         String connectionId = connectionId(harness);
         worker(harness).handleInbound(p2p(harness, "om-empty", "/status"));
         assertThat(lastReply(harness)).isEqualTo(FeishuInteraction.NO_ACTIVE_THREAD);
-        assertThat(harness.threads().find(connectionId, "oc_chat")).isEmpty();
+        assertThat(harness.threads.find(connectionId, "oc_chat")).isEmpty();
 
         worker(harness).handleInbound(p2p(harness, "om-1", "hello"));
-        String threadA = harness.threads().find(connectionId, "oc_chat").orElseThrow();
+        String threadA = harness.threads.find(connectionId, "oc_chat").orElseThrow();
         worker(harness).handleInbound(p2p(harness, "om-status", "/status"));
         assertThat(lastReply(harness)).isEqualTo(FeishuInteraction.ACTIVE_THREAD + threadA);
 
         worker(harness).handleInbound(p2p(harness, "om-new", "/new"));
-        String threadB = harness.threads().find(connectionId, "oc_chat").orElseThrow();
+        String threadB = harness.threads.find(connectionId, "oc_chat").orElseThrow();
         // Replying to the old message shows the old thread, not the new pointer.
         worker(harness).handleInbound(reply(harness, "om-reply-status", "/status", "om-1", "", ""));
         assertThat(lastReply(harness)).isEqualTo(FeishuInteraction.ACTIVE_THREAD + threadA);
         assertThat(threadB).isNotEqualTo(threadA);
-        harness.worker().close();
+        harness.worker.close();
     }
 
     // ---- FT-04 -----------------------------------------------------------------------------
 
     @Test
     void newThenNormalMessageEntersNewThreadAndGroupNewIsAnchored() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         String connectionId = connectionId(harness);
         worker(harness).handleInbound(p2p(harness, "om-1", "hello"));
         worker(harness).handleInbound(p2p(harness, "om-new", "/new"));
-        String threadB = harness.threads().find(connectionId, "oc_chat").orElseThrow();
+        String threadB = harness.threads.find(connectionId, "oc_chat").orElseThrow();
         worker(harness).handleInbound(p2p(harness, "om-2", "next"));
-        assertThat(harness.bridge().turnThreads.getLast()).isEqualTo(threadB);
+        assertThat(harness.bridge.turnThreads.getLast()).isEqualTo(threadB);
 
         // Group /new without reply context anchors only its own command/confirmation ids.
         bindGroup(harness, "oc_group");
         worker(harness).handleInbound(group(harness, "oc_group", "om-g-new", "/new", "", "", ""));
-        String groupNewThread = harness.bridge().createdThreads.getLast();
+        String groupNewThread = harness.bridge.createdThreads.getLast();
         worker(harness).handleInbound(group(harness, "oc_group", "om-g-plain", "plain", "", "", ""));
-        assertThat(harness.bridge().turnThreads.getLast()).isNotEqualTo(groupNewThread);
-        harness.worker().close();
+        assertThat(harness.bridge.turnThreads.getLast()).isNotEqualTo(groupNewThread);
+        harness.worker.close();
     }
 
     // ---- FT-05 -----------------------------------------------------------------------------
 
     @Test
     void replyToOldMessageAfterNewStillRoutesToOldThread() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         String connectionId = connectionId(harness);
         worker(harness).handleInbound(p2p(harness, "om-1", "hello"));
-        String threadA = harness.threads().find(connectionId, "oc_chat").orElseThrow();
+        String threadA = harness.threads.find(connectionId, "oc_chat").orElseThrow();
         worker(harness).handleInbound(p2p(harness, "om-new", "/new"));
-        String threadB = harness.threads().find(connectionId, "oc_chat").orElseThrow();
+        String threadB = harness.threads.find(connectionId, "oc_chat").orElseThrow();
 
         // Reply to old message om-1 -> thread A; ordinary message -> thread B.
         worker(harness).handleInbound(reply(harness, "om-reply", "follow up", "om-1", "", ""));
-        assertThat(harness.bridge().turnThreads.getLast()).isEqualTo(threadA);
+        assertThat(harness.bridge.turnThreads.getLast()).isEqualTo(threadA);
         worker(harness).handleInbound(p2p(harness, "om-2", "plain"));
-        assertThat(harness.bridge().turnThreads.getLast()).isEqualTo(threadB);
-        harness.worker().close();
+        assertThat(harness.bridge.turnThreads.getLast()).isEqualTo(threadB);
+        harness.worker.close();
     }
 
     // ---- FT-06 -----------------------------------------------------------------------------
 
     @Test
     void groupTopicsIsolateAndContinueByRoot() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         bindGroup(harness, "oc_group");
         // Two different roots -> two threads; same root -> same thread.
         worker(harness).handleInbound(group(harness, "oc_group", "om-a1", "a1", "", "root-a", ""));
-        String threadA = harness.bridge().turnThreads.getLast();
+        String threadA = harness.bridge.turnThreads.getLast();
         worker(harness).handleInbound(group(harness, "oc_group", "om-b1", "b1", "", "root-b", ""));
-        String threadB = harness.bridge().turnThreads.getLast();
+        String threadB = harness.bridge.turnThreads.getLast();
         assertThat(threadA).isNotEqualTo(threadB);
         worker(harness).handleInbound(group(harness, "oc_group", "om-a2", "a2", "", "root-a", ""));
-        assertThat(harness.bridge().turnThreads.getLast()).isEqualTo(threadA);
-        harness.worker().close();
+        assertThat(harness.bridge.turnThreads.getLast()).isEqualTo(threadA);
+        harness.worker.close();
     }
 
     // ---- FT-07 -----------------------------------------------------------------------------
@@ -163,13 +161,13 @@ class FeishuMultiThreadRoutingTest {
 
     @Test
     void differentThreadsRunIndependentlyAndStopOnlyTargetsOne() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         String connectionId = connectionId(harness);
-        harness.bridge().activeRun = true;
+        harness.bridge.activeRun.set(true);
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        harness.bridge().blockEnter = entered;
-        harness.bridge().blockRelease = release;
+        harness.bridge.blockEnter = entered;
+        harness.bridge.blockRelease = release;
         // Thread A starts a long run that blocks until released.
         Thread longRun = new Thread(() -> {
             try {
@@ -180,63 +178,63 @@ class FeishuMultiThreadRoutingTest {
         });
         longRun.start();
         assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
-        String threadA = harness.threads().find(connectionId, "oc_chat").orElseThrow();
+        String threadA = harness.threads.find(connectionId, "oc_chat").orElseThrow();
 
         // /new is not blocked while A runs; B is an independent thread.
         worker(harness).handleInbound(p2p(harness, "om-new", "/new"));
-        String threadB = harness.threads().find(connectionId, "oc_chat").orElseThrow();
+        String threadB = harness.threads.find(connectionId, "oc_chat").orElseThrow();
         assertThat(threadB).isNotEqualTo(threadA);
         worker(harness).handleInbound(p2p(harness, "om-b", "task on b"));
-        assertThat(harness.bridge().turnThreads).contains(threadB);
+        assertThat(harness.bridge.turnThreads).contains(threadB);
 
         // /steer as a reply to A's old message targets A only.
         worker(harness).handleInbound(reply(harness, "om-steer", "/steer more", "om-a", "", ""));
-        assertThat(harness.bridge().steerThreads).contains(threadA);
-        assertThat(harness.bridge().steerThreads).doesNotContain(threadB);
+        assertThat(harness.bridge.steerThreads).contains(threadA);
+        assertThat(harness.bridge.steerThreads).doesNotContain(threadB);
 
         release.countDown();
         longRun.join(3_000);
-        harness.worker().close();
+        harness.worker.close();
     }
 
     // ---- FT-10 -----------------------------------------------------------------------------
 
     @Test
     void cardCallbackUsesImmutableRequestAliasAcrossNew() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         String connectionId = connectionId(harness);
         worker(harness).handleInbound(p2p(harness, "om-1", "hello"));
-        String threadA = harness.threads().find(connectionId, "oc_chat").orElseThrow();
+        String threadA = harness.threads.find(connectionId, "oc_chat").orElseThrow();
         // Simulate the production card path binding request:req-1 -> thread A.
-        harness.threads().bindAliasIfAbsent(connectionId, "oc_chat", "request:req-1", threadA);
+        harness.threads.bindAliasIfAbsent(connectionId, "oc_chat", "request:req-1", threadA);
         worker(harness).handleInbound(p2p(harness, "om-new", "/new"));
-        String threadB = harness.threads().find(connectionId, "oc_chat").orElseThrow();
+        String threadB = harness.threads.find(connectionId, "oc_chat").orElseThrow();
         assertThat(threadB).isNotEqualTo(threadA);
 
-        harness.bridge().pending = approval("req-1");
+        harness.bridge.pending = approval("req-1");
         worker(harness).handleInbound(new FeishuInboundMessage(
                 "oc_chat", "om-card", "ou_owner", "", "p2p",
                 new FeishuInboundMessage.CardAction("haifa_interaction", "req-1", "approve", "approve", "2.0")));
-        assertThat(harness.bridge().turnThreads.getLast()).isEqualTo(threadA);
-        harness.worker().close();
+        assertThat(harness.bridge.turnThreads.getLast()).isEqualTo(threadA);
+        harness.worker.close();
     }
 
     @Test
     void cardCallbackWithoutRequestAliasIsSafelyRejected() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         String connectionId = connectionId(harness);
         worker(harness).handleInbound(p2p(harness, "om-1", "hello"));
-        String threadA = harness.threads().find(connectionId, "oc_chat").orElseThrow();
+        String threadA = harness.threads.find(connectionId, "oc_chat").orElseThrow();
         // No request alias -> reject; must not fall back to the current pointer or run a turn.
-        int runsBefore = harness.bridge().turnThreads.size();
-        harness.bridge().pending = approval("req-unknown");
+        int runsBefore = harness.bridge.turnThreads.size();
+        harness.bridge.pending = approval("req-unknown");
         worker(harness).handleInbound(new FeishuInboundMessage(
                 "oc_chat", "om-card", "ou_owner", "", "p2p",
                 new FeishuInboundMessage.CardAction("haifa_interaction", "req-unknown", "approve", "approve", "2.0")));
-        assertThat(harness.bridge().turnThreads).hasSize(runsBefore);
+        assertThat(harness.bridge.turnThreads).hasSize(runsBefore);
         assertThat(lastReply(harness)).isEqualTo(FeishuInteraction.ALREADY_HANDLED);
         assertThat(threadA).isNotBlank();
-        harness.worker().close();
+        harness.worker.close();
     }
 
     // ---- FT-11 -----------------------------------------------------------------------------
@@ -324,71 +322,68 @@ class FeishuMultiThreadRoutingTest {
 
     @Test
     void redeliveredNewCommandIsIdempotent() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         String connectionId = connectionId(harness);
         worker(harness).handleInbound(p2p(harness, "om-1", "hello"));
         worker(harness).handleInbound(p2p(harness, "om-new", "/new"));
-        String threadB = harness.threads().find(connectionId, "oc_chat").orElseThrow();
-        int created = harness.bridge().createdThreads.size();
+        String threadB = harness.threads.find(connectionId, "oc_chat").orElseThrow();
+        int created = harness.bridge.createdThreads.size();
 
         // The same /new event redelivered must reuse the thread, not create/rotate again.
         worker(harness).handleInbound(p2p(harness, "om-new", "/new"));
-        assertThat(harness.threads().find(connectionId, "oc_chat")).contains(threadB);
-        assertThat(harness.bridge().createdThreads).hasSize(created);
-        harness.worker().close();
+        assertThat(harness.threads.find(connectionId, "oc_chat")).contains(threadB);
+        assertThat(harness.bridge.createdThreads).hasSize(created);
+        harness.worker.close();
     }
 
     @Test
     void fallbackTextReplyBindsToOriginatingGroupThread() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         bindGroup(harness, "oc_group");
         String connectionId = connectionId(harness, "oc_group");
-        harness.transport().failInteractiveDelivery();
-        harness.bridge().turnPending = approval("req-fallback");
+        harness.transport.failInteractiveDelivery();
+        harness.bridge.turnPending = approval("req-fallback");
 
         worker(harness).handleInbound(group(harness, "oc_group", "om-card", "need approval", "", "root-1", ""));
-        String thread = harness.bridge().turnThreads.getLast();
-        assertThat(harness.transport().textReplies()).isNotEmpty();
+        String thread = harness.bridge.turnThreads.getLast();
+        assertThat(harness.transport.textReplies()).isNotEmpty();
         // The plain-text fallback's provider id is bound, so a reply continues the same thread.
-        assertThat(harness.threads().findAlias(connectionId, "oc_group", "reply-text-1")).contains(thread);
-        harness.worker().close();
+        assertThat(harness.threads.findAlias(connectionId, "oc_group", "reply-text-1")).contains(thread);
+        harness.worker.close();
     }
+
 
     // ---- harness ---------------------------------------------------------------------------
 
-    private static FeishuChannelWorker worker(Harness harness) {
-        return harness.worker();
+    private static FeishuChannelWorker worker(FeishuWorkerHarness harness) {
+        return harness.worker;
     }
 
-    private static String lastReply(Harness harness) {
-        return harness.transport().replies().getLast().text();
+    private static String lastReply(FeishuWorkerHarness harness) {
+        return harness.lastCardReply();
     }
 
-    private String connectionId(Harness harness) {
-        return connectionId(harness, "oc_chat");
+    private String connectionId(FeishuWorkerHarness harness) {
+        return harness.connectionId();
     }
 
-    private String connectionId(Harness harness, String chatId) {
-        return harness.connections()
-                .findConnectionByExternalIdentity("feishu", "ou_owner", chatId)
-                .orElseThrow()
-                .path("id")
-                .asText("");
+    private String connectionId(FeishuWorkerHarness harness, String chatId) {
+        return harness.connectionId(chatId);
     }
 
-    private FeishuInboundMessage p2p(Harness harness, String messageId, String text) {
-        return new FeishuInboundMessage("oc_chat", messageId, "ou_owner", text, "p2p");
+    private FeishuInboundMessage p2p(FeishuWorkerHarness harness, String messageId, String text) {
+        return FeishuWorkerHarness.p2p(messageId, text);
     }
 
     private FeishuInboundMessage reply(
-            Harness harness, String messageId, String text, String parentId, String rootId, String feishuThreadId) {
+            FeishuWorkerHarness harness, String messageId, String text, String parentId, String rootId, String feishuThreadId) {
         return new FeishuInboundMessage(
                 "oc_chat", messageId, "ou_owner", text, "p2p", "text", List.of(), null,
                 rootId, parentId, feishuThreadId);
     }
 
     private FeishuInboundMessage group(
-            Harness harness, String chatId, String messageId, String text, String parentId, String rootId,
+            FeishuWorkerHarness harness, String chatId, String messageId, String text, String parentId, String rootId,
             String feishuThreadId) {
         return new FeishuInboundMessage(
                 chatId, messageId, "ou_owner", text, "group", "text", List.of(), null,
@@ -408,113 +403,12 @@ class FeishuMultiThreadRoutingTest {
                 false);
     }
 
-    private void bindGroup(Harness harness, String chatId) throws Exception {
-        String code = ChannelConnectionStore.newBindingCode();
-        harness.connections()
-                .createOauthStateWithinCap(
-                        "owner",
-                        "feishu",
-                        code,
-                        java.time.Instant.now().plusSeconds(60),
-                        ChannelConnectionStore.MAX_PENDING_CONNECT_CODES_PER_PROVIDER);
-        harness.connections().bindFeishuFromConnectCode(code, "ou_owner", chatId, Map.of());
+    private void bindGroup(FeishuWorkerHarness harness, String chatId) throws Exception {
+        harness.bindChat(chatId);
     }
 
-    private Harness harness() throws Exception {
-        ChannelConnectionStore connections = new ChannelConnectionStore(json, dataDirectory);
-        FeishuChatThreadStore threads = new FeishuChatThreadStore(json, dataDirectory);
-        ScriptedBridge bridge = new ScriptedBridge();
-        AtomicReference<RecordingFeishuTransport> transportRef = new AtomicReference<>();
-        FeishuChannelWorker worker = new FeishuChannelWorker(connections, threads, bridge, () -> {
-            RecordingFeishuTransport transport = new RecordingFeishuTransport();
-            transportRef.set(transport);
-            return transport;
-        });
-        worker.startOrRestart("cli_x", "secret_x", FeishuOpenDomain.DEFAULT);
-        String code = ChannelConnectionStore.newBindingCode();
-        connections.createOauthStateWithinCap(
-                "owner",
-                "feishu",
-                code,
-                java.time.Instant.now().plusSeconds(60),
-                ChannelConnectionStore.MAX_PENDING_CONNECT_CODES_PER_PROVIDER);
-        connections.bindFeishuFromConnectCode(code, "ou_owner", "oc_chat", Map.of());
-        return new Harness(worker, transportRef.get(), bridge, connections, threads);
-    }
-
-    private record Harness(
-            FeishuChannelWorker worker,
-            RecordingFeishuTransport transport,
-            ScriptedBridge bridge,
-            ChannelConnectionStore connections,
-            FeishuChatThreadStore threads) {}
-
-    private static final class ScriptedBridge implements FeishuAgentBridge {
-        private final List<String> turnThreads = new CopyOnWriteArrayList<>();
-        private final List<String> steerThreads = new CopyOnWriteArrayList<>();
-        private final List<String> createdThreads = new CopyOnWriteArrayList<>();
-        private volatile FeishuPendingInput pending;
-        private volatile FeishuPendingInput turnPending;
-        private volatile boolean activeRun;
-        private volatile CountDownLatch blockEnter;
-        private volatile CountDownLatch blockRelease;
-
-        @Override
-        public TurnResult runTurn(
-                String ownerUserId, String threadId, Map<String, Object> channelMetadata, String userText)
-                throws Exception {
-            return runTurn(
-                    ownerUserId, threadId, channelMetadata, userText, null, List.of(), TurnOptions.defaults());
-        }
-
-        @Override
-        public TurnResult runTurn(
-                String ownerUserId,
-                String threadId,
-                Map<String, Object> channelMetadata,
-                String userText,
-                FeishuHumanResponse response,
-                List<UploadedFile> files,
-                TurnOptions options)
-                throws Exception {
-            if (options != null && options.steer()) {
-                steerThreads.add(threadId);
-                return new TurnResult(threadId, "steered");
-            }
-            turnThreads.add(threadId);
-            CountDownLatch release = blockRelease;
-            if (release != null && "long".equals(userText)) {
-                CountDownLatch enter = blockEnter;
-                if (enter != null) {
-                    enter.countDown();
-                }
-                release.await(3, TimeUnit.SECONDS);
-            }
-            pending = null;
-            FeishuPendingInput resultPending = turnPending;
-            turnPending = null;
-            return new TurnResult(threadId, "continued:" + userText, resultPending);
-        }
-
-        @Override
-        public Optional<FeishuPendingInput> currentPending(String ownerUserId, String threadId) {
-            return Optional.ofNullable(pending);
-        }
-
-        @Override
-        public boolean cancelActiveRun(String ownerUserId, String threadId) {
-            activeRun = false;
-            return true;
-        }
-
-        @Override
-        public boolean hasActiveRun(String ownerUserId, String threadId) {
-            return activeRun;
-        }
-
-        @Override
-        public void createThread(String ownerUserId, String threadId, Map<String, Object> channelMetadata) {
-            createdThreads.add(threadId);
-        }
+    private FeishuWorkerHarness harness() throws Exception {
+        return FeishuWorkerHarness.open(
+                dataDirectory, new ScriptedFeishuBridge().blockOnlyOnLongText());
     }
 }
