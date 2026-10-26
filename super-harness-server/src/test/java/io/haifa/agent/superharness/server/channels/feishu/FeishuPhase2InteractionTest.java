@@ -5,16 +5,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import io.haifa.agent.superharness.server.config.ChannelConnectionStore;
+import io.haifa.agent.superharness.server.testsupport.feishu.FeishuWorkerHarness;
+import io.haifa.agent.superharness.server.testsupport.feishu.ScriptedFeishuBridge;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -46,8 +43,8 @@ class FeishuPhase2InteractionTest {
         assertThat(submitted).contains("版本号: 1.2.3").contains("环境: prod").contains("[values:");
         assertThat(submitted).contains("\"version\":\"1.2.3\"").contains("\"env\":\"prod\"");
 
-        Harness harness = harness();
-        bindRequest(harness, "req-form");
+        FeishuWorkerHarness harness = harness();
+        harness.bindRequest( "req-form");
         harness.bridge.pending = pending;
         harness.worker.handleInbound(new FeishuInboundMessage(
                 "oc_chat",
@@ -136,8 +133,8 @@ class FeishuPhase2InteractionTest {
                 .contains("\"ship_date\":\"2026-10-20\"")
                 .doesNotContain("+0800");
 
-        Harness harness = harness();
-        bindRequest(harness, "req-pareto");
+        FeishuWorkerHarness harness = harness();
+        harness.bindRequest( "req-pareto");
         harness.bridge.pending = pending;
         harness.worker.handleInbound(new FeishuInboundMessage(
                 "oc_chat",
@@ -188,7 +185,7 @@ class FeishuPhase2InteractionTest {
 
     @Test
     void modeCommandPersistsOnConnectionMetadata() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         harness.worker.handleInbound(new FeishuInboundMessage(
                 "oc_chat", "om_mode", "ou_owner", "/mode thinking", "p2p"));
         assertThat(harness.transport.replies().getLast().text())
@@ -206,7 +203,7 @@ class FeishuPhase2InteractionTest {
 
     @Test
     void stopAndSteerWhileBusyUseSharedBridgeSeams() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         harness.bridge.activeRun.set(true);
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -242,7 +239,7 @@ class FeishuPhase2InteractionTest {
 
     @Test
     void busyPathRoutesModeAndWebOnlyBeforeSteerFallback() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         harness.bridge.activeRun.set(true);
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
@@ -289,8 +286,8 @@ class FeishuPhase2InteractionTest {
         ArrayNode messages = json.createArrayNode();
         messages.add(toolForm("req-number", List.of(field("count", "数量", "number", true))));
         FeishuPendingInput pending = FeishuInteraction.pendingFromMessages(messages).orElseThrow();
-        Harness harness = harness();
-        bindRequest(harness, "req-number");
+        FeishuWorkerHarness harness = harness();
+        harness.bindRequest( "req-number");
         harness.bridge.pending = pending;
         try {
             FeishuInboundMessage invalid = new FeishuInboundMessage("oc_chat", "om_num", "ou_owner", "", "p2p",
@@ -322,8 +319,8 @@ class FeishuPhase2InteractionTest {
         FeishuPendingInput pending = FeishuInteraction.pendingFromMessages(messages).orElseThrow();
         assertThat(pending.formSupported()).isTrue();
 
-        Harness harness = harness();
-        bindRequest(harness, "req-check");
+        FeishuWorkerHarness harness = harness();
+        harness.bindRequest( "req-check");
         harness.bridge.pending = pending;
         FeishuInboundMessage unchecked = new FeishuInboundMessage(
                 "oc_chat",
@@ -428,8 +425,8 @@ class FeishuPhase2InteractionTest {
         assertThat(pending.formSupported()).isTrue();
         assertThat(FeishuInteraction.formMissingRequired(pending, Map.of())).isFalse();
 
-        Harness harness = harness();
-        bindRequest(harness, "req-opt");
+        FeishuWorkerHarness harness = harness();
+        harness.bindRequest( "req-opt");
         harness.bridge.pending = pending;
         String toast = harness.worker.acceptCardAction(new FeishuInboundMessage(
                 "oc_chat",
@@ -455,7 +452,7 @@ class FeishuPhase2InteractionTest {
 
     @Test
     void runTurnReceivesConfiguredMode() throws Exception {
-        Harness harness = harness();
+        FeishuWorkerHarness harness = harness();
         harness.connections.mergeConnectionMetadata(
                 harness.connections
                         .findConnectionByExternalIdentity("feishu", "ou_owner", "oc_chat")
@@ -532,123 +529,9 @@ class FeishuPhase2InteractionTest {
         return new FeishuPendingInput.Option(id, label, value);
     }
 
-    private Harness harness() throws Exception {
-        ChannelConnectionStore connections = new ChannelConnectionStore(json, dataDirectory);
-        FeishuChatThreadStore threads = new FeishuChatThreadStore(json, dataDirectory);
-        ScriptedBridge bridge = new ScriptedBridge();
-        AtomicReference<RecordingFeishuTransport> transportRef = new AtomicReference<>();
-        FeishuChannelWorker worker = new FeishuChannelWorker(
-                connections,
-                threads,
-                bridge,
-                () -> {
-                    RecordingFeishuTransport transport = new RecordingFeishuTransport();
-                    transportRef.set(transport);
-                    return transport;
-                });
-        worker.startOrRestart("cli_x", "secret_x", FeishuOpenDomain.DEFAULT);
-        String code = ChannelConnectionStore.newBindingCode();
-        connections.createOauthStateWithinCap(
-                "owner",
-                "feishu",
-                code,
-                java.time.Instant.now().plusSeconds(60),
-                ChannelConnectionStore.MAX_PENDING_CONNECT_CODES_PER_PROVIDER);
-        connections.bindFeishuFromConnectCode(code, "ou_owner", "oc_chat", Map.of());
-        return new Harness(worker, transportRef.get(), bridge, connections, threads);
-    }
 
-    private record Harness(
-            FeishuChannelWorker worker,
-            RecordingFeishuTransport transport,
-            ScriptedBridge bridge,
-            ChannelConnectionStore connections,
-            FeishuChatThreadStore threads) {}
-
-    /** Bind the immutable card request alias the way the production card-delivery path does. */
-    private static void bindRequest(Harness harness, String requestId) {
-        String connectionId = harness
-                .connections()
-                .findConnectionByExternalIdentity("feishu", "ou_owner", "oc_chat")
-                .orElseThrow()
-                .path("id")
-                .asText("");
-        harness.threads()
-                .bindAliasIfAbsent(connectionId, "oc_chat", "request:" + requestId, "feishu-test-thread");
-    }
-
-    private static final class ScriptedBridge implements FeishuAgentBridge {
-        private final AtomicInteger turns = new AtomicInteger();
-        private final AtomicInteger steerCalls = new AtomicInteger();
-        private final AtomicInteger cancelCalls = new AtomicInteger();
-        private final AtomicReference<FeishuHumanResponse> responses = new AtomicReference<>();
-        private final AtomicReference<String> lastMode = new AtomicReference<>("flash");
-        private final AtomicBoolean activeRun = new AtomicBoolean(false);
-        private volatile FeishuPendingInput pending;
-        private volatile CountDownLatch blockEnter;
-        private volatile CountDownLatch blockRelease;
-
-        @Override
-        public TurnResult runTurn(
-                String ownerUserId, String threadId, Map<String, Object> channelMetadata, String userText)
-                throws Exception {
-            return runTurn(
-                    ownerUserId,
-                    threadId,
-                    channelMetadata,
-                    userText,
-                    null,
-                    List.of(),
-                    TurnOptions.defaults());
-        }
-
-        @Override
-        public TurnResult runTurn(
-                String ownerUserId,
-                String threadId,
-                Map<String, Object> channelMetadata,
-                String userText,
-                FeishuHumanResponse response,
-                List<UploadedFile> files,
-                TurnOptions options)
-                throws Exception {
-            TurnOptions resolved = options == null ? TurnOptions.defaults() : options;
-            lastMode.set(resolved.mode());
-            if (resolved.steer()) {
-                // Steer must not wait on the busy Turn latch — it runs on the connectExecutor path.
-                steerCalls.incrementAndGet();
-                return new TurnResult(threadId, "steered");
-            }
-            CountDownLatch enter = blockEnter;
-            if (enter != null) {
-                enter.countDown();
-            }
-            CountDownLatch release = blockRelease;
-            if (release != null) {
-                release.await(3, TimeUnit.SECONDS);
-            }
-            turns.incrementAndGet();
-            responses.set(response);
-            pending = null;
-            activeRun.set(false);
-            return new TurnResult(threadId, "continued");
-        }
-
-        @Override
-        public Optional<FeishuPendingInput> currentPending(String ownerUserId, String threadId) {
-            return Optional.ofNullable(pending);
-        }
-
-        @Override
-        public boolean cancelActiveRun(String ownerUserId, String threadId) {
-            cancelCalls.incrementAndGet();
-            activeRun.set(false);
-            return true;
-        }
-
-        @Override
-        public boolean hasActiveRun(String ownerUserId, String threadId) {
-            return activeRun.get();
-        }
+    private FeishuWorkerHarness harness() throws Exception {
+        return FeishuWorkerHarness.open(
+                dataDirectory, new ScriptedFeishuBridge().withBareContinuedReplies());
     }
 }
