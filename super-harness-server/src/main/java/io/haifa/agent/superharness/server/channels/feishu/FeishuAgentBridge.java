@@ -193,6 +193,14 @@ public interface FeishuAgentBridge {
         createThread(ownerUserId, threadId, channelMetadata);
     }
 
+    /**
+     * Custom Agent pin for {@code threadId}, if any. Subsequent ordinary Feishu turns must carry this
+     * into {@code context.agent_name} so {@code admitTurn} does not fall back to the default lead.
+     */
+    default Optional<String> pinnedAgentName(String ownerUserId, String threadId) throws Exception {
+        return Optional.empty();
+    }
+
     /** Executable model names for {@code /models}. Default: empty catalog. */
     default List<String> listModelNames(String ownerUserId) {
         return List.of();

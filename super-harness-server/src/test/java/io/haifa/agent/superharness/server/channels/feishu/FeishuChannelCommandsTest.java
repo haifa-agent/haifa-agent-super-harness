@@ -65,11 +65,19 @@ class FeishuChannelCommandsTest {
         assertThat(harness.bridge.createdWithAgent).containsExactly("researcher");
         String pinned = harness.threads.find(connectionId(harness), "oc_chat").orElseThrow();
 
+        // Ordinary follow-up turns must carry the pin into TurnOptions (Codex P1).
+        harness.worker.handleInbound(p2p("om-follow", "continue with the researcher"));
+        assertThat(harness.bridge.turnTexts).containsExactly("continue with the researcher");
+        assertThat(harness.bridge.lastAgent.get()).isEqualTo("researcher");
+
         harness.worker.handleInbound(p2p("om-lead", "/agent use lead_agent"));
         assertThat(lastReply(harness))
                 .isEqualTo(FeishuInteraction.agentSelectedNotice(FeishuInteraction.DEFAULT_ASSISTANT_ID));
         assertThat(harness.bridge.createdWithAgent).containsExactly("researcher", "lead_agent");
         assertThat(harness.threads.find(connectionId(harness), "oc_chat").orElseThrow()).isNotEqualTo(pinned);
+
+        harness.worker.handleInbound(p2p("om-lead-follow", "back to default"));
+        assertThat(harness.bridge.lastAgent.get()).isNull();
         harness.worker.close();
     }
 
@@ -194,6 +202,7 @@ class FeishuChannelCommandsTest {
         private final List<String> createdThreads = new CopyOnWriteArrayList<>();
         private final List<String> createdWithAgent = new CopyOnWriteArrayList<>();
         private final Map<String, String> goals = new java.util.concurrent.ConcurrentHashMap<>();
+        private final Map<String, String> pins = new java.util.concurrent.ConcurrentHashMap<>();
         private final AtomicBoolean lastBootstrap = new AtomicBoolean(false);
         private final AtomicReference<String> lastAgent = new AtomicReference<>();
 
@@ -235,6 +244,18 @@ class FeishuChannelCommandsTest {
                 String agentName) {
             createdThreads.add(threadId);
             createdWithAgent.add(agentName);
+            if (agentName == null
+                    || agentName.isBlank()
+                    || FeishuInteraction.DEFAULT_ASSISTANT_ID.equalsIgnoreCase(agentName)) {
+                pins.remove(threadId);
+            } else {
+                pins.put(threadId, agentName);
+            }
+        }
+
+        @Override
+        public Optional<String> pinnedAgentName(String ownerUserId, String threadId) {
+            return Optional.ofNullable(pins.get(threadId));
         }
 
         @Override

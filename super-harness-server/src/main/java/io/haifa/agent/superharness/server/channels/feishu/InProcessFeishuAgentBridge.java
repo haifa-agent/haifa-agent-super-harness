@@ -257,6 +257,18 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
     }
 
     @Override
+    public Optional<String> pinnedAgentName(String ownerUserId, String threadId) throws Exception {
+        String owner = ownerUserId == null || ownerUserId.isBlank() ? AccessOwner.DEFAULT : ownerUserId;
+        return AccessOwner.call(owner, () -> {
+            try {
+                return threads.pinnedAgentName(threadId);
+            } catch (DeerFlowConversationService.ConversationException missing) {
+                return Optional.empty();
+            }
+        });
+    }
+
+    @Override
     public List<String> listModelNames(String ownerUserId) {
         return List.copyOf(catalog.listExecutableModelNames());
     }
@@ -357,8 +369,19 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
         if (options.bootstrap()) {
             context.put("is_bootstrap", true);
         }
-        if (options.agentName() != null && !options.agentName().isBlank()) {
-            context.put("agent_name", options.agentName().trim().toLowerCase(Locale.ROOT));
+        // Prefer an explicit TurnOptions pin; otherwise reuse the thread metadata written by
+        // /agent use (or the last Run). Without this, admitTurn resolves the default lead and the
+        // next setLeadPromptSelection would clear the pin.
+        String agentName = options.agentName();
+        if (agentName == null || agentName.isBlank()) {
+            try {
+                agentName = threads.pinnedAgentName(threadId).orElse(null);
+            } catch (DeerFlowConversationService.ConversationException missing) {
+                agentName = null;
+            }
+        }
+        if (agentName != null && !agentName.isBlank()) {
+            context.put("agent_name", agentName.trim().toLowerCase(Locale.ROOT));
         }
         String runInput = options.steer() ? "steer" : null;
         DeerFlowConversationService.AdmittedTurn turn;

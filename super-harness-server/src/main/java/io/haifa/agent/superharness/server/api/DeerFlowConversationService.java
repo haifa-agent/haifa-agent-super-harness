@@ -694,6 +694,21 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         }
     }
 
+    /**
+     * Custom Agent pin written by {@link #pinAgentSelection} or the last Run's lead-prompt
+     * selection. Empty when the thread uses the default lead agent.
+     */
+    public Optional<String> pinnedAgentName(String threadId) throws ConversationException {
+        ThreadRecord thread = requireOwnedThread(threadId);
+        synchronized (thread) {
+            Object value = thread.metadata.get(AGENT_NAME_METADATA_KEY);
+            if (!(value instanceof String name) || name.isBlank()) {
+                return Optional.empty();
+            }
+            return Optional.of(name);
+        }
+    }
+
     /** Read the thread-scoped goal objective, if any. */
     public Optional<String> threadGoal(String threadId) throws ConversationException {
         ThreadRecord thread = requireOwnedThread(threadId);

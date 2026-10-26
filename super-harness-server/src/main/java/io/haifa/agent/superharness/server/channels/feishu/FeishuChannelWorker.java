@@ -1106,6 +1106,14 @@ public final class FeishuChannelWorker implements AutoCloseable {
             FeishuAgentBridge.TurnOptions options = turnOptions == null
                     ? FeishuAgentBridge.TurnOptions.defaults()
                     : turnOptions;
+            // Carry /agent use (or last-Run) pin into every ordinary Turn so admitTurn does not
+            // silently fall back to lead_agent and clear the metadata pin.
+            if (options.agentName() == null) {
+                String pinned = agentBridge.pinnedAgentName(ownerUserId, threadId).orElse(null);
+                if (pinned != null && !pinned.isBlank()) {
+                    options = options.withAgentName(pinned);
+                }
+            }
             FeishuAgentBridge.TurnResult result = agentBridge.runTurn(
                     ownerUserId,
                     threadId,
