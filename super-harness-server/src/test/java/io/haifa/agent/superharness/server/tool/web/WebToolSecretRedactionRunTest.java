@@ -40,6 +40,7 @@ class WebToolSecretRedactionRunTest {
         environment.put("HAIFA_SUPER_HARNESS_WEB_FETCH_PROVIDER", "deepseek");
         environment.put("HAIFA_SUPER_HARNESS_WEB_SEARCH_PROVIDER", "deepseek");
         environment.remove(ProductionWebFetchTool.JINA_API_KEY_CREDENTIAL);
+        environment.remove(ProductionWebFetchTool.DEEPSEEK_TOOL_API_KEY_CREDENTIAL);
 
         WebToolConfig config = WebToolConfig.fromEnvironment(environment);
 

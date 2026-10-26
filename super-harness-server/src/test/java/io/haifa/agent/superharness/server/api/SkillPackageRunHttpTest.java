@@ -63,12 +63,18 @@ class SkillPackageRunHttpTest {
             assertThat(fixture.request("GET", "/api/threads/" + thread + "/artifacts" + output, null).statusCode()).isEqualTo(404);
             pendingRows = fixture.get("/api/threads/" + thread + "/messages/page?limit=20").path("data");
             java.nio.file.Files.writeString(evidence.resolve("pending-message-page.json"), pendingRows.toPrettyString(), StandardCharsets.UTF_8);
-            assertThat(pendingRows).hasSize(4);
+            assertThat(pendingRows).hasSize(8);
             assertThat(pendingRows.get(0).path("content").path("type").asText()).isEqualTo("human");
-            assertThat(pendingRows.get(1).path("content").path("type").asText()).isEqualTo("ai");
-            assertThat(pendingRows.get(2).path("content").path("type").asText()).isEqualTo("human");
-            assertThat(pendingRows.get(3).path("content").path("name").asText()).isEqualTo("ask_clarification");
-            assertThat(pendingRows.get(3).path("run_id")).isEqualTo(pendingRows.get(2).path("run_id"));
+            assertThat(pendingRows.get(1).path("content").path("tool_calls").get(0).path("name").asText())
+                    .isEqualTo("skill_load");
+            assertThat(pendingRows.get(2).path("content").path("name").asText()).isEqualTo("skill_load");
+            assertThat(pendingRows.get(3).path("content").path("tool_calls").get(0).path("name").asText())
+                    .isEqualTo("skill_resource_read");
+            assertThat(pendingRows.get(4).path("content").path("name").asText()).isEqualTo("skill_resource_read");
+            assertThat(pendingRows.get(5).path("content").path("content").asText()).isEqualTo("completed");
+            assertThat(pendingRows.get(6).path("content").path("type").asText()).isEqualTo("human");
+            assertThat(pendingRows.get(7).path("content").path("name").asText()).isEqualTo("ask_clarification");
+            assertThat(pendingRows.get(7).path("run_id")).isEqualTo(pendingRows.get(6).path("run_id"));
             assertThat(pendingRows.findValuesAsText("seq")).doesNotHaveDuplicates();
         }
         try (var fixture = gateway(data, store(data), model, evidence.resolve("restart"))) {
@@ -79,13 +85,25 @@ class SkillPackageRunHttpTest {
             assertThat(downloaded.statusCode()).isEqualTo(200);
             assertThat(json.readTree(downloaded.body()).path("observed").asInt()).isEqualTo(17);
             var completedRows = fixture.get("/api/threads/" + thread + "/messages/page?limit=20").path("data");
-            assertThat(completedRows).hasSize(6);
+            assertThat(completedRows).hasSize(16);
             assertThat(completedRows.findValuesAsText("seq")).doesNotHaveDuplicates();
-            for (int i = 0; i < pendingRows.size(); i++) {
+            for (int i = 0; i < 6; i++) {
                 assertThat(completedRows.get(i).path("seq")).isEqualTo(pendingRows.get(i).path("seq"));
             }
-            assertThat(completedRows.get(4).path("content").path("additional_kwargs").path("human_input_response").path("option_id").asText()).isEqualTo("approve");
-            assertThat(completedRows.get(5).path("content").path("type").asText()).isEqualTo("ai");
+            assertThat(completedRows.get(6).path("content").path("type").asText()).isEqualTo("human");
+            int approvalIndex = -1;
+            int finalAnswerIndex = -1;
+            for (int i = 0; i < completedRows.size(); i++) {
+                JsonNode content = completedRows.get(i).path("content");
+                if (content.path("additional_kwargs").has("human_input_response")) approvalIndex = i;
+                if ("ai".equals(content.path("type").asText())
+                        && "completed".equals(content.path("content").asText())) finalAnswerIndex = i;
+            }
+            assertThat(approvalIndex).isGreaterThan(6);
+            assertThat(finalAnswerIndex).isGreaterThan(approvalIndex);
+            assertThat(completedRows.get(approvalIndex).path("content").path("additional_kwargs")
+                    .path("human_input_response").path("option_id").asText()).isEqualTo("approve");
+            assertThat(completedRows.get(finalAnswerIndex).path("content").path("type").asText()).isEqualTo("ai");
             var backwards = new java.util.ArrayList<String>();
             Long before = null;
             for (int i = 0; i < completedRows.size(); i++) {
