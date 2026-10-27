@@ -163,6 +163,21 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Long parentWallTimeMillisForTests,
             SchedulerRunConfiguration schedulerConfiguration,
             Supplier<Instant> schedulerClock) throws IOException {
+        this(bindHost, bindPort, executor, dataDirectory, continuationKey, testRunModelResolver, testRunTools,
+                suggestionsSettings, testSkillStore, delegationSettings, executionExecutorFactory,
+                parentWallTimeMillisForTests, schedulerConfiguration, schedulerClock, null);
+    }
+
+    private DeerFlowBootstrapApi(String bindHost, int bindPort, ExecutorService executor, Path dataDirectory,
+            SecretKey continuationKey, Function<JsonNode, HaifaRunBridge.ModelBinding> testRunModelResolver,
+            List<? extends JavaTool<?, ?>> testRunTools, DeerFlowSuggestionsApi.Settings suggestionsSettings,
+            SkillConfigStore testSkillStore,
+            io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings delegationSettings,
+            Supplier<? extends ExecutorService> executionExecutorFactory,
+            Long parentWallTimeMillisForTests,
+            SchedulerRunConfiguration schedulerConfiguration,
+            Supplier<Instant> schedulerClock,
+            Map<String, String> environment) throws IOException {
         this.localAuth = io.haifa.agent.superharness.server.auth.LocalAuthService.takePending();
         this.bindHost = bindHost;
         this.bindPort = bindPort;
@@ -259,7 +274,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                             catalog, configurationApi.resolveAllowedSubagents(body),
                             parent, configurationApi::resolveChildModel, delegationSettings);
                 }, new io.haifa.agent.runtime.api.ChildRunCapacity(delegationSettings.runningCapacity()),
-                executionExecutorFactory, parentWallTimeMillisForTests);
+                executionExecutorFactory, parentWallTimeMillisForTests, environment);
         this.scheduleStore = new ScheduleStore(objectMapper, dataDirectory);
         // The shared conversation service owns the in-process background launch seam: it is the only
         // component that can build the public SDK bridge from private state (Thread/session/model
@@ -452,7 +467,11 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                     null,
                     DeerFlowSuggestionsApi.Settings.fromEnvironment(environment),
                     io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings.fromEnvironment(environment),
-                    SchedulerRunConfiguration.fromEnvironment(environment));
+                    null,
+                    null,
+                    SchedulerRunConfiguration.fromEnvironment(environment),
+                    Instant::now,
+                    environment);
         } finally {
             io.haifa.agent.superharness.server.auth.LocalAuthService.discardPending();
         }
@@ -509,6 +528,21 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Long parentWallTimeMillisForTests,
             SchedulerRunConfiguration schedulerConfiguration,
             Supplier<Instant> schedulerClock) throws IOException {
+        return createWithKey(configuration, dataDirectory, continuationKey, runModelResolver, suggestionsSettings,
+                delegationSettings, executionExecutorFactory, parentWallTimeMillisForTests,
+                schedulerConfiguration, schedulerClock, null);
+    }
+
+    private static DeerFlowBootstrapApi createWithKey(LocalServerConfiguration configuration,
+            Path dataDirectory, SecretKey continuationKey,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            DeerFlowSuggestionsApi.Settings suggestionsSettings,
+            io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings delegationSettings,
+            Supplier<? extends ExecutorService> executionExecutorFactory,
+            Long parentWallTimeMillisForTests,
+            SchedulerRunConfiguration schedulerConfiguration,
+            Supplier<Instant> schedulerClock,
+            Map<String, String> environment) throws IOException {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         return new DeerFlowBootstrapApi(
                 configuration.bindAddress().getHostAddress(),
@@ -522,7 +556,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 null,
                 delegationSettings,
                 executionExecutorFactory, parentWallTimeMillisForTests,
-                schedulerConfiguration, schedulerClock);
+                schedulerConfiguration, schedulerClock,
+                environment);
     }
 
     /**
@@ -546,7 +581,9 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 runModelResolver,
                 DeerFlowSuggestionsApi.Settings.fromEnvironment(environment),
                 io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings.fromEnvironment(environment),
-                executionExecutorFactory, parentWallTimeMillisForTests);
+                executionExecutorFactory, parentWallTimeMillisForTests,
+                SchedulerRunConfiguration.defaults(), Instant::now,
+                environment);
     }
 
     public static DeerFlowBootstrapApi createForTests(
@@ -554,12 +591,25 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Path dataDirectory,
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver)
             throws IOException {
+        return createForTests(configuration, dataDirectory, Map.of(), runModelResolver);
+    }
+
+    public static DeerFlowBootstrapApi createForTests(
+            LocalServerConfiguration configuration,
+            Path dataDirectory,
+            Map<String, String> environment,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver)
+            throws IOException {
         return createWithKey(
                 configuration,
                 dataDirectory,
-                generateContinuationKey(),
+                continuationKey(environment, dataDirectory),
                 runModelResolver,
-                DeerFlowSuggestionsApi.Settings.defaults());
+                DeerFlowSuggestionsApi.Settings.fromEnvironment(environment),
+                io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings.fromEnvironment(environment),
+                null, null,
+                SchedulerRunConfiguration.fromEnvironment(environment), Instant::now,
+                environment);
     }
 
     /**

@@ -81,6 +81,23 @@ abstract class AbstractDeerFlowThreadRunApiTest {
         baseUri = URI.create("http://127.0.0.1:" + api.address().getPort());
     }
 
+    void startApi(
+            Map<String, String> environment,
+            java.util.function.Function<JsonNode, HaifaRunBridge.ModelBinding> resolver)
+            throws Exception {
+        if (api != null) {
+            api.close();
+            api = null;
+        }
+        api = DeerFlowBootstrapApi.createForTests(
+                new LocalServerConfiguration("local", InetAddress.getByName("127.0.0.1"), 0),
+                dataDirectory,
+                environment,
+                resolver);
+        api.start();
+        baseUri = URI.create("http://127.0.0.1:" + api.address().getPort());
+    }
+
     @AfterEach
     void stopServer() {
         if (api != null) api.close();

@@ -346,6 +346,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
 
     /** Test-only host physical-execution seam; production always supplies no executor factory. */
     private final Path dataDirectoryRoot;
+    private final Map<String, String> environment;
 
     DeerFlowConversationService(ObjectMapper json,
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
@@ -359,6 +360,25 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
             Supplier<? extends ExecutorService> executionExecutorFactory,
             Long parentWallTimeMillisForTests) throws IOException {
+        this(json, runModelResolver, projectExists, workspaceChanges, dataDirectory, continuationKey,
+                runToolsForThread, mcpProjections, skillProjections, uploadContext, agentPromptResolver,
+                instructionDiagnostics, delegationProjections, childRunCapacity, executionExecutorFactory,
+                parentWallTimeMillisForTests, null);
+    }
+
+    DeerFlowConversationService(ObjectMapper json,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            Predicate<String> projectExists, PersistentProjectWorkspaceService workspaceChanges,
+            Path dataDirectory, SecretKey continuationKey,
+            Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread,
+            McpProjectionProvider mcpProjections, SkillProjectionProvider skillProjections,
+            DeerFlowUploadContext uploadContext, Function<JsonNode, AgentPromptContext> agentPromptResolver,
+            BiFunction<HaifaRunBridge, AgentRunId, Optional<FrozenInstructionDiagnostic>> instructionDiagnostics,
+            DelegationProjectionProvider delegationProjections,
+            io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
+            Supplier<? extends ExecutorService> executionExecutorFactory,
+            Long parentWallTimeMillisForTests,
+            Map<String, String> environment) throws IOException {
         this.executionExecutorFactory = executionExecutorFactory;
         this.parentWallTimeMillisForTests = parentWallTimeMillisForTests;
         this.childRunCapacity = java.util.Objects.requireNonNull(childRunCapacity, "childRunCapacity");
@@ -375,6 +395,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         this.uploadContext = java.util.Objects.requireNonNull(uploadContext, "uploadContext");
         this.threadCatalog = new PersistentThreadCatalog(json, dataDirectory);
         this.dataDirectoryRoot = dataDirectory.toAbsolutePath().normalize();
+        this.environment = environment != null ? Map.copyOf(environment) : System.getenv();
         this.foundation = new DurableHaifaFoundation(dataDirectory, continuationKey);
         for (PersistentThreadCatalog.Entry entry : threadCatalog.list()) {
             ThreadOwners.remember(entry.threadId(), entry.ownerId());
@@ -1782,7 +1803,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 // The declared Skill script Tool names are environment-and-catalog facts, computed
                 // fresh so a later enable/disable or bun change rebuilds the disclosure consistently.
                 Set<String> platformToolNames = new java.util.LinkedHashSet<>(selectedBridge.mcpToolNames());
-                platformToolNames.addAll(SkillScriptToolConfig.toolNames(System.getenv(), skillProjection));
+                platformToolNames.addAll(SkillScriptToolConfig.toolNames(environment, skillProjection));
                 boolean visionSupported = HaifaRunBridge.supportsVision(binding.snapshot());
                 switchingPrompt = !selectedBridge.matchesAgentIdentity(agentPrompt)
                         || !selectedBridge.promptSignature().equals(
@@ -2330,7 +2351,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             }
         }
         return io.haifa.agent.superharness.server.config.ExecutionProviderConfig.fromEnvironment(
-                        System.getenv(), workspaceRoot, dataDirectoryRoot)
+                        this.environment, workspaceRoot, dataDirectoryRoot)
                 .orElse(null);
     }
 
@@ -2338,7 +2359,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     private HostShellToolConfig hostShellConfig() {
         if (dataDirectoryRoot == null) return null;
         return HostShellToolConfig.fromEnvironment(
-                        System.getenv(), dataDirectoryRoot.resolve("workspace"), dataDirectoryRoot)
+                        this.environment, dataDirectoryRoot.resolve("workspace"), dataDirectoryRoot)
                 .orElse(null);
     }
 
@@ -2347,7 +2368,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
      * {@code auto} (or {@code deny}) value changes the policy handed to the SDK.
      */
     private ApprovalPolicyConfig.Mode approvalMode() {
-        return ApprovalPolicyConfig.fromEnvironment(System.getenv()).mode();
+        return ApprovalPolicyConfig.fromEnvironment(this.environment).mode();
     }
 
     /**
@@ -2360,12 +2381,12 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         if (dataDirectoryRoot == null) return null;
         if (SkillScriptToolConfig.declaredBinding(skillProjection).isEmpty()) return null;
         if (SkillScriptToolConfig.bunExecutable(
-                System.getenv().get(SkillScriptToolConfig.BUN_ENVIRONMENT_KEY)) == null) {
+                this.environment.get(SkillScriptToolConfig.BUN_ENVIRONMENT_KEY)) == null) {
             return null;
         }
         try {
             return SkillScriptToolConfig.fromEnvironment(
-                    System.getenv(),
+                    this.environment,
                     workspaceChanges.bindThreadWorkspaceDataRoot(thread.ownerId, thread.threadId),
                     dataDirectoryRoot,
                     skillProjection).orElse(null);

@@ -167,10 +167,29 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
             io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
             Supplier<? extends ExecutorService> executionExecutorFactory,
             Long parentWallTimeMillisForTests) throws IOException {
+        this(json, runModelResolver, projectExists, workspaceChanges, dataDirectory, continuationKey,
+                runToolsForThread, mcpProjections, skillProjections, uploadContext, agentPromptResolver,
+                instructionDiagnostics, delegationProjections, childRunCapacity, executionExecutorFactory,
+                parentWallTimeMillisForTests, null);
+    }
+
+    DeerFlowThreadRunApi(ObjectMapper json,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            Predicate<String> projectExists, PersistentProjectWorkspaceService workspaceChanges,
+            Path dataDirectory, SecretKey continuationKey,
+            Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread,
+            McpProjectionProvider mcpProjections, SkillProjectionProvider skillProjections,
+            DeerFlowUploadContext uploadContext, Function<JsonNode, AgentPromptContext> agentPromptResolver,
+            BiFunction<HaifaRunBridge, AgentRunId, Optional<FrozenInstructionDiagnostic>> instructionDiagnostics,
+            DelegationProjectionProvider delegationProjections,
+            io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
+            Supplier<? extends ExecutorService> executionExecutorFactory,
+            Long parentWallTimeMillisForTests,
+            Map<String, String> environment) throws IOException {
         this.conversations = new DeerFlowConversationService(json, runModelResolver, projectExists, workspaceChanges, dataDirectory, continuationKey,
                 runToolsForThread, mcpProjections, skillProjections, uploadContext, agentPromptResolver,
                 instructionDiagnostics, delegationProjections, childRunCapacity, executionExecutorFactory,
-                parentWallTimeMillisForTests);
+                parentWallTimeMillisForTests, environment);
     }
 
     public DeerFlowConversationService conversations() {
