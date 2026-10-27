@@ -25,6 +25,7 @@ public interface LarkArchiveSource {
         }
 
         GitHub(HttpClient client) {
+            if (client.followRedirects() != HttpClient.Redirect.NEVER) throw new IllegalArgumentException("Archive redirects are disabled");
             this.client = client;
         }
 
@@ -39,10 +40,10 @@ public interface LarkArchiveSource {
                         .header("User-Agent", "haifa-super-harness")
                         .GET()
                         .build();
-                HttpResponse<Path> response = client.send(request, HttpResponse.BodyHandlers.ofFile(archive,
-                        java.nio.file.StandardOpenOption.CREATE,
-                        java.nio.file.StandardOpenOption.WRITE,
-                        java.nio.file.StandardOpenOption.TRUNCATE_EXISTING));
+                HttpResponse<Path> response = client.send(request, info -> new BoundedArchive(archive, MAX_BYTES));
+                if (!response.uri().equals(request.uri())) {
+                    throw new IllegalArgumentException("Lark archive redirects are not permitted");
+                }
                 if (response.statusCode() != 200) {
                     throw new IllegalArgumentException("Could not download the Lark skill pack (" + version
                             + ") from GitHub: HTTP " + response.statusCode());
@@ -71,6 +72,62 @@ public interface LarkArchiveSource {
                     }
                 }
             }
+        }
+    }
+
+    /** Streams to disk with back pressure, cancelling before a byte beyond the limit is written. */
+    final class BoundedArchive implements HttpResponse.BodySubscriber<Path> {
+        private final java.util.concurrent.CompletableFuture<Path> result = new java.util.concurrent.CompletableFuture<>();
+        private final Path target;
+        private final long limit;
+        private java.util.concurrent.Flow.Subscription subscription;
+        private java.io.OutputStream output;
+        private long written;
+
+        BoundedArchive(Path target, long limit) {
+            this.target = target;
+            this.limit = limit;
+        }
+
+        @Override public java.util.concurrent.CompletionStage<Path> getBody() { return result; }
+
+        @Override public void onSubscribe(java.util.concurrent.Flow.Subscription value) {
+            subscription = value;
+            try {
+                output = Files.newOutputStream(target);
+                value.request(1);
+            } catch (IOException failure) { onError(failure); }
+        }
+
+        @Override public void onNext(java.util.List<java.nio.ByteBuffer> chunks) {
+            if (result.isDone()) return;
+            try {
+                long incoming = chunks.stream().mapToLong(java.nio.ByteBuffer::remaining).sum();
+                if (incoming > limit - written) throw new IOException("Lark CLI source archive is too large.");
+                byte[] buffer = new byte[8192];
+                for (java.nio.ByteBuffer chunk : chunks) {
+                    while (chunk.hasRemaining()) {
+                        int size = Math.min(chunk.remaining(), buffer.length);
+                        chunk.get(buffer, 0, size);
+                        output.write(buffer, 0, size);
+                        written += size;
+                    }
+                }
+                subscription.request(1);
+            } catch (IOException failure) { onError(failure); }
+        }
+
+        @Override public void onError(Throwable failure) {
+            if (subscription != null) subscription.cancel();
+            try { if (output != null) output.close(); } catch (IOException close) { failure.addSuppressed(close); }
+            result.completeExceptionally(failure);
+        }
+
+        @Override public void onComplete() {
+            try {
+                output.close();
+                result.complete(target);
+            } catch (IOException failure) { onError(failure); }
         }
     }
 }

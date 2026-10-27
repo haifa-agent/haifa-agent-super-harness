@@ -188,8 +188,7 @@ public final class LarkIntegrationService {
         environment.put("LARKSUITE_CLI_DATA_DIR", userDataDirectory(ownerId).toString());
         environment.put("LARKSUITE_CLI_NO_UPDATE_NOTIFIER", "1");
         environment.put("LARKSUITE_CLI_NO_SKILLS_NOTIFIER", "1");
-        cli.managedBinDirectory().ifPresent(bin -> environment.put("PATH", bin));
-        return environment;
+        return cli.childEnvironment(environment);
     }
 
     // ------------------------------------------------------------------ status
@@ -257,6 +256,14 @@ public final class LarkIntegrationService {
     // ----------------------------------------------------------------- install
 
     public InstallResult install(String ownerId) {
+        try {
+            return packs.withInstallLock(() -> installLocked(ownerId));
+        } catch (IOException failure) {
+            throw new IllegalStateException("Lark integration install failed", failure);
+        }
+    }
+
+    private InstallResult installLocked(String ownerId) {
         Path archive = null;
         boolean temporaryArchive = false;
         try {
@@ -307,7 +314,7 @@ public final class LarkIntegrationService {
             Path accepted = archive;
             LarkSkillPackInstaller.Installed installed;
             try {
-                installed = packs.install(accepted, version, skills::reload);
+                installed = packs.installLocked(accepted, version, skills::reload);
             } catch (IOException failure) {
                 throw new IllegalStateException("Lark integration install failed", failure);
             }
@@ -333,6 +340,10 @@ public final class LarkIntegrationService {
         String parsedBrand = normalizeBrand(brand);
         String generation = withUserLock(ownerId, () -> advanceGenerationLocked(ownerId));
         LarkAppRegistration.Begin begin = registration.begin(parsedBrand);
+        withUserLock(ownerId, () -> {
+            bindFlowLocked(ownerId, generation, "config", begin.deviceCode());
+            return null;
+        });
         String verificationUrl = verificationUrl(parsedBrand, begin.userCode());
         return new ConfigStart(verificationUrl, begin.deviceCode(), generation, begin.expiresIn(), begin.interval(),
                 begin.userCode(), parsedBrand);
@@ -345,22 +356,21 @@ public final class LarkIntegrationService {
             throw new IllegalArgumentException("device_code is required.");
         }
         String parsedBrand = normalizeBrand(brand);
+        String current = withUserLock(ownerId, () -> requireFlowLocked(ownerId, generation, "config", code));
+        // Frozen complete_lark_config releases the credential lock during network polling. A new
+        // config/start or app switch can supersede this flow while the browser is still pending.
+        LarkAppRegistration.Poll approved = pollAppRegistration(code, parsedBrand, interval, expiresIn);
+        if (blank(approved.appSecret()) && "lark".equals(approved.tenantBrand())) {
+            approved = pollAppRegistration(code, "lark", interval, expiresIn);
+        }
+        String appId = approved.appId() == null ? "" : approved.appId().strip();
+        String appSecret = approved.appSecret() == null ? "" : approved.appSecret().strip();
+        String finalBrand = approved.tenantBrand() != null ? approved.tenantBrand() : parsedBrand;
+        if (appId.isEmpty() || appSecret.isEmpty()) {
+            throw new IllegalArgumentException("Lark app registration succeeded but did not return app credentials.");
+        }
         return withUserLock(ownerId, () -> {
-            String current = requireGenerationLocked(ownerId, generation);
-            LarkAppRegistration.Poll approved = pollAppRegistration(code, parsedBrand, interval, expiresIn);
-            if (blank(approved.appSecret()) && "lark".equals(approved.tenantBrand())) {
-                // Frozen behaviour: the Feishu accounts host can omit client_secret for a Lark
-                // tenant; polling the Lark accounts host with the same device code completes it.
-                approved = pollAppRegistration(code, "lark", interval, expiresIn);
-            }
-            String appId = approved.appId() == null ? "" : approved.appId().strip();
-            String appSecret = approved.appSecret() == null ? "" : approved.appSecret().strip();
-            String finalBrand = approved.tenantBrand() != null ? approved.tenantBrand() : parsedBrand;
-            if (appId.isEmpty() || appSecret.isEmpty()) {
-                throw new IllegalArgumentException(
-                        "Lark app registration succeeded but did not return app credentials.");
-            }
-            requireGenerationLocked(ownerId, current);
+            requireFlowLocked(ownerId, current, "config", code);
             replaceCredentialsLocked(ownerId, appId, appSecret, finalBrand);
             return new ConfigComplete(true, "Lark/Feishu connection setup completed.", current, status(ownerId));
         });
@@ -436,6 +446,7 @@ public final class LarkIntegrationService {
             if (verificationUrl.isBlank() || deviceCode.isBlank()) {
                 throw new IllegalArgumentException("lark-cli did not return a verification_url and device_code.");
             }
+            bindFlowLocked(ownerId, current, "auth", deviceCode);
             return new AuthStart(verificationUrl, deviceCode, current, integerOrNull(data, "expires_in"),
                     blank(text(data, "user_code")) ? null : text(data, "user_code"),
                     blank(text(data, "hint")) ? null : text(data, "hint"));
@@ -453,7 +464,7 @@ public final class LarkIntegrationService {
                     + AUTH_COMPLETE_MIN_WAIT_SECONDS + " and " + AUTH_COMPLETE_MAX_WAIT_SECONDS + ".");
         }
         return withUserLock(ownerId, () -> {
-            requireGenerationLocked(ownerId, generation);
+            requireFlowLocked(ownerId, generation, "auth", code);
             String path = requireCliPath();
             runJson(ownerId, List.of(path, "auth", "login", "--device-code", code, "--json"),
                     Duration.ofSeconds(waitTimeoutSeconds), true);
@@ -478,9 +489,9 @@ public final class LarkIntegrationService {
     private LarkAppRegistration.Poll pollAppRegistration(String deviceCode, String brand, Integer interval,
             Integer expiresIn) {
         long deadline = nanoTime.getAsLong()
-                + Math.min(Math.max(expiresIn == null ? 1 : expiresIn, 1), CONFIG_POLL_TIMEOUT.toSeconds())
+                + Math.min(Math.max(expiresIn == null || expiresIn == 0 ? 300 : expiresIn, 1), CONFIG_POLL_TIMEOUT.toSeconds())
                 * 1_000_000_000L;
-        long pollSeconds = Math.max(1, Math.min(interval == null ? 5 : interval, 10));
+        long pollSeconds = Math.max(1, Math.min(interval == null || interval == 0 ? 5 : interval, 10));
         String lastDetail = "authorization_pending";
         while (nanoTime.getAsLong() < deadline) {
             LarkAppRegistration.PollOutcome outcome = registration.pollOnce(deviceCode, brand);
@@ -503,11 +514,9 @@ public final class LarkIntegrationService {
                     }
                     sleeper.accept(Duration.ofSeconds(Math.min(pollSeconds, remaining)));
                 }
-                case ERROR -> throw new IllegalArgumentException(
-                        blank(outcome.description()) ? "Lark app registration is still pending."
-                                : outcome.description());
+                case ERROR -> throw new IllegalArgumentException(safeFailure(outcome.description()));
             }
-            lastDetail = outcome.description() == null ? lastDetail : outcome.description();
+            lastDetail = "authorization_pending";
         }
         throw new LarkTimeoutException("Lark app registration is still pending: " + lastDetail);
     }
@@ -809,6 +818,33 @@ public final class LarkIntegrationService {
     }
 
     private void writeGeneration(String ownerId, String generation) {
+        writeFlow(ownerId, generation, null, null);
+    }
+
+    private void bindFlowLocked(String ownerId, String generation, String kind, String code) {
+        requireGenerationLocked(ownerId, generation);
+        writeFlow(ownerId, generation, kind, codeDigest(code));
+    }
+
+    private String requireFlowLocked(String ownerId, String generation, String kind, String code) {
+        String current = requireGenerationLocked(ownerId, generation);
+        try {
+            JsonNode flow = json.readTree(userRoot(ownerId).resolve(".flow.json").toFile());
+            if (!kind.equals(flow.path("kind").asText()) || !codeDigest(code).equals(flow.path("device_code_sha256").asText())) {
+                throw new LarkFlowSupersededException();
+            }
+        } catch (IOException invalid) { throw new LarkFlowSupersededException(); }
+        return current;
+    }
+
+    private static String codeDigest(String code) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(code.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    }
+
+    private void writeFlow(String ownerId, String generation, String kind, String codeHash) {
         try {
             ensureUserTree(ownerId);
             Path target = userRoot(ownerId).resolve(".flow.json");
@@ -816,6 +852,10 @@ public final class LarkIntegrationService {
             try {
                 ObjectNode node = json.createObjectNode();
                 node.put("generation", generation);
+                if (kind != null) {
+                    node.put("kind", kind);
+                    node.put("device_code_sha256", codeHash);
+                }
                 Files.writeString(temporary, json.writeValueAsString(node) + "\n", StandardCharsets.UTF_8);
                 harden(temporary);
                 AtomicMoves.replace(temporary, target);
@@ -923,16 +963,16 @@ public final class LarkIntegrationService {
         environment.put("LARKSUITE_CLI_DATA_DIR", userDataDirectory(ownerId).toString());
         environment.put("LARKSUITE_CLI_NO_UPDATE_NOTIFIER", "1");
         environment.put("LARKSUITE_CLI_NO_SKILLS_NOTIFIER", "1");
-        return environment;
+        return cli.childEnvironment(environment);
     }
 
-    private static Map<String, String> directoriesEnvironment(Path config, Path data) {
+    private Map<String, String> directoriesEnvironment(Path config, Path data) {
         Map<String, String> environment = new LinkedHashMap<>();
         environment.put("LARKSUITE_CLI_CONFIG_DIR", config.toString());
         environment.put("LARKSUITE_CLI_DATA_DIR", data.toString());
         environment.put("LARKSUITE_CLI_NO_UPDATE_NOTIFIER", "1");
         environment.put("LARKSUITE_CLI_NO_SKILLS_NOTIFIER", "1");
-        return environment;
+        return cli.childEnvironment(environment);
     }
 
     private String requireCliPath() {
@@ -999,17 +1039,18 @@ public final class LarkIntegrationService {
     }
 
     private static String authErrorMessage(JsonNode data) {
-        if (data == null) {
-            return null;
-        }
-        JsonNode error = data.get("error");
-        if (error != null && error.isObject()) {
-            String value = firstText(error, "message", "hint", "type");
-            if (value != null) {
-                return value;
-            }
-        }
-        return firstText(data, "message", "msg", "hint");
+        if (data == null) return null;
+        JsonNode error = data.path("error");
+        String code = error.isObject() ? firstText(error, "type", "code", "message") : error.asText("");
+        return safeFailure(code);
+    }
+
+    private static String safeFailure(String diagnostic) {
+        String code = diagnostic == null ? "" : diagnostic.toLowerCase(Locale.ROOT);
+        if (code.contains("denied")) return "Lark authorization was denied.";
+        if (code.contains("expired")) return "Lark authorization expired. Start a new flow.";
+        if (code.contains("scope")) return "Lark authorization has insufficient scope.";
+        return "Lark CLI operation failed. Check the application configuration or reconnect authorization.";
     }
 
     private static String firstText(JsonNode node, String... fields) {
@@ -1040,10 +1081,9 @@ public final class LarkIntegrationService {
     }
 
     private static String clipped(String value) {
-        String single = value == null ? "" : value.replace('\r', ' ').replace('\n', ' ').strip();
-        return single.length() > MAX_CLI_DIAGNOSTIC_CHARS
-                ? single.substring(0, MAX_CLI_DIAGNOSTIC_CHARS) + "..."
-                : single;
+        // CLI output can contain app secrets, access tokens or entire credential documents.
+        // Never project raw stderr/stdout into HTTP, SSE or ordinary logs.
+        return safeFailure(null);
     }
 
     private static void deleteTree(Path path) {

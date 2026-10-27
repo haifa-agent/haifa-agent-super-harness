@@ -45,4 +45,9 @@ public interface LarkCliGateway {
 
     /** Managed binary path directory, used to prepend the child {@code PATH}. */
     Optional<String> managedBinDirectory();
+
+    /** Safe inherited runtime paths plus the caller's owner-specific overlay. */
+    default Map<String, String> childEnvironment(Map<String, String> overlay) {
+        return Map.copyOf(overlay);
+    }
 }

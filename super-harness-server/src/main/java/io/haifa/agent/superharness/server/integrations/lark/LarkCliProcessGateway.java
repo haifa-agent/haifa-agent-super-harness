@@ -17,9 +17,8 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Default {@link LarkCliGateway}: structured {@link ProcessBuilder} argv, bounded output and bounded
- * wall clock. Windows {@code .cmd} shims are launched through {@code cmd.exe} because the OS cannot
- * execute a batch file directly; every element still travels as its own argument, and callers
- * validate user-influenced values before they reach argv.
+ * wall clock. User-influenced arguments reach the native official executable directly. Windows
+ * shell shims are never executed; npm uses its fixed JavaScript entry through native Node.
  */
 public final class LarkCliProcessGateway implements LarkCliGateway {
     static final Duration PROBE_TIMEOUT = Duration.ofSeconds(5);
@@ -48,8 +47,7 @@ public final class LarkCliProcessGateway implements LarkCliGateway {
 
     @Override
     public Optional<String> managedBinDirectory() {
-        Path bin = gatewayCliDirectory.resolve("node_modules").resolve(".bin");
-        return Files.isDirectory(bin) ? Optional.of(bin.toString()) : Optional.empty();
+        return resolveManaged().map(path -> Path.of(path).getParent().toString());
     }
 
     @Override
@@ -67,17 +65,21 @@ public final class LarkCliProcessGateway implements LarkCliGateway {
         if (normalized == null) {
             throw new IllegalArgumentException("Invalid Lark CLI npm version: " + requestedVersion);
         }
-        String npm = which("npm").orElseThrow(() ->
-                new IOException("npm is not available on the Gateway; cannot install managed @larksuite/cli."));
+        List<String> npm = npmCommand();
         Files.createDirectories(gatewayCliDirectory);
-        List<String> argv = List.of(npm, "install", "--prefix", gatewayCliDirectory.toString(),
-                "--no-audit", "--no-fund", LarkSkillCatalog.NPM_PACKAGE + "@" + normalized.substring(1));
-        Map<String, String> environment = childEnvironment(Map.of("npm_config_update_notifier", "false"));
+        List<String> argv = new ArrayList<>(npm);
+        argv.addAll(List.of("install", "--prefix", gatewayCliDirectory.toString(),
+                "--no-audit", "--no-fund", LarkSkillCatalog.NPM_PACKAGE + "@" + normalized.substring(1)));
+        Map<String, String> environment = childEnvironment(Map.of(
+                "npm_config_update_notifier", "false",
+                "npm_config_cache", gatewayCliDirectory.resolve(".npm-cache").toString(),
+                "npm_config_userconfig", gatewayCliDirectory.resolve(".npmrc").toString(),
+                "npm_config_globalconfig", gatewayCliDirectory.resolve(".npm-globalrc").toString()));
         ExecResult result = run(argv, environment, NPM_INSTALL_TIMEOUT, null);
         if (result.exitCode() != 0) {
             String detail = !result.stderr().isBlank() ? result.stderr() : result.stdout();
             throw new IOException("npm install " + LarkSkillCatalog.NPM_PACKAGE + "@" + normalized.substring(1)
-                    + " failed: " + boundedForDiagnostic(detail));
+                    + " failed (exit " + result.exitCode() + ")");
         }
         Optional<String> path = resolveManaged();
         if (path.isEmpty()) {
@@ -97,10 +99,18 @@ public final class LarkCliProcessGateway implements LarkCliGateway {
         if (argv.isEmpty()) {
             throw new IllegalArgumentException("argv must not be empty");
         }
-        List<String> command = wrapForPlatform(argv);
+        String executable = argv.getFirst().toLowerCase(Locale.ROOT);
+        if (executable.endsWith(".cmd") || executable.endsWith(".bat")) {
+            throw new IOException("Shell wrappers are not supported for Lark CLI operations");
+        }
+        List<String> command = new ArrayList<>();
+        command.add(argv.getFirst());
+        for (String argument : argv.subList(1, argv.size())) {
+            command.add(isWindows() ? windowsNativeArgument(argument) : argument);
+        }
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.environment().clear();
-        builder.environment().putAll(environment);
+        builder.environment().putAll(childEnvironment(environment));
         builder.redirectErrorStream(false);
         Process process = builder.start();
         try (OutputStream input = process.getOutputStream()) {
@@ -153,14 +163,22 @@ public final class LarkCliProcessGateway implements LarkCliGateway {
     }
 
     private Optional<String> resolveManaged() {
-        Path bin = gatewayCliDirectory.resolve("node_modules").resolve(".bin");
-        for (String name : executableNames("lark-cli")) {
-            Path candidate = bin.resolve(name);
-            if (Files.isRegularFile(candidate)) {
-                return Optional.of(candidate.toString());
-            }
+        // Official @larksuite/cli scripts/run.js delegates to this installed native payload.
+        Path nativeFile = gatewayCliDirectory.resolve("node_modules/@larksuite/cli/bin")
+                .resolve(isWindows() ? "lark-cli.exe" : "lark-cli");
+        return Files.isRegularFile(nativeFile) ? Optional.of(nativeFile.toString()) : Optional.empty();
+    }
+
+    private List<String> npmCommand() throws IOException {
+        String npm = which("npm").orElse(null);
+        if (npm != null) return List.of(npm);
+        if (isWindows()) {
+            String node = which("node").orElseThrow(() -> new IOException("Node.js is not available on the Gateway"));
+            // npm's fixed distribution entry point; no shell string or user configuration is used.
+            Path entry = Path.of(node).getParent().resolve("node_modules/npm/bin/npm-cli.js");
+            if (Files.isRegularFile(entry)) return List.of(node, entry.toString());
         }
-        return Optional.empty();
+        throw new IOException("npm is not available on the Gateway; cannot install managed @larksuite/cli.");
     }
 
     private Optional<String> which(String executable) {
@@ -189,31 +207,32 @@ public final class LarkCliProcessGateway implements LarkCliGateway {
 
     private static List<String> executableNames(String executable) {
         if (isWindows()) {
-            return List.of(executable + ".cmd", executable + ".exe", executable + ".bat", executable);
+            return List.of(executable + ".exe");
         }
         return List.of(executable);
     }
 
-    private static List<String> wrapForPlatform(List<String> argv) {
-        String executable = argv.get(0);
-        String lower = executable.toLowerCase(Locale.ROOT);
-        if (isWindows() && (lower.endsWith(".cmd") || lower.endsWith(".bat"))) {
-            String commandInterpreter = System.getenv().getOrDefault("ComSpec", "cmd.exe");
-            List<String> wrapped = new ArrayList<>(argv.size() + 3);
-            wrapped.add(commandInterpreter);
-            wrapped.add("/d");
-            wrapped.add("/s");
-            wrapped.add("/c");
-            wrapped.addAll(argv);
-            return wrapped;
+    private static String windowsNativeArgument(String value) {
+        // ProcessBuilder handles whitespace/trailing separators, but its legacy Windows quoting
+        // does not protect embedded quotes. Encode those using the native CRT argv convention.
+        if (!value.contains("\"")) return value;
+        StringBuilder encoded = new StringBuilder();
+        int slashes = 0;
+        for (char character : value.toCharArray()) {
+            if (character == '\\') { slashes++; continue; }
+            encoded.append("\\".repeat(character == '"' ? slashes * 2 + 1 : slashes));
+            encoded.append(character);
+            slashes = 0;
         }
-        return argv;
+        encoded.append("\\".repeat(slashes));
+        return encoded.toString();
     }
 
-    private Map<String, String> childEnvironment(Map<String, String> overlay) {
+    public Map<String, String> childEnvironment(Map<String, String> overlay) {
         java.util.LinkedHashMap<String, String> environment = new java.util.LinkedHashMap<>();
         for (String key : ENVIRONMENT_ALLOWLIST) {
-            String value = processEnvironment.get(key);
+            String value = processEnvironment.entrySet().stream().filter(e -> e.getKey().equalsIgnoreCase(key))
+                    .map(Map.Entry::getValue).findFirst().orElse(null);
             if (value != null) {
                 environment.put(key, value);
             }

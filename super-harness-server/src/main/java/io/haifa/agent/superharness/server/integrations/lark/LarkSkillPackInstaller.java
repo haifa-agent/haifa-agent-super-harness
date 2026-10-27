@@ -157,18 +157,24 @@ public final class LarkSkillPackInstaller {
         if (resolvedVersion == null) {
             throw new IllegalArgumentException("Invalid Lark CLI version tag: " + version);
         }
+        return withInstallLock(() -> installLocked(archive, resolvedVersion, afterReplace));
+    }
+
+    /** The same narrow publication lock also covers CLI preparation and version observation. */
+    <T> T withInstallLock(CheckedSupplier<T> action) throws IOException {
         Object jvmLock = JVM_LOCKS.computeIfAbsent(packRoot.getParent(), ignored -> new Object());
         synchronized (jvmLock) {
             Files.createDirectories(integrationRoot);
             Path lockFile = integrationRoot.resolve(".lark.install.lock");
             try (FileChannel channel = FileChannel.open(lockFile, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
                     FileLock ignored = channel.lock()) {
-                return installLocked(archive, resolvedVersion, afterReplace);
+                return action.get();
             }
         }
     }
 
-    private Installed installLocked(Path archive, String version, CheckedRunnable afterReplace) throws IOException {
+    Installed installLocked(Path archive, String version, CheckedRunnable afterReplace) throws IOException {
+        if (!Files.isRegularFile(archive) || Files.size(archive) > MAX_ARCHIVE_BYTES) throw new IOException("Invalid Lark archive");
         Optional<Manifest> previous = manifest();
         String previousContent = previous.map(Manifest::contentSha256).orElse(null);
 
@@ -185,7 +191,7 @@ public final class LarkSkillPackInstaller {
             validate(stagingTarget, extracted);
             appendGuidance(stagingTarget);
             String contentSha = contentSha256(stagingTarget, extracted);
-            writeManifest(stagingTarget, extracted, version, contentSha);
+            writeManifest(stagingTarget, extracted, version, contentSha, archive);
 
             if (Files.exists(packRoot)) {
                 backup = integrationRoot.resolve(".replacing-lark-" + UUID.randomUUID());
@@ -212,6 +218,9 @@ public final class LarkSkillPackInstaller {
                 // No previous pack to restore: leaving the new bytes behind would expose a pack
                 // whose discovery/reload already failed.
                 deleteQuietly(packRoot);
+                try { afterReplace.run(); } catch (IOException | RuntimeException restoreFailure) {
+                    failure.addSuppressed(restoreFailure);
+                }
             }
             throw failure;
         } finally {
@@ -223,6 +232,14 @@ public final class LarkSkillPackInstaller {
         Set<String> extracted = new TreeSet<>();
         Path root = destination.toRealPath();
         long written = 0;
+        byte[] license = null;
+        for (ZipEntry entry : java.util.Collections.list(zip.entries())) {
+            if (entry.getName().matches("[^/]+/LICENSE")) {
+                try (InputStream input = zip.getInputStream(entry)) { license = input.readNBytes(65537); }
+                if (license.length == 0 || license.length > 65536) throw new IOException("Invalid official Lark license");
+            }
+        }
+        if (license == null) throw new IOException("Official Lark archive license is missing");
         for (ZipEntry entry : java.util.Collections.list(zip.entries())) {
             if (entry.isDirectory()) {
                 continue;
@@ -262,6 +279,8 @@ public final class LarkSkillPackInstaller {
             }
             extracted.add(resolved.skill());
         }
+        Files.write(root.resolve("LICENSE"), license);
+        for (String name : extracted) Files.write(root.resolve(name).resolve("LICENSE.txt"), license);
         return extracted;
     }
 
@@ -323,13 +342,20 @@ public final class LarkSkillPackInstaller {
         return HexFormat.of().formatHex(digest.digest());
     }
 
-    private void writeManifest(Path root, Set<String> skills, String version, String contentSha) throws IOException {
+    private void writeManifest(Path root, Set<String> skills, String version, String contentSha, Path archive) throws IOException {
         ObjectNode manifest = json.createObjectNode();
         manifest.put("provider", "lark-cli");
         manifest.put("version", version);
         manifest.put("source", archiveUrl(version));
         manifest.put("content_sha256", contentSha);
-        manifest.put("license", "See the official larksuite/cli repository LICENSE");
+        manifest.put("license", "See LICENSE and per-package LICENSE.txt");
+        manifest.put("license_sha256", HexFormat.of().formatHex(sha256().digest(Files.readAllBytes(root.resolve("LICENSE")))));
+        MessageDigest archiveDigest = sha256();
+        try (var input = Files.newInputStream(archive)) {
+            byte[] buffer = new byte[8192]; int count;
+            while ((count = input.read(buffer)) >= 0) archiveDigest.update(buffer, 0, count);
+        }
+        manifest.put("archive_sha256", HexFormat.of().formatHex(archiveDigest.digest()));
         manifest.put("platforms", "gateway-host (skill content is platform-neutral)");
         manifest.put("installed_at", Instant.now().toString());
         var names = manifest.putArray("skills");
@@ -477,4 +503,7 @@ public final class LarkSkillPackInstaller {
     public interface CheckedRunnable {
         void run() throws IOException;
     }
+
+    @FunctionalInterface
+    interface CheckedSupplier<T> { T get() throws IOException; }
 }
