@@ -685,13 +685,16 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             throws ConversationException, IOException {
         ThreadRecord thread = requireOwnedThread(threadId);
         String normalized = agentName == null ? "" : agentName.trim().toLowerCase(java.util.Locale.ROOT);
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             Map<String, Object> updated = new LinkedHashMap<>(thread.metadata);
             updated.put(AGENT_NAME_METADATA_KEY, normalized);
             updated.put(AGENT_BOOTSTRAP_METADATA_KEY, bootstrap);
             thread.metadata = Collections.unmodifiableMap(updated);
             thread.updatedAt = Instant.now();
             persistThread(thread);
+        } finally {
+            thread.lock.unlock();
         }
     }
 
@@ -701,24 +704,30 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
      */
     public Optional<String> pinnedAgentName(String threadId) throws ConversationException {
         ThreadRecord thread = requireOwnedThread(threadId);
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             Object value = thread.metadata.get(AGENT_NAME_METADATA_KEY);
             if (!(value instanceof String name) || name.isBlank()) {
                 return Optional.empty();
             }
             return Optional.of(name);
+        } finally {
+            thread.lock.unlock();
         }
     }
 
     /** Read the thread-scoped goal objective, if any. */
     public Optional<String> threadGoal(String threadId) throws ConversationException {
         ThreadRecord thread = requireOwnedThread(threadId);
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             Object value = thread.metadata.get(THREAD_GOAL_METADATA_KEY);
             if (!(value instanceof String objective) || objective.isBlank()) {
                 return Optional.empty();
             }
             return Optional.of(objective);
+        } finally {
+            thread.lock.unlock();
         }
     }
 
@@ -728,19 +737,23 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             throw ConversationException.invalid("Goal objective must not be empty");
         }
         ThreadRecord thread = requireOwnedThread(threadId);
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             Map<String, Object> updated = new LinkedHashMap<>(thread.metadata);
             updated.put(THREAD_GOAL_METADATA_KEY, objective);
             thread.metadata = Collections.unmodifiableMap(updated);
             thread.updatedAt = Instant.now();
             persistThread(thread);
+        } finally {
+            thread.lock.unlock();
         }
     }
 
     /** Clear the thread-scoped goal (DeerFlow {@code /goal clear}). */
     public void clearThreadGoal(String threadId) throws ConversationException, IOException {
         ThreadRecord thread = requireOwnedThread(threadId);
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             if (!thread.metadata.containsKey(THREAD_GOAL_METADATA_KEY)) {
                 return;
             }
@@ -749,6 +762,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             thread.metadata = Collections.unmodifiableMap(updated);
             thread.updatedAt = Instant.now();
             persistThread(thread);
+        } finally {
+            thread.lock.unlock();
         }
     }
 
@@ -781,9 +796,10 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             throw ConversationException.notFound("Thread not found");
         }
         // Serialize with every other thread mutation (state writes, admission, terminal stream
-        // cleanup, title finalizer): they all synchronize on this record, so after this block no
+        // cleanup, title finalizer): they all take this record's lock, so after this block no
         // stale mutation can re-add the retired catalog entry.
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             if (activeRunId(threadId).isPresent()) {
                 throw ConversationException.conflict(
                         "Thread has work in flight. Delete it after the work finishes.");
@@ -797,6 +813,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 ThreadOwners.remember(threadId, thread.ownerId);
                 throw new IllegalStateException("Thread catalog delete failed", failure);
             }
+        } finally {
+            thread.lock.unlock();
         }
         return Map.of("success", true, "message", "Deleted local thread data for " + threadId);
     }
@@ -816,7 +834,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         }
         RunRecord run;
         try {
-            synchronized (thread) {
+            thread.lock.lock();
+            try {
                 restoreDurableAdmission(thread);
                 String runId = thread.activeRunId != null ? thread.activeRunId : thread.latestRunId;
                 if (runId == null) {
@@ -826,6 +845,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 if (run == null) {
                     run = findOrRestoreRun(thread, runId).orElse(null);
                 }
+            } finally {
+                thread.lock.unlock();
             }
         } catch (RuntimeException unavailable) {
             return false;
@@ -898,7 +919,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         }
         RunRecord run;
         try {
-            synchronized (thread) {
+            thread.lock.lock();
+            try {
                 restoreDurableAdmission(thread);
                 String activeRunId = thread.activeRunId;
                 if (activeRunId == null) {
@@ -908,6 +930,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 if (run == null) {
                     run = findOrRestoreRun(thread, activeRunId).orElse(null);
                 }
+            } finally {
+                thread.lock.unlock();
             }
         } catch (RuntimeException unavailable) {
             return Optional.empty();
@@ -970,7 +994,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         // The busy check and the write share the admission lock so a Run cannot start between
         // them; an explicit rename therefore either wins before admission or is rejected with 409.
         final String newTitle = renamed;
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             if (threadStatus(thread).equals("busy")) {
                 throw ConversationException.conflict("Thread has an active run");
             }
@@ -979,6 +1004,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 thread.updatedAt = Instant.now();
                 persistThread(thread);
             }
+        } finally {
+            thread.lock.unlock();
         }
         return threadStateResponse(thread, THREAD_STATE_MAX_TURNS);
     }
@@ -1199,7 +1226,10 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     private void projectMessageRows(ThreadRecord thread, List<DisplayTurn> turns,
             Map<Long, Integer> ordinals, FeedRows output) {
         List<PersistentThreadCatalog.InteractionDisplay> displays;
-        synchronized (thread) { displays = List.copyOf(thread.interactionDisplays); }
+        thread.lock.lock();
+        try { displays = List.copyOf(thread.interactionDisplays); } finally {
+            thread.lock.unlock();
+        }
         Map<Long, List<PersistentThreadCatalog.InteractionDisplay>> anchored = new HashMap<>();
         Set<String> anchoredRequests = new HashSet<>();
         for (var display : displays) {
@@ -1439,13 +1469,16 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             for (ToolCallView call : rounds.get(index).calls()) roundByCall.put(call.id().value(), index);
         }
         Map<Integer, List<PersistentThreadCatalog.InteractionDisplay>> cardsByRound = new HashMap<>();
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             for (var display : thread.interactionDisplays) {
                 if (display.runId().equals(runId.value())) {
                     cardsByRound.computeIfAbsent(roundByCall.getOrDefault(display.toolCallId(), 0),
                             ignored -> new ArrayList<>()).add(display);
                 }
             }
+        } finally {
+            thread.lock.unlock();
         }
         long slot = 0;
         for (int index = 0; index < rounds.size(); index++) {
@@ -1622,7 +1655,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         ProjectionCursor steerCursor = null;
         RunRecord synchronizedInputRun = null;
         if (runInput != null) {
-            synchronized (thread) {
+            thread.lock.lock();
+            try {
                 restoreDurableAdmission(thread);
                 if (thread.activeRunId != null) {
                     synchronizedInputRun = runs.get(thread.activeRunId);
@@ -1630,6 +1664,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                         synchronizedInputRun = findOrRestoreRun(thread, thread.activeRunId).orElse(null);
                     }
                 }
+            } finally {
+                thread.lock.unlock();
             }
             if (synchronizedInputRun != null) {
                 try {
@@ -1641,7 +1677,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 }
             }
         }
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             restoreDurableAdmission(thread);
             if (clarificationAck != null && clarificationAlreadyAnswered(thread, clarificationAck.requestId())) {
                 throw ConversationException.conflict("Interaction response already accepted");
@@ -1867,6 +1904,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             }
             persistThread(thread);
             }
+        } finally {
+            thread.lock.unlock();
         }
         if (steerRun != null) {
             return new AdmittedTurn(
@@ -1901,7 +1940,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         RunRecord run;
         ProjectionCursor responseCursor;
         boolean presentationDegraded = false;
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             restoreDurableAdmission(thread);
             String candidateRunId = thread.activeRunId != null
                     ? thread.activeRunId
@@ -1927,6 +1967,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                     && !thread.modelBindingIdentity.equals(run.bridge.bindingIdentity())) {
                 throw ConversationException.conflict("Pending Run model is unavailable");
             }
+        } finally {
+            thread.lock.unlock();
         }
         // Restore pre-response durable events before accepting the reply, without holding the
         // Thread monitor needed by attached stream writers. Admission is revalidated below.
@@ -1935,7 +1977,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         } catch (EventProjectionException terminalRace) {
             throw ConversationException.conflict("Run is no longer accepting an Interaction response");
         }
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             if (!pendingPromptAvailable(thread, run)) {
                 throw ConversationException.conflict("Pending Run prompt or agent identity is unavailable");
             }
@@ -2053,6 +2096,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                     thread.updatedAt = Instant.now();
                 }
             }
+        } finally {
+            thread.lock.unlock();
         }
 
         return new AdmittedTurn(
@@ -2329,8 +2374,11 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     HaifaRunBridge currentBridge(String threadId) {
         ThreadRecord thread = threads.get(threadId);
         if (thread == null) return null;
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             return thread.bridge;
+        } finally {
+            thread.lock.unlock();
         }
     }
 
@@ -2366,7 +2414,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             HaifaRunBridge bridge = newBackgroundBridge(binding, thread, tools, agentPrompt);
             HaifaRunBridge.StartedRun started;
             RunRecord run;
-            synchronized (thread) {
+            thread.lock.lock();
+            try {
                 restoreDurableAdmission(thread);
                 if (activeRunInFlight(thread)) {
                     // A background scheduled Run must never replace an active Run on the same
@@ -2414,6 +2463,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                     ADMISSION_LOG.log(System.Logger.Level.WARNING,
                             "scheduled Run thread could not be persisted");
                 }
+            } finally {
+                thread.lock.unlock();
             }
             ownedBridges.add(bridge);
             backgroundBridges.put(started.runId().value(), bridge);
@@ -2750,7 +2801,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     }
 
     private void persistThread(ThreadRecord thread) throws IOException {
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             // A thread retired by DELETE must not be resurrected by a late mutation that still holds
             // its record (title finalizer, terminal stream cleanup, background admission).
             if (threads.get(thread.threadId) != thread) {
@@ -2766,6 +2818,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                     thread.interactionDisplays,
                     thread.clarificationDisplays,
                     thread.ownerId));
+        } finally {
+            thread.lock.unlock();
         }
     }
 
@@ -2795,7 +2849,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             return;
         }
         run.clarificationObserved = true;
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             try {
                 ensureSavedClarificationDisplay(thread, run, boundary, payload);
             } catch (IOException | IllegalArgumentException failed) {
@@ -2805,6 +2860,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                                 + DeerFlowToolTranscriptProjection.clarificationRequestId(boundary, payload)
                                 + " cause=" + failed.getClass().getSimpleName());
             }
+        } finally {
+            thread.lock.unlock();
         }
         try {
             if (!run.bridge.snapshot(run.runId).status().isTerminal()) {
@@ -2917,7 +2974,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         if (runId == null) {
             return;
         }
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             for (var display : thread.clarificationDisplays) {
                 if (runId.equals(display.answeredRunId()) && display.answeredKind() != null) {
                     Map<String, Object> additional = new LinkedHashMap<>();
@@ -2927,6 +2985,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                     return;
                 }
             }
+        } finally {
+            thread.lock.unlock();
         }
     }
 
@@ -3480,7 +3540,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             Map<String, String> projectedToolMessages)
             throws IOException {
         Map<String, Object> requestMessage;
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             synchronized (run) {
                 Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
                 if (pending.isEmpty()
@@ -3522,6 +3583,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 run.interactionRequestMessage = requestMessage(display);
                 requestMessage = run.interactionRequestMessage;
             }
+        } finally {
+            thread.lock.unlock();
         }
         writeToolRequestIfAvailable(sink, run, null, projectedToolMessages);
         sink.event(
@@ -4696,10 +4759,13 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
      */
     private Set<String> clarificationRunIds(ThreadRecord thread) {
         Set<String> runIds = new HashSet<>();
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             for (var display : thread.clarificationDisplays) {
                 runIds.add(display.runId());
             }
+        } finally {
+            thread.lock.unlock();
         }
         for (RunRecord run : runs.values()) {
             if (run.threadId.equals(thread.threadId) && runHasClarificationBoundary(run)) {
@@ -4973,7 +5039,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             }
         }
         Map<Integer, List<Map<String, Object>>> byRound = new LinkedHashMap<>();
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             if (run != null) {
                 synchronized (run) {
                     adoptPendingInteractionCard(thread, run, runId);
@@ -4988,6 +5055,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 bucket.add(requestMessage(display));
                 if (display.answeredOption() != null) bucket.add(responseMessage(display));
             }
+        } finally {
+            thread.lock.unlock();
         }
         if (run != null) {
             synchronized (run) {
@@ -5923,13 +5992,16 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 || !generatedFromLoneDurableUserTurn(thread, run)) {
             return;
         }
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             if (thread.title() != null) {
                 return;
             }
             thread.setTitle(fallbackTitle(run.humanMessage));
             thread.updatedAt = Instant.now();
             runBestEffort(run.runId.value(), () -> persistThread(thread));
+        } finally {
+            thread.lock.unlock();
         }
     }
 
