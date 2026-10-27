@@ -37,6 +37,8 @@ public final class SkillConfigStore {
     private static final String MANIFEST = "third-party/deerflow/skills/manifest.json";
     private static final System.Logger RECOVERY_LOG =
             System.getLogger(SkillConfigStore.class.getName() + ".recovery");
+    private static final System.Logger MANAGED_LOG =
+            System.getLogger(SkillConfigStore.class.getName() + ".managed-integration");
     /** Bounded length of a persisted Skill name echoed into a recovery diagnostic. */
     private static final int DIAGNOSTIC_NAME_LENGTH = 64;
 
@@ -53,6 +55,7 @@ public final class SkillConfigStore {
     private final ObjectMapper json;
     private final Path repositoryRoot;
     private final Path externalSkillsDirectory;
+    private final Path managedIntegrationsRoot;
     private final Path stateFile;
     private final CustomSkillPackages custom;
     private volatile State state;
@@ -65,6 +68,10 @@ public final class SkillConfigStore {
         this.json = json;
         this.repositoryRoot = repositoryRoot.toAbsolutePath().normalize();
         this.externalSkillsDirectory = externalSkillsDirectory != null ? externalSkillsDirectory.toAbsolutePath().normalize() : null;
+        // Product-managed first-party integration packs (today: the official Lark office pack).
+        // They are discovered through this same store; no parallel Skill registry exists.
+        this.managedIntegrationsRoot = dataDirectory.toAbsolutePath().normalize()
+                .resolve("integrations").resolve("lark").resolve("skills");
         this.stateFile = dataDirectory.toAbsolutePath().normalize().resolve("skills_config.json");
         this.custom = new CustomSkillPackages(json, dataDirectory);
         reload();
@@ -210,6 +217,17 @@ public final class SkillConfigStore {
             packages.add(overrides.contains(pkg.name()) ? new SkillRunTools.Package(pkg.name(), pkg.description(), pkg.category(),
                     pkg.license(), pkg.sourceName(), pkg.sourceSha(), pkg.version(), pkg.contentHash(), false,
                     pkg.enabledByDefault(), pkg.source()) : pkg);
+        }
+        Set<String> knownNames = packages.stream().map(SkillRunTools.Package::name)
+                .collect(java.util.stream.Collectors.toSet());
+        for (SkillRunTools.Package managed : loadManagedIntegrationSkills()) {
+            if (knownNames.add(managed.name())) {
+                packages.add(managed);
+            } else {
+                MANAGED_LOG.log(System.Logger.Level.WARNING,
+                        "Managed integration Skill ignored because its name is already registered: "
+                                + managed.name());
+            }
         }
         packages.addAll(users);
         Map<String, Boolean> enabled = readEnabled(packages, config);
@@ -591,6 +609,54 @@ public final class SkillConfigStore {
             }
         }
         return List.copyOf(result);
+    }
+
+    /**
+     * First-party integration packs materialized by a product installer (today the official Lark
+     * office pack). Discovery uses this store's parser and loader; no enable state, name map or
+     * lifecycle is duplicated here. An unreadable pack stays inactive instead of failing startup,
+     * so a corrupted pack surfaces as "not installed" and a reinstall repairs it.
+     */
+    private List<SkillRunTools.Package> loadManagedIntegrationSkills() {
+        if (managedIntegrationsRoot == null || !Files.isDirectory(managedIntegrationsRoot)) {
+            return List.of();
+        }
+        List<SkillRunTools.Package> result = new ArrayList<>();
+        try (var entries = Files.list(managedIntegrationsRoot)) {
+            for (Path directory : entries.filter(Files::isDirectory).sorted().toList()) {
+                String directoryName = directory.getFileName().toString();
+                if (!directoryName.matches("[a-z][a-z0-9-]{0,62}")) continue;
+                if (!Files.isRegularFile(directory.resolve("SKILL.md"))) continue;
+                try {
+                    Map<String, byte[]> files = SkillPackageFiles.directory(directory);
+                    String digest = SkillPackageFiles.digest(files);
+                    files = normalizedExternalFiles(directory, files);
+                    SkillSourceDescriptor descriptor = externalDescriptor(directoryName, digest);
+                    SkillPackageParser parser = externalParser();
+                    var parsed = parser.parseFiles(directoryName, files, descriptor);
+                    if (parsed.parsed().isEmpty()) {
+                        throw new IOException("Managed integration Skill failed parsing: " + directoryName);
+                    }
+                    var metadata = parsed.parsed().orElseThrow().metadata();
+                    String name = SkillPackageFiles.name(metadata.name().value());
+                    boolean hasScripts = files.keySet().stream().anyMatch(path -> path.startsWith("scripts/"));
+                    String license = metadata.license().orElse(
+                            files.containsKey("LICENSE.txt") ? "See package LICENSE.txt" : "");
+                    result.add(new SkillRunTools.Package(name, metadata.description(), "integration", license,
+                            "integration-managed", "sha256:" + digest, "sha256:" + digest,
+                            SkillPackageFiles.hash(files.get("SKILL.md")), true, !hasScripts,
+                            new io.haifa.agent.skill.core.InMemorySkillSource(descriptor, parser,
+                                    SkillAvailability.ENABLED, Map.of(directoryName, files))));
+                } catch (IOException | RuntimeException invalid) {
+                    MANAGED_LOG.log(System.Logger.Level.WARNING,
+                            "Managed integration Skill is unreadable and stays inactive: " + directoryName);
+                }
+            }
+        } catch (IOException unavailable) {
+            MANAGED_LOG.log(System.Logger.Level.WARNING,
+                    "Managed integration Skill directory is unavailable: " + managedIntegrationsRoot);
+        }
+        return result;
     }
 
     private SkillRunTools.Package externalPackage(String directory, String digest, Map<String, byte[]> files,
