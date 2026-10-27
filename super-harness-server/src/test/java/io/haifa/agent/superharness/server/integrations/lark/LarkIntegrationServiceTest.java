@@ -300,6 +300,106 @@ class LarkIntegrationServiceTest {
     }
 
     @Test
+    void optionalExpiryUsesFrozenFortyFiveSecondBudget() {
+        cli.makeAvailable("1.0.65");
+        for (Integer expiry : java.util.Arrays.asList(null, 0)) {
+            registration.pending(1); registration.approved("cli_alice", "fixture-secret", "feishu");
+            var start = service.startConfig("alice", "feishu");
+            long before = clock.nanoTime();
+            assertThat(service.completeConfig("alice", start.deviceCode(), start.generation(), "feishu", null, expiry).success()).isTrue();
+            assertThat(clock.nanoTime() - before).isEqualTo(java.time.Duration.ofSeconds(5).toNanos());
+        }
+        var start = service.startConfig("alice", "feishu"); long before = clock.nanoTime();
+        assertThatThrownBy(() -> service.completeConfig("alice", start.deviceCode(), start.generation(), "feishu", null, null))
+                .isInstanceOf(LarkTimeoutException.class);
+        assertThat(clock.nanoTime() - before).isEqualTo(java.time.Duration.ofSeconds(45).toNanos());
+    }
+
+    @Test
+    void stalledOldPollDoesNotBlockNewFlowAndCannotOverwriteNewCredentials() throws Exception {
+        cli.makeAvailable("1.0.65");
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        LarkAppRegistration stalled = new LarkAppRegistration() {
+            public Begin begin(String brand) { return registration.begin(brand); }
+            public String latestCliVersion() { return "v1.0.65"; }
+            public PollOutcome pollOnce(String code, String brand) {
+                entered.countDown();
+                try { if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("poll release deadline"); }
+                catch (InterruptedException e) { throw new AssertionError(e); }
+                return PollOutcome.approved(new Poll("cli_old", "old-secret", "feishu"));
+            }
+        };
+        var concurrent = new LarkIntegrationService(json, dataDirectory, skills,
+                new LarkSkillPackInstaller(json, service.integrationRoot()), cli, stalled, archives, clock::nanoTime, clock::sleep);
+        var first = concurrent.startConfig("alice", "feishu");
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var old = executor.submit(() -> concurrent.completeConfig("alice", first.deviceCode(), first.generation(), "feishu", 5, 600));
+            assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            var switched = executor.submit(() -> concurrent.switchCredentials("alice", "cli_new", "new-secret", "feishu"));
+            assertThat(switched.get(3, java.util.concurrent.TimeUnit.SECONDS).status().appId()).isEqualTo("cli_new");
+            release.countDown();
+            assertThatThrownBy(() -> old.get(3, java.util.concurrent.TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(LarkFlowSupersededException.class);
+            assertThat(concurrent.status("alice").appId()).isEqualTo("cli_new");
+        } finally { release.countDown(); }
+    }
+
+    @Test
+    void existingOwnerResourcesRejectCrossedDeviceCodesAndSurviveRestart() throws Exception {
+        cli.makeAvailable("1.0.65");
+        service.switchCredentials("alice", "cli_alice", "secret-a", "feishu");
+        service.switchCredentials("bob", "cli_bob", "secret-b", "feishu");
+        byte[] victim = Files.readAllBytes(service.userConfigDirectory("bob").resolve("config.json"));
+        registration.begin("A", "device-a"); var alice = service.startConfig("alice", "feishu");
+        registration.begin("B", "device-b"); var bob = service.startConfig("bob", "feishu");
+        assertThatThrownBy(() -> service.completeConfig("alice", bob.deviceCode(), alice.generation(), "feishu", 5, 600))
+                .isInstanceOf(LarkFlowSupersededException.class);
+        assertThatThrownBy(() -> service.completeAuth("alice", alice.deviceCode(), alice.generation(), 5))
+                .isInstanceOf(LarkFlowSupersededException.class);
+        assertThat(Files.readAllBytes(service.userConfigDirectory("bob").resolve("config.json"))).isEqualTo(victim);
+        assertThat(Files.readString(service.userRoot("alice").resolve(".flow.json"))).doesNotContain("device-a");
+        var restarted = service(new SkillConfigStore(json, dataDirectory, SkillConfigStore.repositoryRootFromWorkingDirectory()),
+                cli, registration, archives, clock);
+        registration.approved("cli_alice_new", "new-secret-a", "feishu");
+        assertThat(restarted.completeConfig("alice", alice.deviceCode(), alice.generation(), "feishu", 5, 600).success()).isTrue();
+        assertThat(restarted.status("bob").appId()).isEqualTo("cli_bob");
+    }
+
+    @Test
+    void sharedCliPreparationAndPackPublicationAreSerializedAcrossServiceInstances() throws Exception {
+        var active = new java.util.concurrent.atomic.AtomicInteger();
+        var maximum = new java.util.concurrent.atomic.AtomicInteger();
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var work = new ArrayList<Callable<LarkIntegrationService.InstallResult>>();
+            for (int index = 0; index < 4; index++) {
+                FakeCli local = new FakeCli(false);
+                LarkCliGateway guarded = new LarkCliGateway() {
+                    public Probe probe() { return local.probe(); }
+                    public Probe ensureManaged(String version) throws java.io.IOException {
+                        int inFlight = active.incrementAndGet(); maximum.accumulateAndGet(inFlight, Math::max);
+                        calls.incrementAndGet();
+                        try {
+                            Thread.sleep(40);
+                            return local.ensureManaged(version);
+                        } catch (InterruptedException failure) { throw new java.io.IOException(failure); }
+                        finally { active.decrementAndGet(); }
+                    }
+                    public ExecResult run(List<String> argv, java.util.Map<String, String> env, java.time.Duration timeout, String stdin)
+                            throws java.io.IOException { return local.run(argv, env, timeout, stdin); }
+                    public java.util.Optional<String> managedBinDirectory() { return local.managedBinDirectory(); }
+                };
+                var other = new LarkIntegrationService(json, dataDirectory, skills,
+                        new LarkSkillPackInstaller(json, service.integrationRoot()), guarded, registration, archives, clock::nanoTime, clock::sleep);
+                work.add(() -> other.install("alice"));
+            }
+            for (var result : executor.invokeAll(work)) assertThat(result.get().status().skillsInstalled()).isEqualTo(27);
+        }
+        assertThat(calls).hasValue(4); assertThat(maximum).hasValue(1);
+    }
+
+    @Test
     void concurrentInstallsRemainConsistent() throws Exception {
         archives.archive(LarkIntegrationFakes.archive(dataDirectory.resolve("fixture-concurrent.zip"), "v1.0.65",
                 LarkIntegrationFakes.allNames(), null));

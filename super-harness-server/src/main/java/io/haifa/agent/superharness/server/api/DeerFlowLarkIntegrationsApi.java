@@ -121,8 +121,11 @@ final class DeerFlowLarkIntegrationsApi implements HttpHandler {
                         return;
                     }
                     JsonNode body = body(exchange);
-                    boolean recommend = body.path("recommend").isBoolean() && body.path("recommend").asBoolean();
+                    boolean recommend = optionalBoolean(body, "recommend");
                     List<String> domains = stringList(body, "domains");
+                    if (body.hasNonNull("scope") && !body.path("scope").isTextual()) {
+                        throw new BodyFailure("scope must be a string or null");
+                    }
                     String scope = body.path("scope").isTextual() ? body.path("scope").asText() : null;
                     String generation = body.hasNonNull("generation") ? generation(body) : null;
                     send(exchange, 200, authStart(
@@ -165,10 +168,10 @@ final class DeerFlowLarkIntegrationsApi implements HttpHandler {
         } catch (IllegalArgumentException invalid) {
             send(exchange, 400, Map.of("detail", message(invalid.getMessage())));
         } catch (IOException failure) {
-            LOG.log(System.Logger.Level.ERROR, "Lark integration request failed: " + path, failure);
+            LOG.log(System.Logger.Level.ERROR, "Lark integration request failed: " + path + " (" + failure.getClass().getSimpleName() + ")");
             send(exchange, 500, Map.of("detail", routeFailureDetail(path)));
         } catch (RuntimeException failure) {
-            LOG.log(System.Logger.Level.ERROR, "Lark integration request failed: " + path, failure);
+            LOG.log(System.Logger.Level.ERROR, "Lark integration request failed: " + path + " (" + failure.getClass().getSimpleName() + ")");
             send(exchange, 500, Map.of("detail", routeFailureDetail(path)));
         }
     }
@@ -317,7 +320,7 @@ final class DeerFlowLarkIntegrationsApi implements HttpHandler {
 
     private static List<String> stringList(JsonNode body, String field) {
         JsonNode value = body.get(field);
-        if (value == null || value.isNull()) {
+        if (value == null) {
             return List.of();
         }
         if (!value.isArray()) {
@@ -331,6 +334,17 @@ final class DeerFlowLarkIntegrationsApi implements HttpHandler {
             result.add(entry.asText());
         }
         return result;
+    }
+
+    private static boolean optionalBoolean(JsonNode body, String field) {
+        JsonNode value = body.get(field);
+        if (value == null) return false;
+        if (value.isBoolean()) return value.asBoolean();
+        // Match the frozen Pydantic bool coercions without silently dropping malformed values.
+        String text = value.isTextual() || value.isNumber() ? value.asText().toLowerCase(java.util.Locale.ROOT) : "";
+        if (List.of("1", "true", "t", "yes", "y", "on").contains(text)) return true;
+        if (List.of("0", "false", "f", "no", "n", "off").contains(text)) return false;
+        throw new BodyFailure(field + " must be a boolean");
     }
 
     private static String routeFailureDetail(String path) {

@@ -40,7 +40,7 @@ public final class LarkIntegrationFakes {
     public static final class FakeCli implements LarkCliGateway {
         private final List<Call> calls = Collections.synchronizedList(new ArrayList<>());
         private volatile boolean available;
-        private volatile String path = "C:/fake/lark-cli.cmd";
+        private volatile String path = "C:/fake/lark-cli.exe";
         private volatile String version = "1.0.65";
         private volatile int authStatusExit;
         private volatile String authStatusJson = "{\"identities\":{\"user\":{\"userName\":\"Fake User\"}}}";
@@ -233,6 +233,9 @@ public final class LarkIntegrationFakes {
         Files.createDirectories(target.getParent());
         String tag = version.startsWith("v") ? version.substring(1) : version;
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(target))) {
+            zip.putNextEntry(new ZipEntry("cli-" + tag + "/LICENSE"));
+            zip.write("MIT License - controlled test fixture".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
             for (String name : names) {
                 String body = """
                         ---

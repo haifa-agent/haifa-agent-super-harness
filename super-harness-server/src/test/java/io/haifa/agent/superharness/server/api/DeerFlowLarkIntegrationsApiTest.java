@@ -115,7 +115,7 @@ class DeerFlowLarkIntegrationsApiTest {
         assertThat(user.path("sandbox_runtime_detail").asText()).isNotBlank();
 
         JsonNode admin = json.readTree(request("GET", "/api/integrations/lark/status", null, null, null).body());
-        assertThat(admin.path("cli").path("path").asText()).isEqualTo("C:/fake/lark-cli.cmd");
+        assertThat(admin.path("cli").path("path").asText()).isEqualTo("C:/fake/lark-cli.exe");
         assertThat(admin.path("install_path").asText()).contains("integrations");
     }
 
@@ -202,6 +202,43 @@ class DeerFlowLarkIntegrationsApiTest {
         assertThat(missingCli.statusCode()).isEqualTo(404);
         assertThat(json.readTree(missingCli.body()).path("detail").asText())
                 .contains("lark-cli is not installed on the Gateway");
+    }
+
+    @Test
+    void malformedAuthFieldsReturn422BeforeCliOrGenerationMutation() throws Exception {
+        cli.makeAvailable("1.0.65");
+        service.switchCredentials("alice", "cli_alice", "secret", "feishu");
+        Path flow = service.userRoot("alice").resolve(".flow.json");
+        byte[] before = java.nio.file.Files.readAllBytes(flow);
+        int calls = cli.calls().size();
+        for (String payload : java.util.List.of("{\"recommend\":{}}", "{\"recommend\":null}",
+                "{\"scope\":[]}", "{\"domains\":null}", "{\"domains\":[1]}")) {
+            assertThat(request("POST", "/api/integrations/lark/auth/start", payload, "alice", "user").statusCode()).isEqualTo(422);
+        }
+        assertThat(cli.calls()).hasSize(calls);
+        assertThat(java.nio.file.Files.readAllBytes(flow)).isEqualTo(before);
+        assertThat(request("POST", "/api/integrations/lark/auth/start", "{\"scope\":null,\"recommend\":\"yes\"}", "alice", "user").statusCode()).isEqualTo(200);
+    }
+
+    @Test
+    void authCompleteRedactsPathsAndNeverEchoesTokenBearingFailureOutput() throws Exception {
+        cli.makeAvailable("1.0.65");
+        service.switchCredentials("alice", "cli_alice", "known-app-secret", "feishu");
+        JsonNode start = json.readTree(request("POST", "/api/integrations/lark/auth/start", "{}", "alice", "user").body());
+        String payload = json.writeValueAsString(java.util.Map.of("device_code", start.path("device_code").asText(),
+                "generation", start.path("generation").asText(), "wait_timeout_seconds", 5));
+        HttpResponse<String> response = request("POST", "/api/integrations/lark/auth/complete", payload, "alice", "user");
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        JsonNode status = json.readTree(response.body()).path("status");
+        assertThat(status.path("cli").path("path").isNull()).isTrue();
+        assertThat(status.path("install_path").asText()).isEmpty();
+        assertThat(status.path("auth").path("verified").asBoolean()).isTrue();
+        cli.authStatus(1, "{\"error\":{\"message\":\"known-app-secret access_token=known-access-token\"}}");
+        response = request("GET", "/api/integrations/lark/status", null, "alice", "user");
+        assertThat(response.body()).doesNotContain("known-app-secret", "known-access-token");
+        JsonNode failed = json.readTree(response.body()).path("auth");
+        assertThat(failed.path("verified").asBoolean()).isFalse();
+        assertThat(failed.path("status").asText()).isEqualTo("not_authorized");
     }
 
     @Test
