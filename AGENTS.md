@@ -288,6 +288,9 @@ try {
 
 ### SHPM 写入与文件工具
 
+- 远程 SHPM 的 Windows worktree 派工路径：`task dispatch --dry-run --json` 若把 `D:/...` 解析成服务端 `/root/app/shpm/D:\...`，该 dry-run 不可执行为真实派工。保留原输出，先在本机核对实际 branch/SHA、提示词、完整槽位端口绑定和独立 data-root，再用原生 `task start` + `assign create`（显式 repo/worktree/base-sha/slot/data-root）登记，并回读路径；不切换旧本地库、不改数据库、不伪造服务器 worktree、不用 `--no-check-paths` 跳过核对。第二步失败时立即保留错误并将该任务标为 blocked，不能留下无人执行的 developing 记录。这个兼容操作只用于已确认的跨宿主路径解析缺陷，正常派工仍用复合 dispatch。
+- 新 worktree 生成 SDK API 摘要前先创建其 `local-tmp/` 目录并验证 `git check-ignore -v local-tmp`。目录尚不存在时，末尾斜杠忽略规则可能未匹配，摘要入口会报 local-tmp 未忽略并拒绝写入；不因此修改全局 Git 配置或跟踪生成的 SDK 摘要。
+
 - SHPM 正文含非 ASCII 时不要经命令行参数或 PowerShell 管道传递。症状：`shpm issue add --detail '<中文>'`，
   或 `shpm ... --json | python -c ...` 回读时出现 `'�\udc80'`、孤立代理字符或乱码，看起来像数据库被写坏；
   实际是命令行/控制台编码转换。检查：在**一个** Python 进程里
