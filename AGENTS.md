@@ -218,6 +218,12 @@ corepack pnpm install --offline --frozen-lockfile
 - 进程退出后的 `LISTEN` 残留：Windows 子进程 `waitFor` 完成且 `isAlive=false` 后，TCP 栈仍可能短暂保留该已退出 PID 的 `LISTEN`，同端口即时 `ServerSocket.bind` 会失败；不能把数秒后的空表或客户端 `TIME_WAIT` 倒推成失败瞬间的原因。验收停止阶段须在原有共享停止 deadline 内等待**同一精确端口的默认 loopback bind 实际成功**，记录首次 bind 错误、原生 TCP 状态、探测次数和释放耗时；超时仍 FAIL。不得延长原停止预算、启用 `SO_REUSEADDR` 掩盖占用、换端口、跳过绑定断言或把资源释放探测冒充功能重试。诊断只记录状态、PID 与端口，不记录请求、凭据或内容。
 - W05 测试的固定端口：`W05ExactGatewayProcessRestartApprovalTest` 默认使用 `20618`，与槽位 1 的 Gateway 相同。槽位 1 有任务运行时跑全仓门禁，用例入口 `requirePortAvailable` 会抛 `Address already in use`；事后 `Get-NetTCPConnection -LocalPort 20618` 为空不能倒推当时未占用。处理：在启动门禁的同一 PowerShell 会话把进程变量 `HAIFA_SUPER_HARNESS_W05_TEST_GATEWAY_PORT` 设为本 worktree 所分配槽位的 Gateway 端口（例如槽位 4 为 `11618`），测试的两个精确 Gateway 进程共用该端口；主检出没有槽位，由主控指定一个当时空闲槽位的 Gateway 端口。设置前先停止本槽位自己的服务并对该端口做 loopback bind 预检。不得停止其它工作包的服务或占用主服务端口；结束后确认端口释放。
 
+### systemd 单元与 drop-in
+
+- 症状：`journalctl -u super-harness-gateway` 出现 `20-skill-python.conf:1: Assignment outside of section. Ignoring.`，`systemctl show super-harness-gateway -p Environment` 缺少目标变量，进程 `/proc/<pid>/environ` 中也没有该键。
+- 根因：drop-in 文件只有 `Environment=...` 而缺少 `[Service]` 段，systemd 会整行忽略。检查：`systemctl cat super-harness-gateway`、`cat /etc/systemd/system/super-harness-gateway.service.d/*.conf`、`systemctl show super-harness-gateway -p Environment`。
+- 最小修复：drop-in 补写 `[Service]` 段后执行 `systemctl daemon-reload`；产品配置优先写 `config/gateway.env`（`install-service.py` 会保留 operator 额外键），drop-in 属于重复配置。验证：`systemctl show ... -p Environment` 与 `/proc/<MainPID>/environ` 均出现该键，重启后不再出现上述 warning。
+
 ### 凭据与数据目录
 
 - 临时 HTTP 测试的 OS 凭据累积：本机普通 `GatewayFixture.production` 曾持续报 `CredWrite failed with error 8 (STORE_FAILURE)`，单类复验也失败；不能仅据错误码断言物理内存不足或随意清理凭据。普通测试使用 `GatewayFixture.productionEnvironment` 的显式测试环境密钥，保留调用方显式引用；默认 OS 首次配置、丢失与重启由 `ContinuationKeyConfigurationTest` 验证。检查：`pwsh -NoProfile -File scripts/test-targeted.ps1 -Test "PlanModeLifecycleHttpTest,ContinuationKeyConfigurationTest,AcceptanceFixturesTest" -LowMemory`；只输出凭据存在性和计数，不输出值，不删已有数据库或主服务凭据。
