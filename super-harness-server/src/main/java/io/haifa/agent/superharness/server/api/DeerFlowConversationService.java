@@ -87,6 +87,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
 import java.util.function.Consumer;
@@ -2194,7 +2195,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     }
 
     private HaifaRunBridge bridgeForPersistedThread(ThreadRecord thread) {
-        synchronized (thread) {
+        thread.lock.lock();
+        try {
             if (thread.bridge != null) return thread.bridge;
             HaifaRunBridge.ModelBinding binding = null;
             String lastBinding = thread.modelBindingIdentity;
@@ -2243,6 +2245,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             // so a pending Run resumes with its own model after a gateway restart.
             attachBridge(thread, bridge, claimBinding);
             return bridge;
+        } finally {
+            thread.lock.unlock();
         }
     }
 
@@ -3164,12 +3168,15 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             run.observerLeft(observer);
             connectionLiveValues.close();
             observeClarificationBoundary(thread, run);
-            synchronized (thread) {
+            thread.lock.lock();
+            try {
                 boolean terminal = isKnownTerminal(() -> Optional.of(run.bridge.snapshot(run.runId)));
                 if (terminal && run.runId.value().equals(thread.activeRunId)) {
                     thread.activeRunId = null;
                 }
                 thread.updatedAt = Instant.now();
+            } finally {
+                thread.lock.unlock();
             }
             if (isKnownTerminal(() -> run.bridge.findRun(run.runId))) {
                 ClarificationBoundaryRegistry.clear(run.runId.value());
@@ -5722,7 +5729,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         List<ThreadSnapshot> modified = new ArrayList<>();
         try {
             for (ThreadRecord record : threads.values()) {
-                synchronized (record) {
+                record.lock.lock();
+                try {
                     if (projectId.equals(record.metadata.get("deerflow_project_id"))
                             || projectId.equals(record.metadata.get("project_id"))) {
                         modified.add(new ThreadSnapshot(record, record.metadata, record.updatedAt));
@@ -5733,12 +5741,15 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                         record.updatedAt = Instant.now();
                         persistThread(record);
                     }
+                } finally {
+                    record.lock.unlock();
                 }
             }
         } catch (Exception failure) {
             for (int i = modified.size() - 1; i >= 0; i--) {
                 ThreadSnapshot snap = modified.get(i);
-                synchronized (snap.record) {
+                snap.record.lock.lock();
+                try {
                     snap.record.metadata = snap.metadata;
                     snap.record.updatedAt = snap.updatedAt;
                     try {
@@ -5747,6 +5758,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                         INTERACTION_LOG.log(System.Logger.Level.WARNING,
                                 "Failed to rollback thread unbind persistence for " + snap.record.threadId, rollbackError);
                     }
+                } finally {
+                    snap.record.lock.unlock();
                 }
             }
             if (failure instanceof IOException ioException) {
@@ -5757,7 +5770,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     }
 
     private String threadStatus(ThreadRecord record) {
-        synchronized (record) {
+        record.lock.lock();
+        try {
             restoreDurableAdmission(record);
             if (record.activeRunId == null) {
                 return "idle";
@@ -5770,6 +5784,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 return "idle";
             }
             return "busy";
+        } finally {
+            record.lock.unlock();
         }
     }
 
@@ -6113,6 +6129,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     static final class ThreadRecord {
         private final String threadId;
         private final String ownerId;
+        private final ReentrantLock lock = new ReentrantLock();
         private volatile Map<String, Object> metadata;
         private final Instant createdAt;
         private volatile Instant updatedAt;
