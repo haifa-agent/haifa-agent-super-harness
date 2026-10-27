@@ -3,6 +3,7 @@ package io.haifa.agent.superharness.server.config;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.haifa.agent.sandbox.docker.DockerAioLifecycleMode;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
@@ -118,6 +119,24 @@ class ExecutionProviderConfigTest {
         assertThat(docker.aioPort()).isEqualTo(ExecutionProviderConfig.DEFAULT_AIO_PORT);
         assertThat(docker.engineTimeout()).isEqualTo(ExecutionProviderConfig.DEFAULT_ENGINE_TIMEOUT);
         assertThat(docker.stopTimeout()).isEqualTo(ExecutionProviderConfig.DEFAULT_STOP_TIMEOUT);
+        assertThat(docker.lifecycleMode()).isEqualTo(DockerAioLifecycleMode.WARM_SESSION);
+        assertThat(docker.idleTimeout()).isEqualTo(Duration.ofMinutes(10));
+    }
+
+    @Test
+    void dockerAioResolvesCustomLifecycleAndIdleTimeout() {
+        var config = ExecutionProviderConfig.fromEnvironment(
+                Map.of(
+                        ExecutionProviderConfig.PROVIDER_ENVIRONMENT_KEY, "docker-aio",
+                        ExecutionProviderConfig.DOCKER_IMAGE_KEY, VALID_IMAGE,
+                        ExecutionProviderConfig.DOCKER_LIFECYCLE_KEY, "ephemeral",
+                        ExecutionProviderConfig.DOCKER_IDLE_TIMEOUT_MS_KEY, "300000"),
+                WORKSPACE,
+                DATA);
+        assertThat(config).isPresent();
+        var docker = config.get().dockerConfiguration().orElseThrow();
+        assertThat(docker.lifecycleMode()).isEqualTo(DockerAioLifecycleMode.EPHEMERAL);
+        assertThat(docker.idleTimeout()).isEqualTo(Duration.ofMillis(300_000));
     }
 
     @Test

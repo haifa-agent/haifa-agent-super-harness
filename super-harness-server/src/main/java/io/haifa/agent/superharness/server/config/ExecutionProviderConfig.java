@@ -1,5 +1,6 @@
 package io.haifa.agent.superharness.server.config;
 
+import io.haifa.agent.sandbox.docker.DockerAioLifecycleMode;
 import io.haifa.agent.sandbox.docker.DockerAioSandboxConfiguration;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -42,12 +43,16 @@ public record ExecutionProviderConfig(
     public static final String DOCKER_PIDS_LIMIT_KEY = "HAIFA_SUPER_HARNESS_DOCKER_PIDS_LIMIT";
     public static final String DOCKER_ENGINE_TIMEOUT_MS_KEY = "HAIFA_SUPER_HARNESS_DOCKER_ENGINE_TIMEOUT_MS";
     public static final String DOCKER_STOP_TIMEOUT_MS_KEY = "HAIFA_SUPER_HARNESS_DOCKER_STOP_TIMEOUT_MS";
+    public static final String DOCKER_LIFECYCLE_KEY = "HAIFA_SUPER_HARNESS_DOCKER_LIFECYCLE";
+    public static final String DOCKER_IDLE_TIMEOUT_MS_KEY = "HAIFA_SUPER_HARNESS_DOCKER_IDLE_TIMEOUT_MS";
     public static final String DOCKER_UID_KEY = "HAIFA_SUPER_HARNESS_DOCKER_UID";
     public static final String DOCKER_GID_KEY = "HAIFA_SUPER_HARNESS_DOCKER_GID";
 
     public static final Path DEFAULT_DOCKER_SOCKET = Path.of("/var/run/docker.sock");
     public static final String DEFAULT_CONTAINER_WORKSPACE_ROOT = "/mnt/user-data/workspace";
     public static final String DEFAULT_INSTALLATION_ID = "super-harness";
+    public static final DockerAioLifecycleMode DEFAULT_LIFECYCLE = DockerAioLifecycleMode.WARM_SESSION;
+    public static final Duration DEFAULT_IDLE_TIMEOUT = Duration.ofMinutes(10);
     public static final int DEFAULT_AIO_PORT = DockerAioSandboxConfiguration.DEFAULT_AIO_PORT;
     public static final int DEFAULT_MAX_CONCURRENT_SESSIONS =
             DockerAioSandboxConfiguration.DEFAULT_MAX_CONCURRENT_SESSIONS;
@@ -217,6 +222,24 @@ public record ExecutionProviderConfig(
                 ? Duration.ofMillis(parseLongOrDefault(env.get(DOCKER_STOP_TIMEOUT_MS_KEY), 5_000))
                 : DEFAULT_STOP_TIMEOUT;
 
+        DockerAioLifecycleMode lifecycle = DEFAULT_LIFECYCLE;
+        String rawLifecycle = env.get(DOCKER_LIFECYCLE_KEY);
+        if (rawLifecycle != null && !rawLifecycle.isBlank()) {
+            String norm = rawLifecycle.trim().toLowerCase(Locale.ROOT);
+            if ("ephemeral".equals(norm) || "one-shot".equals(norm) || "oneshot".equals(norm)) {
+                lifecycle = DockerAioLifecycleMode.EPHEMERAL;
+            } else if ("warm".equals(norm) || "warm-session".equals(norm) || "warm_session".equals(norm) || "persistent".equals(norm)) {
+                lifecycle = DockerAioLifecycleMode.WARM_SESSION;
+            } else {
+                throw new IllegalArgumentException("Unrecognized " + DOCKER_LIFECYCLE_KEY + " value: '" + rawLifecycle
+                        + "'. Expected 'warm' or 'ephemeral'.");
+            }
+        }
+
+        Duration idleTimeout = env.containsKey(DOCKER_IDLE_TIMEOUT_MS_KEY)
+                ? Duration.ofMillis(parseLongOrDefault(env.get(DOCKER_IDLE_TIMEOUT_MS_KEY), 600_000))
+                : DEFAULT_IDLE_TIMEOUT;
+
         OptionalInt uid = env.containsKey(DOCKER_UID_KEY) && !env.get(DOCKER_UID_KEY).isBlank()
                 ? OptionalInt.of(Integer.parseInt(env.get(DOCKER_UID_KEY).trim()))
                 : OptionalInt.empty();
@@ -239,7 +262,9 @@ public record ExecutionProviderConfig(
                 engineTimeout,
                 stopTimeout,
                 aioPort,
-                maxConcurrent);
+                maxConcurrent,
+                lifecycle,
+                idleTimeout);
     }
 
     private static int parseIntOrDefault(String raw, int defaultValue) {
