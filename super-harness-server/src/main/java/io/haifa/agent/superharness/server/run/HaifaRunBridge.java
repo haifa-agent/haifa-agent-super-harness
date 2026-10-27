@@ -65,6 +65,9 @@ import io.haifa.agent.starter.McpServerSpec;
 import io.haifa.agent.starter.McpToolPlatforms;
 import io.haifa.agent.starter.SkillScriptPlatforms;
 import io.haifa.agent.superharness.server.config.ApprovalPolicyConfig;
+import io.haifa.agent.starter.ContainerExecutionPlatforms;
+import io.haifa.agent.superharness.server.config.ExecutionProvider;
+import io.haifa.agent.superharness.server.config.ExecutionProviderConfig;
 import io.haifa.agent.superharness.server.config.HostShellToolConfig;
 import io.haifa.agent.superharness.server.config.McpRunTools;
 import io.haifa.agent.superharness.server.config.SkillRunTools;
@@ -277,7 +280,7 @@ public final class HaifaRunBridge implements AutoCloseable {
             String threadId) {
         this(binding, tools, foundation, McpRunTools.Projection.empty(), null,
                 AgentPromptContext.defaults(), SubagentRunConfiguration.disabled(),
-                new io.haifa.agent.runtime.api.ChildRunCapacity(1), false, null, null, null, null,
+                new io.haifa.agent.runtime.api.ChildRunCapacity(1), false, null, (ExecutionProviderConfig) null, null, null,
                 workspace, ownerId, threadId, null);
     }
 
@@ -287,6 +290,24 @@ public final class HaifaRunBridge implements AutoCloseable {
             SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
             boolean isPlanMode, Supplier<? extends ExecutorService> executionExecutorFactory,
             HostShellToolConfig hostShell,
+            SkillScriptToolConfig skillScript,
+            Long parentWallTimeMillisForTests,
+            RestrictedWorkspaceService workspace,
+            String ownerId,
+            String threadId,
+            ApprovalPolicyConfig.Mode approvalMode) {
+        this(binding, tools, foundation, mcpProjection, skillProjection, agentContext, delegation,
+                childRunCapacity, isPlanMode, executionExecutorFactory,
+                hostShell != null ? ExecutionProviderConfig.fromHostShell(hostShell) : null,
+                skillScript, parentWallTimeMillisForTests, workspace, ownerId, threadId, approvalMode);
+    }
+
+    public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
+            boolean isPlanMode, Supplier<? extends ExecutorService> executionExecutorFactory,
+            ExecutionProviderConfig executionProvider,
             SkillScriptToolConfig skillScript,
             Long parentWallTimeMillisForTests,
             RestrictedWorkspaceService workspace,
@@ -315,7 +336,7 @@ public final class HaifaRunBridge implements AutoCloseable {
         // bridge advertises tools; a bridge whose only tools come from MCP still does.
         this.hasTools = isPlanMode || delegation.enabled() || !tools.isEmpty() || !mcpSpecs.isEmpty()
                 || (skillProjection != null && skillProjection.installTools())
-                || (hostShell != null && hostShell.enabled()) || skillScript != null;
+                || (executionProvider != null && executionProvider.isEnabled()) || skillScript != null;
         // The declared Skill script Tool adds its catalog names to the prompt set before the
         // composed prompt (and its signature) is rendered, so both stay switch-consistent.
         this.skillScriptToolNames = skillScript == null ? Set.of() : Set.of(SkillScriptToolConfig.TOOL_NAME);
@@ -377,15 +398,15 @@ public final class HaifaRunBridge implements AutoCloseable {
             Set<String> allAllowedTools = registeredToolNames(tools, skillProjection);
             allAllowedTools.addAll(this.mcpToolNames);
             allAllowedTools.remove("task");
-            // The host shell Tool is a product switch: off keeps the Tool surface and the frozen
-            // lead prompt exactly as before, on adds the SDK's own execution_run alias that the
-            // bridge registers below through the public SDK assembly entry.
+            // The execution platform Tool is a product switch: disabled keeps the Tool surface and the frozen
+            // lead prompt exactly as before, enabled (host-guarded or docker-aio) adds the SDK's own execution_run
+            // alias that the bridge registers below through the public SDK assembly entry.
             // A failed build closes it below.
-            // The Skill script Tool is a product switch chained onto the host shell switch: off
+            // The Skill script Tool is a product switch chained onto the execution switch: off
             // keeps the Tool surface and the frozen lead prompt exactly as before, on adds the
             // declared alias through the public SDK skill script entry below.
-            boolean hostShellEnabled = hostShell != null && hostShell.enabled();
-            if (hostShellEnabled) {
+            boolean executionEnabled = executionProvider != null && executionProvider.isEnabled();
+            if (executionEnabled) {
                 allAllowedTools.add("execution_run");
             }
             allAllowedTools.addAll(this.skillScriptToolNames);
@@ -486,21 +507,36 @@ public final class HaifaRunBridge implements AutoCloseable {
                         .toolRegistrations(SkillToolContributions.createRegistrations(
                                 foundation.persistence(), skillProjection.loader(), Instant::now));
             }
-            if (hostShellEnabled) {
-                // The SDK owns the host execution assembly: one Broker/Sandbox/Policy/Runtime, the
-                // frozen assembly policy and the execution-aware Approval prompt. SH declares only
-                // the workspace, the data root and the product timeout bounds.
+            if (executionEnabled) {
+                // The SDK owns the execution assembly: one Broker/Sandbox/Policy/Runtime, the
+                // frozen assembly policy and the execution-aware Approval prompt.
                 SdkCaller caller = SdkCaller.defaultPublicUser();
-                hostExecution = HostExecutionPlatforms.hostGuarded(
-                        new HostExecutionPlatforms.HostExecutionSpec(
-                                hostShell.workspaceRoot(),
-                                hostShell.dataRoot(),
-                                hostShell.defaultTimeout(),
-                                hostShell.maximumTimeout(),
-                                hostShell.maximumOutputBytes(),
-                                hostShell.maximumOutputLines()),
-                        caller.tenant(),
-                        caller.principal());
+                if (executionProvider.provider() == ExecutionProvider.DOCKER_AIO) {
+                    var dockerConfig = executionProvider.dockerConfiguration()
+                            .orElseThrow(() -> new IllegalStateException("dockerConfiguration is missing for docker-aio provider"));
+                    var spec = new ContainerExecutionPlatforms.ContainerExecutionSpec(
+                            executionProvider.workspaceRoot(),
+                            executionProvider.defaultTimeout(),
+                            executionProvider.maximumTimeout(),
+                            executionProvider.maximumOutputBytes(),
+                            executionProvider.maximumOutputLines());
+                    hostExecution = ContainerExecutionPlatforms.dockerAio(
+                            spec,
+                            dockerConfig,
+                            caller.tenant(),
+                            caller.principal());
+                } else {
+                    hostExecution = HostExecutionPlatforms.hostGuarded(
+                            new HostExecutionPlatforms.HostExecutionSpec(
+                                    executionProvider.workspaceRoot(),
+                                    executionProvider.dataRoot(),
+                                    executionProvider.defaultTimeout(),
+                                    executionProvider.maximumTimeout(),
+                                    executionProvider.maximumOutputBytes(),
+                                    executionProvider.maximumOutputLines()),
+                            caller.tenant(),
+                            caller.principal());
+                }
                 // The Agent takes ownership on a successful build; a failed build closes it below.
                 hostExecution.applyTo(builder);
             }

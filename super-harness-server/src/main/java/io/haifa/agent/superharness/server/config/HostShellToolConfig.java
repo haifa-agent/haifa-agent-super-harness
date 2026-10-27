@@ -73,18 +73,9 @@ public record HostShellToolConfig(
      */
     public static Optional<HostShellToolConfig> fromEnvironment(
             Map<String, String> environment, Path workspaceRoot, Path dataRoot) {
-        Objects.requireNonNull(environment, "environment must not be null");
-        if (!isEnabled(environment.get(ENVIRONMENT_KEY))) {
-            return Optional.empty();
-        }
-        return Optional.of(new HostShellToolConfig(
-                true,
-                workspaceRoot,
-                dataRoot,
-                DEFAULT_TIMEOUT,
-                MAXIMUM_TIMEOUT,
-                MAXIMUM_OUTPUT_BYTES,
-                MAXIMUM_OUTPUT_LINES));
+        return ExecutionProviderConfig.fromEnvironment(environment, workspaceRoot, dataRoot)
+                .filter(config -> config.provider() == ExecutionProvider.HOST_GUARDED)
+                .map(ExecutionProviderConfig::toHostShellToolConfig);
     }
 
     /**
