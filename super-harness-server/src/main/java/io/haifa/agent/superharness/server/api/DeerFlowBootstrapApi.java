@@ -975,6 +975,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         bindPrefix("/api/models", configurationApi);
         bindPrefix("/api/managed-models", configurationApi, true);
         bindPrefix("/api/agents", configurationApi, true);
+        // Frozen DeerFlow exposes the bundled capability catalog as inert read-only metadata.
+        bindPrefix(DeerFlowCapabilityCatalogApi.PATH, new DeerFlowCapabilityCatalogApi(objectMapper));
         bindPrefix(
                 "/api/subagents",
                 new DeerFlowSubagentCatalogApi(
