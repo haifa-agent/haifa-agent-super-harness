@@ -333,7 +333,7 @@ class LarkIntegrationServiceTest {
         Path data = service.userDataDirectory("alice");
         Path managed = dataDirectory.resolve("integrations").resolve("lark").resolve("gateway-cli")
                 .resolve("node_modules").resolve("@larksuite").resolve("cli").resolve("bin")
-                .resolve("lark-cli.exe");
+                .resolve(cliExecutableName());
         Files.createDirectories(managed.getParent());
         Files.writeString(managed, "");
 
@@ -473,5 +473,10 @@ class LarkIntegrationServiceTest {
         assertThat(service.status("alice").installed()).isTrue();
         assertThat(service.status("alice").skillsInstalled()).isEqualTo(27);
         assertThat(service.status("alice").manifestVersion()).isEqualTo("v1.0.65");
+    }
+
+    private static String cliExecutableName() {
+        boolean windows = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
+        return windows ? "lark-cli.exe" : "lark-cli";
     }
 }
