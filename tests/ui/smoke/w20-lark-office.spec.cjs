@@ -38,6 +38,7 @@ test("W20 Lark capability center loads the official lark-doc package through Hai
   await page.keyboard.press("Escape");
 
   await page.goto("/workspace/capabilities?tab=skills", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "All skills", exact: true }).click();
   const toggle = page.getByRole("switch", { name: /lark-doc/ });
   await expect(toggle).toBeVisible();
   await expect(toggle).not.toBeChecked(); // Official lark-doc contains scripts and needs explicit review.
