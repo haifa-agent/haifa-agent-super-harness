@@ -59,7 +59,7 @@ public class LarkExecutionEnvironmentRunTest {
         var provider = hostProvider(dataRoot);
         Path managed = dataRoot.resolve("integrations").resolve("lark").resolve("gateway-cli")
                 .resolve("node_modules").resolve("@larksuite").resolve("cli").resolve("bin")
-                .resolve("lark-cli.exe");
+                .resolve(isWindows() ? "lark-cli.exe" : "lark-cli");
         Files.createDirectories(managed.getParent());
         Files.writeString(managed, "");
 
