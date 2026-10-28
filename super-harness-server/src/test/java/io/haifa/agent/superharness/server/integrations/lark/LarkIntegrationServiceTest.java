@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.haifa.agent.superharness.server.config.ExecutionProvider;
 import io.haifa.agent.superharness.server.config.SkillConfigStore;
 import io.haifa.agent.superharness.server.testsupport.LarkIntegrationFakes;
 import io.haifa.agent.superharness.server.testsupport.LarkIntegrationFakes.FakeArchives;
@@ -51,9 +52,14 @@ class LarkIntegrationServiceTest {
 
     private LarkIntegrationService service(SkillConfigStore store, FakeCli gateway,
             FakeRegistration registration, FakeArchives archives, VirtualClock clock) {
+        return service(store, gateway, registration, archives, clock, ExecutionProvider.DISABLED);
+    }
+
+    private LarkIntegrationService service(SkillConfigStore store, FakeCli gateway,
+            FakeRegistration registration, FakeArchives archives, VirtualClock clock, ExecutionProvider provider) {
         Path root = dataDirectory.resolve("integrations").resolve("lark");
         return new LarkIntegrationService(json, dataDirectory, store, new LarkSkillPackInstaller(json, root),
-                gateway, registration, archives, clock::nanoTime, clock::sleep);
+                gateway, registration, archives, clock::nanoTime, clock::sleep, provider);
     }
 
     @Test
@@ -297,6 +303,53 @@ class LarkIntegrationServiceTest {
                 "LARKSUITE_CLI_NO_UPDATE_NOTIFIER", "LARKSUITE_CLI_NO_SKILLS_NOTIFIER");
         assertThat(alice.values()).noneMatch(value -> value.contains("feishu-secret")
                 || value.contains("channel"));
+    }
+
+    @Test
+    void statusDistinguishesDisabledHostAndDockerExecutionProviders() {
+        var disabled = service(skills, cli, registration, archives, clock, ExecutionProvider.DISABLED).status("alice");
+        var host = service(skills, cli, registration, archives, clock, ExecutionProvider.HOST_GUARDED).status("alice");
+        var docker = service(skills, cli, registration, archives, clock, ExecutionProvider.DOCKER_AIO).status("alice");
+
+        assertThat(disabled.sandboxRuntimeMode()).isEqualTo("none");
+        assertThat(disabled.sandboxRuntimeReady()).isFalse();
+        assertThat(disabled.sandboxRuntimeDetail()).contains("disabled");
+
+        assertThat(host.sandboxRuntimeMode()).isEqualTo("none");
+        assertThat(host.sandboxRuntimeReady()).isFalse();
+        assertThat(host.sandboxRuntimeDetail())
+                .contains("Host guarded")
+                .contains("shared")
+                .contains("no OS tenant isolation");
+
+        assertThat(docker.sandboxRuntimeMode()).isEqualTo("gateway-download");
+        assertThat(docker.sandboxRuntimeReady()).isFalse();
+        assertThat(docker.sandboxRuntimeDetail()).contains("not provisioned");
+    }
+
+    @Test
+    void hostRunOverlayMatchesGatewayDirectoriesAndPrependsTheManagedCli() throws Exception {
+        Path config = service.userConfigDirectory("alice");
+        Path data = service.userDataDirectory("alice");
+        Path managed = dataDirectory.resolve("integrations").resolve("lark").resolve("gateway-cli")
+                .resolve("node_modules").resolve("@larksuite").resolve("cli").resolve("bin")
+                .resolve("lark-cli.exe");
+        Files.createDirectories(managed.getParent());
+        Files.writeString(managed, "");
+
+        var overlay = LarkIntegrationService.hostExecutionEnvironment(dataDirectory, "alice");
+        var gatewayOverlay = service.userExecutionEnvironment("alice");
+
+        assertThat(overlay.get("LARKSUITE_CLI_CONFIG_DIR"))
+                .isEqualTo(gatewayOverlay.get("LARKSUITE_CLI_CONFIG_DIR"))
+                .isEqualTo(config.toString());
+        assertThat(overlay.get("LARKSUITE_CLI_DATA_DIR"))
+                .isEqualTo(gatewayOverlay.get("LARKSUITE_CLI_DATA_DIR"))
+                .isEqualTo(data.toString());
+        assertThat(overlay.get("LARKSUITE_CLI_NO_UPDATE_NOTIFIER")).isEqualTo("1");
+        assertThat(overlay).doesNotContainKeys("HOME", "TEMP", "TMP", "SystemRoot", "USERPROFILE");
+        assertThat(overlay.get("PATH").split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))[0])
+                .isEqualTo(managed.getParent().toString());
     }
 
     @Test
