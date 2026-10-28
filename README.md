@@ -224,8 +224,7 @@ Gateway 在启动时读取进程变量 `HAIFA_SUPER_HARNESS_APPROVAL_MODE`，决
 
 Gateway 在启动时读取进程变量 `HAIFA_SUPER_HARNESS_SCHEDULER_ENABLED`：缺省（或 `0`/`false`/`no`）时调度器保持
 关闭，已有定时任务不会自动运行，REST 手动触发仍可用；设为 `1`/`true`/`yes` 时启动单实例后台调度线程，按任务的
-cron / interval / once 计划自动触发 Run，到期未运行的任务在首个轮询周期补跑一次。发布包模板默认启用该键，以服务
-方式部署时由 `config/gateway.env` 生效，修改后需重启 Gateway。可选调优键：`HAIFA_SUPER_HARNESS_SCHEDULER_POLL_SECONDS`
+cron / interval / once 计划自动触发 Run，到期未运行的任务在首个轮询周期补跑一次。发布包安装与模板默认保持关闭（`0`），可通过安装参数 `--scheduler-enabled 1` 或在 `config/gateway.env` 中显式配置启用，以服务方式部署时由 `config/gateway.env` 生效，修改后需重启 Gateway。可选调优键：`HAIFA_SUPER_HARNESS_SCHEDULER_POLL_SECONDS`
 （默认 5）、`HAIFA_SUPER_HARNESS_SCHEDULER_MIN_ONCE_DELAY_SECONDS`（默认 60）、
 `HAIFA_SUPER_HARNESS_SCHEDULER_MAX_CONCURRENT_RUNS`（默认 3）、`HAIFA_SUPER_HARNESS_SCHEDULER_QUEUE_TIMEOUT_SECONDS`
 （默认 3600）。

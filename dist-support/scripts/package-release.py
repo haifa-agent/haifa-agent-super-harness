@@ -357,8 +357,40 @@ def copy_tooling(stage, console):
                 "config/ service/ scripts/ quick-start.*")
 
 
+def read_docker_tar_config(tar_path):
+    """Extract Image Config ID (sha256:...) from a docker save tar archive."""
+    try:
+        import tarfile
+        with tarfile.open(str(tar_path), "r:*") as tar:
+            for member in tar.getmembers():
+                clean_name = member.name.lstrip("./")
+                if clean_name == "manifest.json":
+                    f = tar.extractfile(member)
+                    if f:
+                        data = json.loads(f.read().decode("utf-8"))
+                        if isinstance(data, list) and len(data) > 0:
+                            cfg = data[0].get("Config", "")
+                            cfg_base = cfg.split("/")[-1]
+                            if cfg_base.endswith(".json"):
+                                cfg_base = cfg_base[:-5]
+                            if cfg_base:
+                                return f"sha256:{cfg_base}"
+                elif clean_name == "index.json":
+                    f = tar.extractfile(member)
+                    if f:
+                        data = json.loads(f.read().decode("utf-8"))
+                        manifests = data.get("manifests", [])
+                        if manifests and "digest" in manifests[0]:
+                            return manifests[0]["digest"]
+    except Exception:
+        pass
+    return None
+
+
 def copy_sandbox(repo_root, stage, console, image_tar=None):
-    sandbox_src = DIST_ROOT / "sandbox"
+    sandbox_src = Path(repo_root) / "dist-support" / "sandbox" if repo_root else (DIST_ROOT / "sandbox")
+    if not sandbox_src.is_dir():
+        sandbox_src = DIST_ROOT / "sandbox"
     sandbox_dst = stage / "sandbox"
     sandbox_dst.mkdir(parents=True, exist_ok=True)
     if sandbox_src.is_dir():
@@ -379,6 +411,7 @@ def copy_sandbox(repo_root, stage, console, image_tar=None):
         dest_tar = images_dir / tar_path.name
         shutil.copy2(str(tar_path), str(dest_tar))
         tar_sha = sha256_file(dest_tar)
+        tar_config_id = read_docker_tar_config(dest_tar) or lock_data.get("config_digest")
         manifest_payload = {
             "image": lock_data.get("image"),
             "file": tar_path.name,
@@ -386,10 +419,12 @@ def copy_sandbox(repo_root, stage, console, image_tar=None):
             "size": dest_tar.stat().st_size,
             "platform": lock_data.get("platform", "linux/amd64")
         }
+        if tar_config_id:
+            manifest_payload["image_id"] = tar_config_id
         (images_dir / "manifest.json").write_text(
             json.dumps(manifest_payload, indent=2), encoding="utf-8"
         )
-        console.log("[stage] sandbox offline image archive staged: %s (sha256=%s)" % (dest_tar.name, tar_sha))
+        console.log("[stage] sandbox offline image archive staged: %s (sha256=%s, image_id=%s)" % (dest_tar.name, tar_sha, tar_config_id))
     else:
         console.log("[stage] sandbox image-lock staged: %s" % lock_file)
     return lock_data

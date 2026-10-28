@@ -591,7 +591,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Path dataDirectory,
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver)
             throws IOException {
-        return createForTests(configuration, dataDirectory, Map.of(), runModelResolver);
+        return createForTests(configuration, dataDirectory, runModelResolver, generateContinuationKey());
     }
 
     public static DeerFlowBootstrapApi createForTests(
@@ -600,16 +600,30 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             Map<String, String> environment,
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver)
             throws IOException {
+        SecretKey key = environment != null && environment.containsKey(CONTINUATION_KEY_REFERENCE_ENVIRONMENT)
+                ? continuationKey(environment, dataDirectory)
+                : generateContinuationKey();
+        return createForTests(configuration, dataDirectory, environment, runModelResolver, key);
+    }
+
+    public static DeerFlowBootstrapApi createForTests(
+            LocalServerConfiguration configuration,
+            Path dataDirectory,
+            Map<String, String> environment,
+            Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
+            SecretKey continuationKey)
+            throws IOException {
+        Map<String, String> env = environment == null ? Map.of() : environment;
         return createWithKey(
                 configuration,
                 dataDirectory,
-                continuationKey(environment, dataDirectory),
+                continuationKey != null ? continuationKey : generateContinuationKey(),
                 runModelResolver,
-                DeerFlowSuggestionsApi.Settings.fromEnvironment(environment),
-                io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings.fromEnvironment(environment),
+                DeerFlowSuggestionsApi.Settings.fromEnvironment(env),
+                io.haifa.agent.superharness.server.config.SubagentRunConfiguration.Settings.fromEnvironment(env),
                 null, null,
-                SchedulerRunConfiguration.fromEnvironment(environment), Instant::now,
-                environment);
+                SchedulerRunConfiguration.fromEnvironment(env), Instant::now,
+                env);
     }
 
     /**

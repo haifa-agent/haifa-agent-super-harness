@@ -1,7 +1,6 @@
 package io.haifa.agent.superharness.server.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.haifa.agent.model.api.ModelToolSpecification;
 import io.haifa.agent.sandbox.docker.DockerAioLifecycleMode;

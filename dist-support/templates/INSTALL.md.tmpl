@@ -116,7 +116,7 @@ python .\scripts\install-service.py status
 
 ## 定时任务调度
 
-发布包默认在 `config/gateway.env` 写入 `HAIFA_SUPER_HARNESS_SCHEDULER_ENABLED=1`，Gateway 启动后由
+发布包默认在 `config/gateway.env` 写入 `HAIFA_SUPER_HARNESS_SCHEDULER_ENABLED=0`（默认关闭，可通过 `--scheduler-enabled 1` 安装参数或修改该文件启用），Gateway 启动后由
 单实例后台调度线程按任务的 cron / interval / once 计划自动触发 Run（到期未运行的任务在首个轮询周期补跑）。
 该键缺省、为空或设为 `0` 时调度器关闭，已有任务不会自动运行（REST 手动触发仍可用）。轮询间隔等调优键为
 `HAIFA_SUPER_HARNESS_SCHEDULER_POLL_SECONDS`、`..._MIN_ONCE_DELAY_SECONDS`、`..._MAX_CONCURRENT_RUNS`、
