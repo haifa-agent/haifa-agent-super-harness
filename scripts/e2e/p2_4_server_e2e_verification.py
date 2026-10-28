@@ -3,11 +3,10 @@
 [P2-4] Physical Server End-to-End Container Sandbox Verification Script.
 
 Tests the packaged Super Harness distribution on physical Linux server:
-1. Starts mock LLM provider on 127.0.0.1:21619.
-2. Boots SuperHarness Gateway on 127.0.0.1:21618 with:
+1. Starts mock LLM provider on 127.0.0.1:<mock_port>.
+2. Boots SuperHarness Gateway on 127.0.0.1:<server_port> with:
    - HAIFA_SUPER_HARNESS_EXECUTION_PROVIDER=docker-aio
-   - Locked official AIO sandbox image:
-     enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:1.11.0@sha256:6328d7fd2f0ff0b4c147c3d05b3df1ce331f4a482eb6e550ecd64ed1fcf906e7
+   - Locked official AIO sandbox image
    - WARM container lifecycle mode
    - Pure PR #346 internal bridge routing (NO manual host bridge IP helper needed!)
 3. Executes Turn 1:
@@ -20,12 +19,14 @@ Tests the packaged Super Harness distribution on physical Linux server:
    - Measures execution elapsed time.
    - hostname -> verifies same warm container reused.
    - reads /mnt/user-data/workspace/cold.txt -> verifies filesystem persistence.
-5. Verifies host filesystem reflection (/root/p2-4-server-test/super-harness-0.1.0-SNAPSHOT/data/...).
+5. Verifies host filesystem reflection (<data_dir>/...).
 6. Shuts down Gateway cleanly and asserts zero container/network leaks.
 """
 
+import argparse
 import json
 import os
+import platform
 import re
 import signal
 import subprocess
@@ -35,13 +36,6 @@ import urllib.request
 import urllib.error
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
-
-SERVER_PORT = 21618
-MOCK_PORT = 21619
-PREFIX = "/root/p2-4-server-test/super-harness-0.1.0-SNAPSHOT"
-DATA_DIR = f"{PREFIX}/data"
-JAR_PATH = f"{PREFIX}/app/super-harness-server-0.1.0-SNAPSHOT-exec.jar"
-IMAGE_REF = "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:1.11.0@sha256:6328d7fd2f0ff0b4c147c3d05b3df1ce331f4a482eb6e550ecd64ed1fcf906e7"
 
 SENTINEL_T1 = "P2_4_TURN_1_COLD_BOOT_SENTINEL"
 SENTINEL_T2 = "P2_4_TURN_2_WARM_REUSE_SENTINEL"
@@ -300,23 +294,51 @@ def find_files_under(directory, target_filename):
     return matches
 
 
-def main():
-    # Ensure full rwx permissions for container mounts
-    os.umask(0)
+def build_parser():
+    parser = argparse.ArgumentParser(description="[P2-4] Physical Server End-to-End Container Sandbox Verification")
+    parser.add_argument("--prefix", default="/root/p2-4-server-test/super-harness-0.1.0-SNAPSHOT",
+                        help="Installation prefix path")
+    parser.add_argument("--server-port", type=int, default=21618, help="Gateway port (default 21618)")
+    parser.add_argument("--mock-port", type=int, default=21619, help="Mock LLM server port (default 21619)")
+    parser.add_argument("--image", default="enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:1.11.0@sha256:6328d7fd2f0ff0b4c147c3d05b3df1ce331f4a482eb6e550ecd64ed1fcf906e7",
+                        help="Docker AIO sandbox image reference")
+    parser.add_argument("--java-bin", default="/usr/bin/java", help="Path to java executable")
+    return parser
 
-    print("[p2-4] Starting Mock LLM server on port 21619...")
-    mock_server = HTTPServer(("127.0.0.1", MOCK_PORT), MockLLMHandler)
+
+def main():
+    args = build_parser().parse_args()
+
+    server_port = args.server_port
+    mock_port = args.mock_port
+    prefix = args.prefix
+    data_dir = f"{prefix}/data"
+    jar_path = f"{prefix}/app/super-harness-server-0.1.0-SNAPSHOT-exec.jar"
+    image_ref = args.image
+
+    print(f"[p2-4] Starting Mock LLM server on port {mock_port}...")
+    mock_server = HTTPServer(("127.0.0.1", mock_port), MockLLMHandler)
     mock_thread = threading.Thread(target=mock_server.serve_forever, daemon=True)
     mock_thread.start()
 
     # Pre-clean data dir
-    os.system(f"rm -rf {DATA_DIR}/*")
+    if os.path.isdir(data_dir):
+        for root, dirs, files in os.walk(data_dir, topdown=False):
+            for name in files:
+                try:
+                    os.remove(os.path.join(root, name))
+                except OSError:
+                    pass
+            for name in dirs:
+                try:
+                    os.rmdir(os.path.join(root, name))
+                except OSError:
+                    pass
 
     # Read existing continuation key or generate
-    env_file = f"{PREFIX}/config/gateway.env"
+    env_file = f"{prefix}/config/gateway.env"
 
     env = os.environ.copy()
-    # Read environment variables from rendered gateway.env
     if os.path.exists(env_file):
         with open(env_file, "r") as f:
             for line in f:
@@ -326,21 +348,21 @@ def main():
                     env[k] = v
 
     # Override ports and settings for test
-    env["SUPER_HARNESS_PORT"] = str(SERVER_PORT)
-    env["SUPER_HARNESS_DATA_DIR"] = DATA_DIR
-    env["SUPER_HARNESS_DATA_ROOT"] = DATA_DIR
+    env["SUPER_HARNESS_PORT"] = str(server_port)
+    env["SUPER_HARNESS_DATA_DIR"] = data_dir
+    env["SUPER_HARNESS_DATA_ROOT"] = data_dir
     env["HAIFA_SUPER_HARNESS_EXECUTION_PROVIDER"] = "docker-aio"
-    env["HAIFA_SUPER_HARNESS_DOCKER_IMAGE"] = IMAGE_REF
+    env["HAIFA_SUPER_HARNESS_DOCKER_IMAGE"] = image_ref
     env["HAIFA_SUPER_HARNESS_DOCKER_SOCKET"] = "/var/run/docker.sock"
     env["HAIFA_SUPER_HARNESS_DOCKER_LIFECYCLE"] = "warm"
     env["HAIFA_SUPER_HARNESS_DOCKER_IDLE_TIMEOUT_MS"] = "900000"
     env["HAIFA_SUPER_HARNESS_APPROVAL_MODE"] = "auto"
     env["DEER_FLOW_AUTH_DISABLED"] = "1"
 
-    print(f"[p2-4] Launching Gateway from {JAR_PATH} on port {SERVER_PORT}...")
+    print(f"[p2-4] Launching Gateway from {jar_path} on port {server_port}...")
     server_proc = subprocess.Popen(
-        ["/usr/bin/java", "-Xms256m", "-Xmx768m", "-jar", JAR_PATH],
-        cwd=f"{PREFIX}/repo",
+        [args.java_bin, "-Xms256m", "-Xmx768m", "-jar", jar_path],
+        cwd=f"{prefix}/repo",
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -357,7 +379,7 @@ def main():
     log_thread.start()
 
     # Wait for gateway ready
-    gateway_url = f"http://127.0.0.1:{SERVER_PORT}"
+    gateway_url = f"http://127.0.0.1:{server_port}"
     ready = False
     for attempt in range(60):
         time.sleep(0.5)
@@ -375,24 +397,31 @@ def main():
         server_proc.terminate()
         return 1
 
+    measured_kernel = platform.release()
+    try:
+        docker_ver = subprocess.check_output(["docker", "--version"]).decode().strip()
+    except Exception:
+        docker_ver = "unknown"
+
     evidence_summary = {
         "timestamp": time.time(),
-        "server_kernel": subprocess.check_output(["uname", "-r"]).decode().strip(),
-        "docker_version": subprocess.check_output(["docker", "--version"]).decode().strip(),
-        "docker_image": IMAGE_REF,
+        "server_kernel": measured_kernel,
+        "operating_system": f"{platform.system()} {measured_kernel} ({platform.machine()})",
+        "docker_version": docker_ver,
+        "docker_image": image_ref,
         "turns": {}
     }
 
     try:
         # Register mock model
-        print("[p2-4] Registering mock OpenAI-compatible model pointing to 127.0.0.1:21619...")
+        print(f"[p2-4] Registering mock OpenAI-compatible model pointing to 127.0.0.1:{mock_port}...")
         model_payload = {
             "config": {
                 "name": "p2-4-mock-model",
                 "display_name": "P2-4 Mock Controlled Model",
                 "provider": "openai-compatible",
                 "model": "p2-4-mock-model",
-                "base_url": f"http://127.0.0.1:{MOCK_PORT}/v1",
+                "base_url": f"http://127.0.0.1:{mock_port}/v1",
                 "enabled": True,
                 "supports_vision": False,
                 "context_window": 32768,
@@ -450,8 +479,8 @@ def main():
         assert "gid=1000" in out_t1, "GID is not 1000 in Turn 1!"
 
         # Verify cold.txt on host
-        matches = find_files_under(DATA_DIR, "cold.txt")
-        assert matches, f"Host file cold.txt not found anywhere under {DATA_DIR}!"
+        matches = find_files_under(data_dir, "cold.txt")
+        assert matches, f"Host file cold.txt not found anywhere under {data_dir}!"
         host_cold_file = matches[0]
         with open(host_cold_file, "r") as f:
             content = f.read().strip()
@@ -531,8 +560,8 @@ def main():
         assert h1 == h2, f"Warm container reuse failed! Hostname changed from {h1} to {h2}"
 
         # Verify warm.txt on host
-        matches_warm = find_files_under(DATA_DIR, "warm.txt")
-        assert matches_warm, f"Host file warm.txt not found anywhere under {DATA_DIR}!"
+        matches_warm = find_files_under(data_dir, "warm.txt")
+        assert matches_warm, f"Host file warm.txt not found anywhere under {data_dir}!"
         host_warm_file = matches_warm[0]
         with open(host_warm_file, "r") as f:
             content_warm = f.read().strip()
@@ -549,10 +578,11 @@ def main():
             "warm_reuse_matched": (h1 == h2)
         }
 
+        os_desc = f"{platform.system()} {measured_kernel} ({platform.machine()})"
         print("\n=======================================================")
         print("  [P2-4] PHYSICAL SERVER E2E CONTAINER VERIFICATION")
-        print("  Operating System: Linux 6.8.0-53-generic (x86_64)")
-        print(f"  Container Image:  {IMAGE_REF}")
+        print(f"  Operating System: {os_desc}")
+        print(f"  Container Image:  {image_ref}")
         print("  Execution Mode:   docker-aio (warm session)")
         print(f"  Turn 1 (Cold):    {t1_elapsed:.3f}s [OK]")
         print(f"  Turn 2 (Warm):    {t2_elapsed:.3f}s [OK]")
@@ -562,7 +592,7 @@ def main():
         print("  VERDICT:          ALL PASS (100% GREEN)")
         print("=======================================================\n")
 
-        with open(f"{PREFIX}/../p2_4_e2e_evidence.json", "w") as f:
+        with open(f"{prefix}/../p2_4_e2e_evidence.json", "w") as f:
             json.dump(evidence_summary, f, indent=2)
 
         return 0
@@ -578,10 +608,15 @@ def main():
         time.sleep(1)
 
         # Cleanup leftover test containers
-        containers = subprocess.check_output(["docker", "ps", "-q", "--filter", "label=io.haifa.agent.sandbox.role=container"]).decode().strip().split()
-        if containers:
-            print(f"[p2-4] Cleaning up {len(containers)} test container(s)...")
-            subprocess.run(["docker", "rm", "-f"] + containers, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            containers = subprocess.check_output(
+                ["docker", "ps", "-q", "--filter", "label=io.haifa.agent.sandbox.role=container"]
+            ).decode().strip().split()
+            if containers:
+                print(f"[p2-4] Cleaning up {len(containers)} test container(s)...")
+                subprocess.run(["docker", "rm", "-f"] + containers, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
         print("[p2-4] Teardown complete.")
 
 

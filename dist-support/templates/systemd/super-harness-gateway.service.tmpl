@@ -9,7 +9,7 @@ Wants=network-online.target
 Type=simple
 User=${service_user}
 Group=${service_group}
-UMask=0000
+UMask=0027
 # Gateway must run from the repo working directory: the Skill store resolves
 # third-party/deerflow/skills/manifest.json relative to the process cwd.
 WorkingDirectory=${prefix}/repo

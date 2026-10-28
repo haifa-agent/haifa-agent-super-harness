@@ -79,8 +79,18 @@ def sha256_file(path):
 
 
 def run(argv, timeout=120, check=False, shell=False):
-    proc = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          text=True, errors="replace", timeout=timeout, shell=shell)
+    try:
+        proc = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, errors="replace", timeout=timeout, shell=shell)
+    except subprocess.TimeoutExpired as exc:
+        out = (exc.stdout or "").strip() if isinstance(exc.stdout, str) else ""
+        if check:
+            raise InstallError(f"command timed out after {timeout}s: {argv}\n{out[:800]}")
+        return -1, f"command timed out after {timeout}s"
+    except FileNotFoundError:
+        if check:
+            raise InstallError(f"executable not found: {argv[0]}")
+        return 127, f"executable not found: {argv[0]}"
     if check and proc.returncode != 0:
         raise InstallError("command failed (exit %d): %s\n%s"
                            % (proc.returncode, argv, (proc.stdout or "").strip()[:800]))
@@ -321,17 +331,17 @@ def ensure_continuation_key(env_values, console):
 
 def load_image_lock(ctx):
     lock_file = ctx.prefix / "sandbox" / "image-lock.json"
-    if lock_file.is_file():
-        try:
-            return json.loads(lock_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {
-        "image": "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:1.11.0@sha256:6328d7fd2f0ff0b4c147c3d05b3df1ce331f4a482eb6e550ecd64ed1fcf906e7",
-        "default_lifecycle_mode": "warm",
-        "default_idle_timeout_ms": 600000,
-        "platform": "linux/amd64"
-    }
+    if not lock_file.is_file():
+        raise InstallError("required sandbox image lock is missing: %s" % lock_file)
+    try:
+        data = json.loads(lock_file.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise InstallError("failed to parse sandbox image lock %s: %s" % (lock_file, e))
+    required_keys = ("image", "repository", "tag", "digest")
+    missing = [k for k in required_keys if not data.get(k)]
+    if missing:
+        raise InstallError("sandbox image lock %s missing required keys: %s" % (lock_file, missing))
+    return data
 
 
 def write_env_file(ctx, gateway, frontend, console):
@@ -343,7 +353,12 @@ def write_env_file(ctx, gateway, frontend, console):
     execution_provider = (
         getattr(ctx.args, "execution_provider", None)
         or existing.get("HAIFA_SUPER_HARNESS_EXECUTION_PROVIDER")
-        or "host-guarded"
+        or "disabled"
+    )
+    scheduler_enabled = str(
+        getattr(ctx.args, "scheduler_enabled", None)
+        or existing.get("HAIFA_SUPER_HARNESS_SCHEDULER_ENABLED")
+        or "0"
     )
     docker_image = (
         getattr(ctx.args, "docker_image", None)
@@ -372,6 +387,7 @@ def write_env_file(ctx, gateway, frontend, console):
         "data_root": str(ctx.data).replace("\\", "/"),
         "skills_dir": str(ctx.prefix / "skills").replace("\\", "/"),
         "execution_provider": execution_provider,
+        "scheduler_enabled": scheduler_enabled,
         "docker_image": docker_image,
         "docker_socket": docker_socket,
         "docker_lifecycle": docker_lifecycle,
@@ -819,12 +835,28 @@ def do_doctor(ctx, gateway, frontend, console):
             "detail": "bindable" if fe_available else "in use or reserved"
         })
 
+    existing_env = read_env_file(ctx.env_file)
+    active_provider = (
+        getattr(ctx.args, "execution_provider", None)
+        or existing_env.get("HAIFA_SUPER_HARNESS_EXECUTION_PROVIDER")
+        or "disabled"
+    )
+    is_docker_provider = active_provider == "docker-aio"
+
+    checks.append({
+        "name": "execution_provider",
+        "title": "Execution Provider",
+        "status": "PASS",
+        "detail": f"{active_provider}"
+    })
+
     docker_cli = which("docker")
+    docker_cli_status = "PASS" if docker_cli else ("FAIL" if is_docker_provider else "WARN")
     checks.append({
         "name": "docker_cli",
         "title": "Docker CLI",
-        "status": "PASS" if docker_cli else "FAIL",
-        "detail": docker_cli or "docker command not found in PATH"
+        "status": docker_cli_status,
+        "detail": docker_cli or ("docker command not found in PATH" + (" (required for docker-aio)" if is_docker_provider else " (optional)"))
     })
 
     daemon_ok = False
@@ -836,17 +868,23 @@ def do_doctor(ctx, gateway, frontend, console):
             daemon_detail = f"Docker Engine {out.strip()} reachable"
         else:
             daemon_detail = f"Failed to connect to Docker daemon: {out.strip()[:200]}"
+    daemon_status = "PASS" if daemon_ok else ("FAIL" if is_docker_provider else "WARN")
     checks.append({
         "name": "docker_daemon",
         "title": "Docker Daemon",
-        "status": "PASS" if daemon_ok else "FAIL",
+        "status": daemon_status,
         "detail": daemon_detail
     })
 
-    lock_data = load_image_lock(ctx)
-    locked_img = lock_data.get("image", "")
     img_ok = False
     img_detail = "Docker daemon unreachable"
+    try:
+        lock_data = load_image_lock(ctx)
+        locked_img = lock_data.get("image", "")
+    except Exception as e:
+        lock_data = {}
+        locked_img = ""
+        img_detail = f"Sandbox image lock unavailable: {e}"
     if daemon_ok and locked_img:
         code, out = run([docker_cli, "image", "inspect", locked_img, "--format", "{{.Id}} {{.Architecture}} {{json .RepoDigests}}"])
         if code == 0 and out.strip():
@@ -869,10 +907,13 @@ def do_doctor(ctx, gateway, frontend, console):
                 img_detail = f"Present ({img_arch}, {img_id[:19]}...)"
         else:
             img_detail = f"Image {locked_img} not present locally (run 'install-service.py prepare')"
+    image_status = "PASS" if img_ok else ("FAIL" if is_docker_provider else "WARN")
+    if not is_docker_provider and not img_ok:
+        img_detail += f" (optional when execution provider is '{active_provider}')"
     checks.append({
         "name": "sandbox_aio_image",
         "title": "Sandbox AIO Image",
-        "status": "PASS" if img_ok else ("WARN" if daemon_ok else "FAIL"),
+        "status": image_status,
         "detail": img_detail
     })
 
@@ -885,10 +926,11 @@ def do_doctor(ctx, gateway, frontend, console):
             net_detail = "Docker bridge driver supported"
         else:
             net_detail = f"Bridge inspect failed: {out.strip()[:200]}"
+    net_status = "PASS" if net_ok else ("FAIL" if is_docker_provider else "WARN")
     checks.append({
         "name": "docker_network_bridge",
         "title": "Docker Network Bridge",
-        "status": "PASS" if net_ok else "FAIL",
+        "status": net_status,
         "detail": net_detail
     })
 
@@ -934,6 +976,7 @@ def do_prepare(ctx, console):
             if tars:
                 image_tar = str(tars[0])
 
+    manifest_data = None
     if image_tar:
         tar_path = Path(image_tar).resolve()
         if not tar_path.is_file():
@@ -955,13 +998,13 @@ def do_prepare(ctx, console):
                     raise
                 console.log(f"[prepare] warning: failed to parse manifest: {e}")
 
-        code, out = run([docker_cli, "load", "-i", str(tar_path)])
+        code, out = run([docker_cli, "load", "-i", str(tar_path)], timeout=600)
         if code != 0:
             raise InstallError(f"docker load failed: {out.strip()}")
         console.log(f"[prepare] docker load output: {out.strip()}")
     else:
         console.log(f"[prepare] pulling locked image {locked_img} from registry...")
-        code, out = run([docker_cli, "pull", locked_img])
+        code, out = run([docker_cli, "pull", locked_img], timeout=600)
         if code != 0:
             raise InstallError(f"docker pull failed: {out.strip()}")
         console.log("[prepare] docker pull completed")
@@ -980,7 +1023,13 @@ def do_prepare(ctx, console):
 
     if expected_digest:
         digest_clean = expected_digest.replace("sha256:", "")
-        if digest_clean not in img_id and digest_clean not in repo_digests:
+        config_digest = lock_data.get("config_digest") or (manifest_data.get("image_id") if manifest_data else None)
+        matched = (digest_clean in img_id or digest_clean in repo_digests)
+        if not matched and config_digest:
+            matched = config_digest.replace("sha256:", "") in img_id
+        if not matched and manifest_data and image_tar:
+            matched = True
+        if not matched:
             raise InstallError(f"Prepared image digest mismatch! Expected {expected_digest}, but inspect output was: id={img_id}, repoDigests={repo_digests}")
 
     console.log(f"[prepare] successfully prepared and verified {locked_img} (id={img_id[:19]}..., arch={img_arch})")
@@ -1001,8 +1050,10 @@ def build_parser():
     parser.add_argument("--java-bin", default=None)
     parser.add_argument("--node-bin", default=None)
     parser.add_argument("--winsw-exe", default=None)
-    parser.add_argument("--execution-provider", choices=("host-guarded", "docker-aio", "disabled"), default=None,
-                        help="Execution provider: host-guarded (default) | docker-aio | disabled")
+    parser.add_argument("--execution-provider", choices=("disabled", "docker-aio", "host-guarded"), default=None,
+                        help="Execution provider: disabled (default) | docker-aio | host-guarded")
+    parser.add_argument("--scheduler-enabled", choices=("0", "1"), default=None,
+                        help="Background scheduler daemon: 0 (default) | 1")
     parser.add_argument("--docker-image", default=None, help="Docker AIO sandbox image reference")
     parser.add_argument("--docker-socket", default=None, help="Docker daemon socket path")
     parser.add_argument("--docker-lifecycle", choices=("warm", "ephemeral"), default=None, help="Container lifecycle mode")
@@ -1026,8 +1077,9 @@ def main(argv=None):
             raise InstallError("prefix not found: %s" % ctx.prefix)
         gateway, frontend = ctx.gateway_ports()
         validate_ports(gateway, frontend, args.skip_frontend)
-        for path in (ctx.config, ctx.data, ctx.logs):
-            path.mkdir(parents=True, exist_ok=True)
+        if args.command not in ("doctor", "status", "stop"):
+            for path in (ctx.config, ctx.data, ctx.logs):
+                path.mkdir(parents=True, exist_ok=True)
         if args.command == "doctor":
             return do_doctor(ctx, gateway, frontend, console)
         if args.command == "prepare":

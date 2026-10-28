@@ -358,7 +358,9 @@ def copy_tooling(stage, console):
 
 
 def copy_sandbox(repo_root, stage, console, image_tar=None):
-    sandbox_src = DIST_ROOT / "sandbox"
+    sandbox_src = Path(repo_root) / "dist-support" / "sandbox" if repo_root else (DIST_ROOT / "sandbox")
+    if not sandbox_src.is_dir():
+        sandbox_src = DIST_ROOT / "sandbox"
     sandbox_dst = stage / "sandbox"
     sandbox_dst.mkdir(parents=True, exist_ok=True)
     if sandbox_src.is_dir():
