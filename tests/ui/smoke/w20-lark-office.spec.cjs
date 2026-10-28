@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { test, expect } = require("./fixtures.cjs");
+const { readResourceReceipt } = require("./support/lark-office.cjs");
 
 test("W20 Lark capability center loads the official lark-doc package through Haifa", async ({ context, page, runtime, runFlow, evidence }) => {
   test.setTimeout(120_000);
@@ -82,12 +83,30 @@ test("W20 Lark capability center loads the official lark-doc package through Hai
   const loadResult = messages.find((message) => message.type === "tool" && message.tool_call_id === loadCall.id);
   const readResult = messages.find((message) => message.type === "tool" && message.tool_call_id === readCall.id);
   expect(loadResult.additional_kwargs.haifa_tool_result.activated).toBe(true);
-  const content = readResult.additional_kwargs.haifa_tool_result.content;
+  const publicResult = readResult.additional_kwargs.haifa_tool_result;
+  // The public ToolCallView is a bounded, redacted display copy. Bind the raw
+  // integrity assertion to the exact owned Runtime record for this Run and call.
+  const raw = readResourceReceipt(seed, { runId: identity.runId, callId: readCall.id,
+    skill: "lark-doc", resourcePath: readCall.args.path, expectedSha256: seed.referenceSha256 });
+  expect(raw.receipt).toMatchObject({ status: "COMPLETED", successful: true, truncated: false,
+    toolName: "skill_resource_read", runId: identity.runId, callId: readCall.id,
+    sdkToolCallId: readCall.id, skill: "lark-doc", path: readCall.args.path,
+    digest: `sha256:${seed.referenceSha256}`, sha256: seed.referenceSha256 });
+  const content = raw.content;
   expect(crypto.createHash("sha256").update(content, "utf8").digest("hex")).toBe(seed.referenceSha256);
   expect(content).toBe(fs.readFileSync(path.join(seed.packageDirectory, seed.reference), "utf8"));
+  const publicSha256 = crypto.createHash("sha256").update(publicResult.content, "utf8").digest("hex");
+  expect(publicResult.digest).toBe(`sha256:${seed.referenceSha256}`);
+  expect(publicSha256).toBe("a4e2f4f235ab7d5f27cdf266dd7a8906c8fb881b38c966719e6d64cfe982e3d3");
+  expect((publicResult.content.match(/\[REDACTED\]/g) ?? []).length).toBe(3);
+  expect(publicResult.securityLabel).toBe("untrusted-skill-resource");
+  expect(publicResult.content).not.toBe(content);
   expect(calls.some((call) => call.name === "execution_run")).toBe(false);
   await evidence.json("lark-skill-run", { ...identity, metadata, loadCall, readCall,
-    activated: true, referenceSha256: seed.referenceSha256,
+    activated: true, referenceSha256: seed.referenceSha256, rawReceipt: raw.receipt,
+    publicProjection: { digest: publicResult.digest, sha256: publicSha256,
+      securityLabel: publicResult.securityLabel, redactedMarkers: 3,
+      byteLength: Buffer.byteLength(publicResult.content, "utf8") },
     officeOAuth: "BLOCKED_EXTERNAL", officeDocumentRun: "BLOCKED_EXTERNAL",
     boundary: "official package load/reference read only; no CLI execution or office OAuth" });
   await evidence.screenshot(page, "lark-doc-loaded");

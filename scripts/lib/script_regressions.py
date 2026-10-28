@@ -54,6 +54,8 @@ CHECKS = (
      "path": "tests/checks/ui/skill-read-order.test.cjs"},
     {"name": "python-lark-seed", "kind": "python",
      "path": "tests/checks/ui/test_lark_seed.py"},
+    {"name": "python-lark-resource-receipt", "kind": "python",
+     "path": "tests/checks/ui/test_lark_resource_receipt.py"},
     {"name": "node-lark-office", "kind": "node",
      "path": "tests/checks/ui/lark-office.test.cjs"},
 )
