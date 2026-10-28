@@ -367,6 +367,7 @@ public final class RestrictedWorkspaceService {
             Path part = Files.createTempFile(target.getParent(), ".upload-", ".part");
             Files.write(part, content);
             WorkspaceRegistry.moveAtomically(part, target);
+            WorkspaceRegistry.makeFilePermissive(target);
         } catch (java.nio.file.FileAlreadyExistsException exception) {
             throw new WorkspaceException(WorkspaceError.IMMUTABLE_UPLOAD,
                     "upload target already exists", exception);
@@ -385,6 +386,7 @@ public final class RestrictedWorkspaceService {
             Files.write(part, content);
             // Hard-link publication is atomic and fails if target exists; ATOMIC_MOVE may replace it.
             Files.createLink(target, part);
+            WorkspaceRegistry.makeFilePermissive(target);
         } catch (java.nio.file.FileAlreadyExistsException exception) {
             throw new WorkspaceException(WorkspaceError.HASH_CONFLICT,
                     "working file already exists", exception);
@@ -409,6 +411,7 @@ public final class RestrictedWorkspaceService {
             Path part = Files.createTempFile(target.getParent(), ".write-", ".part");
             Files.write(part, content);
             AtomicMoves.replace(part, target);
+            WorkspaceRegistry.makeFilePermissive(target);
         } catch (IOException exception) {
             throw WorkspaceRegistry.ioFailure("failed to write workspace file", exception);
         }

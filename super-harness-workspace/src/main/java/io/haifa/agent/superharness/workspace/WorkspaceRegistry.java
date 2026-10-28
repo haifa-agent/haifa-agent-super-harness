@@ -33,9 +33,15 @@ final class WorkspaceRegistry {
             return existing;
         }
         try {
-            Files.createDirectories(workspaceRoot.resolve("user-data/uploads"));
-            Files.createDirectories(workspaceRoot.resolve("user-data/workspace"));
-            Files.createDirectories(workspaceRoot.resolve("user-data/outputs"));
+            Path uploads = workspaceRoot.resolve("user-data/uploads");
+            Path workspace = workspaceRoot.resolve("user-data/workspace");
+            Path outputs = workspaceRoot.resolve("user-data/outputs");
+            Files.createDirectories(uploads);
+            Files.createDirectories(workspace);
+            Files.createDirectories(outputs);
+            makeDirectoryPermissive(uploads);
+            makeDirectoryPermissive(workspace);
+            makeDirectoryPermissive(outputs);
             Properties properties = new Properties();
             properties.setProperty("ownerId", owner);
             properties.setProperty("threadId", thread);
@@ -132,6 +138,28 @@ final class WorkspaceRegistry {
             Files.createDirectories(path);
         } catch (IOException exception) {
             throw ioFailure("failed to create storage directory", exception);
+        }
+    }
+
+    static void makeDirectoryPermissive(Path path) {
+        try {
+            if (java.nio.file.FileSystems.getDefault().supportedFileAttributeViews().contains("posix")) {
+                Files.setPosixFilePermissions(
+                        path, java.nio.file.attribute.PosixFilePermissions.fromString("rwxrwxrwx"));
+            }
+        } catch (Exception ignored) {
+            // Best effort on platforms or security managers where POSIX attributes are not supported
+        }
+    }
+
+    static void makeFilePermissive(Path path) {
+        try {
+            if (java.nio.file.FileSystems.getDefault().supportedFileAttributeViews().contains("posix")) {
+                Files.setPosixFilePermissions(
+                        path, java.nio.file.attribute.PosixFilePermissions.fromString("rw-rw-rw-"));
+            }
+        } catch (Exception ignored) {
+            // Best effort on platforms or security managers where POSIX attributes are not supported
         }
     }
 

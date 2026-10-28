@@ -194,7 +194,7 @@ class DistSupportSandboxTest(unittest.TestCase):
             with self.assertRaises(install_service.InstallError):
                 install_service.run(["test"], timeout=1, check=True)
 
-    def test_do_prepare_offline_tar_success(self):
+    def test_do_prepare_offline_tar_success_and_doctor_pass(self):
         prefix = Path(self.temp_dir)
         sandbox_dir = prefix / "sandbox"
         sandbox_dir.mkdir(parents=True, exist_ok=True)
@@ -202,17 +202,85 @@ class DistSupportSandboxTest(unittest.TestCase):
             str(ROOT / "dist-support" / "sandbox" / "image-lock.json"),
             str(sandbox_dir / "image-lock.json")
         )
+        import io, tarfile
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
+            inner_manifest = json.dumps([{
+                "Config": "6328d7fd2f0ff0b4c147c3d05b3df1ce331f4a482eb6e550ecd64ed1fcf906e7.json",
+                "RepoTags": ["enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:1.11.0"]
+            }]).encode("utf-8")
+            ti = tarfile.TarInfo(name="manifest.json")
+            ti.size = len(inner_manifest)
+            tar.addfile(ti, io.BytesIO(inner_manifest))
         fake_tar = prefix / "sandbox-fake.tar"
-        fake_tar.write_bytes(b"dummy-tar-bytes")
+        fake_tar.write_bytes(tar_buffer.getvalue())
         fake_sha = install_service.sha256_file(fake_tar)
 
         manifest_file = prefix / "manifest.json"
         manifest_file.write_text(json.dumps({
-            "image": "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:1.11.0",
+            "image": "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:1.11.0@sha256:6328d7fd2f0ff0b4c147c3d05b3df1ce331f4a482eb6e550ecd64ed1fcf906e7",
             "file": fake_tar.name,
             "sha256": fake_sha,
-            "image_id": "sha256:d8c5f111222333"
+            "image_id": "sha256:6328d7fd2f0ff0b4c147c3d05b3df1ce331f4a482eb6e550ecd64ed1fcf906e7"
         }), encoding="utf-8")
+
+        args = types.SimpleNamespace(
+            prefix=str(prefix),
+            data_root=None,
+            image_tar=str(fake_tar),
+            gateway_port=18018,
+            frontend_port=33018,
+            skip_frontend=True,
+            json=True,
+            java_bin=None,
+            execution_provider="docker-aio"
+        )
+        console = MagicMock()
+        ctx = install_service.Context(args)
+
+        # 1. do_prepare loads and verifies the image
+        with patch.object(install_service, "which", return_value="/usr/bin/docker"), \
+             patch.object(install_service, "run", side_effect=[
+                 (0, "29.1.3"),  # docker info
+                 (0, "Loaded image: enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:1.11.0"),  # docker load
+                 (0, "sha256:6328d7fd2f0ff0b4c147c3d05b3df1ce331f4a482eb6e550ecd64ed1fcf906e7 amd64 []")  # docker image inspect
+             ]):
+            code = install_service.do_prepare(ctx, console)
+            self.assertEqual(code, install_service.EXIT_OK)
+
+        # 2. Sequence test: do_doctor in the same run immediately recognizes the loaded image and returns PASS
+        with patch.object(install_service, "which", side_effect=lambda cmd: "/usr/bin/" + cmd), \
+             patch.object(install_service, "port_bindable", return_value=True), \
+             patch.object(install_service, "run", side_effect=[
+                 (0, 'openjdk version "21.0.2"'),  # java
+                 (0, "29.1.3"),  # docker info
+                 (0, "sha256:6328d7fd2f0ff0b4c147c3d05b3df1ce331f4a482eb6e550ecd64ed1fcf906e7 amd64 []"),  # image inspect
+                 (0, "bridge")  # docker network inspect bridge
+             ]), \
+             patch("sys.stdout"):
+            doctor_code = install_service.do_doctor(ctx, 18018, 33018, console)
+            self.assertEqual(doctor_code, install_service.EXIT_OK)
+
+    def test_do_prepare_offline_tar_rejected_when_different_image(self):
+        prefix = Path(self.temp_dir)
+        sandbox_dir = prefix / "sandbox"
+        sandbox_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            str(ROOT / "dist-support" / "sandbox" / "image-lock.json"),
+            str(sandbox_dir / "image-lock.json")
+        )
+        import io, tarfile
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
+            inner_manifest = json.dumps([{
+                "Config": "1111111111111111111111111111111111111111111111111111111111111111.json",
+                "RepoTags": ["some-unrelated-image:latest"]
+            }]).encode("utf-8")
+            ti = tarfile.TarInfo(name="manifest.json")
+            ti.size = len(inner_manifest)
+            tar.addfile(ti, io.BytesIO(inner_manifest))
+        fake_tar = prefix / "sandbox-fake-wrong.tar"
+        fake_tar.write_bytes(tar_buffer.getvalue())
 
         args = types.SimpleNamespace(
             prefix=str(prefix),
@@ -225,11 +293,47 @@ class DistSupportSandboxTest(unittest.TestCase):
         with patch.object(install_service, "which", return_value="/usr/bin/docker"), \
              patch.object(install_service, "run", side_effect=[
                  (0, "29.1.3"),  # docker info
-                 (0, "Loaded image: enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:1.11.0"),  # docker load
-                 (0, "sha256:d8c5f111222333 amd64 []")  # docker image inspect
+                 (0, "Loaded image: some-unrelated-image:latest"),  # docker load
+                 (0, "sha256:1111111111111111111111111111111111111111111111111111111111111111 amd64 []")  # docker image inspect
              ]):
-            code = install_service.do_prepare(ctx, console)
-            self.assertEqual(code, install_service.EXIT_OK)
+            with self.assertRaises(install_service.InstallError) as cm:
+                install_service.do_prepare(ctx, console)
+            self.assertIn("digest mismatch", str(cm.exception))
+
+    def test_write_env_file_without_image_lock_for_non_docker(self):
+        prefix = Path(self.temp_dir)
+        config_dir = prefix / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        env_tmpl = ROOT / "dist-support" / "templates" / "gateway.env.tmpl"
+        shutil.copy2(str(env_tmpl), str(config_dir / "gateway.env.tmpl"))
+
+        args = types.SimpleNamespace(
+            prefix=str(prefix),
+            data_root=None,
+            gateway_port=18018,
+            frontend_port=33018,
+            execution_provider="disabled",
+            docker_image=None,
+            docker_socket=None,
+            docker_lifecycle=None,
+            docker_idle_timeout_ms=None,
+            skip_frontend=False
+        )
+        console = MagicMock()
+        ctx = install_service.Context(args)
+        # sandbox/image-lock.json does NOT exist; write_env_file for disabled provider must succeed
+        key_state = install_service.write_env_file(ctx, 18018, 33018, console)
+        self.assertEqual(key_state, "CREATED")
+        env_values = install_service.read_env_file(ctx.env_file)
+        self.assertEqual(env_values.get("HAIFA_SUPER_HARNESS_EXECUTION_PROVIDER"), "disabled")
+
+    def test_provider_alias_normalization(self):
+        self.assertEqual(install_service.normalize_execution_provider("docker_aio"), "docker-aio")
+        self.assertEqual(install_service.normalize_execution_provider("docker"), "docker-aio")
+        self.assertEqual(install_service.normalize_execution_provider("host_guarded"), "host-guarded")
+        self.assertEqual(install_service.normalize_execution_provider("host"), "host-guarded")
+        self.assertEqual(install_service.normalize_execution_provider("off"), "disabled")
+        self.assertEqual(install_service.normalize_execution_provider("none"), "disabled")
 
     def test_do_doctor_provider_aware(self):
         prefix = Path(self.temp_dir)

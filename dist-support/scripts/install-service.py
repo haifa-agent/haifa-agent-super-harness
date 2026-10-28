@@ -329,6 +329,95 @@ def ensure_continuation_key(env_values, console):
     return "CREATED"
 
 
+def normalize_execution_provider(raw):
+    if not raw:
+        return "disabled"
+    val = raw.strip().lower().replace("_", "-")
+    if val in ("docker-aio", "docker"):
+        return "docker-aio"
+    if val in ("host-guarded", "host"):
+        return "host-guarded"
+    if val in ("disabled", "off", "none", "false"):
+        return "disabled"
+    return val
+
+
+def read_docker_tar_config(tar_path):
+    """Extract Image Config ID (sha256:...) from a docker save tar archive."""
+    try:
+        import tarfile
+        with tarfile.open(str(tar_path), "r:*") as tar:
+            for member in tar.getmembers():
+                clean_name = member.name.lstrip("./")
+                if clean_name == "manifest.json":
+                    f = tar.extractfile(member)
+                    if f:
+                        data = json.loads(f.read().decode("utf-8"))
+                        if isinstance(data, list) and len(data) > 0:
+                            cfg = data[0].get("Config", "")
+                            cfg_base = cfg.split("/")[-1]
+                            if cfg_base.endswith(".json"):
+                                cfg_base = cfg_base[:-5]
+                            if cfg_base:
+                                return f"sha256:{cfg_base}"
+                elif clean_name == "index.json":
+                    f = tar.extractfile(member)
+                    if f:
+                        data = json.loads(f.read().decode("utf-8"))
+                        manifests = data.get("manifests", [])
+                        if manifests and "digest" in manifests[0]:
+                            return manifests[0]["digest"]
+    except Exception:
+        pass
+    return None
+
+
+def inspect_and_verify_image(docker_cli, lock_data, manifest_data=None, tar_config_id=None):
+    """
+    Inspect local docker image and verify its identity against image lock data.
+    Shared by do_doctor and do_prepare.
+    Returns (ok: bool, detail: str, img_id: str, img_arch: str).
+    """
+    locked_img = lock_data.get("image", "")
+    expected_digest = lock_data.get("digest")
+    expected_config = lock_data.get("config_digest") or (manifest_data.get("image_id") if manifest_data else None) or tar_config_id
+
+    # 1. Inspect image by locked_img
+    code, out = run([docker_cli, "image", "inspect", locked_img, "--format", "{{.Id}} {{.Architecture}} {{json .RepoDigests}}"])
+    if code != 0:
+        repo_tag = f"{lock_data.get('repository')}:{lock_data.get('tag')}"
+        code, out = run([docker_cli, "image", "inspect", repo_tag, "--format", "{{.Id}} {{.Architecture}} {{json .RepoDigests}}"])
+        if code != 0 and expected_config:
+            code, out = run([docker_cli, "image", "inspect", expected_config, "--format", "{{.Id}} {{.Architecture}} {{json .RepoDigests}}"])
+
+    if code != 0 or not out.strip():
+        return False, f"Image {locked_img} not present locally (run 'install-service.py prepare')", "", ""
+
+    parts = out.strip().split(maxsplit=2)
+    img_id = parts[0]
+    img_arch = parts[1] if len(parts) > 1 else "unknown"
+    repo_digests = parts[2] if len(parts) > 2 else ""
+
+    matched = False
+    if expected_digest:
+        digest_clean = expected_digest.replace("sha256:", "")
+        if digest_clean in img_id or digest_clean in repo_digests:
+            matched = True
+    if not matched and expected_config:
+        cfg_clean = expected_config.replace("sha256:", "")
+        if cfg_clean in img_id:
+            matched = True
+
+    if not matched:
+        return False, f"Image present but digest mismatch: expected digest={expected_digest} or config={expected_config}, got id={img_id}, repoDigests={repo_digests}", img_id, img_arch
+
+    expected_platform = lock_data.get("platform", "linux/amd64")
+    if "amd64" in expected_platform and platform.machine().lower() in ("x86_64", "amd64") and img_arch != "amd64":
+        return False, f"Architecture mismatch: {img_arch} vs amd64", img_id, img_arch
+
+    return True, f"Present and verified ({img_arch}, {img_id[:19]}...)", img_id, img_arch
+
+
 def load_image_lock(ctx):
     lock_file = ctx.prefix / "sandbox" / "image-lock.json"
     if not lock_file.is_file():
@@ -349,12 +438,21 @@ def write_env_file(ctx, gateway, frontend, console):
         raise InstallError("env template is missing: %s" % ctx.env_template)
     existing = read_env_file(ctx.env_file)
     key_state = ensure_continuation_key(existing, console)
-    lock_data = load_image_lock(ctx)
-    execution_provider = (
+    raw_provider = (
         getattr(ctx.args, "execution_provider", None)
         or existing.get("HAIFA_SUPER_HARNESS_EXECUTION_PROVIDER")
         or "disabled"
     )
+    execution_provider = normalize_execution_provider(raw_provider)
+    is_docker = execution_provider == "docker-aio"
+    lock_data = {}
+    if is_docker:
+        lock_data = load_image_lock(ctx)
+    else:
+        try:
+            lock_data = load_image_lock(ctx)
+        except Exception:
+            pass
     scheduler_enabled = str(
         getattr(ctx.args, "scheduler_enabled", None)
         or existing.get("HAIFA_SUPER_HARNESS_SCHEDULER_ENABLED")
@@ -841,7 +939,7 @@ def do_doctor(ctx, gateway, frontend, console):
         or existing_env.get("HAIFA_SUPER_HARNESS_EXECUTION_PROVIDER")
         or "disabled"
     )
-    is_docker_provider = active_provider == "docker-aio"
+    is_docker_provider = normalize_execution_provider(active_provider) == "docker-aio"
 
     checks.append({
         "name": "execution_provider",
@@ -878,35 +976,20 @@ def do_doctor(ctx, gateway, frontend, console):
 
     img_ok = False
     img_detail = "Docker daemon unreachable"
+    lock_data = {}
     try:
         lock_data = load_image_lock(ctx)
-        locked_img = lock_data.get("image", "")
     except Exception as e:
-        lock_data = {}
-        locked_img = ""
         img_detail = f"Sandbox image lock unavailable: {e}"
-    if daemon_ok and locked_img:
-        code, out = run([docker_cli, "image", "inspect", locked_img, "--format", "{{.Id}} {{.Architecture}} {{json .RepoDigests}}"])
-        if code == 0 and out.strip():
-            parts = out.strip().split(maxsplit=2)
-            img_id = parts[0]
-            img_arch = parts[1] if len(parts) > 1 else "unknown"
-            repo_digests = parts[2] if len(parts) > 2 else ""
-            expected_digest = lock_data.get("digest")
-            if expected_digest:
-                digest_clean = expected_digest.replace("sha256:", "")
-                if digest_clean not in img_id and digest_clean not in repo_digests:
-                    img_detail = f"Image present but digest mismatch: {img_id}"
-                elif img_arch != "amd64" and arch in ("x86_64", "amd64"):
-                    img_detail = f"Architecture mismatch: {img_arch} vs amd64"
-                else:
-                    img_ok = True
-                    img_detail = f"Present and verified ({img_arch}, {img_id[:19]}...)"
-            else:
-                img_ok = True
-                img_detail = f"Present ({img_arch}, {img_id[:19]}...)"
-        else:
-            img_detail = f"Image {locked_img} not present locally (run 'install-service.py prepare')"
+
+    if daemon_ok and lock_data:
+        img_ok, img_detail, _, _ = inspect_and_verify_image(docker_cli, lock_data)
+    elif not daemon_ok:
+        img_ok = False
+        img_detail = "Docker daemon unreachable"
+    else:
+        img_ok = False
+
     image_status = "PASS" if img_ok else ("FAIL" if is_docker_provider else "WARN")
     if not is_docker_provider and not img_ok:
         img_detail += f" (optional when execution provider is '{active_provider}')"
@@ -977,6 +1060,7 @@ def do_prepare(ctx, console):
                 image_tar = str(tars[0])
 
     manifest_data = None
+    tar_config_id = None
     if image_tar:
         tar_path = Path(image_tar).resolve()
         if not tar_path.is_file():
@@ -987,6 +1071,9 @@ def do_prepare(ctx, console):
         if manifest_file.is_file():
             try:
                 manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+                manifest_img = manifest_data.get("image")
+                if manifest_img and manifest_img != locked_img:
+                    raise InstallError(f"Manifest image '{manifest_img}' does not match locked image '{locked_img}'")
                 expected_sha = manifest_data.get("sha256")
                 if expected_sha:
                     actual_sha = sha256_file(tar_path)
@@ -997,6 +1084,11 @@ def do_prepare(ctx, console):
                 if isinstance(e, InstallError):
                     raise
                 console.log(f"[prepare] warning: failed to parse manifest: {e}")
+
+        tar_config_id = read_docker_tar_config(tar_path)
+        if manifest_data and manifest_data.get("image_id") and tar_config_id:
+            if manifest_data.get("image_id") != tar_config_id:
+                raise InstallError(f"Archive config ID mismatch: manifest expects {manifest_data.get('image_id')} but tar contains {tar_config_id}")
 
         code, out = run([docker_cli, "load", "-i", str(tar_path)], timeout=600)
         if code != 0:
@@ -1009,30 +1101,12 @@ def do_prepare(ctx, console):
             raise InstallError(f"docker pull failed: {out.strip()}")
         console.log("[prepare] docker pull completed")
 
-    code, out = run([docker_cli, "image", "inspect", locked_img, "--format", "{{.Id}} {{.Architecture}} {{json .RepoDigests}}"])
-    if code != 0:
-        repo_tag = f"{lock_data.get('repository')}:{lock_data.get('tag')}"
-        code, out = run([docker_cli, "image", "inspect", repo_tag, "--format", "{{.Id}} {{.Architecture}} {{json .RepoDigests}}"])
-        if code != 0:
-            raise InstallError(f"Failed to inspect prepared image: {out.strip()}")
+    ok, detail, img_id, img_arch = inspect_and_verify_image(
+        docker_cli, lock_data, manifest_data=manifest_data, tar_config_id=tar_config_id)
+    if not ok:
+        raise InstallError(f"Prepared image verification failed: {detail}")
 
-    parts = out.strip().split(maxsplit=2)
-    img_id = parts[0]
-    img_arch = parts[1] if len(parts) > 1 else ""
-    repo_digests = parts[2] if len(parts) > 2 else ""
-
-    if expected_digest:
-        digest_clean = expected_digest.replace("sha256:", "")
-        config_digest = lock_data.get("config_digest") or (manifest_data.get("image_id") if manifest_data else None)
-        matched = (digest_clean in img_id or digest_clean in repo_digests)
-        if not matched and config_digest:
-            matched = config_digest.replace("sha256:", "") in img_id
-        if not matched and manifest_data and image_tar:
-            matched = True
-        if not matched:
-            raise InstallError(f"Prepared image digest mismatch! Expected {expected_digest}, but inspect output was: id={img_id}, repoDigests={repo_digests}")
-
-    console.log(f"[prepare] successfully prepared and verified {locked_img} (id={img_id[:19]}..., arch={img_arch})")
+    console.log(f"[prepare] successfully prepared and verified {locked_img} ({detail})")
     return EXIT_OK
 
 
