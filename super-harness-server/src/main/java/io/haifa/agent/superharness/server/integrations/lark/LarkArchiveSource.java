@@ -8,6 +8,7 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.function.Function;
 
 /** Source of the official Lark CLI content archive for one release tag. */
 public interface LarkArchiveSource {
@@ -19,28 +20,37 @@ public interface LarkArchiveSource {
         static final Duration TIMEOUT = Duration.ofSeconds(60);
         static final int MAX_BYTES = LarkSkillPackInstaller.MAX_ARCHIVE_BYTES;
         private final HttpClient client;
+        private final Duration timeout;
+        private final Function<String, String> urlResolver;
 
         public GitHub() {
-            this(HttpClient.newBuilder().connectTimeout(TIMEOUT).build());
+            this(HttpClient.newBuilder().connectTimeout(TIMEOUT).build(), TIMEOUT, LarkSkillPackInstaller::archiveUrl);
         }
 
         GitHub(HttpClient client) {
+            this(client, TIMEOUT, LarkSkillPackInstaller::archiveUrl);
+        }
+
+        GitHub(HttpClient client, Duration timeout, Function<String, String> urlResolver) {
             if (client.followRedirects() != HttpClient.Redirect.NEVER) throw new IllegalArgumentException("Archive redirects are disabled");
             this.client = client;
+            this.timeout = timeout;
+            this.urlResolver = urlResolver;
         }
 
         @Override
         public Path fetch(String version) throws IOException {
-            String url = LarkSkillPackInstaller.archiveUrl(version);
+            String url = urlResolver.apply(version);
             Path archive = Files.createTempFile("haifa-lark-skills-", ".zip");
             boolean ok = false;
-            try {
+            try (BoundedArchive subscriber = new BoundedArchive(archive, MAX_BYTES)) {
                 HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-                        .timeout(TIMEOUT)
+                        .timeout(timeout)
                         .header("User-Agent", "haifa-super-harness")
                         .GET()
                         .build();
-                HttpResponse<Path> response = client.send(request, info -> new BoundedArchive(archive, MAX_BYTES));
+                HttpResponse<Path> response = LarkHttpCalls.sendWithDeadline(
+                        client, request, info -> subscriber, timeout);
                 if (!response.uri().equals(request.uri())) {
                     throw new IllegalArgumentException("Lark archive redirects are not permitted");
                 }
@@ -76,7 +86,7 @@ public interface LarkArchiveSource {
     }
 
     /** Streams to disk with back pressure, cancelling before a byte beyond the limit is written. */
-    final class BoundedArchive implements HttpResponse.BodySubscriber<Path> {
+    final class BoundedArchive implements HttpResponse.BodySubscriber<Path>, AutoCloseable {
         private final java.util.concurrent.CompletableFuture<Path> result = new java.util.concurrent.CompletableFuture<>();
         private final Path target;
         private final long limit;
@@ -125,9 +135,24 @@ public interface LarkArchiveSource {
 
         @Override public void onComplete() {
             try {
-                output.close();
+                if (output != null) output.close();
                 result.complete(target);
             } catch (IOException failure) { onError(failure); }
+        }
+
+        @Override
+        public void close() {
+            cancel();
+        }
+
+        void cancel() {
+            if (subscription != null) {
+                try { subscription.cancel(); } catch (RuntimeException ignored) {}
+            }
+            try {
+                if (output != null) output.close();
+            } catch (IOException ignored) {}
+            result.cancel(true);
         }
     }
 }

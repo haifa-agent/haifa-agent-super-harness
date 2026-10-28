@@ -23,14 +23,27 @@ public final class LarkHttpAppRegistration implements LarkAppRegistration {
 
     private final ObjectMapper json;
     private final HttpClient client;
+    private final Duration httpTimeout;
+    private final Duration latestVersionTimeout;
+    private final String accountsHost;
+    private final String latestReleaseApi;
 
     public LarkHttpAppRegistration(ObjectMapper json) {
         this(json, HttpClient.newBuilder().connectTimeout(HTTP_TIMEOUT).build());
     }
 
     LarkHttpAppRegistration(ObjectMapper json, HttpClient client) {
+        this(json, client, HTTP_TIMEOUT, LATEST_VERSION_TIMEOUT, null, LATEST_RELEASE_API);
+    }
+
+    LarkHttpAppRegistration(ObjectMapper json, HttpClient client, Duration httpTimeout,
+            Duration latestVersionTimeout, String accountsHost, String latestReleaseApi) {
         this.json = json;
         this.client = client;
+        this.httpTimeout = httpTimeout;
+        this.latestVersionTimeout = latestVersionTimeout;
+        this.accountsHost = accountsHost;
+        this.latestReleaseApi = latestReleaseApi;
     }
 
     @Override
@@ -42,7 +55,7 @@ public final class LarkHttpAppRegistration implements LarkAppRegistration {
         form.put("archetype", "PersonalAgent");
         form.put("auth_method", "client_secret");
         form.put("request_user_info", "open_id tenant_brand");
-        JsonNode response = postForm(accountsUrl("feishu"), form);
+        JsonNode response = postForm(resolveAccountsUrl("feishu"), form);
         String userCode = text(response, "user_code");
         String deviceCode = text(response, "device_code");
         if (userCode.isBlank() || deviceCode.isBlank()) {
@@ -56,7 +69,7 @@ public final class LarkHttpAppRegistration implements LarkAppRegistration {
         Map<String, String> form = new LinkedHashMap<>();
         form.put("action", "poll");
         form.put("device_code", deviceCode);
-        JsonNode response = postForm(accountsUrl(brand), form);
+        JsonNode response = postForm(resolveAccountsUrl(brand), form);
         String error = text(response, "error");
         if (error.isEmpty() && !text(response, "client_id").isEmpty()) {
             return PollOutcome.approved(new Poll(
@@ -73,14 +86,15 @@ public final class LarkHttpAppRegistration implements LarkAppRegistration {
 
     @Override
     public String latestCliVersion() {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(LATEST_RELEASE_API))
-                .timeout(LATEST_VERSION_TIMEOUT)
+        HttpRequest request = HttpRequest.newBuilder(URI.create(latestReleaseApi))
+                .timeout(latestVersionTimeout)
                 .header("Accept", "application/vnd.github+json")
                 .header("User-Agent", "haifa-super-harness")
                 .GET()
                 .build();
         try {
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            HttpResponse<String> response = LarkHttpCalls.sendWithDeadline(
+                    client, request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), latestVersionTimeout);
             if (response.statusCode() != 200) {
                 return null;
             }
@@ -106,14 +120,15 @@ public final class LarkHttpAppRegistration implements LarkAppRegistration {
                     .append(URLEncoder.encode(value, StandardCharsets.UTF_8));
         });
         HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-                .timeout(HTTP_TIMEOUT)
+                .timeout(httpTimeout)
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .header("User-Agent", "haifa-super-harness")
                 .POST(HttpRequest.BodyPublishers.ofString(encoded.toString(), StandardCharsets.UTF_8))
                 .build();
         HttpResponse<String> response;
         try {
-            response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            response = LarkHttpCalls.sendWithDeadline(
+                    client, request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), httpTimeout);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new IllegalArgumentException("Lark app registration request failed: InterruptedException");
@@ -130,6 +145,13 @@ public final class LarkHttpAppRegistration implements LarkAppRegistration {
         } catch (IOException invalid) {
             throw new IllegalArgumentException("Lark app registration returned non-JSON response.", invalid);
         }
+    }
+
+    private String resolveAccountsUrl(String brand) {
+        if (accountsHost != null) {
+            return accountsHost + REGISTRATION_PATH;
+        }
+        return accountsUrl(brand);
     }
 
     static String accountsUrl(String brand) {
