@@ -64,6 +64,10 @@ python scripts/install-service.py uninstall
 - **配置**：从 `config/gateway.env.tmpl` 渲染 `config/gateway.env`（0600）；首次生成
   continuation key 后**永不轮换**，重复 install 保留已有 key 与 operator 额外键。同时写入
   `HAIFA_SUPER_HARNESS_SKILLS_DIR=<prefix>/skills`，让服务端加载 `skills/public` 官方技能。
+- **定时任务调度**：模板默认写入 `HAIFA_SUPER_HARNESS_SCHEDULER_ENABLED=1`，启用单实例后台调度线程；
+  缺省、空或 `0` 时保持关闭，已有定时任务不会自动运行（REST 手动触发仍可用）。轮询间隔等调优键为
+  `HAIFA_SUPER_HARNESS_SCHEDULER_POLL_SECONDS`（默认 5）、`..._MIN_ONCE_DELAY_SECONDS`（默认 60）、
+  `..._MAX_CONCURRENT_RUNS`（默认 3）、`..._QUEUE_TIMEOUT_SECONDS`（默认 3600）；修改后需重启 Gateway。
 - **Linux**：渲染 `service/systemd/*.tmpl` 到 `/etc/systemd/system/`，`enable --now`；覆盖前把旧 unit
   备份到 `config/unit-backup/`。需要 root。前端 unit 只用 `After=`/`Wants=`，**不** `Requires=` gateway，
   这样后端单独更新（`systemctl stop super-harness-gateway`）不会连带停掉前端。

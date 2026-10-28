@@ -22,8 +22,10 @@ from __future__ import annotations
 import argparse
 import base64
 import getpass
+import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import socket
@@ -66,6 +68,14 @@ def _reconfigure_stdio():
 
 def which(name):
     return shutil.which(name) or ""
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(str(path), "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def run(argv, timeout=120, check=False, shell=False):
@@ -309,16 +319,63 @@ def ensure_continuation_key(env_values, console):
     return "CREATED"
 
 
+def load_image_lock(ctx):
+    lock_file = ctx.prefix / "sandbox" / "image-lock.json"
+    if lock_file.is_file():
+        try:
+            return json.loads(lock_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {
+        "image": "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:1.11.0@sha256:6328d7fd2f0ff0b4c147c3d05b3df1ce331f4a482eb6e550ecd64ed1fcf906e7",
+        "default_lifecycle_mode": "warm",
+        "default_idle_timeout_ms": 600000,
+        "platform": "linux/amd64"
+    }
+
+
 def write_env_file(ctx, gateway, frontend, console):
     if not ctx.env_template.is_file():
         raise InstallError("env template is missing: %s" % ctx.env_template)
     existing = read_env_file(ctx.env_file)
     key_state = ensure_continuation_key(existing, console)
+    lock_data = load_image_lock(ctx)
+    execution_provider = (
+        getattr(ctx.args, "execution_provider", None)
+        or existing.get("HAIFA_SUPER_HARNESS_EXECUTION_PROVIDER")
+        or "host-guarded"
+    )
+    docker_image = (
+        getattr(ctx.args, "docker_image", None)
+        or existing.get("HAIFA_SUPER_HARNESS_DOCKER_IMAGE")
+        or lock_data.get("image", "")
+    )
+    default_socket = "//./pipe/docker_engine" if ctx.is_windows else "/var/run/docker.sock"
+    docker_socket = (
+        getattr(ctx.args, "docker_socket", None)
+        or existing.get("HAIFA_SUPER_HARNESS_DOCKER_SOCKET")
+        or default_socket
+    )
+    docker_lifecycle = (
+        getattr(ctx.args, "docker_lifecycle", None)
+        or existing.get("HAIFA_SUPER_HARNESS_DOCKER_LIFECYCLE")
+        or lock_data.get("default_lifecycle_mode", "warm")
+    )
+    docker_idle_timeout = str(
+        getattr(ctx.args, "docker_idle_timeout_ms", None)
+        or existing.get("HAIFA_SUPER_HARNESS_DOCKER_IDLE_TIMEOUT_MS")
+        or lock_data.get("default_idle_timeout_ms", 600000)
+    )
     rendered = render_template(ctx.env_template, {
         "gateway_port": gateway,
         "frontend_port": frontend,
         "data_root": str(ctx.data).replace("\\", "/"),
         "skills_dir": str(ctx.prefix / "skills").replace("\\", "/"),
+        "execution_provider": execution_provider,
+        "docker_image": docker_image,
+        "docker_socket": docker_socket,
+        "docker_lifecycle": docker_lifecycle,
+        "docker_idle_timeout_ms": docker_idle_timeout,
     })
     managed = set()
     lines = []
@@ -697,10 +754,243 @@ def do_status(ctx, gateway, frontend, console):
     return EXIT_OK if report["running"] else EXIT_NOT_RUNNING
 
 
+def do_doctor(ctx, gateway, frontend, console):
+    checks = []
+    os_name = platform.system()
+    arch = platform.machine().lower()
+    is_linux = os_name == "Linux"
+    checks.append({
+        "name": "operating_system",
+        "title": "Operating System",
+        "status": "PASS" if is_linux else "WARN",
+        "detail": f"{os_name} {platform.release()} ({arch})"
+    })
+
+    java_exec = ctx.java_bin()
+    code, out = run([java_exec, "-version"])
+    java_ok = False
+    java_detail = "java executable not found"
+    if code == 0 or out:
+        m = re.search(r'version "((\d+)[^"]*)"', out) or re.search(r'version ((\d+)[^\s]*)', out)
+        if m:
+            major = int(m.group(2))
+            java_ok = major >= 21
+            java_detail = f"Java {m.group(1)} (>=21 required)"
+        elif out.strip():
+            java_detail = out.strip().splitlines()[0]
+    checks.append({
+        "name": "java_runtime",
+        "title": "Java Runtime (>=21)",
+        "status": "PASS" if java_ok else "FAIL",
+        "detail": java_detail
+    })
+
+    if not ctx.args.skip_frontend:
+        node_exec = ctx.node_bin()
+        code, out = run([node_exec, "--version"])
+        node_ok = False
+        node_detail = "node executable not found"
+        if code == 0 and out.strip().startswith("v"):
+            m = re.match(r"^v(\d+)\.", out.strip())
+            if m:
+                major = int(m.group(1))
+                node_ok = major >= 22
+                node_detail = f"{out.strip()} (>=22 required)"
+        checks.append({
+            "name": "node_runtime",
+            "title": "Node.js Runtime (>=22)",
+            "status": "PASS" if node_ok else "FAIL",
+            "detail": node_detail
+        })
+
+    gw_available = port_bindable(gateway)
+    fe_available = ctx.args.skip_frontend or port_bindable(frontend)
+    checks.append({
+        "name": "gateway_port",
+        "title": f"Gateway Port {gateway}",
+        "status": "PASS" if gw_available else "WARN",
+        "detail": "bindable" if gw_available else "in use or reserved"
+    })
+    if not ctx.args.skip_frontend:
+        checks.append({
+            "name": "frontend_port",
+            "title": f"Frontend Port {frontend}",
+            "status": "PASS" if fe_available else "WARN",
+            "detail": "bindable" if fe_available else "in use or reserved"
+        })
+
+    docker_cli = which("docker")
+    checks.append({
+        "name": "docker_cli",
+        "title": "Docker CLI",
+        "status": "PASS" if docker_cli else "FAIL",
+        "detail": docker_cli or "docker command not found in PATH"
+    })
+
+    daemon_ok = False
+    daemon_detail = "docker CLI missing"
+    if docker_cli:
+        code, out = run([docker_cli, "info", "--format", "{{.ServerVersion}}"])
+        if code == 0 and out.strip():
+            daemon_ok = True
+            daemon_detail = f"Docker Engine {out.strip()} reachable"
+        else:
+            daemon_detail = f"Failed to connect to Docker daemon: {out.strip()[:200]}"
+    checks.append({
+        "name": "docker_daemon",
+        "title": "Docker Daemon",
+        "status": "PASS" if daemon_ok else "FAIL",
+        "detail": daemon_detail
+    })
+
+    lock_data = load_image_lock(ctx)
+    locked_img = lock_data.get("image", "")
+    img_ok = False
+    img_detail = "Docker daemon unreachable"
+    if daemon_ok and locked_img:
+        code, out = run([docker_cli, "image", "inspect", locked_img, "--format", "{{.Id}} {{.Architecture}} {{json .RepoDigests}}"])
+        if code == 0 and out.strip():
+            parts = out.strip().split(maxsplit=2)
+            img_id = parts[0]
+            img_arch = parts[1] if len(parts) > 1 else "unknown"
+            repo_digests = parts[2] if len(parts) > 2 else ""
+            expected_digest = lock_data.get("digest")
+            if expected_digest:
+                digest_clean = expected_digest.replace("sha256:", "")
+                if digest_clean not in img_id and digest_clean not in repo_digests:
+                    img_detail = f"Image present but digest mismatch: {img_id}"
+                elif img_arch != "amd64" and arch in ("x86_64", "amd64"):
+                    img_detail = f"Architecture mismatch: {img_arch} vs amd64"
+                else:
+                    img_ok = True
+                    img_detail = f"Present and verified ({img_arch}, {img_id[:19]}...)"
+            else:
+                img_ok = True
+                img_detail = f"Present ({img_arch}, {img_id[:19]}...)"
+        else:
+            img_detail = f"Image {locked_img} not present locally (run 'install-service.py prepare')"
+    checks.append({
+        "name": "sandbox_aio_image",
+        "title": "Sandbox AIO Image",
+        "status": "PASS" if img_ok else ("WARN" if daemon_ok else "FAIL"),
+        "detail": img_detail
+    })
+
+    net_ok = False
+    net_detail = "Docker daemon unreachable"
+    if daemon_ok:
+        code, out = run([docker_cli, "network", "inspect", "bridge", "--format", "{{.Driver}}"])
+        if code == 0 and "bridge" in out:
+            net_ok = True
+            net_detail = "Docker bridge driver supported"
+        else:
+            net_detail = f"Bridge inspect failed: {out.strip()[:200]}"
+    checks.append({
+        "name": "docker_network_bridge",
+        "title": "Docker Network Bridge",
+        "status": "PASS" if net_ok else "FAIL",
+        "detail": net_detail
+    })
+
+    has_fail = any(c["status"] == "FAIL" for c in checks)
+    overall = "FAIL" if has_fail else "PASS"
+    result = {
+        "overall_status": overall,
+        "operating_system": os_name,
+        "architecture": arch,
+        "checks": checks
+    }
+    if ctx.args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        console.log("=== Super Harness Linux Sandbox Doctor ===")
+        for c in checks:
+            tag = f"[{c['status']}]"
+            console.log(f"  {tag:<7} {c['title']:<25} -> {c['detail']}")
+        console.log("==========================================")
+        console.log(f"[doctor] verdict: {overall}")
+    return EXIT_OK if overall == "PASS" else EXIT_PREREQ
+
+
+def do_prepare(ctx, console):
+    docker_cli = which("docker")
+    if not docker_cli:
+        raise InstallError("docker CLI not found in PATH")
+    code, out = run([docker_cli, "info", "--format", "{{.ServerVersion}}"])
+    if code != 0:
+        raise InstallError(f"Docker daemon unreachable: {out.strip()}")
+
+    lock_data = load_image_lock(ctx)
+    locked_img = lock_data.get("image", "")
+    if not locked_img:
+        raise InstallError("image lock data missing 'image'")
+    expected_digest = lock_data.get("digest")
+
+    image_tar = ctx.args.image_tar
+    if not image_tar:
+        local_images_dir = ctx.prefix / "sandbox" / "images"
+        if local_images_dir.is_dir():
+            tars = sorted(list(local_images_dir.glob("*.tar")) + list(local_images_dir.glob("*.tar.gz")))
+            if tars:
+                image_tar = str(tars[0])
+
+    if image_tar:
+        tar_path = Path(image_tar).resolve()
+        if not tar_path.is_file():
+            raise InstallError(f"Image archive file not found: {tar_path}")
+        console.log(f"[prepare] loading offline image from {tar_path}...")
+
+        manifest_file = tar_path.parent / "manifest.json"
+        if manifest_file.is_file():
+            try:
+                manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+                expected_sha = manifest_data.get("sha256")
+                if expected_sha:
+                    actual_sha = sha256_file(tar_path)
+                    if actual_sha != expected_sha:
+                        raise InstallError(f"Tar archive sha256 mismatch: expected {expected_sha}, got {actual_sha}")
+                    console.log("[prepare] verified tar archive sha256 successfully")
+            except Exception as e:
+                if isinstance(e, InstallError):
+                    raise
+                console.log(f"[prepare] warning: failed to parse manifest: {e}")
+
+        code, out = run([docker_cli, "load", "-i", str(tar_path)])
+        if code != 0:
+            raise InstallError(f"docker load failed: {out.strip()}")
+        console.log(f"[prepare] docker load output: {out.strip()}")
+    else:
+        console.log(f"[prepare] pulling locked image {locked_img} from registry...")
+        code, out = run([docker_cli, "pull", locked_img])
+        if code != 0:
+            raise InstallError(f"docker pull failed: {out.strip()}")
+        console.log("[prepare] docker pull completed")
+
+    code, out = run([docker_cli, "image", "inspect", locked_img, "--format", "{{.Id}} {{.Architecture}} {{json .RepoDigests}}"])
+    if code != 0:
+        repo_tag = f"{lock_data.get('repository')}:{lock_data.get('tag')}"
+        code, out = run([docker_cli, "image", "inspect", repo_tag, "--format", "{{.Id}} {{.Architecture}} {{json .RepoDigests}}"])
+        if code != 0:
+            raise InstallError(f"Failed to inspect prepared image: {out.strip()}")
+
+    parts = out.strip().split(maxsplit=2)
+    img_id = parts[0]
+    img_arch = parts[1] if len(parts) > 1 else ""
+    repo_digests = parts[2] if len(parts) > 2 else ""
+
+    if expected_digest:
+        digest_clean = expected_digest.replace("sha256:", "")
+        if digest_clean not in img_id and digest_clean not in repo_digests:
+            raise InstallError(f"Prepared image digest mismatch! Expected {expected_digest}, but inspect output was: id={img_id}, repoDigests={repo_digests}")
+
+    console.log(f"[prepare] successfully prepared and verified {locked_img} (id={img_id[:19]}..., arch={img_arch})")
+    return EXIT_OK
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog=ENTRY_NAME, description="Haifa Super Harness 安装/服务化工具")
     parser.add_argument("command", nargs="?", default="install",
-                        choices=("install", "uninstall", "status", "render", "start", "stop"))
+                        choices=("install", "uninstall", "status", "render", "start", "stop", "doctor", "prepare"))
     parser.add_argument("--prefix", default=str(Path(__file__).resolve().parent.parent))
     parser.add_argument("--data-root", default=None)
     parser.add_argument("--gateway-port", type=int, default=0)
@@ -711,6 +1001,13 @@ def build_parser():
     parser.add_argument("--java-bin", default=None)
     parser.add_argument("--node-bin", default=None)
     parser.add_argument("--winsw-exe", default=None)
+    parser.add_argument("--execution-provider", choices=("host-guarded", "docker-aio", "disabled"), default=None,
+                        help="Execution provider: host-guarded (default) | docker-aio | disabled")
+    parser.add_argument("--docker-image", default=None, help="Docker AIO sandbox image reference")
+    parser.add_argument("--docker-socket", default=None, help="Docker daemon socket path")
+    parser.add_argument("--docker-lifecycle", choices=("warm", "ephemeral"), default=None, help="Container lifecycle mode")
+    parser.add_argument("--docker-idle-timeout-ms", type=int, default=None, help="Warm container idle timeout in ms")
+    parser.add_argument("--image-tar", default=None, help="Path to offline Docker image tar archive for prepare")
     parser.add_argument("--skip-frontend", action="store_true")
     parser.add_argument("--ready-timeout", type=int, default=300)
     parser.add_argument("--dry-run", action="store_true")
@@ -731,6 +1028,10 @@ def main(argv=None):
         validate_ports(gateway, frontend, args.skip_frontend)
         for path in (ctx.config, ctx.data, ctx.logs):
             path.mkdir(parents=True, exist_ok=True)
+        if args.command == "doctor":
+            return do_doctor(ctx, gateway, frontend, console)
+        if args.command == "prepare":
+            return do_prepare(ctx, console)
         if args.command == "status":
             return do_status(ctx, gateway, frontend, console)
         if args.command == "stop":

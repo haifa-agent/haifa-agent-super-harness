@@ -218,6 +218,11 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -GatewayOnly
   非只读 MCP 与技能脚本不再逐个弹审批；`deny` 把同样的能力改为 DENY。两者都保留 CRITICAL 风险 DENY，凭据
   `REAUTHENTICATE` 在 `auto` 下仍要求审批。级别只在 Gateway 启动时读取、对之后新建的 Run 生效；已在等待的审批按原级别处理。
   该开关是信任扩大，不得用作验收或演示证据，也不得据此放宽任何 Oracle（登记见 SHPM issue `W05-APPROVAL-LEVEL`，归属 W21）。
+- **定时任务调度（默认关闭）**：进程变量 `HAIFA_SUPER_HARNESS_SCHEDULER_ENABLED=1`（或 `true`/`yes`）启动单实例
+  后台调度线程，按任务 cron / interval / once 计划触发 Run；缺省、空或 `0` 时调度器保持关闭，已有任务不会自动运行，
+  REST 手动触发仍可用。可选 `HAIFA_SUPER_HARNESS_SCHEDULER_POLL_SECONDS`（默认 5）、
+  `HAIFA_SUPER_HARNESS_SCHEDULER_MIN_ONCE_DELAY_SECONDS`（默认 60）、`..._MAX_CONCURRENT_RUNS`（默认 3）、
+  `..._QUEUE_TIMEOUT_SECONDS`（默认 3600）。只在 Gateway 启动时读取，修改后需重启；发布包模板默认启用该键。
 - **宿主 Shell 工具（默认关闭）**：设进程变量 `HAIFA_SUPER_HARNESS_HOST_SHELL=on`（缺省、空、`off` 或非法值
   均保持关闭，关闭时工具面与披露逐字不变）后，经公开 `HostExecutionPlatforms.hostGuarded` 注册 SDK 的
   `execution_run`。命令或脚本以 Gateway OS 用户在**唯一注册的宿主 workspace** 内执行；模型不能选择 workspace

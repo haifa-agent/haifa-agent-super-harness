@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "policy_version": "docker-aio/v2",
+  "image": "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:1.11.0@sha256:6328d7fd2f0ff0b4c147c3d05b3df1ce331f4a482eb6e550ecd64ed1fcf906e7",
+  "repository": "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox",
+  "tag": "1.11.0",
+  "digest": "sha256:6328d7fd2f0ff0b4c147c3d05b3df1ce331f4a482eb6e550ecd64ed1fcf906e7",
+  "platform": "linux/amd64",
+  "default_lifecycle_mode": "warm",
+  "default_idle_timeout_ms": 600000,
+  "aio_port": 8080,
+  "required_capabilities": [
+    "unprivileged",
+    "no-new-privileges"
+  ],
+  "network": {
+    "driver": "bridge",
+    "internal": true,
+    "enable_icc": false
+  }
+}

@@ -357,6 +357,44 @@ def copy_tooling(stage, console):
                 "config/ service/ scripts/ quick-start.*")
 
 
+def copy_sandbox(repo_root, stage, console, image_tar=None):
+    sandbox_src = DIST_ROOT / "sandbox"
+    sandbox_dst = stage / "sandbox"
+    sandbox_dst.mkdir(parents=True, exist_ok=True)
+    if sandbox_src.is_dir():
+        for item in sandbox_src.iterdir():
+            if item.is_file():
+                shutil.copy2(str(item), str(sandbox_dst / item.name))
+    lock_file = sandbox_dst / "image-lock.json"
+    if not lock_file.is_file():
+        raise PackageError("required sandbox image lock is missing: %s" % lock_file)
+    lock_data = json.loads(lock_file.read_text(encoding="utf-8"))
+
+    if image_tar:
+        tar_path = Path(image_tar).resolve()
+        if not tar_path.is_file():
+            raise PackageError("specified --with-sandbox-image-tar not found: %s" % tar_path)
+        images_dir = sandbox_dst / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        dest_tar = images_dir / tar_path.name
+        shutil.copy2(str(tar_path), str(dest_tar))
+        tar_sha = sha256_file(dest_tar)
+        manifest_payload = {
+            "image": lock_data.get("image"),
+            "file": tar_path.name,
+            "sha256": tar_sha,
+            "size": dest_tar.stat().st_size,
+            "platform": lock_data.get("platform", "linux/amd64")
+        }
+        (images_dir / "manifest.json").write_text(
+            json.dumps(manifest_payload, indent=2), encoding="utf-8"
+        )
+        console.log("[stage] sandbox offline image archive staged: %s (sha256=%s)" % (dest_tar.name, tar_sha))
+    else:
+        console.log("[stage] sandbox image-lock staged: %s" % lock_file)
+    return lock_data
+
+
 def render_install_md(stage, version, commit, built_at, gateway_port, frontend_port):
     template = Template((TEMPLATES_DIR / "INSTALL.md.tmpl").read_text(encoding="utf-8"))
     text = template.substitute(version=version, commit=commit, built_at=built_at,
@@ -489,6 +527,7 @@ def do_assemble(args, console):
                 console.log("[stage] dropped repo/frontend/node_modules "
                             "(use --with-node-modules to bundle it)")
     copy_tooling(stage, console)
+    sandbox_info = copy_sandbox(repo_root, stage, console, getattr(args, "with_sandbox_image_tar", None))
 
     built_at = datetime.now(timezone.utc).isoformat()
     write_version_file(stage, {
@@ -498,6 +537,10 @@ def do_assemble(args, console):
         "frontendBundled": need_frontend, "nodeModulesBundled": bool(args.with_node_modules),
         "officialSkills": official["count"], "officialSkillsCommit": official["commit"],
         "officialSkillsExcluded": official["excluded"],
+        "sandboxImage": sandbox_info.get("image"),
+        "sandboxDigest": sandbox_info.get("digest"),
+        "sandboxPolicyVersion": sandbox_info.get("policy_version"),
+        "sandboxOfflineImageBundled": bool(getattr(args, "with_sandbox_image_tar", None)),
         "host": socket.gethostname(), "python": sys.version.split()[0],
     })
     render_install_md(stage, version, commit, built_at, args.gateway_port, args.frontend_port)
@@ -556,6 +599,8 @@ def build_parser():
                              % ",".join(DEFAULT_EXCLUDED_OFFICIAL_SKILLS))
     parser.add_argument("--with-node-modules", action="store_true",
                         help="把 node_modules 一并打包（同平台离线安装用，体积大）")
+    parser.add_argument("--with-sandbox-image-tar", default=None,
+                        help="随包携带已导出的 Docker 沙箱镜像归档（离线包制作）")
     parser.add_argument("--force-frontend-install", action="store_true")
     parser.add_argument("--allow-dirty-tree", action="store_true")
     parser.add_argument("--dry-run", action="store_true")

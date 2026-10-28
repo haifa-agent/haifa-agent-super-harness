@@ -70,6 +70,31 @@ sudo python3 /opt/super-harness-${version}/scripts/install-service.py status
 此后永不轮换）、把两个 unit 渲染到 `/etc/systemd/system/` 并 `enable --now`；覆盖旧 unit 前
 自动备份到 `config/unit-backup-*`。
 
+### Linux 容器沙箱执行模式（可选）
+
+如需启用 Linux Docker 容器沙箱隔离（DeerFlow 热容器常驻会话模式），执行工具将在隔离的 Linux 容器中执行：
+
+1. **环境诊断与预检 (doctor)**：
+   ```bash
+   python3 /opt/super-harness-${version}/scripts/install-service.py doctor
+   ```
+   检查 Docker 守护进程连通性、socket 访问权限与端口可用性。
+
+2. **准备沙箱镜像 (prepare)**：
+   * 在线拉取锁定镜像：
+     ```bash
+     python3 /opt/super-harness-${version}/scripts/install-service.py prepare
+     ```
+   * 离线环境从 `.tar` 镜像归档载入：
+     ```bash
+     python3 /opt/super-harness-${version}/scripts/install-service.py prepare --image-tar /path/to/all-in-one-sandbox-1.11.0.tar
+     ```
+
+3. **安装并启用沙箱服务**：
+   ```bash
+   sudo python3 /opt/super-harness-${version}/scripts/install-service.py install --execution-provider docker-aio
+   ```
+
 卸载（保留 config/data/logs）：
 
 ```bash
@@ -88,6 +113,14 @@ python .\scripts\install-service.py status
 
 `uninstall` 停止并删除服务定义，保留 config/data/logs。WinSW 的 `<env>` 由安装脚本从
 `config\gateway.env` 展开，因此密钥不入服务定义明文以外的位置。
+
+## 定时任务调度
+
+发布包默认在 `config/gateway.env` 写入 `HAIFA_SUPER_HARNESS_SCHEDULER_ENABLED=1`，Gateway 启动后由
+单实例后台调度线程按任务的 cron / interval / once 计划自动触发 Run（到期未运行的任务在首个轮询周期补跑）。
+该键缺省、为空或设为 `0` 时调度器关闭，已有任务不会自动运行（REST 手动触发仍可用）。轮询间隔等调优键为
+`HAIFA_SUPER_HARNESS_SCHEDULER_POLL_SECONDS`、`..._MIN_ONCE_DELAY_SECONDS`、`..._MAX_CONCURRENT_RUNS`、
+`..._QUEUE_TIMEOUT_SECONDS`；修改后重启 Gateway 生效。
 
 ## 首次启动后
 

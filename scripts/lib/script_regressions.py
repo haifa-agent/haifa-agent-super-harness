@@ -44,6 +44,8 @@ CHECKS = (
      "path": "tests/checks/build/test_pipeline_tools.py"},
     {"name": "python-w08-oracle12", "kind": "python",
      "path": "tests/checks/build/test_w08_oracle12.py"},
+    {"name": "python-dist-support", "kind": "python",
+     "path": "tests/checks/build/test_dist_support.py"},
     {"name": "node-evaluation-report", "kind": "node",
      "path": "tests/checks/ui/evaluation-report.test.cjs"},
     {"name": "node-pending-write", "kind": "node",
