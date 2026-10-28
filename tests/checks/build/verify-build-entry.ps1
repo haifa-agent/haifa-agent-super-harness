@@ -10,8 +10,9 @@
     -Maven                  runs test-targeted.ps1 for real (T1, T2).
     -SelectedHaifaVersion   additionally runs it against that worktree-labelled SDK
                             version, which must already be published locally (V2).
-  local-tmp/sdk-selection.json of this worktree must not exist when the script starts;
-  the script creates and removes it itself.
+  local-tmp/sdk-selection.json of this worktree must not exist when the script starts
+  with -Maven; the script creates and removes it itself. Fast (no -Maven) cases work
+  from scratch directories and tolerate an existing selection file.
 
 .EXAMPLE
   pwsh -NoProfile -File tests/checks/build/verify-build-entry.ps1 -Maven
@@ -60,7 +61,7 @@ function Get-EntryJson {
     return ($Text.Substring($Text.IndexOf('{')) | ConvertFrom-Json)
 }
 
-if (Test-Path -LiteralPath $selectionPath) {
+if ($Maven -and (Test-Path -LiteralPath $selectionPath)) {
     throw "Refusing to run: '$selectionPath' exists. This regression needs to create and remove it."
 }
 

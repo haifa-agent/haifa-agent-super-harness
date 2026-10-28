@@ -76,7 +76,7 @@
       {
         "id": "0005-narrated-tool-ordering-and-run-failures",
         "file": "third-party/deerflow/patches/0005-narrated-tool-ordering-and-run-failures.patch",
-        "sha256": "042bad5b7bba99981b9cfc46a1a952b645b2b73eb9c0e9ffefa5b606dd4b8515",
+        "sha256": "9a6f517b54b158e6ab04b952f32368a30caa2cb08fac818dff02bff54af237e2",
         "reason": "Fix narrated tool history ordering in message list and thread message order, surface run failure notices in conversation thread, and add corresponding unit and DOM tests.",
         "affectedFiles": [
           "frontend/src/AGENTS.md",
