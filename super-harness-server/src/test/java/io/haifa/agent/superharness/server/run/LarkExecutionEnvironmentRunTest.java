@@ -315,32 +315,66 @@ public class LarkExecutionEnvironmentRunTest {
     }
 
     private static String fixtureCommand(String mode, Path marker, String extra) {
+        boolean windows = isWindows();
+        String javaPath = javaExecutable();
+        String cp = fixtureClasspath().toString();
+
         StringBuilder command = new StringBuilder();
-        command.append(javaExecutable());
-        command.append(" -cp ").append(testClasses());
-        command.append(' ').append(FIXTURE);
-        command.append(' ').append(mode);
-        if (marker != null) {
-            command.append(' ').append(forwardSlashes(marker));
-        }
-        if (extra != null) {
-            command.append(' ').append(extra);
+        if (windows) {
+            command.append("& ").append(quotePowerShell(javaPath))
+                    .append(" -cp ").append(quotePowerShell(cp))
+                    .append(' ').append(FIXTURE)
+                    .append(' ').append(mode);
+            if (marker != null) {
+                command.append(' ').append(quotePowerShell(marker.toAbsolutePath().normalize().toString()));
+            }
+            if (extra != null) {
+                command.append(' ').append(quotePowerShell(extra));
+            }
+        } else {
+            command.append(quotePosix(javaPath))
+                    .append(" -cp ").append(quotePosix(cp))
+                    .append(' ').append(FIXTURE)
+                    .append(' ').append(mode);
+            if (marker != null) {
+                command.append(' ').append(quotePosix(marker.toAbsolutePath().normalize().toString()));
+            }
+            if (extra != null) {
+                command.append(' ').append(quotePosix(extra));
+            }
         }
         return command.toString();
     }
 
+    private static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
+    }
+
+    private static String quotePowerShell(String value) {
+        return "'" + value.replace("'", "''") + "'";
+    }
+
+    private static String quotePosix(String value) {
+        return "'" + value.replace("'", "'\\''") + "'";
+    }
+
     private static String javaExecutable() {
-        boolean windows = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
-        return Path.of(System.getProperty("java.home"), "bin", windows ? "java.exe" : "java")
-                .toAbsolutePath().toString();
+        return Path.of(System.getProperty("java.home"), "bin", isWindows() ? "java.exe" : "java")
+                .toAbsolutePath().normalize().toString();
     }
 
-    private static String testClasses() {
-        return forwardSlashes(Path.of("target", "test-classes").toAbsolutePath());
-    }
-
-    private static String forwardSlashes(Path path) {
-        return path.toString().replace('\\', '/');
+    private static Path fixtureClasspath() {
+        try {
+            var codeSource = io.haifa.agent.superharness.server.testsupport.LarkExecutionFixture.class
+                    .getProtectionDomain()
+                    .getCodeSource();
+            if (codeSource == null || codeSource.getLocation() == null) {
+                throw new IllegalStateException("LarkExecutionFixture has no CodeSource location");
+            }
+            return Path.of(codeSource.getLocation().toURI()).toAbsolutePath().normalize();
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to resolve LarkExecutionFixture CodeSource Path", e);
+        }
     }
 
     private LarkIntegrationService larkService(Path dataRoot) throws Exception {
