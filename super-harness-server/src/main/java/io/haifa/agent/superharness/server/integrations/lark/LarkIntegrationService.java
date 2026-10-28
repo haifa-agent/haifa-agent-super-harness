@@ -3,6 +3,8 @@ package io.haifa.agent.superharness.server.integrations.lark;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.haifa.agent.superharness.server.config.ExecutionProvider;
+import io.haifa.agent.superharness.server.config.ExecutionProviderConfig;
 import io.haifa.agent.superharness.server.config.SkillConfigStore;
 import io.haifa.agent.superharness.workspace.AtomicMoves;
 import java.io.IOException;
@@ -125,6 +127,7 @@ public final class LarkIntegrationService {
     private final SkillConfigStore skills;
     private final LongSupplier nanoTime;
     private final Consumer<Duration> sleeper;
+    private final ExecutionProvider executionProvider;
     private final Map<String, ReentrantLock> userLocks = new ConcurrentHashMap<>();
     private volatile LatestCache latestCache;
 
@@ -143,12 +146,19 @@ public final class LarkIntegrationService {
                         Thread.currentThread().interrupt();
                         throw new LarkTimeoutException("Interrupted while waiting for Lark.", interrupted);
                     }
-                });
+                }, ExecutionProviderConfig.fromEnvironment(System.getenv(), dataDirectory.resolve("workspace"), dataDirectory)
+                        .map(ExecutionProviderConfig::provider).orElse(ExecutionProvider.DISABLED));
     }
 
     public LarkIntegrationService(ObjectMapper json, Path dataDirectory, SkillConfigStore skills,
             LarkSkillPackInstaller packs, LarkCliGateway cli, LarkAppRegistration registration,
             LarkArchiveSource archives, LongSupplier nanoTime, Consumer<Duration> sleeper) {
+        this(json, dataDirectory, skills, packs, cli, registration, archives, nanoTime, sleeper, ExecutionProvider.DISABLED);
+    }
+
+    public LarkIntegrationService(ObjectMapper json, Path dataDirectory, SkillConfigStore skills,
+            LarkSkillPackInstaller packs, LarkCliGateway cli, LarkAppRegistration registration,
+            LarkArchiveSource archives, LongSupplier nanoTime, Consumer<Duration> sleeper, ExecutionProvider executionProvider) {
         this.json = json;
         this.integrationRoot = dataDirectory.toAbsolutePath().normalize().resolve("integrations").resolve("lark");
         this.skills = skills;
@@ -158,6 +168,7 @@ public final class LarkIntegrationService {
         this.archives = archives;
         this.nanoTime = nanoTime;
         this.sleeper = sleeper;
+        this.executionProvider = java.util.Objects.requireNonNull(executionProvider);
     }
 
     public Path integrationRoot() {
@@ -177,18 +188,31 @@ public final class LarkIntegrationService {
     }
 
     /**
-     * Per-user execution environment that the Host execution provider would need to reach the CLI
-     * with this user's authorization. Exposed for the execution-seam probe; it is not itself an
-     * execution path and must not be used to bypass the SDK.
+     * Gateway-side view of the per-user CLI environment. Model-visible execution receives the same
+     * values from {@link #hostExecutionEnvironment(Path, String)} through the trusted bridge
+     * constructor; this method must not be used to bypass the SDK execution platform.
      */
     public Map<String, String> userExecutionEnvironment(String ownerId) {
         ensureUserTree(ownerId);
-        Map<String, String> environment = new LinkedHashMap<>();
-        environment.put("LARKSUITE_CLI_CONFIG_DIR", userConfigDirectory(ownerId).toString());
-        environment.put("LARKSUITE_CLI_DATA_DIR", userDataDirectory(ownerId).toString());
-        environment.put("LARKSUITE_CLI_NO_UPDATE_NOTIFIER", "1");
-        environment.put("LARKSUITE_CLI_NO_SKILLS_NOTIFIER", "1");
-        return cli.childEnvironment(environment);
+        return runtimeOverlay(cli, userConfigDirectory(ownerId), userDataDirectory(ownerId));
+    }
+
+    /** Captured once by the trusted bridge constructor, never selected by model Tool arguments. */
+    public static Map<String, String> hostExecutionEnvironment(Path dataDirectory, String ownerId) {
+        Path integration = dataDirectory.toAbsolutePath().normalize().resolve("integrations").resolve("lark");
+        prepareUserTree(integration, ownerId);
+        Path user = integration.resolve("users").resolve(ownerSegment(ownerId));
+        return runtimeOverlay(LarkCliProcessGateway.production(integration.resolve("gateway-cli")),
+                user.resolve("config"), user.resolve("data"));
+    }
+
+    private static Map<String, String> runtimeOverlay(LarkCliGateway cli, Path config, Path data) {
+        Map<String, String> overlay = environmentOverlay(config, data);
+        String path = cli.childEnvironment(Map.of()).get("PATH");
+        if (path != null && !path.isBlank()) overlay.put("PATH", path);
+        // SDK trusted overrides deliberately prohibit HOME, TEMP, SystemRoot and other protected
+        // host variables. Only this product's CLI directories/notifiers and PATH cross that seam.
+        return Map.copyOf(overlay);
     }
 
     // ------------------------------------------------------------------ status
@@ -217,10 +241,16 @@ public final class LarkIntegrationService {
                 packs.packRoot().toString(),
                 new CliState(probe.available(), probe.path(), probe.version(), probe.error()),
                 probeAuth(ownerId, probe, false),
-                "none",
+                executionProvider == ExecutionProvider.DOCKER_AIO ? "gateway-download" : "none",
                 false,
-                "Host execution provider: lark-cli runs on the Gateway host with per-user credentials; "
-                        + "no sandbox runtime is used.");
+                switch (executionProvider) {
+                    case DISABLED -> "Execution is disabled; no execution_run tool is registered.";
+                    case HOST_GUARDED -> "Host guarded execution runs lark-cli on the Gateway host with this owner's "
+                            + "CLI config/data directories; OS identity and network are shared with other owners "
+                            + "(no OS tenant isolation).";
+                    case DOCKER_AIO -> "Selected provider is docker-aio. The container lark-cli runtime and per-owner "
+                            + "credentials are not provisioned; Gateway installation does not make the container ready.";
+                });
     }
 
     private List<String> enabledSkills() {
@@ -727,15 +757,19 @@ public final class LarkIntegrationService {
     }
 
     private void ensureUserTree(String ownerId) {
+        prepareUserTree(integrationRoot, ownerId);
+    }
+
+    private static void prepareUserTree(Path integrationRoot, String ownerId) {
         try {
             Path users = integrationRoot.resolve("users");
             Files.createDirectories(users);
             rejectSymlink(users);
-            Path root = userRoot(ownerId);
+            Path root = users.resolve(ownerSegment(ownerId));
             Files.createDirectories(root);
             rejectSymlink(root);
-            Path config = Files.createDirectories(userConfigDirectory(ownerId));
-            Path data = Files.createDirectories(userDataDirectory(ownerId));
+            Path config = Files.createDirectories(root.resolve("config"));
+            Path data = Files.createDirectories(root.resolve("data"));
             harden(root);
             harden(config);
             harden(data);
@@ -744,7 +778,7 @@ public final class LarkIntegrationService {
         }
     }
 
-    private void harden(Path path) throws IOException {
+    private static void harden(Path path) throws IOException {
         if (Files.isSymbolicLink(path)) {
             throw new IOException("Lark CLI credential path must not be a symlink: " + path);
         }
@@ -958,21 +992,20 @@ public final class LarkIntegrationService {
 
     private Map<String, String> cliEnvironment(String ownerId) {
         ensureUserTree(ownerId);
-        Map<String, String> environment = new LinkedHashMap<>();
-        environment.put("LARKSUITE_CLI_CONFIG_DIR", userConfigDirectory(ownerId).toString());
-        environment.put("LARKSUITE_CLI_DATA_DIR", userDataDirectory(ownerId).toString());
-        environment.put("LARKSUITE_CLI_NO_UPDATE_NOTIFIER", "1");
-        environment.put("LARKSUITE_CLI_NO_SKILLS_NOTIFIER", "1");
-        return cli.childEnvironment(environment);
+        return cli.childEnvironment(environmentOverlay(userConfigDirectory(ownerId), userDataDirectory(ownerId)));
     }
 
     private Map<String, String> directoriesEnvironment(Path config, Path data) {
+        return cli.childEnvironment(environmentOverlay(config, data));
+    }
+
+    private static Map<String, String> environmentOverlay(Path config, Path data) {
         Map<String, String> environment = new LinkedHashMap<>();
         environment.put("LARKSUITE_CLI_CONFIG_DIR", config.toString());
         environment.put("LARKSUITE_CLI_DATA_DIR", data.toString());
         environment.put("LARKSUITE_CLI_NO_UPDATE_NOTIFIER", "1");
         environment.put("LARKSUITE_CLI_NO_SKILLS_NOTIFIER", "1");
-        return cli.childEnvironment(environment);
+        return environment;
     }
 
     private String requireCliPath() {
