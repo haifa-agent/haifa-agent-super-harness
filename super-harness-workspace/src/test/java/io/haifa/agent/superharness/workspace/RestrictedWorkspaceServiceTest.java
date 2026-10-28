@@ -318,6 +318,32 @@ class RestrictedWorkspaceServiceTest {
                 "owner-a", binding.workspaceId(), recreated.logicalPath())).isEqualTo(bytes("payload"));
     }
 
+    @Test
+    void writeWorkingFileCreatesPermissiveIntermediateDirectoriesAndFile() throws Exception {
+        RestrictedWorkspaceService workspace = service();
+        WorkspaceBinding binding = workspace.bind("owner-a", "thread-nested");
+        String nestedPath = "workspace/nested/sub/script.py";
+        workspace.writeWorkingFile("owner-a", binding.workspaceId(), nestedPath,
+                bytes("print('hello')"), Optional.empty());
+
+        Path userDataRoot = storageRoot.resolve("workspaces").resolve(binding.workspaceId().value()).resolve("user-data");
+        Path file = userDataRoot.resolve(nestedPath);
+        assertThat(Files.isRegularFile(file)).isTrue();
+        assertThat(Files.readString(file, StandardCharsets.UTF_8)).isEqualTo("print('hello')");
+
+        if (java.nio.file.FileSystems.getDefault().supportedFileAttributeViews().contains("posix")) {
+            java.util.Set<java.nio.file.attribute.PosixFilePermission> filePerms = Files.getPosixFilePermissions(file);
+            assertThat(filePerms).contains(
+                    java.nio.file.attribute.PosixFilePermission.OTHERS_READ,
+                    java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE);
+            java.util.Set<java.nio.file.attribute.PosixFilePermission> dirPerms = Files.getPosixFilePermissions(file.getParent());
+            assertThat(dirPerms).contains(
+                    java.nio.file.attribute.PosixFilePermission.OTHERS_READ,
+                    java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE,
+                    java.nio.file.attribute.PosixFilePermission.OTHERS_EXECUTE);
+        }
+    }
+
     private RestrictedWorkspaceService service() {
         return new RestrictedWorkspaceService(storageRoot, limits);
     }

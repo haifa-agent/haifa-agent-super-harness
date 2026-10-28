@@ -152,6 +152,20 @@ final class WorkspaceRegistry {
         }
     }
 
+    static void makeDirectoriesPermissive(Path root, Path dir) {
+        if (dir == null || root == null) {
+            return;
+        }
+        Path curr = dir;
+        while (curr != null && curr.startsWith(root)) {
+            makeDirectoryPermissive(curr);
+            if (curr.equals(root)) {
+                break;
+            }
+            curr = curr.getParent();
+        }
+    }
+
     static void makeFilePermissive(Path path) {
         try {
             if (java.nio.file.FileSystems.getDefault().supportedFileAttributeViews().contains("posix")) {

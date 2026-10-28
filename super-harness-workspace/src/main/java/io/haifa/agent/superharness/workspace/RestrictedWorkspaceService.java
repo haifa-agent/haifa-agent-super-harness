@@ -360,10 +360,22 @@ public final class RestrictedWorkspaceService {
         return new WorkspaceFileSnapshot(logical, bytes, Hashing.sha256(bytes), bytes.length, offset, truncated);
     }
 
+    private static void ensurePermissiveParentDirectories(Path root, Path target) {
+        Path parent = target.getParent();
+        if (parent != null) {
+            try {
+                Files.createDirectories(parent);
+            } catch (IOException exception) {
+                throw WorkspaceRegistry.ioFailure("failed to create directory", exception);
+            }
+            WorkspaceRegistry.makeDirectoriesPermissive(root, parent);
+        }
+    }
+
     private static void atomicCreate(Path root, Path target, byte[] content) {
         ensureNoLinks(root, target);
         try {
-            Files.createDirectories(target.getParent());
+            ensurePermissiveParentDirectories(root, target);
             Path part = Files.createTempFile(target.getParent(), ".upload-", ".part");
             Files.write(part, content);
             WorkspaceRegistry.moveAtomically(part, target);
@@ -380,7 +392,7 @@ public final class RestrictedWorkspaceService {
         ensureNoLinks(root, target);
         Path part = null;
         try {
-            Files.createDirectories(target.getParent());
+            ensurePermissiveParentDirectories(root, target);
             ensureNoLinks(root, target);
             part = Files.createTempFile(target.getParent(), ".write-", ".part");
             Files.write(part, content);
@@ -406,7 +418,7 @@ public final class RestrictedWorkspaceService {
     private static void atomicReplace(Path root, Path target, byte[] content) {
         ensureNoLinks(root, target);
         try {
-            Files.createDirectories(target.getParent());
+            ensurePermissiveParentDirectories(root, target);
             ensureNoLinks(root, target);
             Path part = Files.createTempFile(target.getParent(), ".write-", ".part");
             Files.write(part, content);
