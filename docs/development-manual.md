@@ -252,3 +252,28 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -GatewayOnly
   `HAIFA_SUPER_HARNESS_SUGGESTIONS_MAX`）；线程标题按冻结回退规则生成，可在 Run 之间切换模型。
 - **冻结前端与 BFF**：直接复用冻结 DeerFlow 前端，Next BFF 只指向本槽位 Gateway；启动时校验冻结来源、
   工具链版本与同源代理目标。
+
+## Lark 办公插件定向 UI 验收
+
+`-W20Lark` 复用现有受控模型、生产 Gateway 与冻结前端。主控须提供真实产品 installer 产出的共享 `skills` 目录（含 `.haifa-lark-manifest.json`、根 LICENSE 与各技能 LICENSE.txt）及对应官方归档。Python 预置检查完整文件集合、官方逐文件字节、版本、归档与许可证 hash、产品 manifest 的内容 hash；只允许当前产品的明确 `lark-shared` 指引追加。Java Windows 与 Unix 的路径排序不同，检查器分别重算这两种确定的聚合 hash，并记录匹配的平台顺序。它不生成产品 manifest、不执行安装，不复制用户凭据、启用配置、Runtime 状态或 CLI。
+
+```powershell
+pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 `
+  -SourceRepository <主控核对的冻结检出> -AgentSlot 2 -GatewayPort 30618 -FrontendPort 35618 `
+  -W20Lark -LarkSkillSeedDirectory <本工作树内的真实安装skills目录> `
+  -LarkOfficialArchive <本工作树内的官方zip> `
+  -CaseTitle 'W20 Lark capability center loads the official lark-doc package through Haifa' -PreflightOnly
+```
+
+每次调用使用独立新 data-root，默认由 runner 分配；预检也会准备种子，正式调用必须使用另一个新 data-root。主控放行后去掉 `-PreflightOnly`，构建戳匹配时才使用 `-SkipBuild`。该 profile 尚未验证同次启动重复运行，x2 使用两次独立启动，不传 `-Passes 2`。
+
+唯一用例打开能力中心真实 Lark 设置，通过真实 BFF 检查精确 27 个技能和未连接状态；再通过冻结技能开关与生产 screen 启用 `lark-doc`，真实 Run 执行 `skill_load` 和 `skill_resource_read`，核对激活结果及官方 reference 的完整字节 hash。受控模型只定向发出调用，不伪造 Tool 结果，不拦截页面响应。证据包含 seed 清单、HTTP 状态、Run/Tool 身份、reference hash、截图、trace 与 runner 流程健康度。此切片不执行 CLI/OAuth/办公文档读取；真实 OAuth 与文档链记 `BLOCKED_EXTERNAL`，其余未运行项保留 `NOT_RUN`，不能据此标记 LARK-05 完整通过。
+
+小范围脚本自测（不启动服务、浏览器或构建）：
+
+```powershell
+python -B -m unittest discover -s tests/checks/ui -p test_lark_seed.py -v
+node --test tests/checks/ui/lark-office.test.cjs
+```
+
+修改 UI 用例或 runner 后正式 L1 默认 x2；最终模型与其余门禁仍以整合候选的 `change_scope.py` 为准。

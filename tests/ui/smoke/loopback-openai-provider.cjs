@@ -1,6 +1,7 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
+const { decideLark } = require("./support/lark-office.cjs");
 
 const port = Number.parseInt(process.argv[2] ?? "0", 10);
 const readyFile = process.argv[3];
@@ -1131,6 +1132,20 @@ const server = http.createServer((request, response) => {
     // W15 Skill proof: the answer is derived from the SDK's offered Tool and
     // the instructions visible in the resumed model request, not from a local
     // copy of SKILL.md or a hard-coded successful response.
+    const larkMarker = firstUserMatch(body, /w20-lark-load-\d+/);
+    if (larkMarker) {
+      const decision = decideLark(body, larkMarker, offeredTools);
+      const id = `w20-lark-${Date.now()}`;
+      if (decision.tool) {
+        finishWithToolCall(response, id, `${id}-${decision.action}`, decision.tool, decision.args);
+      } else {
+        finishWithText(response, id, decision.text);
+      }
+      console.log(JSON.stringify({ type: "w20_lark_load", marker: larkMarker,
+        action: decision.action, observed: decision.observed ?? false,
+        loads: decision.loads ?? 0, reads: decision.reads ?? 0 }));
+      return;
+    }
     const packageMarker = firstUserMatch(body, /w15-package-use-\d+/);
     if (packageMarker) {
       const id = `w15-package-${Date.now()}`;
