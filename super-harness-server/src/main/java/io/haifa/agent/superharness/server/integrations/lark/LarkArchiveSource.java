@@ -22,26 +22,34 @@ public interface LarkArchiveSource {
         private final HttpClient client;
         private final Duration timeout;
         private final Function<String, String> urlResolver;
+        private final Path tempDirectory;
 
         public GitHub() {
-            this(HttpClient.newBuilder().connectTimeout(TIMEOUT).build(), TIMEOUT, LarkSkillPackInstaller::archiveUrl);
+            this(HttpClient.newBuilder().connectTimeout(TIMEOUT).build(), TIMEOUT, LarkSkillPackInstaller::archiveUrl, null);
         }
 
         GitHub(HttpClient client) {
-            this(client, TIMEOUT, LarkSkillPackInstaller::archiveUrl);
+            this(client, TIMEOUT, LarkSkillPackInstaller::archiveUrl, null);
         }
 
         GitHub(HttpClient client, Duration timeout, Function<String, String> urlResolver) {
+            this(client, timeout, urlResolver, null);
+        }
+
+        GitHub(HttpClient client, Duration timeout, Function<String, String> urlResolver, Path tempDirectory) {
             if (client.followRedirects() != HttpClient.Redirect.NEVER) throw new IllegalArgumentException("Archive redirects are disabled");
             this.client = client;
             this.timeout = timeout;
             this.urlResolver = urlResolver;
+            this.tempDirectory = tempDirectory;
         }
 
         @Override
         public Path fetch(String version) throws IOException {
             String url = urlResolver.apply(version);
-            Path archive = Files.createTempFile("haifa-lark-skills-", ".zip");
+            Path archive = tempDirectory != null
+                    ? Files.createTempFile(tempDirectory, "haifa-lark-skills-", ".zip")
+                    : Files.createTempFile("haifa-lark-skills-", ".zip");
             boolean ok = false;
             try (BoundedArchive subscriber = new BoundedArchive(archive, MAX_BYTES)) {
                 HttpRequest request = HttpRequest.newBuilder(URI.create(url))
@@ -101,15 +109,25 @@ public interface LarkArchiveSource {
 
         @Override public java.util.concurrent.CompletionStage<Path> getBody() { return result; }
 
-        @Override public void onSubscribe(java.util.concurrent.Flow.Subscription value) {
-            subscription = value;
+        @Override public synchronized void onSubscribe(java.util.concurrent.Flow.Subscription value) {
+            this.subscription = value;
+            if (result.isDone()) {
+                if (value != null) {
+                    try {
+                        value.cancel();
+                    } catch (RuntimeException ignored) {}
+                }
+                return;
+            }
             try {
                 output = Files.newOutputStream(target);
                 value.request(1);
-            } catch (IOException failure) { onError(failure); }
+            } catch (IOException failure) {
+                onError(failure);
+            }
         }
 
-        @Override public void onNext(java.util.List<java.nio.ByteBuffer> chunks) {
+        @Override public synchronized void onNext(java.util.List<java.nio.ByteBuffer> chunks) {
             if (result.isDone()) return;
             try {
                 long incoming = chunks.stream().mapToLong(java.nio.ByteBuffer::remaining).sum();
@@ -127,17 +145,31 @@ public interface LarkArchiveSource {
             } catch (IOException failure) { onError(failure); }
         }
 
-        @Override public void onError(Throwable failure) {
-            if (subscription != null) subscription.cancel();
-            try { if (output != null) output.close(); } catch (IOException close) { failure.addSuppressed(close); }
+        @Override public synchronized void onError(Throwable failure) {
+            if (subscription != null) {
+                try { subscription.cancel(); } catch (RuntimeException ignored) {}
+            }
+            try {
+                if (output != null) {
+                    output.close();
+                    output = null;
+                }
+            } catch (IOException close) {
+                failure.addSuppressed(close);
+            }
             result.completeExceptionally(failure);
         }
 
-        @Override public void onComplete() {
+        @Override public synchronized void onComplete() {
             try {
-                if (output != null) output.close();
+                if (output != null) {
+                    output.close();
+                    output = null;
+                }
                 result.complete(target);
-            } catch (IOException failure) { onError(failure); }
+            } catch (IOException failure) {
+                onError(failure);
+            }
         }
 
         @Override
@@ -145,14 +177,19 @@ public interface LarkArchiveSource {
             cancel();
         }
 
-        void cancel() {
+        synchronized void cancel() {
+            result.cancel(true);
             if (subscription != null) {
-                try { subscription.cancel(); } catch (RuntimeException ignored) {}
+                try {
+                    subscription.cancel();
+                } catch (RuntimeException ignored) {}
             }
             try {
-                if (output != null) output.close();
+                if (output != null) {
+                    output.close();
+                    output = null;
+                }
             } catch (IOException ignored) {}
-            result.cancel(true);
         }
     }
 }
