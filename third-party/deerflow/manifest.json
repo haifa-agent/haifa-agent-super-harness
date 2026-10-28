@@ -72,11 +72,38 @@
           "frontend/src/components/workspace/workspace-nav-chat-list.tsx",
           "frontend/src/components/workspace/projects-section.tsx"
         ]
+      },
+      {
+        "id": "0005-narrated-tool-ordering-and-run-failures",
+        "file": "third-party/deerflow/patches/0005-narrated-tool-ordering-and-run-failures.patch",
+        "sha256": "042bad5b7bba99981b9cfc46a1a952b645b2b73eb9c0e9ffefa5b606dd4b8515",
+        "reason": "Fix narrated tool history ordering in message list and thread message order, surface run failure notices in conversation thread, and add corresponding unit and DOM tests.",
+        "affectedFiles": [
+          "frontend/src/AGENTS.md",
+          "frontend/src/components/workspace/messages/message-list.tsx",
+          "frontend/src/components/workspace/messages/run-failure-notice.tsx",
+          "frontend/src/core/i18n/locales/en-US.ts",
+          "frontend/src/core/i18n/locales/types.ts",
+          "frontend/src/core/i18n/locales/zh-CN.ts",
+          "frontend/src/core/threads/message-order.ts",
+          "frontend/tests/unit/components/workspace/messages/run-failure-notice.dom.test.tsx",
+          "frontend/tests/unit/core/threads/message-order.test.ts"
+        ]
+      },
+      {
+        "id": "0006-remove-local-editor-and-agent-files",
+        "file": "third-party/deerflow/patches/0006-remove-local-editor-and-agent-files.patch",
+        "sha256": "ae55ad601b901e721fb9a83e7fd604f939aa2e7408cf5263175ee7c761e45fba",
+        "reason": "Stop tracking local editor settings (.vscode/settings.json) and local agent instruction file (CLAUDE.md) from the imported frontend tree.",
+        "affectedFiles": [
+          "frontend/.vscode/settings.json",
+          "frontend/CLAUDE.md"
+        ]
       }
     ],
     "fileCount": 985,
-    "totalBytes": 21207692,
-    "contentInventorySha256": "f09ecb89e59b919cd4352860495895b3750022d15a33b27ddc73163d86b05445"
+    "totalBytes": 21214512,
+    "contentInventorySha256": "59aa372cbd724a1f614897c632b547412ca2c81e176e7099813358b9cbb8c523"
   },
   "build": {
     "node": ">=22",
