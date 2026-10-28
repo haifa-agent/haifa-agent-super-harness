@@ -16,6 +16,10 @@ param(
     [switch]$V2ModelSwitch,
     [switch]$V2FileContext,
     [switch]$V2Skill,
+    # Official product-installed shared pack; never copies user credentials or Runtime state.
+    [switch]$W20Lark,
+    [string]$LarkSkillSeedDirectory,
+    [string]$LarkOfficialArchive,
     [switch]$V2Diagnostics,
     [switch]$W08Catalog,
     [switch]$W08Delegation,
@@ -53,6 +57,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($W20Lark) {
+    if (-not $LarkSkillSeedDirectory -or -not $LarkOfficialArchive) {
+        throw 'W20Lark requires LarkSkillSeedDirectory and LarkOfficialArchive from the controller.'
+    }
+    if (@($ActiveReconnect, $Interaction, $DemoArtifact, $TitleSuggestions, $InputPolish, $V2ModelSwitch, $V2FileContext, $V2Skill, $V2Diagnostics, $W08Catalog, $W08Delegation, $LiveRendering, $LiveDeepSeek, $W08LiveDelegation, $W15LiveSkill, $W15PackageDifferential, $W19ScheduledTasks, $W19ScheduledTasksRestart, $W04ImageGen, $UxV1DefaultTools, $UxV1AgentSoul).Where({ $_ }).Count) {
+        throw 'W20Lark is mutually exclusive with every other UI profile.'
+    }
+} elseif ($LarkSkillSeedDirectory -or $LarkOfficialArchive) {
+    throw 'Lark seed inputs require W20Lark.'
+}
 if ($DeferUxV1Web -and -not $UxV1DefaultTools) {
     throw 'DeferUxV1Web requires the UX-V1 default-tools profile.'
 }
@@ -113,7 +127,7 @@ $controlledContextWindow = 32768
 $sdk = [pscustomobject]@{ Status = 'NOT_RUN'; HaifaVersion = $null }
 $internalGatewayBaseUrl = "http://127.0.0.1:$GatewayPort"
  . (Join-Path $PSScriptRoot '../lib/run-fixture.ps1')
-$tag = if ($W19ScheduledTasksRestart) { 'w19-scheduled-tasks-restart' } elseif ($W19ScheduledTasks) { 'w19-scheduled-tasks' } elseif ($W15PackageDifferential) { 'w15-package-differential' } elseif ($W15LiveSkill) { 'w15-live-skill' } elseif ($UxV1AgentSoul) { 'ux-v1-soul' } elseif ($UxV1DefaultTools) { 'ux-v1' }
+$tag = if ($W20Lark) { 'w20-lark-office' } elseif ($W19ScheduledTasksRestart) { 'w19-scheduled-tasks-restart' } elseif ($W19ScheduledTasks) { 'w19-scheduled-tasks' } elseif ($W15PackageDifferential) { 'w15-package-differential' } elseif ($W15LiveSkill) { 'w15-live-skill' } elseif ($UxV1AgentSoul) { 'ux-v1-soul' } elseif ($UxV1DefaultTools) { 'ux-v1' }
     elseif ($W04ImageGen) { 'w04-imagegen' }
     elseif ($W08LiveDelegation) { 'w08-live-delegation' }
     elseif ($LiveDeepSeek) { 'w18-deepseek' } elseif ($ActiveReconnect) { 'w05-active-reconnect' }
@@ -270,6 +284,7 @@ $managedEnvironment = @{
     E2E_FRONTEND_PORT = [string]$FrontendPort
     E2E_APP_URL = "http://127.0.0.1:$FrontendPort"
     W18_EVIDENCE_DIR = $evidenceRoot
+    W20_LARK_SEED_MANIFEST = $(if ($W20Lark) { Join-Path $evidenceRoot 'lark-seed.json' } else { $null })
     COREPACK_ENABLE_NETWORK = '0'
     W18_PROVIDER_URL = $null
     UXV1_DEFER_WEB = $(if ($DeferUxV1Web) { '1' } else { $null })
@@ -297,7 +312,9 @@ $managedEnvironment = @{
     HAIFA_SUPER_HARNESS_SCHEDULER_POLL_SECONDS = $(if ($W19ScheduledTasks -or $W19ScheduledTasksRestart) { '2' } else { $null })
     HAIFA_SUPER_HARNESS_SCHEDULER_MIN_ONCE_DELAY_SECONDS = $(if ($W19ScheduledTasks -or $W19ScheduledTasksRestart) { '30' } else { $null })
     W18_MODEL_NAME = $(if ($LiveDeepSeek) { 'w18-deepseek-live' } else { 'w18-controlled' })
-    W18_PLAYWRIGHT_SPEC = $(if ($W19ScheduledTasksRestart) {
+    W18_PLAYWRIGHT_SPEC = $(if ($W20Lark) {
+        'w20-lark-office.spec.cjs'
+    } elseif ($W19ScheduledTasksRestart) {
         'w19-scheduled-tasks-restart.spec.cjs'
     } elseif ($W19ScheduledTasks) {
         'w19-scheduled-tasks.spec.cjs'
@@ -342,8 +359,8 @@ $managedEnvironment = @{
     } else {
         'w18-ui-smoke.spec.cjs'
     })
-    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill -or $W04ImageGen -or $W19ScheduledTasks -or $W19ScheduledTasksRestart) { '360000' } elseif ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation -or $LiveRendering) { '120000' } else { '60000' })
-    W18_PLAYWRIGHT_TRACE = $(if ($LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation -or $LiveRendering) { 'on' } else { 'retain-on-failure' })
+    W18_PLAYWRIGHT_TIMEOUT_MS = $(if ($UxV1DefaultTools -or $UxV1AgentSoul -or $W15LiveSkill -or $W04ImageGen -or $W19ScheduledTasks -or $W19ScheduledTasksRestart) { '360000' } elseif ($W20Lark -or $LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation -or $LiveRendering) { '120000' } else { '60000' })
+    W18_PLAYWRIGHT_TRACE = $(if ($W20Lark -or $LiveDeepSeek -or $ActiveReconnect -or $Interaction -or $DemoArtifact -or $TitleSuggestions -or $InputPolish -or $V2ModelSwitch -or $V2FileContext -or $V2Skill -or $V2Diagnostics -or $W08Catalog -or $W08Delegation -or $LiveRendering) { 'on' } else { 'retain-on-failure' })
     # Pass index handed to the spec; restored with the rest at the end.
     W18_PASS_INDEX = '1'
     # Kept disabled through the ordinary build/test gate. The runner enables it
@@ -360,6 +377,14 @@ $providerProcess = $null
 $serverBuild = $(if ($SkipBuild -or $SkipServerBuild) { 'REUSED' } else { 'NOT_RUN' })
 $preflight = [ordered]@{ result = 'NOT_RUN'; assertions = 'NOT_RUN'; servicesStartedDuringPreflight = $false }
 try {
+    if ($W20Lark) {
+        & python -B (Join-Path $root 'tests/ui/fixtures/w20/lark_seed.py') `
+            --source $LarkSkillSeedDirectory --archive $LarkOfficialArchive `
+            --guidance (Join-Path $root 'super-harness-server/src/main/resources/upstream/lark/lark-shared-guidance.md') `
+            --data-root $dataRoot --evidence $managedEnvironment.W20_LARK_SEED_MANIFEST 2>&1 |
+            Tee-Object -FilePath (Join-Path $evidenceRoot 'lark-seed-validation.log')
+        if ($LASTEXITCODE -ne 0) { throw 'W20 Lark prepared-product-seed validation failed.' }
+    }
     $selection = Resolve-SmokeCaseSelection -SpecPath (Join-Path $root "tests/ui/smoke/$($managedEnvironment.W18_PLAYWRIGHT_SPEC)") -CaseTitle $CaseTitle
     $expectedCases = $selection.All
     $selectedCases = $selection.Selected
@@ -776,6 +801,7 @@ finally {
             executionScope = $(if ($PreflightOnly) { 'preflight-only' } elseif ($CaseTitle) { 'selected-case' } else { 'full-profile' })
             selectedCases = $selectedCases
             passes = $passesSummary
+            larkSeedManifest = $(if ($W20Lark) { $managedEnvironment.W20_LARK_SEED_MANIFEST } else { $null })
         }
         if ($Passes -gt 1) {
             # Merge the per-pass case results into the top-level file and record the passes array

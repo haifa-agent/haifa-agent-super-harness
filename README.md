@@ -85,6 +85,8 @@ Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业�
 `main` 只消费 `0.1.4-SNAPSHOT`，工作包候选 SDK 由主控通过该 worktree 的 `local-tmp/sdk-selection.json` 指定，执行者不得自行换版或直接传 `-Dhaifa.version`。
 测试示例、SDK 摘要、基线检查与交付辅助命令见[开发与运行手册](docs/development-manual.md#定向测试与-sdk-版本选择)。
 
+Lark 办公插件的冻结界面定向验收使用现有 UI runner 的 `-W20Lark`，只消费主控提供的真实产品安装种子和官方归档；范围与命令见[开发手册](docs/development-manual.md#lark-办公插件定向-ui-验收)。此用例证明技能展示、启用和真实 Skill 加载，真实 OAuth 与办公文档 Run 仍须单独验收。
+
 ## 冻结前端本地准备与启动
 
 每个验收 worktree 使用独立的 `frontend/node_modules`、`.next`、端口和数据目录；冻结来源按固定 DeerFlow
