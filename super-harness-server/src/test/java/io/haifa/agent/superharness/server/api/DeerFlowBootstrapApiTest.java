@@ -156,6 +156,21 @@ class DeerFlowBootstrapApiTest {
                                 """));
     }
 
+    @Test
+    void larkIntegrationPrefixIsBoundAndKeepsItsPerRouteMethodContract() throws Exception {
+        HttpResponse<String> method = client.send(
+                HttpRequest.newBuilder(baseUri.resolve("/api/integrations/lark/install")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(method.statusCode()).isEqualTo(405);
+        assertThat(method.headers().firstValue("allow")).contains("POST");
+
+        HttpResponse<String> missing = client.send(
+                HttpRequest.newBuilder(baseUri.resolve("/api/integrations/lark/status/extra")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(missing.statusCode()).isEqualTo(404);
+        assertThat(json(missing.body())).isEqualTo(json("{\"detail\":\"Not Found\"}"));
+    }
+
     private void assertGetJson(String path, String expected) throws Exception {
         HttpResponse<String> response =
                 client.send(

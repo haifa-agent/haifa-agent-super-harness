@@ -73,6 +73,7 @@ import io.haifa.agent.superharness.server.config.McpRunTools;
 import io.haifa.agent.superharness.server.config.SkillRunTools;
 import io.haifa.agent.superharness.server.config.SkillScriptToolConfig;
 import io.haifa.agent.superharness.server.config.SubagentRunConfiguration;
+import io.haifa.agent.superharness.server.integrations.lark.LarkIntegrationService;
 import io.haifa.agent.superharness.server.prompt.AgentPromptContext;
 import io.haifa.agent.superharness.server.prompt.LeadPromptComposer;
 import io.haifa.agent.superharness.server.prompt.LeadPromptInputs;
@@ -535,7 +536,10 @@ public final class HaifaRunBridge implements AutoCloseable {
                                     executionProvider.maximumOutputBytes(),
                                     executionProvider.maximumOutputLines()),
                             caller.tenant(),
-                            caller.principal());
+                            caller.principal(),
+                            // Never fatal: an unusable Lark credential tree must not stop a run
+                            // that has nothing to do with Lark from being built at all.
+                            LarkIntegrationService.hostExecutionEnvironment(executionProvider.dataRoot(), this.ownerId));
                 }
                 // The Agent takes ownership on a successful build; a failed build closes it below.
                 hostExecution.applyTo(builder);

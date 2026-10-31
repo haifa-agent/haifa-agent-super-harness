@@ -229,6 +229,7 @@ corepack pnpm install --offline --frozen-lockfile
 - 临时 HTTP 测试的 OS 凭据累积：本机普通 `GatewayFixture.production` 曾持续报 `CredWrite failed with error 8 (STORE_FAILURE)`，单类复验也失败；不能仅据错误码断言物理内存不足或随意清理凭据。普通测试使用 `GatewayFixture.productionEnvironment` 的显式测试环境密钥，保留调用方显式引用；默认 OS 首次配置、丢失与重启由 `ContinuationKeyConfigurationTest` 验证。检查：`pwsh -NoProfile -File scripts/test-targeted.ps1 -Test "PlanModeLifecycleHttpTest,ContinuationKeyConfigurationTest,AcceptanceFixturesTest" -LowMemory`；只输出凭据存在性和计数，不输出值，不删已有数据库或主服务凭据。
 - 持久 SQLite Runtime 的 model continuation 使用 AES-GCM 稳定密钥。Windows 默认使用**单个固定** Windows Credential Manager target：`haifa:os:HAIFA_SUPER_HARNESS_CONTINUATION_KEY`（不再按 data-root 分槽）。历史实现曾按规范化绝对 data-root 的 SHA-256 前 16 个十六进制字符分槽（`haifa:os:HAIFA_SUPER_HARNESS_CONTINUATION_KEY_<data-root-hash>`），每个 data-root 写一条凭据并最终写满 Windows Credential Manager，故已废止。仅当该固定凭据尚不存在时首次启动可生成并写入，已有凭据不得覆盖；已有数据库但凭据丢失必须启动失败，禁止静默换钥；固定凭据缺失时会回退读取旧的按 data-root 分槽凭据（只读复用、不改动其 key、也不迁移）以兼容既存数据库。由此，本机新建 data-root 共用同一把密钥。显式 `os://NAME` 属于外部托管引用，缺失时即使数据库尚不存在也必须失败。Linux/CI 必须通过 `HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF=env://NAME` 指向外部注入的 Base64 256-bit key。症状：启动前报 continuation key unavailable/invalid。检查：`Test-Path <data-root>/runtime/haifa-agent.sqlite` 确认数据库是否存在，`cmdkey /list` 只检查 `haifa:os:HAIFA_SUPER_HARNESS_CONTINUATION_KEY` 是否存在（不得输出 secret），并查看 `server-*.stderr.log`。最小修复：恢复该固定 OS 凭据或原外部 secret 引用，不能删除数据库或生成替代 key；修复后以同一数据目录完成关闭重启并验证 transcript/history/runs 可读。
 - 由上一条推出：不同启动方式不得共用同一 data-root。例如 W05 Playwright 的 Interaction 测试 classpath profile 与生产 JAR ActiveReconnect profile 混用时，后者会报 `continuation key credential is unavailable for the existing Runtime database`。从首次运行起就为每种 profile 分配独立的新 data-root 子目录。
+- worktree `local-tmp` 下新建的 data-root 若继承 `BUILTIN\Administrators` / `Authenticated Users` ACL 而没有当前用户显式 ACE，Lark 逐用户 CLI 目录初始化会报 `Lark CLI credential directory is unavailable`，根因是 `WindowsAclFileAttributeView.setOwner` 的 `AccessDeniedException`；同一 data-root 的 Gateway CLI 探测也会失败。检查：`icacls <data-root>` 与 `cmd /c dir /q <dir>`，只输出 ACL/owner，不输出凭据。最小修复：对用户 profile 下或应用新建的 data-root 同样须先行核对实际 owner 与 ACL，不得未经验证假设默认具有显式用户 ACE；任何本地修复操作仅限当前任务新建且为空的 data-root（例如执行 `icacls <data-root> /grant:r "<DOMAIN\user>:(OI)(CI)F"` 后重新创建用户目录），严禁自动修改已存在的用户 data-root，更不得放宽或绕过产品级的 fail-closed ACL 校验代码、改用全局权限或复用其他 data-root。
 
 ### 冻结 DeerFlow 参考后端
 
@@ -287,6 +288,9 @@ try {
 - 需要续接时，先确认原精确进程已终止并保存原件；只从本任务 `--log-file` 中核对唯一 `Created conversation <ID>`，用 `agy --conversation <ID> --model gemini-3.8-flash-high` 在同一 worktree 续接，写入交接文件时仍须 `--mode accept-edits`。不得默认续接全局最近会话，且每次续接须有独立 deadline、原会话归属和新交付证据。
 
 ### SHPM 写入与文件工具
+
+- 远程 SHPM 的 Windows worktree 派工路径：`task dispatch --dry-run --json` 若把 `D:/...` 解析成服务端 `/root/app/shpm/D:\...`，该 dry-run 不可执行为真实派工。保留原输出，先在本机核对实际 branch/SHA、提示词、完整槽位端口绑定和独立 data-root，再用原生 `task start` + `assign create`（显式 repo/worktree/base-sha/slot/data-root）登记，并回读路径；不切换旧本地库、不改数据库、不伪造服务器 worktree、不用 `--no-check-paths` 跳过核对。第二步失败时立即保留错误并将该任务标为 blocked，不能留下无人执行的 developing 记录。这个兼容操作只用于已确认的跨宿主路径解析缺陷，正常派工仍用复合 dispatch。
+- 新 worktree 生成 SDK API 摘要前先创建其 `local-tmp/` 目录并验证 `git check-ignore -v local-tmp`。目录尚不存在时，末尾斜杠忽略规则可能未匹配，摘要入口会报 local-tmp 未忽略并拒绝写入；不因此修改全局 Git 配置或跟踪生成的 SDK 摘要。
 
 - SHPM 正文含非 ASCII 时不要经命令行参数或 PowerShell 管道传递。症状：`shpm issue add --detail '<中文>'`，
   或 `shpm ... --json | python -c ...` 回读时出现 `'�\udc80'`、孤立代理字符或乱码，看起来像数据库被写坏；

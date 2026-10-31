@@ -1,0 +1,10 @@
+{
+  "source_sha": "e545c28ac301e6f9feae247c513d8ea8f83df294",
+  "files": [
+    {
+      "path": "builtin.json",
+      "source": "backend/packages/harness/deerflow/capabilities/builtin.json",
+      "sha256": "4f7b2577f2e075969522533e07fa05c90cc4e0ba32e47dd2f98a097128618fd5"
+    }
+  ]
+}

@@ -107,6 +107,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final DeerFlowChannelsApi channelsApi;
     private final FeishuChannelWorker feishuWorker;
     private final DeerFlowSkillsApi skillsApi;
+    private final DeerFlowLarkIntegrationsApi larkIntegrationsApi;
     private final DeerFlowWorkspaceApi workspaceApi;
     private final DeerFlowProjectApi projectApi;
     private final DeerFlowTrashApi trashApi;
@@ -328,6 +329,9 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi.conversations()::hasThread);
         this.skillsApi = new DeerFlowSkillsApi(objectMapper, skillStore, workspaceApi);
+        this.larkIntegrationsApi = new DeerFlowLarkIntegrationsApi(objectMapper,
+                io.haifa.agent.superharness.server.integrations.lark.LarkIntegrationService.production(
+                        objectMapper, dataDirectory, skillStore));
         this.projectApi = new DeerFlowProjectApi(objectMapper, projects, threadRunApi.conversations(), workspaceApi);
         this.trashApi = new DeerFlowTrashApi(objectMapper, projects);
         this.inputPolishApi = new DeerFlowInputPolishApi(objectMapper, modelResolver);
@@ -971,6 +975,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         bindPrefix("/api/models", configurationApi);
         bindPrefix("/api/managed-models", configurationApi, true);
         bindPrefix("/api/agents", configurationApi, true);
+        // Frozen DeerFlow exposes the bundled capability catalog as inert read-only metadata.
+        bindPrefix(DeerFlowCapabilityCatalogApi.PATH, new DeerFlowCapabilityCatalogApi(objectMapper));
         bindPrefix(
                 "/api/subagents",
                 new DeerFlowSubagentCatalogApi(
@@ -983,6 +989,9 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         // ordinary owners must POST connect and DELETE their connections.
         bindPrefix("/api/channels", channelsApi);
         bindPrefix("/api/skills", skillsApi, true);
+        // Only POST /install is administrator-gated, inside the handler, mirroring the frozen
+        // router; per-user config/OAuth must stay self-service.
+        bindPrefix("/api/integrations", larkIntegrationsApi);
         bindPrefix(DeerFlowInputPolishApi.PATH, inputPolishApi);
         bindPrefix("/api/suggestions", suggestionsApi);
         bindPrefix("/api/projects", projectApi);
