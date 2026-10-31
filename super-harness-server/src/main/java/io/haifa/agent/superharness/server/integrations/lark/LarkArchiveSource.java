@@ -60,14 +60,14 @@ public interface LarkArchiveSource {
                 HttpResponse<Path> response = LarkHttpCalls.sendWithDeadline(
                         client, request, info -> subscriber, timeout);
                 if (!response.uri().equals(request.uri())) {
-                    throw new IllegalArgumentException("Lark archive redirects are not permitted");
+                    throw new LarkUpstreamUnavailableException("Lark archive redirects are not permitted");
                 }
                 if (response.statusCode() != 200) {
-                    throw new IllegalArgumentException("Could not download the Lark skill pack (" + version
+                    throw new LarkUpstreamUnavailableException("Could not download the Lark skill pack (" + version
                             + ") from GitHub: HTTP " + response.statusCode());
                 }
                 if (Files.size(archive) > MAX_BYTES) {
-                    throw new IllegalArgumentException("Lark CLI source archive is too large.");
+                    throw new LarkUpstreamUnavailableException("Lark CLI source archive is too large.");
                 }
                 ok = true;
                 return archive;
@@ -75,10 +75,10 @@ public interface LarkArchiveSource {
                 Thread.currentThread().interrupt();
                 throw new IOException("Interrupted while downloading the Lark skill pack", interrupted);
             } catch (IOException | RuntimeException failure) {
-                if (failure instanceof IllegalArgumentException) {
-                    throw (IllegalArgumentException) failure;
+                if (failure instanceof LarkUpstreamUnavailableException upstream) {
+                    throw upstream;
                 }
-                throw new IllegalArgumentException("Could not download the Lark skill pack (" + version
+                throw new LarkUpstreamUnavailableException("Could not download the Lark skill pack (" + version
                         + ") from GitHub. Check the Gateway's internet access, or pre-stage the archive via "
                         + LarkSkillCatalog.ARCHIVE_ENV + ".", failure);
             } finally {

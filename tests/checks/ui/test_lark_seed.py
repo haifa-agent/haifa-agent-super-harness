@@ -112,7 +112,10 @@ class PreparedSeedTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "differs"):
             self.validate()
 
-    def test_windows_product_path_order_preserves_exact_content_digest(self):
+    def test_case_insensitive_order_is_not_a_second_pack_identity(self):
+        # The product hashes one canonical order. A digest built with Windows
+        # case-insensitive Path ordering must not be accepted, otherwise the same
+        # official pack would carry two identities depending on the host.
         aggregate = hashlib.sha256()
         for name in sorted(seed.NAMES):
             files = sorted((self.source / name).rglob("*"), key=lambda path: str(path).casefold())
@@ -121,7 +124,11 @@ class PreparedSeedTest(unittest.TestCase):
                     aggregate.update(path.relative_to(self.source).as_posix().encode() + b"\0" + path.read_bytes() + b"\0")
         self.manifest["content_sha256"] = aggregate.hexdigest()
         self.write_manifest()
-        self.assertEqual(self.validate()[1]["productPathOrder"], "windows")
+        with self.assertRaisesRegex(ValueError, "content digest"):
+            self.validate()
+
+    def test_canonical_digest_is_reported_as_a_single_order(self):
+        self.assertEqual(self.validate()[1]["productPathOrder"], "canonical-relative-path")
 
     def test_arbitrary_manifest_digest_is_never_accepted(self):
         self.manifest["content_sha256"] = "0" * 64

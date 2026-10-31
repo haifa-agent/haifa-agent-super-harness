@@ -537,6 +537,8 @@ public final class HaifaRunBridge implements AutoCloseable {
                                     executionProvider.maximumOutputLines()),
                             caller.tenant(),
                             caller.principal(),
+                            // Never fatal: an unusable Lark credential tree must not stop a run
+                            // that has nothing to do with Lark from being built at all.
                             LarkIntegrationService.hostExecutionEnvironment(executionProvider.dataRoot(), this.ownerId));
                 }
                 // The Agent takes ownership on a successful build; a failed build closes it below.

@@ -160,6 +160,9 @@ class LarkIntegrationServiceTest {
         assertThat(result.status().runtimeVersionMismatch()).isFalse();
 
         cli.makeAvailable("1.0.67 (lark-cli)");
+        // The probe is cached for CLI_PROBE_TTL_SECONDS, so an out-of-band CLI upgrade is observed
+        // after that bound rather than on the very next request.
+        clock.sleep(java.time.Duration.ofSeconds(LarkIntegrationService.CLI_PROBE_TTL_SECONDS + 1));
         LarkIntegrationService.Status drifted = service.status("alice");
         assertThat(drifted.runtimeVersionMismatch()).isTrue();
         assertThat(drifted.latestAvailableVersion()).isEqualTo("v1.0.66");
@@ -478,5 +481,48 @@ class LarkIntegrationServiceTest {
     private static String cliExecutableName() {
         boolean windows = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
         return windows ? "lark-cli.exe" : "lark-cli";
+    }
+
+    @Test
+    void repeatedStatusReusesTheCachedCliProbeAndAuthorizationState() {
+        cli.makeAvailable("1.0.65");
+        long before = cli.probeCount();
+        LarkIntegrationService.Status first = service.status("alice");
+        LarkIntegrationService.Status second = service.status("alice");
+        assertThat(cli.probeCount() - before).as("status polling must not probe once per request")
+                .isLessThanOrEqualTo(1);
+        assertThat(second.cli().version()).isEqualTo(first.cli().version());
+        assertThat(second.auth().status()).isEqualTo(first.auth().status());
+
+        // A state change must invalidate the cache rather than stay masked until the TTL expires.
+        service.switchCredentials("alice", "cli_alice", "secret-a", "feishu");
+        assertThat(service.status("alice").auth().status()).isEqualTo("authenticated");
+    }
+
+    @Test
+    void modifiedPackBytesAreReportedAsNotInstalled() throws Exception {
+        service.install("alice");
+        assertThat(service.status("alice").installed()).isTrue();
+
+        // Rewrite a default-enabled, script-free skill after install: no review key changes, so the
+        // recorded content digest is the only thing that can catch it.
+        Path shared = dataDirectory.resolve("integrations/lark/skills")
+                .resolve(LarkSkillCatalog.GUARD_SKILL).resolve("SKILL.md");
+        Files.writeString(shared, Files.readString(shared) + "\nInjected instruction.\n");
+
+        var tampered = service(new SkillConfigStore(json, dataDirectory,
+                SkillConfigStore.repositoryRootFromWorkingDirectory()), cli, registration, archives, clock);
+        assertThat(tampered.status("alice").installed()).isFalse();
+        assertThat(tampered.install("alice").status().installed()).isTrue();
+    }
+
+    @Test
+    void hostExecutionOverlayDegradesInsteadOfFailingEveryRun() throws Exception {
+        // A file where the per-owner directory must be created: preparation cannot succeed.
+        Path users = dataDirectory.resolve("integrations/lark/users");
+        Files.createDirectories(users.getParent());
+        Files.writeString(users, "not a directory");
+
+        assertThat(LarkIntegrationService.hostExecutionEnvironment(dataDirectory, "alice")).isEmpty();
     }
 }

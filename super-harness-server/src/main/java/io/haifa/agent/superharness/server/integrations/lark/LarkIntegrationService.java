@@ -63,6 +63,11 @@ public final class LarkIntegrationService {
     static final int AUTH_COMPLETE_MAX_WAIT_SECONDS = 45;
     static final long LATEST_VERSION_TTL_SECONDS = 3600;
     private static final long LATEST_VERSION_TTL_NANOS = Duration.ofSeconds(LATEST_VERSION_TTL_SECONDS).toNanos();
+    /** {@code status} shells out to the CLI; polling must not spawn one probe per request. */
+    static final long CLI_PROBE_TTL_SECONDS = 30;
+    private static final long CLI_PROBE_TTL_NANOS = Duration.ofSeconds(CLI_PROBE_TTL_SECONDS).toNanos();
+    static final long AUTH_STATE_TTL_SECONDS = 15;
+    private static final long AUTH_STATE_TTL_NANOS = Duration.ofSeconds(AUTH_STATE_TTL_SECONDS).toNanos();
     private static final Pattern SAFE_OWNER = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,63}");
     private static final Pattern SAFE_SCOPE = Pattern.compile("[A-Za-z0-9 _.,:/-]{1,1024}");
     private static final Pattern SAFE_DOMAIN = Pattern.compile("[A-Za-z][A-Za-z0-9_-]{0,31}");
@@ -130,6 +135,9 @@ public final class LarkIntegrationService {
     private final ExecutionProvider executionProvider;
     private final Map<String, ReentrantLock> userLocks = new ConcurrentHashMap<>();
     private volatile LatestCache latestCache;
+    private volatile ProbeCache probeCache;
+    private volatile PackIntegrityCache packIntegrityCache;
+    private final Map<String, AuthCache> authCache = new ConcurrentHashMap<>();
 
     public static LarkIntegrationService production(ObjectMapper json, Path dataDirectory, SkillConfigStore skills) {
         Path root = dataDirectory.toAbsolutePath().normalize().resolve("integrations").resolve("lark");
@@ -197,13 +205,28 @@ public final class LarkIntegrationService {
         return runtimeOverlay(cli, userConfigDirectory(ownerId), userDataDirectory(ownerId));
     }
 
-    /** Captured once by the trusted bridge constructor, never selected by model Tool arguments. */
+    /**
+     * Captured once by the trusted bridge constructor, never selected by model Tool arguments.
+     *
+     * <p>This overlay is an optional convenience for owners who did install Lark, so it must not
+     * decide whether an unrelated run can be built. When the credential tree cannot be prepared
+     * (for example an ACL that denies the Gateway user, or a data root owned by another identity)
+     * the run continues without the overlay and the failure is logged; {@code lark-cli} then fails
+     * with its own diagnostic inside the run instead of every run failing to start.
+     */
     public static Map<String, String> hostExecutionEnvironment(Path dataDirectory, String ownerId) {
         Path integration = dataDirectory.toAbsolutePath().normalize().resolve("integrations").resolve("lark");
-        prepareUserTree(integration, ownerId);
-        Path user = integration.resolve("users").resolve(ownerSegment(ownerId));
-        return runtimeOverlay(LarkCliProcessGateway.production(integration.resolve("gateway-cli")),
-                user.resolve("config"), user.resolve("data"));
+        try {
+            prepareUserTree(integration, ownerId);
+            Path user = integration.resolve("users").resolve(ownerSegment(ownerId));
+            return runtimeOverlay(LarkCliProcessGateway.production(integration.resolve("gateway-cli")),
+                    user.resolve("config"), user.resolve("data"));
+        } catch (RuntimeException unavailable) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "Lark execution overlay is unavailable for this run; continuing without it ("
+                            + unavailable.getClass().getSimpleName() + ")");
+            return Map.of();
+        }
     }
 
     private static Map<String, String> runtimeOverlay(LarkCliGateway cli, Path config, Path data) {
@@ -221,12 +244,15 @@ public final class LarkIntegrationService {
         Optional<LarkSkillPackInstaller.Manifest> manifest = packs.manifest();
         Set<String> installed = packs.installedNames();
         AppCredentials app = readAppCredentials(ownerId);
-        LarkCliGateway.Probe probe = cli.probe();
+        LarkCliGateway.Probe probe = cachedProbe();
+        boolean packVerified = cachedPackIntegrity();
         String manifestVersion = manifest.map(LarkSkillPackInstaller.Manifest::version).orElse(null);
         String latest = cachedLatestVersion();
         List<String> enabled = enabledSkills();
         return new Status(
-                manifest.isPresent() && installed.contains(LarkSkillCatalog.GUARD_SKILL),
+                // A pack whose bytes no longer match the installed digest is reported as not
+                // installed rather than silently trusted; reinstalling repairs it.
+                manifest.isPresent() && installed.contains(LarkSkillCatalog.GUARD_SKILL) && packVerified,
                 manifestVersion != null ? manifestVersion : LarkSkillCatalog.FALLBACK_VERSION,
                 manifestVersion,
                 latest,
@@ -240,7 +266,7 @@ public final class LarkIntegrationService {
                 enabled,
                 packs.packRoot().toString(),
                 new CliState(probe.available(), probe.path(), probe.version(), probe.error()),
-                probeAuth(ownerId, probe, false),
+                cachedAuth(ownerId, probe),
                 executionProvider == ExecutionProvider.DOCKER_AIO ? "gateway-download" : "none",
                 false,
                 switch (executionProvider) {
@@ -279,8 +305,66 @@ public final class LarkIntegrationService {
         } catch (RuntimeException unavailable) {
             version = null;
         }
-        latestCache = new LatestCache(version, now);
+        // A transient failure must not be remembered for the whole TTL; only real answers are.
+        latestCache = version == null ? null : new LatestCache(version, now);
         return version;
+    }
+
+    /**
+     * A CLI probe costs a process launch, so status polling reuses it briefly. The TTL is short
+     * enough that an operator who installs the managed CLI sees it without a restart.
+     */
+    private LarkCliGateway.Probe cachedProbe() {
+        long now = nanoTime.getAsLong();
+        ProbeCache cached = probeCache;
+        if (cached != null && now - cached.atNanos() < CLI_PROBE_TTL_NANOS) {
+            return cached.probe();
+        }
+        LarkCliGateway.Probe probe = cli.probe();
+        probeCache = new ProbeCache(probe, now);
+        return probe;
+    }
+
+    /**
+     * Re-hashing the whole pack is far too expensive per status poll, so the verification result
+     * shares the probe TTL and is dropped whenever the pack may have changed.
+     */
+    private boolean cachedPackIntegrity() {
+        long now = nanoTime.getAsLong();
+        PackIntegrityCache cached = packIntegrityCache;
+        if (cached != null && now - cached.atNanos() < CLI_PROBE_TTL_NANOS) {
+            return cached.verified();
+        }
+        boolean verified = packs.contentMatchesManifest();
+        if (!verified) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "Installed Lark skill pack does not match its recorded content digest; reporting it "
+                            + "as not installed until it is reinstalled");
+        }
+        packIntegrityCache = new PackIntegrityCache(verified, now);
+        return verified;
+    }
+
+    /** Drops cached CLI observations after an operation that may change them. */
+    private void invalidateCliObservations(String ownerId) {
+        probeCache = null;
+        packIntegrityCache = null;
+        if (ownerId == null) {
+            authCache.clear();
+        } else {
+            authCache.remove(ownerId);
+        }
+    }
+
+    private AuthState cachedAuth(String ownerId, LarkCliGateway.Probe probe) {
+        long now = nanoTime.getAsLong();
+        AuthCache cached = authCache.get(ownerId);
+        if (cached != null && now - cached.atNanos() < AUTH_STATE_TTL_NANOS) {
+            return cached.state();
+        }
+        AuthState state = probeAuth(ownerId, probe, false);
+        authCache.put(ownerId, new AuthCache(state, now));
+        return state;
     }
 
     // ----------------------------------------------------------------- install
@@ -352,6 +436,8 @@ public final class LarkIntegrationService {
             if (installed.contentChanged()) {
                 message += " Skill content changed since the previous install.";
             }
+            // The install may have just materialized the managed CLI and changed the pack.
+            invalidateCliObservations(null);
             return new InstallResult(true, List.copyOf(installed.names()), message, status(ownerId));
         } finally {
             if (temporaryArchive && archive != null) {
@@ -402,6 +488,7 @@ public final class LarkIntegrationService {
         return withUserLock(ownerId, () -> {
             requireFlowLocked(ownerId, current, "config", code);
             replaceCredentialsLocked(ownerId, appId, appSecret, finalBrand);
+            invalidateCliObservations(ownerId);
             return new ConfigComplete(true, "Lark/Feishu connection setup completed.", current, status(ownerId));
         });
     }
@@ -423,6 +510,7 @@ public final class LarkIntegrationService {
             validateCredentialsWithCli(ownerId, id, secret, parsedBrand);
             String generation = advanceGenerationLocked(ownerId);
             replaceCredentialsLocked(ownerId, id, secret, parsedBrand);
+            invalidateCliObservations(ownerId);
             return new ConfigComplete(true, "Lark/Feishu app switched. Reconnect to authorize the new app.",
                     generation, status(ownerId));
         });
@@ -493,11 +581,21 @@ public final class LarkIntegrationService {
             throw new IllegalArgumentException("wait_timeout_seconds must be between "
                     + AUTH_COMPLETE_MIN_WAIT_SECONDS + " and " + AUTH_COMPLETE_MAX_WAIT_SECONDS + ".");
         }
-        return withUserLock(ownerId, () -> {
+        // Validate the flow and capture the CLI path under the owner lock, then release it for the
+        // device-flow wait. Holding the lock across the wait would block this owner's config/start
+        // and credential switch for up to the full timeout, which the frozen flow does not do.
+        String path = withUserLock(ownerId, () -> {
             requireFlowLocked(ownerId, generation, "auth", code);
-            String path = requireCliPath();
-            runJson(ownerId, List.of(path, "auth", "login", "--device-code", code, "--json"),
-                    Duration.ofSeconds(waitTimeoutSeconds), true);
+            return requireCliPath();
+        });
+        runJson(ownerId, List.of(path, "auth", "login", "--device-code", code, "--json"),
+                Duration.ofSeconds(waitTimeoutSeconds), true);
+        return withUserLock(ownerId, () -> {
+            // A newer flow may have started while the browser was pending; a late callback must
+            // not publish its result over that newer generation.
+            requireFlowLocked(ownerId, generation, "auth", code);
+            // Authorization just changed; the cached status must not mask the new state.
+            invalidateCliObservations(ownerId);
             Status verified = status(ownerId);
             AuthState auth = probeAuth(ownerId, cli.probe(), true);
             Status withVerification = new Status(verified.installed(), verified.version(),
@@ -1137,6 +1235,12 @@ public final class LarkIntegrationService {
     }
 
     private record LatestCache(String version, long atNanos) {}
+
+    private record ProbeCache(LarkCliGateway.Probe probe, long atNanos) {}
+
+    private record PackIntegrityCache(boolean verified, long atNanos) {}
+
+    private record AuthCache(AuthState state, long atNanos) {}
 
     private record AppCredentials(boolean configured, String appId, String brand) {
         static final AppCredentials NONE = new AppCredentials(false, null, null);

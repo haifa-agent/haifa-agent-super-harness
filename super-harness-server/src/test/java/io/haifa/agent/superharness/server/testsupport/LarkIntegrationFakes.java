@@ -45,6 +45,7 @@ public final class LarkIntegrationFakes {
         private volatile int authStatusExit;
         private volatile String authStatusJson = "{\"identities\":{\"user\":{\"userName\":\"Fake User\"}}}";
         private volatile boolean failConfigInit;
+        private final AtomicLong probes = new AtomicLong();
 
         public FakeCli(boolean available) {
             this.available = available;
@@ -68,8 +69,14 @@ public final class LarkIntegrationFakes {
             this.failConfigInit = fail;
         }
 
+        /** How many times {@link #probe()} ran, so caching behavior is observable. */
+        public long probeCount() {
+            return probes.get();
+        }
+
         @Override
         public Probe probe() {
+            probes.incrementAndGet();
             return available ? new Probe(true, path, version, null)
                     : new Probe(false, null, null, "lark-cli is not installed on the Gateway");
         }
@@ -145,6 +152,12 @@ public final class LarkIntegrationFakes {
         private final Deque<PollOutcome> outcomes = new ArrayDeque<>();
         private volatile String latest = "v1.0.65";
         private volatile Begin begin = new Begin("USER-CODE", "DEVICE-CODE", 600, 5);
+        private volatile boolean upstreamUnavailable;
+
+        /** Simulates an unreachable accounts host, which is not a client input error. */
+        public void upstreamUnavailable(boolean unavailable) {
+            this.upstreamUnavailable = unavailable;
+        }
 
         public void approved(String appId, String appSecret, String tenantBrand) {
             outcomes.add(PollOutcome.approved(new Poll(appId, appSecret, tenantBrand)));
@@ -178,6 +191,10 @@ public final class LarkIntegrationFakes {
 
         @Override
         public Begin begin(String brand) {
+            if (upstreamUnavailable) {
+                throw new io.haifa.agent.superharness.server.integrations.lark
+                        .LarkUpstreamUnavailableException("Lark app registration request failed: ConnectException");
+            }
             return begin;
         }
 

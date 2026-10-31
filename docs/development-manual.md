@@ -255,7 +255,7 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -GatewayOnly
 
 ## Lark 办公插件定向 UI 验收
 
-`-W20Lark` 复用现有受控模型、生产 Gateway 与冻结前端。主控须提供真实产品 installer 产出的共享 `skills` 目录（含 `.haifa-lark-manifest.json`、根 LICENSE 与各技能 LICENSE.txt）及对应官方归档。Python 预置检查完整文件集合、官方逐文件字节、版本、归档与许可证 hash、产品 manifest 的内容 hash；只允许当前产品的明确 `lark-shared` 指引追加。Java Windows 与 Unix 的路径排序不同，检查器分别重算这两种确定的聚合 hash，并记录匹配的平台顺序。它不生成产品 manifest、不执行安装，不复制用户凭据、启用配置、Runtime 状态或 CLI。
+`-W20Lark` 复用现有受控模型、生产 Gateway 与冻结前端。主控须提供真实产品 installer 产出的共享 `skills` 目录（含 `.haifa-lark-manifest.json`、根 LICENSE 与各技能 LICENSE.txt）及对应官方归档。Python 预置检查完整文件集合、官方逐文件字节、版本、归档与许可证 hash、产品 manifest 的内容 hash；只允许当前产品的明确 `lark-shared` 指引追加。内容聚合 hash 只有一种顺序：先按技能名分组，再按 `/` 归一化后的相对路径用字符串序排序，与宿主平台无关，因此同一官方包在 Windows 与 Unix 上得到同一身份；检查器按同一顺序重算并记录 `productPathOrder=canonical-relative-path`。它不生成产品 manifest、不执行安装，不复制用户凭据、启用配置、Runtime 状态或 CLI。????????? Windows ???????????????? Path ???????? manifest ??????`status` ???? `installed=false` ?? WARNING??????????? Linux ????????????????????????
 
 ```powershell
 pwsh -NoProfile -File scripts/ui/run-w18-ui-smoke.ps1 `
