@@ -101,7 +101,10 @@ test("W20 Lark capability center loads the official lark-doc package through Hai
   // redacted derivative, so it must differ from the raw bytes while the raw digest stays bound.
   expect(publicSha256).not.toBe(seed.referenceSha256);
   expect((publicResult.content.match(/\[REDACTED\]/g) ?? []).length).toBeGreaterThan(0);
-  expect(Buffer.byteLength(publicResult.content, "utf8")).toBeLessThan(Buffer.byteLength(content, "utf8"));
+  // Redaction substitutes short secrets with an "[REDACTED]" marker, so the display copy may be
+  // slightly larger than the raw bytes. Do not bound its length; bound the secret and the digest.
+  expect(Buffer.byteLength(publicResult.content, "utf8"))
+    .toBeGreaterThan(Buffer.byteLength(content, "utf8") / 2);
   expect(publicResult.securityLabel).toBe("untrusted-skill-resource");
   expect(publicResult.content).not.toBe(content);
   expect(calls.some((call) => call.name === "execution_run")).toBe(false);
