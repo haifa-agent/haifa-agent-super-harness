@@ -62,7 +62,8 @@ class LarkHttpDeadlineTest {
         long start = System.nanoTime();
         try {
             assertThatThrownBy(() -> source.fetch("v1.0.65"))
-                    .isInstanceOf(IllegalArgumentException.class)
+                    .as("a stalled GitHub download is an upstream outage, not a client input error")
+                    .isInstanceOf(LarkUpstreamUnavailableException.class)
                     .hasCauseInstanceOf(HttpTimeoutException.class);
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
             assertThat(elapsedMs).as("fetch should abort near timeout rather than 1500ms").isLessThan(900);
@@ -260,7 +261,8 @@ class LarkHttpDeadlineTest {
         long start = System.nanoTime();
         try {
             assertThatThrownBy(() -> registration.begin("feishu"))
-                    .isInstanceOf(IllegalArgumentException.class)
+                    .as("a stalled accounts host is an upstream outage, not a client input error")
+                    .isInstanceOf(LarkUpstreamUnavailableException.class)
                     .hasMessageContaining("HttpTimeoutException");
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
             assertThat(elapsedMs).as("postForm should abort near timeout").isLessThan(900);

@@ -133,6 +133,29 @@ public final class LarkSkillPackInstaller {
     }
 
     /**
+     * Recomputes the pack digest from disk and compares it with the digest recorded at install time.
+     *
+     * <p>Discovery used to trust whatever bytes were on disk, so a modified script-free,
+     * default-enabled skill would be adopted silently with no re-review. A missing manifest means
+     * nothing was installed by this product, so there is nothing to verify.
+     */
+    public boolean contentMatchesManifest() {
+        Optional<Manifest> recorded = manifest();
+        if (recorded.isEmpty()) {
+            return true;
+        }
+        String expected = recorded.orElseThrow().contentSha256();
+        if (expected == null || expected.isBlank()) {
+            return false;
+        }
+        try {
+            return expected.equals(contentSha256(packRoot, installedNames()));
+        } catch (IOException | RuntimeException unreadable) {
+            return false;
+        }
+    }
+
+    /**
      * Atomically install {@code archive} as version {@code version}.
      *
      * <p>Same-version reinstalls are idempotent but still re-verify content. A failed validation or
@@ -330,16 +353,27 @@ public final class LarkSkillPackInstaller {
             Path directory = root.resolve(name);
             List<Path> files;
             try (var walk = Files.walk(directory)) {
-                files = walk.filter(Files::isRegularFile).sorted().toList();
+                // Order by the normalized relative path with String order, never by Path order:
+                // Path comparison is case-insensitive on Windows, so "references/..." would sort
+                // before "SKILL.md" there but after it on Unix. That made the same official pack
+                // hash differently per platform, which broke the digest as a pack identity.
+                files = walk.filter(Files::isRegularFile)
+                        .sorted(java.util.Comparator.comparing(file -> relativePath(root, file)))
+                        .toList();
             }
             for (Path file : files) {
-                digest.update(root.relativize(file).toString().replace('\\', '/').getBytes(StandardCharsets.UTF_8));
+                digest.update(relativePath(root, file).getBytes(StandardCharsets.UTF_8));
                 digest.update((byte) 0);
                 digest.update(Files.readAllBytes(file));
                 digest.update((byte) 0);
             }
         }
         return HexFormat.of().formatHex(digest.digest());
+    }
+
+    /** The single, platform-independent spelling of a pack member used by the content digest. */
+    static String relativePath(Path root, Path file) {
+        return root.relativize(file).toString().replace('\\', '/');
     }
 
     private void writeManifest(Path root, Set<String> skills, String version, String contentSha, Path archive) throws IOException {

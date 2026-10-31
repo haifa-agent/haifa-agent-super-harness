@@ -131,9 +131,10 @@ public final class LarkHttpAppRegistration implements LarkAppRegistration {
                     client, request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), httpTimeout);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
-            throw new IllegalArgumentException("Lark app registration request failed: InterruptedException");
+            throw new LarkUpstreamUnavailableException("Lark app registration request failed: InterruptedException");
         } catch (IOException failure) {
-            throw new IllegalArgumentException("Lark app registration request failed: "
+            // A transport failure is an upstream availability problem, not a bad request body.
+            throw new LarkUpstreamUnavailableException("Lark app registration request failed: "
                     + failure.getClass().getSimpleName());
         }
         try {

@@ -97,15 +97,19 @@ test("W20 Lark capability center loads the official lark-doc package through Hai
   expect(content).toBe(fs.readFileSync(path.join(seed.packageDirectory, seed.reference), "utf8"));
   const publicSha256 = crypto.createHash("sha256").update(publicResult.content, "utf8").digest("hex");
   expect(publicResult.digest).toBe(`sha256:${seed.referenceSha256}`);
-  expect(publicSha256).toBe("a4e2f4f235ab7d5f27cdf266dd7a8906c8fb881b38c966719e6d64cfe982e3d3");
-  expect((publicResult.content.match(/\[REDACTED\]/g) ?? []).length).toBe(3);
+  // Assert the projection's shape, never a digest tied to one official tag: the display copy is a
+  // redacted derivative, so it must differ from the raw bytes while the raw digest stays bound.
+  expect(publicSha256).not.toBe(seed.referenceSha256);
+  expect((publicResult.content.match(/\[REDACTED\]/g) ?? []).length).toBeGreaterThan(0);
+  expect(Buffer.byteLength(publicResult.content, "utf8")).toBeLessThan(Buffer.byteLength(content, "utf8"));
   expect(publicResult.securityLabel).toBe("untrusted-skill-resource");
   expect(publicResult.content).not.toBe(content);
   expect(calls.some((call) => call.name === "execution_run")).toBe(false);
   await evidence.json("lark-skill-run", { ...identity, metadata, loadCall, readCall,
     activated: true, referenceSha256: seed.referenceSha256, rawReceipt: raw.receipt,
     publicProjection: { digest: publicResult.digest, sha256: publicSha256,
-      securityLabel: publicResult.securityLabel, redactedMarkers: 3,
+      securityLabel: publicResult.securityLabel,
+      redactedMarkers: (publicResult.content.match(/\[REDACTED\]/g) ?? []).length,
       byteLength: Buffer.byteLength(publicResult.content, "utf8") },
     officeOAuth: "BLOCKED_EXTERNAL", officeDocumentRun: "BLOCKED_EXTERNAL",
     boundary: "official package load/reference read only; no CLI execution or office OAuth" });

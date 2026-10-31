@@ -164,19 +164,17 @@ def validate_seed(source: Path, archive: Path, guidance: Path) -> tuple[dict[str
     for name, content in licenses.items():
         if files.get(name) != content:
             raise ValueError("Prepared seed must retain the original official license")
-    # Product uses Path.sorted(): Windows compares paths without case, Unix
-    # compares case. The prepared seed can be transported across those hosts.
-    aggregates = {}
-    for order, key in (("unix", None), ("windows", str.casefold)):
-        aggregate = hashlib.sha256()
-        # Product groups by skill name FIRST (lark-vc before lark-vc-agent),
-        # then sorts that package's file paths. A global path sort is different.
-        for name in sorted(NAMES):
-            for relative in sorted((item for item in originals if item.startswith(name + "/")), key=key):
-                aggregate.update(relative.encode("utf-8") + b"\0" + files[relative] + b"\0")
-        aggregates[order] = aggregate.hexdigest()
+    # The product hashes one canonical order: group by skill name first (lark-vc
+    # before lark-vc-agent), then order that package's members by the
+    # '/'-normalized relative path using String order. It is deliberately not
+    # Path order, which is case-insensitive on Windows and would otherwise give
+    # the same official pack two different identities.
+    aggregate = hashlib.sha256()
+    for name in sorted(NAMES):
+        for relative in sorted(item for item in originals if item.startswith(name + "/")):
+            aggregate.update(relative.encode("utf-8") + b"\0" + files[relative] + b"\0")
     content_sha = manifest.get("content_sha256")
-    if content_sha not in aggregates.values():
+    if content_sha != aggregate.hexdigest():
         raise ValueError("Product content digest does not match prepared skill bytes")
     if not any(name.startswith("lark-doc/scripts/") for name in files):
         raise ValueError("Official lark-doc must include real scripts")
@@ -184,7 +182,7 @@ def validate_seed(source: Path, archive: Path, guidance: Path) -> tuple[dict[str
               "version": version, "source": manifest["source"],
               "officialArchiveSha256": archive_sha256,
               "productContentSha256": content_sha, "skills": list(NAMES),
-              "productPathOrder": next(order for order, value in aggregates.items() if value == content_sha),
+              "productPathOrder": "canonical-relative-path",
               "files": {name: digest(data) for name, data in sorted(files.items())},
               "reference": REFERENCE, "referenceSha256": digest(files[REFERENCE]),
               "officeOAuth": "BLOCKED_EXTERNAL", "officeDocumentRun": "BLOCKED_EXTERNAL"}

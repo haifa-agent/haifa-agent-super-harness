@@ -10,6 +10,7 @@ import io.haifa.agent.superharness.server.integrations.lark.LarkCliUnavailableEx
 import io.haifa.agent.superharness.server.integrations.lark.LarkFlowSupersededException;
 import io.haifa.agent.superharness.server.integrations.lark.LarkIntegrationService;
 import io.haifa.agent.superharness.server.integrations.lark.LarkTimeoutException;
+import io.haifa.agent.superharness.server.integrations.lark.LarkUpstreamUnavailableException;
 import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -165,6 +166,10 @@ final class DeerFlowLarkIntegrationsApi implements HttpHandler {
             send(exchange, 404, Map.of("detail", message(missing.getMessage())));
         } catch (LarkTimeoutException timeout) {
             send(exchange, 504, Map.of("detail", message(timeout.getMessage())));
+        } catch (LarkUpstreamUnavailableException unavailable) {
+            // Upstream outage or missing egress, not a malformed client request.
+            LOG.log(System.Logger.Level.WARNING, "Lark upstream is unavailable: " + path);
+            send(exchange, 502, Map.of("detail", message(unavailable.getMessage())));
         } catch (IllegalArgumentException invalid) {
             send(exchange, 400, Map.of("detail", message(invalid.getMessage())));
         } catch (IOException failure) {

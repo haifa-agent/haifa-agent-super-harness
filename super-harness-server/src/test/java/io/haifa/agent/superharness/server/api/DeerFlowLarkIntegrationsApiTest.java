@@ -205,6 +205,15 @@ class DeerFlowLarkIntegrationsApiTest {
     }
 
     @Test
+    void upstreamOutageMapsTo502RatherThanAClientError() throws Exception {
+        registration.upstreamUnavailable(true);
+        HttpResponse<String> response = request("POST", "/api/integrations/lark/config/start", "{}", "alice", "user");
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(502);
+        assertThat(json.readTree(response.body()).path("detail").asText())
+                .contains("Lark app registration request failed");
+    }
+
+    @Test
     void malformedAuthFieldsReturn422BeforeCliOrGenerationMutation() throws Exception {
         cli.makeAvailable("1.0.65");
         service.switchCredentials("alice", "cli_alice", "secret", "feishu");
@@ -234,6 +243,9 @@ class DeerFlowLarkIntegrationsApiTest {
         assertThat(status.path("install_path").asText()).isEmpty();
         assertThat(status.path("auth").path("verified").asBoolean()).isTrue();
         cli.authStatus(1, "{\"error\":{\"message\":\"known-app-secret access_token=known-access-token\"}}");
+        // The authorization probe is cached for a short TTL, so an out-of-band revocation is
+        // observed after that bound instead of on the very next poll.
+        clock.sleep(java.time.Duration.ofSeconds(60));
         response = request("GET", "/api/integrations/lark/status", null, "alice", "user");
         assertThat(response.body()).doesNotContain("known-app-secret", "known-access-token");
         JsonNode failed = json.readTree(response.body()).path("auth");
