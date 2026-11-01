@@ -927,7 +927,7 @@ public final class LarkIntegrationService {
         }
     }
 
-    private static void harden(Path path) throws IOException {
+    static void harden(Path path) throws IOException {
         if (Files.isSymbolicLink(path)) {
             throw new IOException("Lark CLI credential path must not be a symlink: " + path);
         }
@@ -935,15 +935,7 @@ public final class LarkIntegrationService {
             AclFileAttributeView view = Files.getFileAttributeView(path, AclFileAttributeView.class,
                     LinkOption.NOFOLLOW_LINKS);
             if (view != null) {
-                var lookup = path.getFileSystem().getUserPrincipalLookupService();
-                var owner = lookup.lookupPrincipalByName(System.getProperty("user.name", ""));
-                view.setOwner(owner);
-                AclEntry allow = AclEntry.newBuilder()
-                        .setType(AclEntryType.ALLOW)
-                        .setPrincipal(owner)
-                        .setPermissions(EnumSet.allOf(AclEntryPermission.class))
-                        .build();
-                view.setAcl(List.of(allow));
+                hardenAcl(path, view);
                 return;
             }
         }
@@ -958,6 +950,36 @@ public final class LarkIntegrationService {
             }
         } catch (UnsupportedOperationException unsupported) {
             // The platform has neither ACL nor POSIX modes; the data root boundary still applies.
+        }
+    }
+
+    /**
+     * Best-effort owner-only ACL on the per-owner credential directory.
+     *
+     * <p>Windows denies {@code WRITE_OWNER} to a non-elevated process even when it already owns the
+     * directory, and NIO {@code setOwner} requires it, so retightening an existing tree fails with
+     * {@code AccessDeniedException}. That must not fail app configuration, authorization or a Run:
+     * the per-owner directory boundary still applies and the downgrade is logged. Symlink rejection
+     * in {@link #harden(Path)} stays fatal because it is a real safety check.
+     */
+    private static void hardenAcl(Path path, AclFileAttributeView view) {
+        try {
+            var lookup = path.getFileSystem().getUserPrincipalLookupService();
+            var owner = lookup.lookupPrincipalByName(System.getProperty("user.name", ""));
+            if (!owner.equals(view.getOwner())) {
+                view.setOwner(owner);
+            }
+            AclEntry allow = AclEntry.newBuilder()
+                    .setType(AclEntryType.ALLOW)
+                    .setPrincipal(owner)
+                    .setPermissions(EnumSet.allOf(AclEntryPermission.class))
+                    .build();
+            view.setAcl(List.of(allow));
+        } catch (IOException | RuntimeException failure) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "Lark credential directory permissions stay best-effort on this platform; "
+                            + "continuing with the per-owner directory boundary ("
+                            + failure.getClass().getSimpleName() + ")");
         }
     }
 
