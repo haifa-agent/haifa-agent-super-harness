@@ -1,0 +1,262 @@
+diff --git a/frontend/src/AGENTS.md b/frontend/src/AGENTS.md
+index 9a0e249..bb1a55d 100644
+--- a/frontend/src/AGENTS.md
++++ b/frontend/src/AGENTS.md
+@@ -14 +14 @@
+-3. `useThreadHistory` loads persisted conversation pages from `GET /api/threads/{id}/messages/page`, preserving the backend's thread-global event `seq`; rendering overlays checkpoint/live copies at their matching canonical identities (a summarized checkpoint may contain a protected early input plus a recent tail). Context-compaction rescue diffs every retained visible identity rather than slicing at the first anchor, and keeps a run-scoped ledger of committed visible messages so replacement updates and repeated rolling checkpoint windows cannot erase an already displayed step. A checkpoint/transient prefix whose canonical position is still behind an unloaded cursor page is woven in before the first shared anchor, not discarded: both the checkpoint and seq-sorted history place it earlier, so that position is known even when the pages between are not. Position authority is seq-first and lives in `core/threads/message-order.ts` (re-exported through `hooks.ts`): every normalized identity tracks latest visible content and trusted position separately; a valid `deerflow_seq` (positive safe integer, earliest value wins per identity, hidden control copies contribute a position only when no visible copy carries one) joins an ascending skeleton that outranks identity-anchor weaving, which remains the fallback for no-seq segments whose internal order is preserved. Live-only and rescued messages with trusted seq also serve as anchors for adjacent no-seq segments. A trailing segment follows its last live-only positioned anchor within the loaded window; after a shared anchor or a rescued prefix before the window, it stays at the tail. Optimistic messages remain last; the transient bridge inserts positioned rows before weaving so the insertion cannot reverse previously displayed steps. Rescued sequence anchors preserve preceding captured steps even before React has rendered them; only a leading prefix anchored to loaded history requires previously rendered ordering to cross an unloaded cursor gap. Content replacement never drops the known seq, `run_id`, or `turn_duration`, and the compaction transient bridge plus rendered ledger share the same position priority. `deerflow_seq` is server-owned display metadata and is never written back into a checkpoint. It must never be appended to the tail (#4065) — the tail is provably wrong — but suppressing it entirely is how a user's own question vanished from a long thread once the first 50-row history page no longer reached back to it (#4666). A collapsed unloaded gap is recoverable by paging; a dropped message is not. Weaving alone restores the message but not its exact position — after compaction the live window carries too few anchors — so both sides now carry the backend's thread-global `additional_kwargs.deerflow_seq`: `buildVisibleHistoryMessages` copies each row's `seq`, and the Gateway stamps it onto `values` frame messages it has already persisted. A live message whose seq is below the loaded window's lower bound is placed ahead of everything on screen instead of before the nearest anchor, which is what puts a compaction-rescued first user turn back at the head rather than mid-transcript. That split happens _before_ the anchor walk, not inside it: a compacted checkpoint can share no identity at all with the loaded page — it keeps only the current run's recent tail, while the page on screen was fetched turns earlier — and the anchor walk then never runs at all, which is precisely when a rescued turn most needs its seq. Doing the split inside the walk left that case appending the message after the whole window (#4666), the one arrangement #4065 proved wrong. A message without a seq (still streaming, so not in the feed yet) keeps the weaving path — the tail is already its correct position. Optimistic messages are then added without timestamp re-sorting. History invalidation preserves already-loaded pages so their established ordering positions are not discarded. Dynamic context re-keys each submitted user message from the client-generated `local-human-*` identity `X` to the visible server echo `X__user`; UI identity matching normalizes that reserved suffix only for human messages so the optimistic input and checkpoint replacement remain one visible turn. At dispatch, a local-turn anchor snapshots the checkpoint identity baseline, canonical history identities and maximum trusted seq, and any pre-existing transient-bridge identities. Render repair uses `confirmedHistoryIdentities` plus `preSubmitMaxSeq` to restore baseline or history-confirmed messages above that exact human anchor, while moving only speculative non-baseline AI/tool steps behind it; `currentTurnRunIds` keeps already-persisted steps of the active turn below their human. Keep the anchor scoped to its originating thread through finish, stop, and stream error because the SDK's settled frame can retain transient event order; replace it on the next local submit and clear it on thread switch or replay-gap recovery.
++3. `useThreadHistory` loads persisted conversation pages from `GET /api/threads/{id}/messages/page`, preserving the backend's thread-global event `seq`; rendering overlays checkpoint/live copies at their matching canonical identities (a summarized checkpoint may contain a protected early input plus a recent tail). Context-compaction rescue diffs every retained visible identity rather than slicing at the first anchor, and keeps a run-scoped ledger of committed visible messages so replacement updates and repeated rolling checkpoint windows cannot erase an already displayed step. A checkpoint/transient prefix whose canonical position is still behind an unloaded cursor page is woven in before the first shared anchor, not discarded: both the checkpoint and seq-sorted history place it earlier, so that position is known even when the pages between are not. Position authority is seq-first and lives in `core/threads/message-order.ts` (re-exported through `hooks.ts`): every normalized identity tracks latest visible content and trusted position separately; a valid `deerflow_seq` (positive safe integer, earliest value wins per identity, hidden control copies contribute a position only when no visible copy carries one) joins an ascending skeleton that outranks identity-anchor weaving, which remains the fallback for no-seq segments whose internal order is preserved. Live-only and rescued messages with trusted seq also serve as anchors for adjacent no-seq segments. A trailing segment follows its last live-only positioned anchor within the loaded window. Stale unsequenced narration with a Run id can also follow that Run's last positioned predecessor actually observed in the checkpoint, including a shared anchor; an unseen later history row or same-Run Steer must never replace that predecessor. A rescued predecessor before the loaded window still leaves its followers at the tail. Optimistic messages remain last; the transient bridge inserts positioned rows before weaving so the insertion cannot reverse previously displayed steps. Rescued sequence anchors preserve preceding captured steps even before React has rendered them; only a leading prefix anchored to loaded history requires previously rendered ordering to cross an unloaded cursor gap. Content replacement never drops the known seq, `run_id`, or `turn_duration`, and the compaction transient bridge plus rendered ledger share the same position priority. `deerflow_seq` is server-owned display metadata and is never written back into a checkpoint. It must never be appended to the tail (#4065) — the tail is provably wrong — but suppressing it entirely is how a user's own question vanished from a long thread once the first 50-row history page no longer reached back to it (#4666). A collapsed unloaded gap is recoverable by paging; a dropped message is not. Weaving alone restores the message but not its exact position — after compaction the live window carries too few anchors — so both sides now carry the backend's thread-global `additional_kwargs.deerflow_seq`: `buildVisibleHistoryMessages` copies each row's `seq`, and the Gateway stamps it onto `values` frame messages it has already persisted. A live message whose seq is below the loaded window's lower bound is placed ahead of everything on screen instead of before the nearest anchor, which is what puts a compaction-rescued first user turn back at the head rather than mid-transcript. That split happens _before_ the anchor walk, not inside it: a compacted checkpoint can share no identity at all with the loaded page — it keeps only the current run's recent tail, while the page on screen was fetched turns earlier — and the anchor walk then never runs at all, which is precisely when a rescued turn most needs its seq. Doing the split inside the walk left that case appending the message after the whole window (#4666), the one arrangement #4065 proved wrong. A message without a seq (still streaming, so not in the feed yet) keeps the weaving path — the tail is already its correct position. Optimistic messages are then added without timestamp re-sorting. History invalidation preserves already-loaded pages so their established ordering positions are not discarded. Dynamic context re-keys each submitted user message from the client-generated `local-human-*` identity `X` to the visible server echo `X__user`; UI identity matching normalizes that reserved suffix only for human messages so the optimistic input and checkpoint replacement remain one visible turn. At dispatch, a local-turn anchor snapshots the checkpoint identity baseline, canonical history identities and maximum trusted seq, and any pre-existing transient-bridge identities. Render repair uses `confirmedHistoryIdentities` plus `preSubmitMaxSeq` to restore baseline or history-confirmed messages above that exact human anchor, while moving only speculative non-baseline AI/tool steps behind it; `currentTurnRunIds` keeps already-persisted steps of the active turn below their human. Keep the anchor scoped to its originating thread through finish, stop, and stream error because the SDK's settled frame can retain transient event order; replace it on the next local submit and clear it on thread switch or replay-gap recovery.
+diff --git a/frontend/src/components/workspace/messages/message-list.tsx b/frontend/src/components/workspace/messages/message-list.tsx
+index 407a36d..9f7be13 100644
+--- a/frontend/src/components/workspace/messages/message-list.tsx
++++ b/frontend/src/components/workspace/messages/message-list.tsx
+@@ -105,0 +106 @@ import { RunActivity, RunDuration } from "./run-duration";
++import { RunFailureNotice } from "./run-failure-notice";
+@@ -1449,0 +1451,6 @@ export function MessageList({
++          <RunFailureNotice
++            messages={thread.messages}
++            error={thread.error}
++            isLoading={thread.isLoading}
++            label={t.conversation.runFailed}
++          />
+diff --git a/frontend/src/components/workspace/messages/run-failure-notice.tsx b/frontend/src/components/workspace/messages/run-failure-notice.tsx
+new file mode 100644
+index 0000000..503a9ce
+--- /dev/null
++++ b/frontend/src/components/workspace/messages/run-failure-notice.tsx
+@@ -0,0 +1,45 @@
++import type { Message } from "@langchain/langgraph-sdk";
++
++import { isHiddenFromUIMessage } from "@/core/messages/utils";
++
++export function RunFailureNotice({
++  messages,
++  error,
++  isLoading,
++  label,
++}: {
++  messages: Message[];
++  error: unknown;
++  isLoading: boolean;
++  label: string;
++}) {
++  let human: Message | undefined;
++  for (let index = messages.length - 1; index >= 0; index--) {
++    const message = messages[index]!;
++    if (message.type === "human" && !isHiddenFromUIMessage(message)) {
++      human = message;
++      break;
++    }
++  }
++  const failure: unknown = human?.additional_kwargs?.run_error;
++  if (isLoading || (!error && (!failure || typeof failure !== "object")))
++    return null;
++  const diagnosticId =
++    failure &&
++    typeof failure === "object" &&
++    "diagnostic_id" in failure &&
++    typeof failure.diagnostic_id === "string"
++      ? failure.diagnostic_id
++      : undefined;
++  return (
++    <div
++      role="alert"
++      className="text-destructive w-full rounded-md border p-3 text-sm"
++    >
++      <p>{label}</p>
++      {diagnosticId && (
++        <p className="mt-1 font-mono text-xs break-all">{diagnosticId}</p>
++      )}
++    </div>
++  );
++}
+diff --git a/frontend/src/core/i18n/locales/en-US.ts b/frontend/src/core/i18n/locales/en-US.ts
+index 5101c15..46868b4 100644
+--- a/frontend/src/core/i18n/locales/en-US.ts
++++ b/frontend/src/core/i18n/locales/en-US.ts
+@@ -974,0 +975 @@ export const enUS: Translations = {
++    runFailed: "This run failed. The messages above may belong to earlier runs.",
+diff --git a/frontend/src/core/i18n/locales/types.ts b/frontend/src/core/i18n/locales/types.ts
+index e67f69a..d20060e 100644
+--- a/frontend/src/core/i18n/locales/types.ts
++++ b/frontend/src/core/i18n/locales/types.ts
+@@ -805,0 +806 @@ export interface Translations {
++    runFailed: string;
+diff --git a/frontend/src/core/i18n/locales/zh-CN.ts b/frontend/src/core/i18n/locales/zh-CN.ts
+index 21018c6..b514ac1 100644
+--- a/frontend/src/core/i18n/locales/zh-CN.ts
++++ b/frontend/src/core/i18n/locales/zh-CN.ts
+@@ -911,0 +912 @@ export const zhCN: Translations = {
++    runFailed: "本轮执行失败。上方消息可能来自之前的执行。",
+diff --git a/frontend/src/core/threads/message-order.ts b/frontend/src/core/threads/message-order.ts
+index 4b6066f..c04a9f4 100644
+--- a/frontend/src/core/threads/message-order.ts
++++ b/frontend/src/core/threads/message-order.ts
+@@ -282,0 +283,3 @@ export function mergeMessages(
++  // Positions observed in this checkpoint, not the maximum over a whole Run:
++  // a later same-Run Steer in refreshed history must not pull stale text past it.
++  const lastObservedSeqByRun = new Map<string, number>();
+@@ -287,0 +291,7 @@ export function mergeMessages(
++    const runId =
++      getMessageRunId(message) ??
++      (identity ? savedRunIds.get(identity) : undefined);
++    const observedSeq = trustedSeqOf(identity);
++    if (runId && observedSeq !== undefined) {
++      lastObservedSeqByRun.set(runId, observedSeq);
++    }
+@@ -382 +392,12 @@ export function mergeMessages(
+-    entries.push({ message, major: trailingMajor, minor: 0.5 });
++    // Preserve the applicable live anchor. Only observed same-Run predecessors
++    // can pull stale narration before a new human; unseen later history cannot.
++    const runId = getMessageRunId(message);
++    const runSeq = runId ? lastObservedSeqByRun.get(runId) : undefined;
++    entries.push({
++      message,
++      major:
++        runSeq !== undefined && runSeq >= firstCanonicalSeq
++          ? runSeq
++          : trailingMajor,
++      minor: 0.5,
++    });
+diff --git a/frontend/tests/unit/components/workspace/messages/run-failure-notice.dom.test.tsx b/frontend/tests/unit/components/workspace/messages/run-failure-notice.dom.test.tsx
+new file mode 100644
+index 0000000..58c4b2b
+--- /dev/null
++++ b/frontend/tests/unit/components/workspace/messages/run-failure-notice.dom.test.tsx
+@@ -0,0 +1,74 @@
++import type { Message } from "@langchain/langgraph-sdk";
++import { afterEach, expect, test } from "@rstest/core";
++import { cleanup, render, screen } from "@testing-library/react";
++
++import { RunFailureNotice } from "@/components/workspace/messages/run-failure-notice";
++
++afterEach(cleanup);
++const human = (failure = false): Message => ({
++  id: "human",
++  type: "human",
++  content: "today?",
++  additional_kwargs: failure
++    ? { run_error: { diagnostic_id: "diagnostic-123" } }
++    : {},
++});
++
++test("persisted current Run failure survives a reload without a stream error", () => {
++  render(
++    <RunFailureNotice
++      messages={[human(true)]}
++      error={null}
++      isLoading={false}
++      label="Run failed"
++    />,
++  );
++  expect(screen.getByRole("alert").textContent).toContain("Run failed");
++  expect(screen.getByRole("alert").textContent).toContain("diagnostic-123");
++});
++
++test("a stream error is visible even without a new assistant message", () => {
++  render(
++    <RunFailureNotice
++      messages={[human()]}
++      error={new Error("failed")}
++      isLoading={false}
++      label="Run failed"
++    />,
++  );
++  expect(screen.getByRole("alert").textContent).toBe("Run failed");
++});
++
++test("new submission and streaming do not retain the earlier failure notice", () => {
++  const { rerender } = render(
++    <RunFailureNotice
++      messages={[human(true), human()]}
++      error={null}
++      isLoading={false}
++      label="Run failed"
++    />,
++  );
++  expect(screen.queryByRole("alert")).toBeNull();
++  rerender(
++    <RunFailureNotice
++      messages={[human(true)]}
++      error={null}
++      isLoading={true}
++      label="Run failed"
++    />,
++  );
++  expect(screen.queryByRole("alert")).toBeNull();
++});
++
++test("hidden control replies do not hide the latest visible human failure", () => {
++  const hidden = { ...human(), additional_kwargs: { hide_from_ui: true } };
++  render(
++    <RunFailureNotice
++      messages={[human(true), hidden]}
++      error={null}
++      isLoading={false}
++      label="Run failed"
++    />,
++  );
++  expect(screen.getByRole("alert").textContent).toContain("diagnostic-123");
++});
+diff --git a/frontend/tests/unit/core/threads/message-order.test.ts b/frontend/tests/unit/core/threads/message-order.test.ts
+index a6502b2..73d9574 100644
+--- a/frontend/tests/unit/core/threads/message-order.test.ts
++++ b/frontend/tests/unit/core/threads/message-order.test.ts
+@@ -545,0 +546,58 @@ test.each(["before", "after"] as const)(
++
++test("stale checkpoint narration stays before a newer human using its persisted Run", () => {
++  const human = msg("old-human", "human", "old question", 1, { run_id: "old" });
++  const result = msg("result", "tool", "old result", 3, {
++    run_id: "old",
++    tool_call_id: "call",
++  });
++  const newer = msg("new-human", "human", "today?", 4, { run_id: "new" });
++  const narration = msg("old-ai", "ai", "old answer", undefined, {
++    run_id: "old",
++  });
++  expect(
++    mergeMessages([human, result, newer], [human, result, narration], []).map(
++      (m) => m.id,
++    ),
++  ).toEqual(["old-human", "result", "old-ai", "new-human"]);
++});
++
++test("trusted narration seq keeps its exact place despite an older checkpoint", () => {
++  const human = msg("old-human", "human", "old", 1, { run_id: "old" });
++  const narration = msg("old-ai", "ai", "old answer", 2, { run_id: "old" });
++  const newer = msg("new-human", "human", "today?", 4, { run_id: "new" });
++  expect(
++    mergeMessages(
++      [human, narration, newer],
++      [human, msg("old-ai", "ai", "updated")],
++      [],
++    ).map((m) => m.id),
++  ).toEqual(["old-human", "old-ai", "new-human"]);
++});
++
++test("a newer live result remains the anchor for trailing same-Run narration", () => {
++  const human = msg("human", "human", "old", 1, { run_id: "run" });
++  const before = msg("before", "ai", "before", undefined, { run_id: "run" });
++  const result = msg("result", "tool", "result", 3, {
++    run_id: "run",
++    tool_call_id: "call",
++  });
++  const after = msg("after", "ai", "after", undefined, { run_id: "run" });
++  expect(
++    mergeMessages([human], [human, before, result, after], []).map((m) => m.id),
++  ).toEqual(["human", "before", "result", "after"]);
++});
++
++test("a stale checkpoint does not move narration after an unseen same-Run Steer", () => {
++  const human = msg("human", "human", "old", 1, { run_id: "run" });
++  const result = msg("result", "tool", "result", 3, {
++    run_id: "run",
++    tool_call_id: "call",
++  });
++  const steer = msg("steer", "human", "steer", 4, { run_id: "run" });
++  const after = msg("after", "ai", "after", undefined, { run_id: "run" });
++  expect(
++    mergeMessages([human, result, steer], [human, result, after], []).map(
++      (m) => m.id,
++    ),
++  ).toEqual(["human", "result", "after", "steer"]);
++});
