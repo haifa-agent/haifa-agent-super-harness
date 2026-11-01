@@ -37,6 +37,8 @@ public final class SkillConfigStore {
     private static final String MANIFEST = "third-party/deerflow/skills/manifest.json";
     private static final System.Logger RECOVERY_LOG =
             System.getLogger(SkillConfigStore.class.getName() + ".recovery");
+    private static final System.Logger MANAGED_LOG =
+            System.getLogger(SkillConfigStore.class.getName() + ".managed-integration");
     /** Bounded length of a persisted Skill name echoed into a recovery diagnostic. */
     private static final int DIAGNOSTIC_NAME_LENGTH = 64;
 
@@ -53,6 +55,7 @@ public final class SkillConfigStore {
     private final ObjectMapper json;
     private final Path repositoryRoot;
     private final Path externalSkillsDirectory;
+    private final Path managedIntegrationsRoot;
     private final Path stateFile;
     private final CustomSkillPackages custom;
     private volatile State state;
@@ -65,6 +68,10 @@ public final class SkillConfigStore {
         this.json = json;
         this.repositoryRoot = repositoryRoot.toAbsolutePath().normalize();
         this.externalSkillsDirectory = externalSkillsDirectory != null ? externalSkillsDirectory.toAbsolutePath().normalize() : null;
+        // Product-managed first-party integration packs (today: the official Lark office pack).
+        // They are discovered through this same store; no parallel Skill registry exists.
+        this.managedIntegrationsRoot = dataDirectory.toAbsolutePath().normalize()
+                .resolve("integrations").resolve("lark").resolve("skills");
         this.stateFile = dataDirectory.toAbsolutePath().normalize().resolve("skills_config.json");
         this.custom = new CustomSkillPackages(json, dataDirectory);
         reload();
@@ -155,13 +162,14 @@ public final class SkillConfigStore {
                     if (!payload.path("bundled_reviews").has(key)) {
                         Map<String, byte[]> files = reviewFiles(name);
                         // The screen only reads the frozen target. Its decision is bound to the exact SDK digest.
-                        Path target = null;
+                        Path target = pkg.sourceName().equals("integration-managed")
+                                ? requireExternalDirectory(managedIntegrationsRoot.resolve(name)) : null;
                         if (externalSkillsDirectory == null) for (JsonNode entry : json.readTree(repositoryRoot.resolve(MANIFEST).toFile()).path("packages")) {
                             if (entry.path("name").asText().equals(name) && entry.path("version").asText().equals(pkg.version())) {
                                 target = repositoryRoot.resolve(entry.path("root").asText()).resolve(name);
                             }
                         }
-                        if (externalSkillsDirectory != null) target = externalPackageDirectory(name);
+                        if (externalSkillsDirectory != null && !pkg.sourceName().equals("integration-managed")) target = externalPackageDirectory(name);
                         if (target == null) throw new IOException("Frozen Skill review target is unavailable");
                         JsonNode result = custom.screen(target, files);
                         payload.withObject("bundled_reviews").set(key, SkillReviewApprovals.evidence(json, registration, result));
@@ -210,6 +218,19 @@ public final class SkillConfigStore {
             packages.add(overrides.contains(pkg.name()) ? new SkillRunTools.Package(pkg.name(), pkg.description(), pkg.category(),
                     pkg.license(), pkg.sourceName(), pkg.sourceSha(), pkg.version(), pkg.contentHash(), false,
                     pkg.enabledByDefault(), pkg.source()) : pkg);
+        }
+        Set<String> knownNames = packages.stream().map(SkillRunTools.Package::name)
+                .collect(java.util.stream.Collectors.toSet());
+        for (SkillRunTools.Package managed : loadManagedIntegrationSkills()) {
+            if (!managed.active() || knownNames.add(managed.name())) {
+                packages.add(overrides.contains(managed.name()) ? new SkillRunTools.Package(managed.name(), managed.description(),
+                        managed.category(), managed.license(), managed.sourceName(), managed.sourceSha(), managed.version(),
+                        managed.contentHash(), false, managed.enabledByDefault(), managed.source()) : managed);
+            } else {
+                MANAGED_LOG.log(System.Logger.Level.WARNING,
+                        "Managed integration Skill ignored because its name is already registered: "
+                                + managed.name());
+            }
         }
         packages.addAll(users);
         Map<String, Boolean> enabled = readEnabled(packages, config);
@@ -332,6 +353,9 @@ public final class SkillConfigStore {
     public synchronized Map<String, byte[]> reviewFiles(String name) throws IOException {
         SkillPackageFiles.name(name);
         if (detail(name).map(row -> Boolean.TRUE.equals(row.get("editable"))).orElse(false)) return custom.current(readConfiguration(), name);
+        if (detail(name).map(row -> "integration-managed".equals(row.get("source"))).orElse(false)) {
+            return externalPackageFiles(requireExternalDirectory(managedIntegrationsRoot.resolve(name)));
+        }
         if (externalSkillsDirectory != null) return externalPackageFiles(externalPackageDirectory(name));
         for (JsonNode entry : json.readTree(repositoryRoot.resolve(MANIFEST).toFile()).path("packages")) {
             if (entry.path("name").asText().equals(SkillPackageFiles.name(name)) && entry.path("active").asBoolean()) {
@@ -344,11 +368,13 @@ public final class SkillConfigStore {
     }
 
     public synchronized Map<String, byte[]> installedReviewFiles(String category, String relative) throws IOException {
-        if (!Set.of("public", "custom", "legacy").contains(category)) throw new IllegalArgumentException("Invalid installed Skill category");
+        if (!Set.of("public", "custom", "legacy", "integration").contains(category)) throw new IllegalArgumentException("Invalid installed Skill category");
         String[] path = relative.split("/", 2); String name = SkillPackageFiles.name(path[0]);
         Map<String, byte[]> files;
         if (category.equals("custom")) files = custom.current(readConfiguration(), name);
-        else if (category.equals("public")) {
+        else if (category.equals("integration") && detail(name).map(row -> "integration-managed".equals(row.get("source"))).orElse(false)) {
+            files = externalPackageFiles(requireExternalDirectory(managedIntegrationsRoot.resolve(name)));
+        } else if (category.equals("public")) {
             files = null;
             if (externalSkillsDirectory != null) files = externalPackageFiles(externalPackageDirectory(name));
             if (files == null) {
@@ -593,6 +619,79 @@ public final class SkillConfigStore {
         return List.copyOf(result);
     }
 
+    /**
+     * First-party integration packs materialized by a product installer (today the official Lark
+     * office pack). Discovery uses this store's parser and loader; no enable state, name map or
+     * lifecycle is duplicated here. An unreadable pack stays inactive instead of failing startup,
+     * so a corrupted pack surfaces as "not installed" and a reinstall repairs it.
+     */
+    private List<SkillRunTools.Package> loadManagedIntegrationSkills() throws IOException {
+        if (managedIntegrationsRoot == null || !Files.isDirectory(managedIntegrationsRoot)) {
+            return List.of();
+        }
+        List<SkillRunTools.Package> result = new ArrayList<>();
+        try (var entries = Files.list(managedIntegrationsRoot)) {
+            for (Path directory : entries.filter(Files::isDirectory).sorted().toList()) {
+                String directoryName = directory.getFileName().toString();
+                if (!directoryName.matches("[a-z][a-z0-9-]{0,62}")) continue;
+                if (!Files.isRegularFile(directory.resolve("SKILL.md"))) continue;
+                try {
+                    Map<String, byte[]> files = SkillPackageFiles.directory(directory);
+                    String digest = SkillPackageFiles.digest(files);
+                    files = normalizedExternalFiles(directory, files);
+                    SkillSourceDescriptor descriptor = externalDescriptor(directoryName, digest);
+                    SkillPackageParser parser = externalParser();
+                    var parsed = parser.parseFiles(directoryName, files, descriptor);
+                    if (parsed.parsed().isEmpty()) {
+                        throw new IOException("Managed integration Skill failed parsing: " + directoryName);
+                    }
+                    var metadata = parsed.parsed().orElseThrow().metadata();
+                    String name = SkillPackageFiles.name(metadata.name().value());
+                    boolean hasScripts = files.keySet().stream().anyMatch(path -> path.startsWith("scripts/"));
+                    String license = metadata.license().orElse(
+                            files.containsKey("LICENSE.txt") ? "See package LICENSE.txt" : "");
+                    result.add(new SkillRunTools.Package(name, metadata.description(), "integration", license,
+                            "integration-managed", "sha256:" + digest, "sha256:" + digest,
+                            SkillPackageFiles.hash(files.get("SKILL.md")), true, !hasScripts,
+                            new io.haifa.agent.skill.core.InMemorySkillSource(descriptor, parser,
+                                    SkillAvailability.ENABLED, Map.of(directoryName, files))));
+                } catch (IOException | RuntimeException invalid) {
+                    MANAGED_LOG.log(System.Logger.Level.WARNING,
+                            "Managed integration Skill is unreadable and stays inactive: " + directoryName);
+                }
+            }
+        } catch (IOException unavailable) {
+            MANAGED_LOG.log(System.Logger.Level.WARNING,
+                    "Managed integration Skill directory is unavailable: " + managedIntegrationsRoot);
+        }
+        Path retained = stateFile.getParent().resolve("skills/integrations/.versions");
+        if (Files.exists(retained)) {
+            requireExternalDirectory(retained);
+            Set<String> current = result.stream().map(pkg -> pkg.name() + "@" + pkg.version())
+                    .collect(java.util.stream.Collectors.toSet());
+            try (var directories = Files.list(retained)) {
+                for (Path directory : directories.sorted().toList()) {
+                    requireExternalDirectory(directory);
+                    String directoryName = SkillPackageFiles.name(directory.getFileName().toString());
+                    try (var versions = Files.list(directory)) {
+                        for (Path version : versions.sorted().toList()) {
+                            String filename = version.getFileName().toString();
+                            if (filename.startsWith(".pending-")) continue;
+                            if (!filename.matches("[0-9a-f]{64}\\.zip")) throw new IOException("Invalid retained Skill version");
+                            String digest = filename.substring(0, 64);
+                            Map<String, byte[]> files = normalizedExternalFiles(version, retainedFiles(version, digest));
+                            SkillRunTools.Package pkg = externalPackage(directoryName, digest, files, false);
+                            if (current.add(pkg.name() + "@" + pkg.version())) result.add(new SkillRunTools.Package(
+                                    pkg.name(), pkg.description(), "integration", pkg.license(), "integration-managed",
+                                    pkg.sourceSha(), pkg.version(), pkg.contentHash(), false, false, pkg.source()));
+                        }
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
     private SkillRunTools.Package externalPackage(String directory, String digest, Map<String, byte[]> files,
             boolean active) throws IOException {
         SkillPackageParser parser = externalParser();
@@ -625,19 +724,20 @@ public final class SkillConfigStore {
 
     /** Retain resource bytes for SDK-pinned Runs; no Run state or recovery semantics live here. */
     private void retainExternalFiles(State candidate) throws IOException {
-        if (externalSkillsDirectory == null) return;
         Path root = externalCache();
         Path existing = root;
         while (!Files.exists(existing)) existing = existing.getParent();
         requireExternalDirectory(existing);
         Files.createDirectories(root); requireExternalDirectory(root);
         for (SkillRunTools.Package pkg : candidate.packages()) {
-            if (!pkg.sourceName().equals("external-directory") || !pkg.active()) continue;
+            if ((!pkg.sourceName().equals("external-directory") && !pkg.sourceName().equals("integration-managed")) || !pkg.active()) continue;
             String directory = pkg.source().descriptor().reference().sourceId();
-            Map<String, byte[]> files = SkillPackageFiles.directory(requireExternalDirectory(externalScanRoot().resolve(directory)));
+            boolean managed = pkg.sourceName().equals("integration-managed");
+            Map<String, byte[]> files = SkillPackageFiles.directory(requireExternalDirectory(
+                    managed ? managedIntegrationsRoot.resolve(directory) : externalScanRoot().resolve(directory)));
             String digest = SkillPackageFiles.digest(files);
             if (!pkg.version().equals("sha256:" + digest)) throw new IOException("External Skill changed during publication");
-            Path parent = root.resolve(directory);
+            Path parent = (managed ? stateFile.getParent().resolve("skills/integrations/.versions") : root).resolve(directory);
             if (Files.exists(parent)) requireExternalDirectory(parent);
             Files.createDirectories(parent);
             Path target = parent.resolve(digest + ".zip");

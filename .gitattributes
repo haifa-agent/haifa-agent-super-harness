@@ -22,3 +22,9 @@ super-harness-server/src/main/resources/upstream/deerflow/tool-descriptions/* te
 super-harness-server/src/main/resources/upstream/deerflow/prompts/* text eol=lf
 # Frozen Skill scanner manifests hash committed LF bytes, including Python resources.
 super-harness-server/src/main/resources/upstream/deerflow/w15/** text eol=lf
+# The frozen plugin capability catalog hashes committed LF bytes at startup, so a
+# core.autocrlf=true checkout must not materialize CRLF and fail the hash gate.
+super-harness-server/src/main/resources/upstream/deerflow/capabilities/** text eol=lf
+# The bundled Lark authorization guidance is appended into SKILL.md and hashed into the
+# installed pack digest, so its committed bytes must survive every checkout unchanged.
+super-harness-server/src/main/resources/upstream/lark/** text eol=lf
