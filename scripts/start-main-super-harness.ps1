@@ -133,9 +133,23 @@ $env:no_proxy = '127.0.0.1,localhost'
 # direct starts and refreshes cannot drift, and the credentials are handed to the Java child
 # only. The wrapper resolves paths, prepares the inherited environment and delegates.
 $authCheck = if ($LocalAuth) { 'unauthorized' } else { 'default' }
-$gatewayResult = & python -B $mainServiceModule --worktree $root --gateway-port $GatewayPort `
-    --frontend-port $FrontendPort start --jar $jar --data-root $dataRoot --log-dir $logRoot `
-    --stamp $stamp --ready-timeout-seconds $ReadyTimeoutSeconds --auth $authCheck
+$gatewayArguments = @(
+    '-B', $mainServiceModule,
+    '--worktree', $root,
+    '--gateway-port', $GatewayPort,
+    '--frontend-port', $FrontendPort,
+    'start',
+    '--jar', $jar,
+    '--data-root', $dataRoot,
+    '--log-dir', $logRoot,
+    '--stamp', $stamp,
+    '--ready-timeout-seconds', $ReadyTimeoutSeconds,
+    '--auth', $authCheck
+)
+# main_service.py owns the local profile: --auth only selects the readiness probe, while
+# --local-auth is what actually stops the Gateway from running auth-disabled.
+if ($LocalAuth) { $gatewayArguments += '--local-auth' }
+$gatewayResult = & python @gatewayArguments
 $gatewayExit = $LASTEXITCODE
 if ($gatewayExit -ne 0) {
     throw "Gateway start failed with exit code ${gatewayExit}: $($gatewayResult -join ' ')"

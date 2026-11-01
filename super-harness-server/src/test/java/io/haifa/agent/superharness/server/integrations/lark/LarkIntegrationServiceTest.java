@@ -11,6 +11,7 @@ import io.haifa.agent.superharness.server.testsupport.LarkIntegrationFakes.FakeA
 import io.haifa.agent.superharness.server.testsupport.LarkIntegrationFakes.FakeCli;
 import io.haifa.agent.superharness.server.testsupport.LarkIntegrationFakes.FakeRegistration;
 import io.haifa.agent.superharness.server.testsupport.LarkIntegrationFakes.VirtualClock;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -221,6 +222,31 @@ class LarkIntegrationServiceTest {
         assertThat(status.latestAvailableVersion()).isEqualTo("v1.0.98");
         assertThat(status.version()).isEqualTo(LarkSkillCatalog.FALLBACK_VERSION);
         assertThat(registration.latestQueries()).isEqualTo(1);
+    }
+
+    @Test
+    void credentialDirectoryHardeningToleratesAPlatformThatRefusesTheOwnerChange(@TempDir Path directory)
+            throws Exception {
+        // Windows denies WRITE_OWNER to a non-elevated process even when the directory is already
+        // owned by it, and NIO setOwner needs that right. Tightening the per-owner tree must stay
+        // best-effort so app configuration and OAuth are never blocked by filesystem policy.
+        LarkIntegrationService.harden(directory);
+
+        assertThat(Files.isDirectory(directory)).isTrue();
+    }
+
+    @Test
+    void credentialDirectoryHardeningStillRejectsSymlinks(@TempDir Path directory) throws Exception {
+        Path link = directory.resolve("lark-credentials-link");
+        try {
+            Files.createSymbolicLink(link, directory);
+        } catch (IOException | UnsupportedOperationException unsupported) {
+            return; // No symlink support here, so the guard cannot be exercised.
+        }
+
+        assertThatThrownBy(() -> LarkIntegrationService.harden(link))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("must not be a symlink");
     }
 
     @Test
