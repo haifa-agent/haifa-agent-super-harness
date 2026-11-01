@@ -16,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
@@ -60,6 +61,15 @@ class LarkIntegrationServiceTest {
         Path root = dataDirectory.resolve("integrations").resolve("lark");
         return new LarkIntegrationService(json, dataDirectory, store, new LarkSkillPackInstaller(json, root),
                 gateway, registration, archives, clock::nanoTime, clock::sleep, provider);
+    }
+
+    private LarkIntegrationService service(SkillConfigStore store, FakeCli gateway,
+            FakeRegistration registration, FakeArchives archives, VirtualClock clock,
+            Map<String, String> environment) {
+        Path root = dataDirectory.resolve("integrations").resolve("lark");
+        return new LarkIntegrationService(json, dataDirectory, store, new LarkSkillPackInstaller(json, root),
+                gateway, registration, archives, clock::nanoTime, clock::sleep, ExecutionProvider.DISABLED,
+                environment::get);
     }
 
     @Test
@@ -166,6 +176,51 @@ class LarkIntegrationServiceTest {
         LarkIntegrationService.Status drifted = service.status("alice");
         assertThat(drifted.runtimeVersionMismatch()).isTrue();
         assertThat(drifted.latestAvailableVersion()).isEqualTo("v1.0.66");
+    }
+
+    @Test
+    void pinnedVersionHoldsInstallAndStatusAtTheApprovedPackVersion() throws Exception {
+        registration.latest("v1.0.98");
+        service = service(skills, cli, registration, archives, clock,
+                Map.of(LarkSkillCatalog.VERSION_ENV, "1.0.65"));
+
+        LarkIntegrationService.InstallResult result = service.install("alice");
+        LarkIntegrationService.Status status = service.status("alice");
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.installedSkills()).hasSize(27);
+        assertThat(status.version()).isEqualTo("v1.0.65");
+        assertThat(status.manifestVersion()).isEqualTo("v1.0.65");
+        assertThat(status.latestAvailableVersion()).isEqualTo("v1.0.65");
+        assertThat(status.runtimeVersionMismatch()).isFalse();
+        assertThat(status.cli().version()).startsWith("v1.0.65");
+        // A pin is the operator's decision; the tracked official release is never consulted.
+        assertThat(registration.latestQueries()).isZero();
+    }
+
+    @Test
+    void unusablePinnedVersionIsIgnoredAndTheLatestReleaseStillWins() throws Exception {
+        registration.latest("v1.0.66");
+        archives.archive(LarkIntegrationFakes.archive(dataDirectory.resolve("fixture-1.0.66.zip"),
+                "v1.0.66", LarkIntegrationFakes.allNames(), null));
+        service = service(skills, cli, registration, archives, clock,
+                Map.of(LarkSkillCatalog.VERSION_ENV, "latest"));
+
+        LarkIntegrationService.InstallResult result = service.install("alice");
+        assertThat(result.success()).isTrue();
+        assertThat(result.status().manifestVersion()).isEqualTo("v1.0.66");
+        assertThat(result.status().latestAvailableVersion()).isEqualTo("v1.0.66");
+    }
+
+    @Test
+    void unsetPinKeepsTrackingTheLatestOfficialRelease() {
+        registration.latest("v1.0.98");
+
+        LarkIntegrationService.Status status = service.status("alice");
+
+        assertThat(status.latestAvailableVersion()).isEqualTo("v1.0.98");
+        assertThat(status.version()).isEqualTo(LarkSkillCatalog.FALLBACK_VERSION);
+        assertThat(registration.latestQueries()).isEqualTo(1);
     }
 
     @Test

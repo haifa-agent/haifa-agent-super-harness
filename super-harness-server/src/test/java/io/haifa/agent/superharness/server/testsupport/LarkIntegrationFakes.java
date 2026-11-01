@@ -150,6 +150,7 @@ public final class LarkIntegrationFakes {
     /** Scripted app-registration flow. */
     public static final class FakeRegistration implements LarkAppRegistration {
         private final Deque<PollOutcome> outcomes = new ArrayDeque<>();
+        private final AtomicLong latestQueries = new AtomicLong();
         private volatile String latest = "v1.0.65";
         private volatile Begin begin = new Begin("USER-CODE", "DEVICE-CODE", 600, 5);
         private volatile boolean upstreamUnavailable;
@@ -206,7 +207,13 @@ public final class LarkIntegrationFakes {
 
         @Override
         public String latestCliVersion() {
+            latestQueries.incrementAndGet();
             return latest;
+        }
+
+        /** How many times the tracked official release was consulted. */
+        public long latestQueries() {
+            return latestQueries.get();
         }
     }
 

@@ -277,3 +277,20 @@ node --test tests/checks/ui/lark-office.test.cjs
 ```
 
 修改 UI 用例或 runner 后正式 L1 默认 x2；最终模型与其余门禁仍以整合候选的 `change_scope.py` 为准。
+
+## Lark CLI 与技能包版本固定（`HAIFA_SUPER_HARNESS_LARK_CLI_VERSION`）
+
+Gateway 默认按官方 `releases/latest` 追新，仅在取不到时回退到冻结的 `v1.0.65`。当验收或交付必须停留在
+一个已批准的包时（例如官方 `v1.0.98` 已是 28 个技能、且 `lark-doc` 不再随包提供 `scripts/`，与冻结的
+27 名清单不符），在启动 Gateway 的同一进程环境设置该键：
+
+```powershell
+$env:HAIFA_SUPER_HARNESS_LARK_CLI_VERSION = 'v1.0.65'   # 也接受 '1.0.65'
+```
+
+- 设置后 `install` 用该版本安装托管 CLI 与官方技能包，`status.latest_available_version` 也回报该值，
+  不再查询 GitHub；未设置时与冻结 DeerFlow 的「追 latest + 回退 `v1.0.65`」语义一致。
+- 非法值（如 `latest`）不生效并记 WARNING，行为回到追 latest。
+- 离线/内网仍用 `HAIFA_SUPER_HARNESS_LARK_SKILLS_ARCHIVE` 预置归档，两者可同时使用：版本决定包身份与
+  `source`，归档决定实际字节。
+- 该键只影响安装与状态展示，不改动已安装包的字节，也不影响每个用户既有的授权与配置。

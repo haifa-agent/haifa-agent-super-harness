@@ -39,6 +39,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.regex.Pattern;
 
@@ -133,6 +134,7 @@ public final class LarkIntegrationService {
     private final LongSupplier nanoTime;
     private final Consumer<Duration> sleeper;
     private final ExecutionProvider executionProvider;
+    private final Function<String, String> environment;
     private final Map<String, ReentrantLock> userLocks = new ConcurrentHashMap<>();
     private volatile LatestCache latestCache;
     private volatile ProbeCache probeCache;
@@ -167,6 +169,20 @@ public final class LarkIntegrationService {
     public LarkIntegrationService(ObjectMapper json, Path dataDirectory, SkillConfigStore skills,
             LarkSkillPackInstaller packs, LarkCliGateway cli, LarkAppRegistration registration,
             LarkArchiveSource archives, LongSupplier nanoTime, Consumer<Duration> sleeper, ExecutionProvider executionProvider) {
+        this(json, dataDirectory, skills, packs, cli, registration, archives, nanoTime, sleeper,
+                executionProvider, System::getenv);
+    }
+
+    /**
+     * Test seam for the two environment-driven inputs: the optional
+     * {@link LarkSkillCatalog#VERSION_ENV} version pin and the pre-staged
+     * {@link LarkSkillCatalog#ARCHIVE_ENV} archive. Production reads the Gateway process
+     * environment through {@link System#getenv}.
+     */
+    public LarkIntegrationService(ObjectMapper json, Path dataDirectory, SkillConfigStore skills,
+            LarkSkillPackInstaller packs, LarkCliGateway cli, LarkAppRegistration registration,
+            LarkArchiveSource archives, LongSupplier nanoTime, Consumer<Duration> sleeper,
+            ExecutionProvider executionProvider, Function<String, String> environment) {
         this.json = json;
         this.integrationRoot = dataDirectory.toAbsolutePath().normalize().resolve("integrations").resolve("lark");
         this.skills = skills;
@@ -177,6 +193,7 @@ public final class LarkIntegrationService {
         this.nanoTime = nanoTime;
         this.sleeper = sleeper;
         this.executionProvider = java.util.Objects.requireNonNull(executionProvider);
+        this.environment = java.util.Objects.requireNonNull(environment);
     }
 
     public Path integrationRoot() {
@@ -294,6 +311,13 @@ public final class LarkIntegrationService {
     }
 
     private String cachedLatestVersion() {
+        String pinned = pinnedVersion();
+        if (pinned != null) {
+            // A pin is an operator decision, not a cached upstream answer: report it without
+            // contacting GitHub and without a TTL, so the UI never advertises a newer release that
+            // the deployment deliberately does not adopt.
+            return pinned;
+        }
         long now = nanoTime.getAsLong();
         LatestCache cached = latestCache;
         if (cached != null && now - cached.atNanos() < LATEST_VERSION_TTL_NANOS) {
@@ -308,6 +332,35 @@ public final class LarkIntegrationService {
         // A transient failure must not be remembered for the whole TTL; only real answers are.
         latestCache = version == null ? null : new LatestCache(version, now);
         return version;
+    }
+
+    /**
+     * Version to install. An explicit {@link LarkSkillCatalog#VERSION_ENV} pin wins so an approved
+     * pack can be held at a known version; otherwise the frozen "track latest, fall back to
+     * v1.0.65" resolution applies unchanged.
+     */
+    private String installVersion() {
+        String pinned = pinnedVersion();
+        if (pinned != null) {
+            return pinned;
+        }
+        return Optional.ofNullable(registration.latestCliVersion())
+                .map(LarkCliProcessGateway::normalizeVersionTag)
+                .orElse(LarkSkillCatalog.FALLBACK_VERSION);
+    }
+
+    /** The configured pin as a version tag, or {@code null} when unset or unusable. */
+    private String pinnedVersion() {
+        String configured = environment.apply(LarkSkillCatalog.VERSION_ENV);
+        if (configured == null || configured.isBlank()) {
+            return null;
+        }
+        String normalized = LarkCliProcessGateway.normalizeVersionTag(configured);
+        if (normalized == null) {
+            LOG.log(System.Logger.Level.WARNING, "Ignoring an invalid " + LarkSkillCatalog.VERSION_ENV
+                    + " value; expected a tag such as v1.0.65");
+        }
+        return normalized;
     }
 
     /**
@@ -381,9 +434,7 @@ public final class LarkIntegrationService {
         Path archive = null;
         boolean temporaryArchive = false;
         try {
-            String requested = Optional.ofNullable(registration.latestCliVersion())
-                    .map(LarkCliProcessGateway::normalizeVersionTag)
-                    .orElse(LarkSkillCatalog.FALLBACK_VERSION);
+            String requested = installVersion();
             LarkCliGateway.Probe probe = cli.probe();
             String current = numericVersion(probe.version());
             if (!probe.available() || current == null) {
@@ -411,9 +462,9 @@ public final class LarkIntegrationService {
             String numeric = numericVersion(probe.version());
             String version = numeric != null ? "v" + numeric : LarkSkillCatalog.FALLBACK_VERSION;
 
-            String explicit = System.getenv(LarkSkillCatalog.ARCHIVE_ENV);
+            String explicit = environment.apply(LarkSkillCatalog.ARCHIVE_ENV);
             if (explicit == null || explicit.isBlank()) {
-                explicit = System.getenv(LarkSkillCatalog.FROZEN_ARCHIVE_ENV);
+                explicit = environment.apply(LarkSkillCatalog.FROZEN_ARCHIVE_ENV);
             }
             if (explicit != null && !explicit.isBlank()) {
                 archive = Path.of(explicit);

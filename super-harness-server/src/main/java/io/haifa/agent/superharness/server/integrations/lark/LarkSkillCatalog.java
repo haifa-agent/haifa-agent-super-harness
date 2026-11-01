@@ -65,5 +65,15 @@ public final class LarkSkillCatalog {
     /** Frozen DeerFlow environment key for a pre-staged archive; accepted as a fallback. */
     public static final String FROZEN_ARCHIVE_ENV = "DEER_FLOW_LARK_CLI_SKILLS_ARCHIVE";
 
+    /**
+     * Optional Gateway environment key that pins the managed CLI and skill-pack version.
+     *
+     * <p>Unset keeps the frozen DeerFlow behaviour: follow the official {@code releases/latest}
+     * tag and fall back to {@link #FALLBACK_VERSION}. Set to an approved tag (for example
+     * {@code v1.0.65}) when a verification run or a delivery must not drift to a newer official
+     * release whose pack no longer matches {@link #NAMES}.
+     */
+    public static final String VERSION_ENV = "HAIFA_SUPER_HARNESS_LARK_CLI_VERSION";
+
     private LarkSkillCatalog() {}
 }
