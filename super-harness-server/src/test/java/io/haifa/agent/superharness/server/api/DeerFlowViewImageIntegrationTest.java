@@ -738,6 +738,7 @@ public class DeerFlowViewImageIntegrationTest {
                 new ModelCallId("call-1"),
                 new ModelRequestId("req-1"),
                 new AgentRunId("run-1"),
+                "vision-http-test-session",
                 1,
                 1,
                 snapshot,

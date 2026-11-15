@@ -22,6 +22,7 @@ import io.haifa.agent.policy.core.DefaultPolicyDecisionService;
 import io.haifa.agent.runtime.api.AgentRunSnapshot;
 import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
 import io.haifa.agent.runtime.api.FrozenInstructionDiagnostic;
+import io.haifa.agent.runtime.api.InteractionRequestId;
 import io.haifa.agent.runtime.api.InteractionResponseReceipt;
 import io.haifa.agent.runtime.api.InteractionResponseSubmission;
 import io.haifa.agent.runtime.api.InteractionView;
@@ -921,6 +922,10 @@ public final class HaifaRunBridge implements AutoCloseable {
         return agent.runs().respond(submission);
     }
 
+    public void resumeApprovedTool(AgentRunId runId, InteractionRequestId requestId) {
+        agent.runs().resumeApprovedTool(runId, requestId);
+    }
+
     public RunInputResult submitInput(RunInputCommand command) {
         return agent.runs().submitInput(command);
     }
@@ -1191,6 +1196,7 @@ public final class HaifaRunBridge implements AutoCloseable {
                 request.callId(),
                 request.requestId(),
                 request.runId(),
+                request.sessionAffinity(),
                 request.iteration(),
                 request.attempt(),
                 request.model(),

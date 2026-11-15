@@ -184,6 +184,7 @@ public class ModelVisionInjectionTest {
                 new ModelCallId("call-1"),
                 new ModelRequestId("req-1"),
                 new AgentRunId("run-1"),
+                "vision-test-session",
                 1,
                 1,
                 snapshot,
@@ -235,6 +236,7 @@ public class ModelVisionInjectionTest {
         AgentChatRequest request = createChatRequest(visionModelSnapshot, List.of(userMsg, assistantMsg, toolMsg));
         AgentChatRequest injected = visionBridge.injectVision(request);
 
+        assertThat(injected.sessionAffinity()).isEqualTo(request.sessionAffinity());
         assertThat(injected.messages()).hasSize(4);
         ModelMessage lastMsg = injected.messages().get(3);
         assertThat(lastMsg.role()).isEqualTo(ModelMessageRole.USER);

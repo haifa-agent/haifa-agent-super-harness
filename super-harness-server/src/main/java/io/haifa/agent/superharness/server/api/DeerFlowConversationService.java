@@ -16,6 +16,7 @@ import io.haifa.agent.superharness.server.plan.PlanAuthoringResources;
 import io.haifa.agent.runtime.api.AgentRunSnapshot;
 import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
 import io.haifa.agent.runtime.api.FrozenInstructionDiagnostic;
+import io.haifa.agent.runtime.api.InteractionRequestId;
 import io.haifa.agent.runtime.api.InteractionResponseReceiptStatus;
 import io.haifa.agent.runtime.api.InteractionResponseSubmission;
 import io.haifa.agent.runtime.api.InteractionResponseReceipt;
@@ -2101,8 +2102,12 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                         throw ConversationException.conflict("Run is no longer accepting an Interaction response");
                     }
                     Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
-                    if (pending.isEmpty()
-                            || !pending.orElseThrow().requestId().value().equals(response.requestId())) {
+                    if (pending.isEmpty()) {
+                        presentationDegraded = resumeSavedApproval(thread, run, response);
+                        return new AdmittedTurn(thread, run, responseCursor, true, onDisconnect, true, false,
+                                presentationDegraded);
+                    }
+                    if (!pending.orElseThrow().requestId().value().equals(response.requestId())) {
                         throw ConversationException.conflict("Thread has no matching Interaction");
                     }
                     PersistentThreadCatalog.InteractionDisplay approvalDisplay;
@@ -2180,35 +2185,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                     Map<String, Object> responseMessage =
                             DeerFlowInteractionHttpProjection.responseMessage(
                                     response, submittedText, run.runId.value());
-                    List<PersistentThreadCatalog.InteractionDisplay> updated =
-                            new ArrayList<>(thread.interactionDisplays);
-                    boolean savedDisplay = false;
-                    for (int index = 0; index < updated.size(); index++) {
-                        var display = updated.get(index);
-                        if (display.runId().equals(run.runId.value())
-                                && display.requestId().equals(response.requestId())) {
-                            updated.set(index, display.answered(response.optionId()));
-                            savedDisplay = true;
-                            break;
-                        }
-                    }
-                    if (!savedDisplay) throw new IllegalStateException(
-                            "Saved Interaction card disappeared after SDK accepted the response");
-                    thread.interactionDisplays = List.copyOf(updated);
-                    try {
-                        persistThread(thread);
-                    } catch (IOException | RuntimeException failedPersistence) {
-                        // The SDK has already accepted this response. Keep the in-process
-                        // display answered, expose the degraded durability explicitly, and
-                        // continue the same Run. A restart filters the stale unaccepted card
-                        // against the SDK's current pending ID.
-                        presentationDegraded = true;
-                        INTERACTION_LOG.log(System.Logger.Level.ERROR,
-                                "INTERACTION_PRESENTATION_SAVE_AFTER_ACCEPT_FAILURE run="
-                                        + run.runId.value() + " request=" + response.requestId()
-                                        + " sdk_receipt=ACCEPTED cause="
-                                        + failedPersistence.getClass().getSimpleName());
-                    }
+                    presentationDegraded = saveAnsweredInteraction(thread, run, response);
                     run.acceptedInteractionResponse = new AcceptedInteractionResponse(
                             response, submission, responseMessage);
                     thread.updatedAt = Instant.now();
@@ -2227,6 +2204,50 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 true,
                 false,
                 presentationDegraded);
+    }
+
+    private boolean resumeSavedApproval(
+            ThreadRecord thread, RunRecord run, DeerFlowInteractionHttpProjection.FrozenResponse response) {
+        if (!DeerFlowInteractionHttpProjection.SOURCE.equals(response.source())
+                || !"option".equals(response.responseKind())
+                || !"approve".equals(response.optionId()) || !"approve".equals(response.value())
+                || thread.interactionDisplays.stream().noneMatch(display -> display.runId().equals(run.runId.value())
+                        && display.requestId().equals(response.requestId()))) {
+            throw ConversationException.conflict("Thread has no matching Interaction");
+        }
+        try {
+            run.bridge.resumeApprovedTool(run.runId, new InteractionRequestId(response.requestId()));
+        } catch (RuntimeException rejected) {
+            sendInteractionFailure(run, "stored-approval", rejected);
+            throw ConversationException.conflict("Stored approval could not resume the Run");
+        }
+        thread.updatedAt = Instant.now();
+        return saveAnsweredInteraction(thread, run, response);
+    }
+
+    private boolean saveAnsweredInteraction(
+            ThreadRecord thread, RunRecord run, DeerFlowInteractionHttpProjection.FrozenResponse response) {
+        List<PersistentThreadCatalog.InteractionDisplay> updated = new ArrayList<>(thread.interactionDisplays);
+        for (int index = 0; index < updated.size(); index++) {
+            var display = updated.get(index);
+            if (display.runId().equals(run.runId.value()) && display.requestId().equals(response.requestId())) {
+                updated.set(index, display.answered(response.optionId()));
+                thread.interactionDisplays = List.copyOf(updated);
+                try {
+                    persistThread(thread);
+                    return false;
+                } catch (IOException | RuntimeException failedPersistence) {
+                    // The SDK has accepted the response. Keep the answered card in memory so the Run can continue.
+                    INTERACTION_LOG.log(System.Logger.Level.ERROR,
+                            "INTERACTION_PRESENTATION_SAVE_AFTER_ACCEPT_FAILURE run="
+                                    + run.runId.value() + " request=" + response.requestId()
+                                    + " sdk_receipt=ACCEPTED cause="
+                                    + failedPersistence.getClass().getSimpleName());
+                    return true;
+                }
+            }
+        }
+        throw new IllegalStateException("Saved Interaction card disappeared after SDK accepted the response");
     }
 
     private InteractionResponseReceipt respondWithRetry(
