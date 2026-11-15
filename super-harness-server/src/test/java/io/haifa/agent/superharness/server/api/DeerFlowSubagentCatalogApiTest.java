@@ -46,7 +46,7 @@ class DeerFlowSubagentCatalogApiTest {
     }
 
     private GatewayFixture production() throws Exception {
-        return GatewayFixture.production(data, Integer.getInteger("w08.catalog.port", 30618),
+        return GatewayFixture.production(data, Integer.getInteger("w08.catalog.port", 0),
                 Map.of("HAIFA_SUPER_HARNESS_CONTINUATION_KEY_REF", "env://W08_CATALOG_TEST_KEY",
                         "W08_CATALOG_TEST_KEY", Base64.getEncoder().encodeToString(new byte[32])), evidence);
     }
@@ -199,12 +199,13 @@ class DeerFlowSubagentCatalogApiTest {
         // Exercise the handler with a parameterized role, never a forged identity header.
         // This fixture is not a production non-admin principal or isolation acceptance.
         var roleServer = com.sun.net.httpserver.HttpServer.create(
-                new java.net.InetSocketAddress("127.0.0.1", 35618), 0);
+                new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        int rolePort = roleServer.getAddress().getPort();
         try {
             roleServer.createContext("/api/subagents", new DeerFlowSubagentCatalogApi(json, store,
                     ignored -> false, ignored -> false));
             roleServer.start();
-            var roleBase = java.net.URI.create("http://127.0.0.1:35618");
+            var roleBase = java.net.URI.create("http://127.0.0.1:" + rolePort);
             var list = http.request(roleBase, "GET", "/api/subagents", null, "role-param-read.http");
             assertThat(list.statusCode()).isEqualTo(200);
             assertThat(body(list).path("subagents")).allSatisfy(item -> assertThat(item.path("system_prompt").isNull()).isTrue());
@@ -218,7 +219,7 @@ class DeerFlowSubagentCatalogApiTest {
             assertThat(store.catalog(true)).hasSize(2);
         } finally {
             roleServer.stop(0);
-            GatewayFixture.portReleased(35618);
+            GatewayFixture.portReleased(rolePort);
         }
         Files.writeString(evidence.resolve("oracle12-identity-limit.txt"),
                 "Role-parameterized checks PASS; production non-admin HTTP NOT_RUN: local identity is admin only.\n");
