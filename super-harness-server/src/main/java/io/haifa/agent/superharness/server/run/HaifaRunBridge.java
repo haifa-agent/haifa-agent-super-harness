@@ -516,7 +516,9 @@ public final class HaifaRunBridge implements AutoCloseable {
             }
             builder.autoApproveReadOnlyNetworkTools(autoApproveReadOnlyNetwork);
             builder.autoApproveStandardFileWriteTools(tools.stream()
-                    .filter(tool -> tool instanceof ProductionSetupAgentTool || tool instanceof ProductionUpdateAgentTool)
+                    .filter(tool -> tool instanceof ProductionSetupAgentTool
+                            || tool instanceof ProductionUpdateAgentTool
+                            || tool instanceof io.haifa.agent.superharness.server.tool.poster.PosterEditTool)
                     .map(tool -> tool.spec().name())
                     .collect(java.util.stream.Collectors.toSet()));
             if (skillProjection != null && skillProjection.installTools()) {

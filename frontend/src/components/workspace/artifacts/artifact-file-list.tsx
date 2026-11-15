@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { DownloadIcon, LoaderIcon, PackageIcon } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useContext, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -17,18 +17,19 @@ import {
   getArtifactArchiveManifest,
   MAX_ARTIFACT_ARCHIVE_FILES,
 } from "@/core/artifacts/api";
+import {
+  currentPosterPath,
+  posterArtifactLabel,
+} from "@/core/artifacts/poster-labels";
 import { urlOfArtifact } from "@/core/artifacts/utils";
 import { useAuth } from "@/core/auth/AuthProvider";
 import { useI18n } from "@/core/i18n/hooks";
 import { installSkill, SkillRequestError } from "@/core/skills/api";
 import { isStaticWebsiteOnly } from "@/core/static-mode";
-import {
-  getFileExtensionDisplayName,
-  getFileIcon,
-  getFileName,
-} from "@/core/utils/files";
+import { getFileExtensionDisplayName, getFileIcon } from "@/core/utils/files";
 import { cn } from "@/lib/utils";
 
+import { ThreadContext } from "../messages/context";
 import { useArtifacts } from "./context";
 
 export function ArtifactFileList({
@@ -44,7 +45,10 @@ export function ArtifactFileList({
   runId?: string;
   threadId: string;
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
+  const current = currentPosterPath(
+    useContext(ThreadContext)?.thread.values.messages,
+  );
   const { user } = useAuth();
   const isAdmin = user?.system_role === "admin";
   const { select: selectArtifact, setOpen } = useArtifacts();
@@ -168,7 +172,9 @@ export function ArtifactFileList({
           >
             <CardHeader className="grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 pr-2 pl-1">
               <CardTitle className="relative min-w-0 pl-8 leading-tight [overflow-wrap:anywhere] break-words">
-                <div className="min-w-0">{getFileName(file)}</div>
+                <div className="min-w-0">
+                  {posterArtifactLabel(file, current, locale)}
+                </div>
                 <div className="absolute top-2 -left-0.5">
                   {getFileIcon(file, "size-6")}
                 </div>

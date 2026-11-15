@@ -114,11 +114,22 @@
           "frontend/src/core/messages/human-input.ts",
           "frontend/src/core/threads/api.ts"
         ]
+      },
+      {
+        "id": "0008-poster-artifact-labels",
+        "file": "third-party/deerflow/patches/0008-poster-artifact-labels.patch",
+        "sha256": "ab4d23d48e89e7889e4875691b56e4ef9796017745508d4e39ba6e339349f90d",
+        "reason": "Label poster layouts and the current version in the existing artifact sidebar without changing download paths.",
+        "affectedFiles": [
+          "frontend/src/components/workspace/artifacts/artifact-file-detail.tsx",
+          "frontend/src/components/workspace/artifacts/artifact-file-list.tsx",
+          "frontend/src/core/artifacts/poster-labels.ts"
+        ]
       }
     ],
-    "fileCount": 986,
-    "totalBytes": 21240249,
-    "contentInventorySha256": "db0eab7870b62c1da73967e2dff0a467b0ca1713d2ba2c46b1e8c172b0cb3b8b"
+    "fileCount": 987,
+    "totalBytes": 21242386,
+    "contentInventorySha256": "888b185dcc8a49abcf21e080e368e88bae3b8f28089ab87bbfc8ace6aeb65e4e"
   },
   "build": {
     "node": ">=22",

@@ -57,6 +57,7 @@ import io.haifa.agent.superharness.server.run.HaifaRunBridge;
 import io.haifa.agent.superharness.server.run.PersistentThreadCatalog;
 import io.haifa.agent.superharness.server.schedule.ScheduledRunLauncher;
 import io.haifa.agent.superharness.server.schedule.ScheduledRunStatus;
+import io.haifa.agent.superharness.server.tool.poster.PosterRenderTool;
 import io.haifa.agent.superharness.server.tool.clarification.ClarificationBoundaryRegistry;
 import io.haifa.agent.superharness.server.tool.file.CurrentRunUploads;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
@@ -2436,7 +2437,10 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     }
 
     /** Resolved execution provider configuration for the given thread, or null when disabled. */
-    private io.haifa.agent.superharness.server.config.ExecutionProviderConfig executionProviderConfig(ThreadRecord thread) {
+    private io.haifa.agent.superharness.server.config.ExecutionProviderConfig executionProviderConfig(
+            ThreadRecord thread, AgentPromptContext agentPrompt) {
+        // The poster preset uses the declared baoyu tool for image generation.
+        if (PosterRenderTool.AGENT_NAME.equals(agentPrompt.agentName()) && !agentPrompt.bootstrap()) return null;
         if (dataDirectoryRoot == null) return null;
         Path workspaceRoot = dataDirectoryRoot.resolve("workspace");
         if (thread != null && thread.ownerId != null && thread.threadId != null) {
@@ -2501,7 +2505,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         bridgeBuilds.incrementAndGet();
         return AccessOwner.call(thread.ownerId, () -> new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt),
                 foundation, mcpProjection, skillProjection, agentPrompt, delegation, childRunCapacity, isPlanMode,
-                executionExecutorFactory, executionProviderConfig(thread), skillScriptConfig(thread, skillProjection),
+                executionExecutorFactory, executionProviderConfig(thread, agentPrompt), skillScriptConfig(thread, skillProjection),
                 parentWallTimeMillisForTests, null, thread.ownerId, thread.threadId, approvalMode(),
                 ApprovalPolicyConfig.requireWebReadApproval(environment)));
     }
@@ -2815,7 +2819,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         return AccessOwner.call(thread.ownerId, () -> new HaifaRunBridge(binding, tools, foundation,
                 McpRunTools.Projection.empty(), null, agentPrompt,
                 io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled(),
-                childRunCapacity, false, executionExecutorFactory, executionProviderConfig(thread), null,
+                childRunCapacity, false, executionExecutorFactory, executionProviderConfig(thread, agentPrompt), null,
                 parentWallTimeMillisForTests, null, thread.ownerId, thread.threadId, approvalMode(),
                 ApprovalPolicyConfig.requireWebReadApproval(environment)));
     }

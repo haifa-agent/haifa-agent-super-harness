@@ -78,6 +78,26 @@ Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业�
 `scripts/install-service.py` 把应用注册为 Linux systemd 或 Windows WinSW 服务。
 命令、目录布局、密钥/数据约定与已知边界见 [dist-support/README.md](dist-support/README.md)。
 
+## 本地海报助手
+
+海报助手从活动通知生成两种竖版。两稿共用一张由 baoyu 自动生成的主视觉。本地海报启动脚本使用自动审批模式。选择 A 或 B 后，`poster_edit` 读取当前稿，只用新日期或文案重新排版，无需额外审批或生图。如果更换报名链接，重新生成二维码；只有明确要求更换主视觉时才重新生图。旧版本保留在产物栏，侧栏标识当前稿，文件名采用 `活动名-B稿-v2.png` 等格式。输入报名链接可生成二维码，缺少链接的草稿会标明待补。
+
+本地实例默认使用槽位 5 的 Gateway `21618` 和前端 `26618`，每次启动创建独立数据目录。要和原实例同时运行，可加 `-Slot 6` 使用 `22618/27618`。编辑中尚未固定的前端可加 `-DevelopmentFrontend`。先准备 Java 构建、冻结前端依赖、已登录的 Codex CLI、托管凭据 `os://DEEPSEEK_API_KEY`，以及 `JimLiu/baoyu-skills@1567581` 的 `skills/baoyu-image-gen` 原始目录和逐文件 SHA-256 清单。生产模式另需对应端口的前端构建戳。清单每行依次是 `baoyu-image-gen/<相对路径> <SHA-256>`。
+
+```powershell
+pwsh -NoProfile -File scripts/poster/start-local.ps1 `
+  -BaoyuSource '<冻结 baoyu-image-gen 目录>' -BaoyuManifest '<SHA-256 清单>' `
+  -BunPath '<bun.exe 的绝对路径>' -FrozenSource '<冻结 DeerFlow 源码目录>'
+```
+
+启动后打开 [本地智能体广场](http://127.0.0.1:26618/workspace/agents)，进入「海报助手」。已安装 Playwright、Pillow 和 OpenCV 的本机可执行一次 FDE 用例：
+
+```powershell
+python -B scripts/poster/smoke_local.py --evidence local-tmp/poster-assistant/evidence/<新的轮次目录>
+```
+
+用例打开广场，验证自动生图、选 B、刷新后改日期、改活动说明和下载 PNG，并检查像素变化范围和二维码。
+
 ## 定向测试与 SDK 版本选择
 
 定向测试使用 `pwsh -NoProfile -File scripts/test-targeted.ps1 -Test <测试类>`，可加 `-Module`、`-LowMemory` 或 `-Slow`，匹配 0 个测试算失败。

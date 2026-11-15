@@ -33,6 +33,8 @@ import io.haifa.agent.superharness.server.prompt.AgentPromptContext;
 import io.haifa.agent.superharness.server.run.HaifaRunBridge;
 import io.haifa.agent.superharness.server.schedule.ScheduleDispatchService;
 import io.haifa.agent.superharness.server.schedule.ScheduleStore;
+import io.haifa.agent.superharness.server.tool.poster.PosterEditTool;
+import io.haifa.agent.superharness.server.tool.poster.PosterRenderTool;
 import io.haifa.agent.superharness.server.tool.agent.ProductionSetupAgentTool;
 import io.haifa.agent.superharness.server.tool.agent.ProductionUpdateAgentTool;
 import io.haifa.agent.superharness.server.tool.clarification.ProductionAskClarificationTool;
@@ -362,6 +364,12 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             }
         }
         AgentPromptContext agent = scope.agentPrompt();
+        if (PosterRenderTool.AGENT_NAME.equals(agent.agentName()) && !agent.bootstrap()) {
+            var poster = new PosterRenderTool(
+                    scope.threadId(), projects, toolWorkspace);
+            tools.add(poster);
+            tools.add(new PosterEditTool(poster));
+        }
         java.util.function.Consumer<com.fasterxml.jackson.databind.node.ObjectNode> validateCandidate = candidate -> {
             SkillRunTools.Selection selectedSkills = SkillRunTools.Selection.fromJson(candidate.get("skills"));
             selectedSkills.names().ifPresent(names -> names.forEach(name -> {

@@ -45,6 +45,10 @@ import {
 } from "@/core/artifacts/editing";
 import { useArtifactContent } from "@/core/artifacts/hooks";
 import {
+  currentPosterPath,
+  posterArtifactLabel,
+} from "@/core/artifacts/poster-labels";
+import {
   getArtifactViewState,
   getTabularDelimiter,
 } from "@/core/artifacts/preview";
@@ -89,7 +93,7 @@ export function ArtifactFileDetail({
   filepath: string;
   threadId: string;
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const isAdmin = user?.system_role === "admin";
@@ -103,6 +107,7 @@ export function ArtifactFileDetail({
     setEditingPath,
   } = useArtifacts();
   const { thread, isMock } = useThread();
+  const currentPoster = currentPosterPath(thread.values.messages);
   const isWriteFile = useMemo(() => {
     return filepathFromProps.startsWith("write-file:");
   }, [filepathFromProps]);
@@ -417,7 +422,7 @@ export function ArtifactFileDetail({
                   <SelectGroup>
                     {artifactOptions.map((option) => (
                       <SelectItem key={option} value={option}>
-                        {getFileName(option)}
+                        {posterArtifactLabel(option, currentPoster, locale)}
                       </SelectItem>
                     ))}
                   </SelectGroup>
