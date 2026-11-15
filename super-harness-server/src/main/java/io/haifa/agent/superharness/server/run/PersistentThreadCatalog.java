@@ -138,6 +138,8 @@ public final class PersistentThreadCatalog {
                 display.options().forEach(options::add);
                 if (display.answeredOption() == null) encoded.putNull("answeredOption");
                 else encoded.put("answeredOption", display.answeredOption());
+                // Keep the original key so a rollback can still read answered approval records.
+                if (display.toolApproval() != null) encoded.set("executionApproval", display.toolApproval());
             }
             ArrayNode clarifications = item.putArray("clarification_displays");
             for (ClarificationDisplay display : entry.clarificationDisplays()) {
@@ -216,7 +218,8 @@ public final class PersistentThreadCatalog {
                         requiredText(item, "question"),
                         optionalText(item, "context").orElse(""),
                         options,
-                        optionalText(item, "answeredOption").orElse(null)));
+                        optionalText(item, "answeredOption").orElse(null),
+                        item.hasNonNull("executionApproval") ? item.get("executionApproval") : null));
             }
             validateDisplays(displays);
         } catch (IllegalArgumentException failure) {
@@ -422,8 +425,19 @@ public final class PersistentThreadCatalog {
             String question,
             String context,
             List<String> options,
-            String answeredOption) {
+            String answeredOption,
+            JsonNode toolApproval) {
+        public InteractionDisplay(String runId, String requestId, long requestSequence, Instant createdAt,
+                String toolCallId, String title, String question, String context, List<String> options,
+                String answeredOption) {
+            this(runId, requestId, requestSequence, createdAt, toolCallId, title, question, context, options,
+                    answeredOption, null);
+        }
+
         public InteractionDisplay {
+            boolean sessionResponse = toolApproval != null
+                    && toolApproval.path("session_eligible").asBoolean(false)
+                    && ("allow_session".equals(answeredOption) || "auto_approve".equals(answeredOption));
             if (runId == null || runId.isBlank() || runId.length() > 200
                     || requestId == null || requestId.isBlank() || requestId.length() > 200
                     || requestSequence < 1 || createdAt == null
@@ -434,15 +448,17 @@ public final class PersistentThreadCatalog {
                     || options == null || options.isEmpty() || options.size() > 4
                     || options.stream().anyMatch(option -> option == null || option.isBlank()
                             || option.length() > 100)
-                    || answeredOption != null && !options.contains(answeredOption)) {
+                    || toolApproval != null && (!toolApproval.isObject() || toolApproval.toString().length() > 32768)
+                    || answeredOption != null && !options.contains(answeredOption) && !sessionResponse) {
                 throw new IllegalArgumentException("invalid interaction display");
             }
             options = List.copyOf(options);
+            toolApproval = toolApproval == null ? null : toolApproval.deepCopy();
         }
 
         public InteractionDisplay answered(String option) {
             return new InteractionDisplay(runId, requestId, requestSequence, createdAt,
-                    toolCallId, title, question, context, options, option);
+                    toolCallId, title, question, context, options, option, toolApproval);
         }
     }
 

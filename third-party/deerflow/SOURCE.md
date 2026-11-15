@@ -72,6 +72,11 @@ principal, permissions, owner boundaries, tool policy, and approvals.
 
 ## Updating
 
+Patch `0007-unified-tool-approval.patch` adds the shared tool approval card
+and revocable session consent to the chat UI. The card displays each tool's
+target, effects, and details. Approval responses use the existing Human Input
+reply, and session status and revocation use the same-origin Gateway proxy.
+
 Do not follow DeerFlow `main`. An update requires an explicit new approved
 commit, a fresh archive import, license review, manifest/hash regeneration,
 patch-state review, and the relevant frontend checks. Never refresh the

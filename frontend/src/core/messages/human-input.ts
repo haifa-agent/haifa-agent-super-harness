@@ -37,6 +37,27 @@ export type HumanInputFact = {
   value: string;
 };
 
+export type ExecutionApproval = {
+  environment?: string;
+  workspace?: string;
+  network?: string;
+  impact: string[];
+  detail_label?: string;
+  session_eligible: boolean;
+};
+
+export type ToolApproval = {
+  tool_name: string;
+  facts: HumanInputFact[];
+  impact: string[];
+  impact_title?: string;
+  detail_title?: string;
+  detail_label?: string;
+  session_eligible: boolean;
+  before?: string;
+  after?: string;
+};
+
 export type HumanInputRequest = {
   version: 1 | 2;
   kind: "human_input_request";
@@ -56,6 +77,8 @@ export type HumanInputRequest = {
   content_type?: string;
   environment_facts?: HumanInputFact[];
   technical_facts?: HumanInputFact[];
+  tool_approval?: ToolApproval;
+  execution_approval?: ExecutionApproval;
 };
 
 export type HumanInputResponse =
@@ -80,6 +103,7 @@ export type HumanInputResponse =
 export type HumanInputThreadState = {
   answeredResponses: Map<string, HumanInputResponse>;
   latestOpenRequestId: string | null;
+  latestOpenRequest: HumanInputRequest | null;
 };
 
 export function shouldClearPendingHumanInputOnThreadError({
@@ -288,6 +312,41 @@ function parseFacts(value: unknown): HumanInputFact[] | undefined {
   return facts.length > 0 ? facts : undefined;
 }
 
+function parseExecutionApproval(value: unknown): ExecutionApproval | undefined {
+  if (!isRecord(value) || Array.isArray(value)) {
+    return undefined;
+  }
+  return {
+    environment: readOptionalString(value.environment),
+    workspace: readOptionalString(value.workspace),
+    network: readOptionalString(value.network),
+    impact: Array.isArray(value.impact)
+      ? value.impact.filter(isNonEmptyString)
+      : [],
+    detail_label: readOptionalString(value.detail_label),
+    session_eligible: value.session_eligible === true,
+  };
+}
+
+function parseToolApproval(value: unknown): ToolApproval | undefined {
+  if (!isRecord(value) || Array.isArray(value) || !isNonEmptyString(value.tool_name)) {
+    return undefined;
+  }
+  return {
+    tool_name: value.tool_name,
+    facts: parseFacts(value.facts) ?? [],
+    impact: Array.isArray(value.impact)
+      ? value.impact.filter(isNonEmptyString)
+      : [],
+    impact_title: readOptionalString(value.impact_title),
+    detail_title: readOptionalString(value.detail_title),
+    detail_label: readOptionalString(value.detail_label),
+    session_eligible: value.session_eligible === true,
+    before: readOptionalString(value.before),
+    after: readOptionalString(value.after),
+  };
+}
+
 export function parseHumanInputRequest(
   value: unknown,
 ): HumanInputRequest | null {
@@ -330,6 +389,13 @@ export function parseHumanInputRequest(
     return null;
   }
 
+  const isApproval =
+    value.source === "haifa_interaction" &&
+    value.clarification_type === "risk_confirmation" &&
+    value.input_mode === "single_choice";
+  const toolApproval = isApproval ? parseToolApproval(value.tool_approval) : undefined;
+  const executionApproval =
+    isApproval && !toolApproval ? parseExecutionApproval(value.execution_approval) : undefined;
   const context = value.context;
   if (
     context !== undefined &&
@@ -358,6 +424,8 @@ export function parseHumanInputRequest(
     input_mode: value.input_mode,
     ...(options ? { options } : {}),
     ...(fields ? { fields } : {}),
+    ...(toolApproval ? { tool_approval: toolApproval } : {}),
+    ...(executionApproval ? { execution_approval: executionApproval } : {}),
     ...(readOptionalString(value.risk_level)
       ? { risk_level: readOptionalString(value.risk_level) }
       : {}),
@@ -487,10 +555,18 @@ export function deriveHumanInputThreadState(
     }
 
     const response = extractHumanInputResponse(message);
+    const requested = response ? seenRequests.get(response.request_id) : undefined;
     if (
       response &&
-      seenRequests.has(response.request_id) &&
-      !answeredResponses.has(response.request_id)
+      requested &&
+      !answeredResponses.has(response.request_id) &&
+      (!(requested.tool_approval ?? requested.execution_approval) ||
+        (response.source === requested.source &&
+          response.response_kind === "option" &&
+          response.option_id === response.value &&
+          ["approve", "reject", "allow_session", "auto_approve"].includes(
+            response.option_id,
+          )))
     ) {
       answeredResponses.set(response.request_id, response);
       continue;
@@ -512,7 +588,12 @@ export function deriveHumanInputThreadState(
         latestUnansweredId === undefined
           ? undefined
           : seenRequests.get(latestUnansweredId);
-      if (latestUnansweredId !== undefined && request) {
+      if (
+        latestUnansweredId !== undefined &&
+        request &&
+        !request.tool_approval &&
+        !request.execution_approval
+      ) {
         answeredResponses.set(latestUnansweredId, {
           version: 1,
           kind: "human_input_response",
@@ -530,7 +611,11 @@ export function deriveHumanInputThreadState(
       .reverse()
       .find((requestId) => !answeredResponses.has(requestId)) ?? null;
 
-  return { answeredResponses, latestOpenRequestId };
+  return {
+    answeredResponses,
+    latestOpenRequestId,
+    latestOpenRequest: seenRequests.get(latestOpenRequestId ?? "") ?? null,
+  };
 }
 
 export function hasOpenHumanInputRequest(

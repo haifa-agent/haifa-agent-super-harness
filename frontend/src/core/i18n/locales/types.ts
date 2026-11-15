@@ -992,6 +992,41 @@ export interface Translations {
     browserClose: string;
   };
 
+  toolApproval: {
+    fallbackTitle: string;
+    purpose: string;
+    environment: string;
+    workspace: string;
+    network: string;
+    impact: string;
+    unavailable: string;
+    unknownImpact: string;
+    details: string;
+    before: string;
+    after: string;
+    emptyContent: string;
+    tool: string;
+    requestId: string;
+    pending: string;
+    submitting: string;
+    approved: string;
+    rejected: string;
+    autoApproved: string;
+    once: string;
+    session: string;
+    reject: string;
+    sessionScope: string;
+    individualScope: string;
+    approvedOnce: string;
+    approvedForSession: string;
+    approvedAutomatically: string;
+    rejectedResult: string;
+    executionResult: string;
+    sessionActive: string;
+    revoke: string;
+    revokeError: string;
+  };
+
   humanInput: {
     answered: string;
     pending: string;

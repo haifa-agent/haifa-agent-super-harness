@@ -3,6 +3,38 @@ import { getBackendBaseURL } from "@/core/config";
 
 import type { AgentThread, ThreadTokenUsageResponse } from "./types";
 
+export async function readExecutionApprovalSession(
+  threadId: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  return executionApprovalSession(threadId, "GET", signal);
+}
+
+export async function revokeExecutionApprovalSession(
+  threadId: string,
+): Promise<boolean> {
+  return executionApprovalSession(threadId, "DELETE");
+}
+
+async function executionApprovalSession(
+  threadId: string,
+  method: "GET" | "DELETE",
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const response = await fetchWithAuth(
+    `${getBackendBaseURL()}/api/threads/${encodeURIComponent(threadId)}/execution-approval-session`,
+    { method, signal, cache: "no-store" },
+  );
+  if (!response.ok) {
+    throw new Error("Could not load execution approval session");
+  }
+  const responseBody = (await response.json()) as { active?: unknown };
+  if (typeof responseBody.active !== "boolean") {
+    throw new Error("Invalid execution approval session");
+  }
+  return responseBody.active;
+}
+
 export type ThreadCompactResponse = {
   thread_id: string;
   compacted: boolean;

@@ -46,6 +46,8 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private static final Pattern THREAD = Pattern.compile("^/api/threads/([^/]+)$");
     private static final Pattern THREAD_STATE = Pattern.compile("^/api/threads/([^/]+)/state$");
+    private static final Pattern EXECUTION_APPROVAL_SESSION =
+            Pattern.compile("^/api/threads/([^/]+)/execution-approval-session$");
     private static final Pattern THREAD_HISTORY =
             Pattern.compile("^/api/threads/([^/]+)/history$");
     private static final Pattern THREAD_MESSAGES_PAGE =
@@ -220,7 +222,19 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 searchThreads(exchange);
                 return;
             }
-            Matcher match = THREAD_STATE.matcher(path);
+            Matcher match = EXECUTION_APPROVAL_SESSION.matcher(path);
+            if (match.matches()) {
+                String method = exchange.getRequestMethod();
+                if ("GET".equals(method) || "DELETE".equals(method)) {
+                    exchange.getResponseHeaders().set("Cache-Control", "no-store");
+                    sendJson(exchange, 200, conversations.executionApprovalSession(match.group(1), "DELETE".equals(method)));
+                } else {
+                    exchange.getResponseHeaders().set("Allow", "GET, DELETE");
+                    sendJson(exchange, 405, Map.of("detail", "Method Not Allowed"));
+                }
+                return;
+            }
+            match = THREAD_STATE.matcher(path);
             if (match.matches() && exchange.getRequestMethod().equals("GET")) {
                 getThreadState(exchange, match.group(1));
                 return;

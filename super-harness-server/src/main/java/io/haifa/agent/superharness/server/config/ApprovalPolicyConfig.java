@@ -32,6 +32,7 @@ public record ApprovalPolicyConfig(Mode mode) {
 
     /** Environment variable that selects the level; any unrecognised value keeps {@link Mode#ASK}. */
     public static final String ENVIRONMENT_KEY = "HAIFA_SUPER_HARNESS_APPROVAL_MODE";
+    public static final String WEB_READ_APPROVAL_ENVIRONMENT_KEY = "HAIFA_SUPER_HARNESS_WEB_READ_APPROVAL";
 
     /** Fail-closed product default: every governed Tool call still requires approval. */
     public static final Mode DEFAULT_MODE = Mode.ASK;
@@ -44,6 +45,11 @@ public record ApprovalPolicyConfig(Mode mode) {
     public static ApprovalPolicyConfig fromEnvironment(Map<String, String> environment) {
         Objects.requireNonNull(environment, "environment must not be null");
         return new ApprovalPolicyConfig(parse(environment.get(ENVIRONMENT_KEY)));
+    }
+
+    /** Opt in to the SDK's standard network approval for web search and fetch in ASK mode. */
+    public static boolean requireWebReadApproval(Map<String, String> environment) {
+        return "ask".equalsIgnoreCase(environment.getOrDefault(WEB_READ_APPROVAL_ENVIRONMENT_KEY, "").strip());
     }
 
     /** Parses one declared value; anything other than {@code auto}/{@code deny} keeps {@code ask}. */

@@ -1,5 +1,6 @@
 import type { Message } from "@langchain/langgraph-sdk";
 import type { BaseStream } from "@langchain/langgraph-sdk/react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronUpIcon,
   GitBranchPlusIcon,
@@ -39,8 +40,10 @@ import {
   type AssistantTurnUsageState,
 } from "@/core/messages/derived-state";
 import {
+  createHumanInputOptionResponse,
   deriveHumanInputThreadState,
   extractHumanInputRequest,
+  extractHumanInputResponse,
   shouldClearPendingHumanInputOnThreadError,
   type HumanInputRequest,
   type HumanInputResponse,
@@ -82,6 +85,10 @@ import {
   parseSubtaskResult,
 } from "@/core/tasks/subtask-result";
 import type { AgentThreadState } from "@/core/threads";
+import {
+  readExecutionApprovalSession,
+  revokeExecutionApprovalSession,
+} from "@/core/threads/api";
 import { cn } from "@/lib/utils";
 
 import { ArtifactFileList } from "../artifacts/artifact-file-list";
@@ -91,6 +98,7 @@ import { useMaybeSidecar } from "../sidecar/context";
 import { Tooltip } from "../tooltip";
 
 import { ConversationOutline } from "./conversation-outline";
+import { ToolApprovalCard } from "./tool-approval-card";
 import {
   HumanInputCard,
   type HumanInputSubmitResult,
@@ -628,6 +636,71 @@ export function MessageList({
     ],
   );
 
+  const queryClient = useQueryClient();
+  const approvalSessionKey = useMemo(
+    () => ["execution-approval-session", threadId] as const,
+    [threadId],
+  );
+  const approvalSessionEnabled = Boolean(
+    onSubmitHumanInput && !thread.isThreadLoading,
+  );
+  const approvalSession = useQuery({
+    queryKey: approvalSessionKey,
+    queryFn: ({ signal }) => readExecutionApprovalSession(threadId, signal),
+    enabled: approvalSessionEnabled,
+    retry: false,
+  });
+  const [grantingApprovalSessionKey, setGrantingApprovalSessionKey] = useState<
+    typeof approvalSessionKey | null
+  >(null);
+  const revokeApprovalSession = useMutation({
+    mutationFn: async (key: typeof approvalSessionKey) => {
+      if (await revokeExecutionApprovalSession(key[1])) {
+        throw new Error("Execution approval session is still active");
+      }
+    },
+    onMutate: (key) => queryClient.cancelQueries({ queryKey: key }),
+    onSuccess: (_, key) => queryClient.setQueryData(key, false),
+    onError: () => toast.error(t.toolApproval.revokeError),
+  });
+  const isRevokingApprovalSession =
+    revokeApprovalSession.isPending &&
+    revokeApprovalSession.variables?.[1] === threadId;
+  const showApprovalSession =
+    approvalSessionEnabled && approvalSession.isSuccess && approvalSession.data;
+  const toolApprovalSessionActive =
+    !approvalSessionEnabled ||
+    grantingApprovalSessionKey === approvalSessionKey ||
+    approvalSession.isFetching ||
+    isRevokingApprovalSession
+      ? undefined
+      : approvalSession.isSuccess && approvalSession.data;
+
+  const grantReceiptRequestId = useMemo(() => {
+    let requestId: string | undefined;
+    for (const message of messages) {
+      const response = extractHumanInputResponse(message);
+      if (
+        response?.source === "haifa_interaction" &&
+        response.response_kind === "option" &&
+        response.option_id === "allow_session"
+      ) {
+        requestId = response.request_id;
+      }
+    }
+    return requestId;
+  }, [messages]);
+  useEffect(() => {
+    if (approvalSessionEnabled && grantReceiptRequestId) {
+      void queryClient.invalidateQueries({ queryKey: approvalSessionKey });
+    }
+  }, [
+    approvalSessionEnabled,
+    approvalSessionKey,
+    grantReceiptRequestId,
+    queryClient,
+  ]);
+
   const humanInputState = useMemo(
     () =>
       deriveHumanInputThreadState(
@@ -691,6 +764,13 @@ export function MessageList({
         return next;
       });
 
+      const grantsSession =
+        (request.tool_approval ?? request.execution_approval) &&
+        response.response_kind === "option" &&
+        response.option_id === "allow_session";
+      if (grantsSession) {
+        setGrantingApprovalSessionKey(approvalSessionKey);
+      }
       try {
         const result = await onSubmitHumanInput?.(request, response);
         if (result === false) {
@@ -701,10 +781,86 @@ export function MessageList({
         clearPendingHumanInput(request.request_id);
         toast.error(error instanceof Error ? error.message : String(error));
         return false;
+      } finally {
+        if (grantsSession) {
+          // APPLIED is a server-side fact. A disconnected stream can have an
+          // accepted response, so refresh even if the send failed.
+          await queryClient.invalidateQueries({ queryKey: approvalSessionKey });
+          setGrantingApprovalSessionKey((current) =>
+            current === approvalSessionKey ? null : current,
+          );
+        }
       }
     },
-    [clearPendingHumanInput, onSubmitHumanInput],
+    [approvalSessionKey, clearPendingHumanInput, onSubmitHumanInput, queryClient],
   );
+
+  const toolApprovalDecisionsSeen = useRef(new Set<string>());
+  const toolApprovalRequest = humanInputState.latestOpenRequest;
+  useEffect(() => {
+    const approval =
+      toolApprovalRequest?.tool_approval ?? toolApprovalRequest?.execution_approval;
+    if (
+      thread.isLoading ||
+      !onSubmitHumanInput ||
+      !toolApprovalRequest ||
+      !approval?.session_eligible ||
+      pendingHumanInputRequestIds.has(toolApprovalRequest.request_id)
+    ) {
+      return;
+    }
+    const requestKey = JSON.stringify([
+      threadId,
+      toolApprovalRequest.request_id,
+    ]);
+    const decisionsSeen = toolApprovalDecisionsSeen.current;
+    if (decisionsSeen.has(requestKey)) {
+      return;
+    }
+    // Preserve an open card already presented for a manual decision even
+    // if another client later enables session approval.
+    if (toolApprovalSessionActive === false) {
+      decisionsSeen.add(requestKey);
+      return;
+    }
+    if (toolApprovalSessionActive !== true) {
+      return;
+    }
+
+    const controller = new AbortController();
+    void readExecutionApprovalSession(threadId, controller.signal)
+      .then((active) => {
+        if (controller.signal.aborted || decisionsSeen.has(requestKey)) {
+          return;
+        }
+        decisionsSeen.add(requestKey);
+        if (active) {
+          void handleSubmitHumanInput(
+            toolApprovalRequest,
+            createHumanInputOptionResponse(toolApprovalRequest, {
+              id: "auto_approve",
+              label: "",
+              value: "auto_approve",
+            }),
+          );
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          decisionsSeen.add(requestKey);
+        }
+        // If consent cannot be verified, the manual controls stay available.
+      });
+    return () => controller.abort();
+  }, [
+    toolApprovalRequest,
+    toolApprovalSessionActive,
+    handleSubmitHumanInput,
+    onSubmitHumanInput,
+    pendingHumanInputRequestIds,
+    thread.isLoading,
+    threadId,
+  ]);
 
   const latestAssistantGroupId = useMemo(() => {
     if (thread.isLoading) {
@@ -1087,6 +1243,28 @@ export function MessageList({
         initial={initialScroll}
         resize={resizeScroll}
       >
+        {showApprovalSession && (
+          <aside
+            aria-label={t.toolApproval.sessionActive}
+            className="mx-auto mt-3 flex w-[calc(100%-1.5rem)] max-w-(--container-width-md) shrink-0 flex-wrap items-center justify-between gap-x-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-100 sm:w-[calc(100%-3rem)]"
+          >
+            <div className="min-w-0">
+              <p role="status" className="text-sm font-medium">
+                {t.toolApproval.sessionActive}
+              </p>
+              <p className="text-xs">{t.toolApproval.sessionScope}</p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={isRevokingApprovalSession}
+              onClick={() => revokeApprovalSession.mutate(approvalSessionKey)}
+            >
+              {t.toolApproval.revoke}
+            </Button>
+          </aside>
+        )}
         <ConversationContent className="mx-auto w-full max-w-(--container-width-md) gap-8 pt-8">
           <LoadMoreHistoryIndicator
             isLoading={isHistoryLoading}
@@ -1226,11 +1404,14 @@ export function MessageList({
                   const pending = pendingHumanInputRequestIds.has(
                     humanInputRequest.request_id,
                   );
+                  const Card = humanInputRequest.tool_approval ?? humanInputRequest.execution_approval
+                    ? ToolApprovalCard
+                    : HumanInputCard;
                   return withRunDuration(
                     group,
                     groupIndex,
                     <div className="w-full">
-                      <HumanInputCard
+                      <Card
                         answeredResponse={answeredResponse}
                         disabled={
                           thread.isLoading ||

@@ -220,7 +220,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 projects,
                 dataDirectory,
                 continuationKey,
-                scope -> promptReadyTools(testRunTools, projects, toolWorkspace, scope, configurationApi, skillStore, skillScreening, localAuth),
+                scope -> promptReadyTools(testRunTools, projects, toolWorkspace, scope, configurationApi,
+                        skillStore, skillScreening, localAuth, environment),
                 new DeerFlowConversationService.McpProjectionProvider() {
                     @Override
                     public McpRunTools.Projection forRun(JsonNode body) {
@@ -352,9 +353,10 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             DeerFlowConfigurationApi configuration,
             SkillConfigStore skills,
             io.haifa.agent.superharness.server.config.SkillPackageScreening skillScreening,
-            io.haifa.agent.superharness.server.auth.LocalAuthService localAuth) {
+            io.haifa.agent.superharness.server.auth.LocalAuthService localAuth,
+            Map<String, String> environment) {
         List<JavaTool<?, ?>> tools = new java.util.ArrayList<>(configured);
-        for (JavaTool<?, ?> tool : fileTools(scope, projects, toolWorkspace)) {
+        for (JavaTool<?, ?> tool : fileTools(scope, projects, toolWorkspace, environment)) {
             if (tools.stream().noneMatch(existing -> existing.spec().name().equals(tool.spec().name()))) {
                 tools.add(tool);
             }
@@ -372,7 +374,8 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             // Pure M2 composition checks the complete registered catalog and SDK instruction limit
             // before the existing ConfigurationStore performs its single atomic replacement.
             HaifaRunBridge.promptSignatureFor(
-                    promptReadyTools(configured, projects, toolWorkspace, nextScope, configuration, skills, skillScreening, localAuth),
+                    promptReadyTools(configured, projects, toolWorkspace, nextScope, configuration, skills,
+                            skillScreening, localAuth, environment),
                     skills.projection(selectedSkills), nextAgent);
         };
         java.util.function.BooleanSupplier configAdmin = () -> localAuth == null
@@ -417,8 +420,16 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             DeerFlowConversationService.ThreadToolScope scope,
             PersistentProjectWorkspaceService projects,
             RestrictedWorkspaceService workspace) {
+        return fileTools(scope, projects, workspace, System.getenv());
+    }
+
+    private static List<? extends JavaTool<?, ?>> fileTools(
+            DeerFlowConversationService.ThreadToolScope scope,
+            PersistentProjectWorkspaceService projects,
+            RestrictedWorkspaceService workspace,
+            Map<String, String> environment) {
         FileToolSession session = new FileToolSession();
-        WebToolConfig web = WebToolConfig.fromEnvironment(System.getenv());
+        WebToolConfig web = WebToolConfig.fromEnvironment(environment == null ? System.getenv() : environment);
         return List.of(
                 new ProductionWriteFileTool(
                         scope.threadId(), scope.artifactProjectRef(), projects, workspace, session),

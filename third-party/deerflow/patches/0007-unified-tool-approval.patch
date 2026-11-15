@@ -1,0 +1,752 @@
+diff --git a/frontend/src/components/workspace/messages/message-list.tsx b/frontend/src/components/workspace/messages/message-list.tsx
+index 9f7be13..9516928 100644
+--- a/frontend/src/components/workspace/messages/message-list.tsx
++++ b/frontend/src/components/workspace/messages/message-list.tsx
+@@ -2,0 +3 @@ import type { BaseStream } from "@langchain/langgraph-sdk/react";
++import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+@@ -41,0 +43 @@ import {
++  createHumanInputOptionResponse,
+@@ -43,0 +46 @@ import {
++  extractHumanInputResponse,
+@@ -84,0 +88,4 @@ import type { AgentThreadState } from "@/core/threads";
++import {
++  readExecutionApprovalSession,
++  revokeExecutionApprovalSession,
++} from "@/core/threads/api";
+@@ -93,0 +101 @@ import { ConversationOutline } from "./conversation-outline";
++import { ToolApprovalCard } from "./tool-approval-card";
+@@ -630,0 +639,65 @@ export function MessageList({
++  const queryClient = useQueryClient();
++  const approvalSessionKey = useMemo(
++    () => ["execution-approval-session", threadId] as const,
++    [threadId],
++  );
++  const approvalSessionEnabled = Boolean(
++    onSubmitHumanInput && !thread.isThreadLoading,
++  );
++  const approvalSession = useQuery({
++    queryKey: approvalSessionKey,
++    queryFn: ({ signal }) => readExecutionApprovalSession(threadId, signal),
++    enabled: approvalSessionEnabled,
++    retry: false,
++  });
++  const [grantingApprovalSessionKey, setGrantingApprovalSessionKey] = useState<
++    typeof approvalSessionKey | null
++  >(null);
++  const revokeApprovalSession = useMutation({
++    mutationFn: async (key: typeof approvalSessionKey) => {
++      if (await revokeExecutionApprovalSession(key[1])) {
++        throw new Error("Execution approval session is still active");
++      }
++    },
++    onMutate: (key) => queryClient.cancelQueries({ queryKey: key }),
++    onSuccess: (_, key) => queryClient.setQueryData(key, false),
++    onError: () => toast.error(t.toolApproval.revokeError),
++  });
++  const isRevokingApprovalSession =
++    revokeApprovalSession.isPending &&
++    revokeApprovalSession.variables?.[1] === threadId;
++  const showApprovalSession =
++    approvalSessionEnabled && approvalSession.isSuccess && approvalSession.data;
++  const toolApprovalSessionActive =
++    !approvalSessionEnabled ||
++    grantingApprovalSessionKey === approvalSessionKey ||
++    approvalSession.isFetching ||
++    isRevokingApprovalSession
++      ? undefined
++      : approvalSession.isSuccess && approvalSession.data;
++
++  const grantReceiptRequestId = useMemo(() => {
++    let requestId: string | undefined;
++    for (const message of messages) {
++      const response = extractHumanInputResponse(message);
++      if (
++        response?.source === "haifa_interaction" &&
++        response.response_kind === "option" &&
++        response.option_id === "allow_session"
++      ) {
++        requestId = response.request_id;
++      }
++    }
++    return requestId;
++  }, [messages]);
++  useEffect(() => {
++    if (approvalSessionEnabled && grantReceiptRequestId) {
++      void queryClient.invalidateQueries({ queryKey: approvalSessionKey });
++    }
++  }, [
++    approvalSessionEnabled,
++    approvalSessionKey,
++    grantReceiptRequestId,
++    queryClient,
++  ]);
++
+@@ -693,0 +767,7 @@ export function MessageList({
++      const grantsSession =
++        (request.tool_approval ?? request.execution_approval) &&
++        response.response_kind === "option" &&
++        response.option_id === "allow_session";
++      if (grantsSession) {
++        setGrantingApprovalSessionKey(approvalSessionKey);
++      }
+@@ -703,0 +784,9 @@ export function MessageList({
++      } finally {
++        if (grantsSession) {
++          // APPLIED is a server-side fact. A disconnected stream can have an
++          // accepted response, so refresh even if the send failed.
++          await queryClient.invalidateQueries({ queryKey: approvalSessionKey });
++          setGrantingApprovalSessionKey((current) =>
++            current === approvalSessionKey ? null : current,
++          );
++        }
+@@ -706 +795 @@ export function MessageList({
+-    [clearPendingHumanInput, onSubmitHumanInput],
++    [approvalSessionKey, clearPendingHumanInput, onSubmitHumanInput, queryClient],
+@@ -708,0 +798,67 @@ export function MessageList({
++  const toolApprovalDecisionsSeen = useRef(new Set<string>());
++  const toolApprovalRequest = humanInputState.latestOpenRequest;
++  useEffect(() => {
++    const approval =
++      toolApprovalRequest?.tool_approval ?? toolApprovalRequest?.execution_approval;
++    if (
++      thread.isLoading ||
++      !onSubmitHumanInput ||
++      !toolApprovalRequest ||
++      !approval?.session_eligible ||
++      pendingHumanInputRequestIds.has(toolApprovalRequest.request_id)
++    ) {
++      return;
++    }
++    const requestKey = JSON.stringify([
++      threadId,
++      toolApprovalRequest.request_id,
++    ]);
++    const decisionsSeen = toolApprovalDecisionsSeen.current;
++    if (decisionsSeen.has(requestKey)) {
++      return;
++    }
++    // Preserve an open card already presented for a manual decision even
++    // if another client later enables session approval.
++    if (toolApprovalSessionActive === false) {
++      decisionsSeen.add(requestKey);
++      return;
++    }
++    if (toolApprovalSessionActive !== true) {
++      return;
++    }
++
++    const controller = new AbortController();
++    void readExecutionApprovalSession(threadId, controller.signal)
++      .then((active) => {
++        if (controller.signal.aborted || decisionsSeen.has(requestKey)) {
++          return;
++        }
++        decisionsSeen.add(requestKey);
++        if (active) {
++          void handleSubmitHumanInput(
++            toolApprovalRequest,
++            createHumanInputOptionResponse(toolApprovalRequest, {
++              id: "auto_approve",
++              label: "",
++              value: "auto_approve",
++            }),
++          );
++        }
++      })
++      .catch(() => {
++        if (!controller.signal.aborted) {
++          decisionsSeen.add(requestKey);
++        }
++        // If consent cannot be verified, the manual controls stay available.
++      });
++    return () => controller.abort();
++  }, [
++    toolApprovalRequest,
++    toolApprovalSessionActive,
++    handleSubmitHumanInput,
++    onSubmitHumanInput,
++    pendingHumanInputRequestIds,
++    thread.isLoading,
++    threadId,
++  ]);
++
+@@ -1089,0 +1246,22 @@ export function MessageList({
++        {showApprovalSession && (
++          <aside
++            aria-label={t.toolApproval.sessionActive}
++            className="mx-auto mt-3 flex w-[calc(100%-1.5rem)] max-w-(--container-width-md) shrink-0 flex-wrap items-center justify-between gap-x-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-100 sm:w-[calc(100%-3rem)]"
++          >
++            <div className="min-w-0">
++              <p role="status" className="text-sm font-medium">
++                {t.toolApproval.sessionActive}
++              </p>
++              <p className="text-xs">{t.toolApproval.sessionScope}</p>
++            </div>
++            <Button
++              type="button"
++              variant="ghost"
++              size="sm"
++              disabled={isRevokingApprovalSession}
++              onClick={() => revokeApprovalSession.mutate(approvalSessionKey)}
++            >
++              {t.toolApproval.revoke}
++            </Button>
++          </aside>
++        )}
+@@ -1228,0 +1407,3 @@ export function MessageList({
++                  const Card = humanInputRequest.tool_approval ?? humanInputRequest.execution_approval
++                    ? ToolApprovalCard
++                    : HumanInputCard;
+@@ -1233 +1414 @@ export function MessageList({
+-                      <HumanInputCard
++                      <Card
+diff --git a/frontend/src/components/workspace/messages/tool-approval-card.tsx b/frontend/src/components/workspace/messages/tool-approval-card.tsx
+new file mode 100644
+index 0000000..967aec3
+--- /dev/null
++++ b/frontend/src/components/workspace/messages/tool-approval-card.tsx
+@@ -0,0 +1,280 @@
++"use client";
++
++import {
++  ChevronRightIcon,
++  FilePenLineIcon,
++  FilePlusIcon,
++  GlobeIcon,
++  Loader2Icon,
++  SearchIcon,
++  TerminalIcon,
++  WrenchIcon,
++} from "lucide-react";
++import { useEffect, useId, useRef } from "react";
++
++import { Button } from "@/components/ui/button";
++import { useI18n } from "@/core/i18n/hooks";
++import {
++  createHumanInputOptionResponse,
++  type HumanInputRequest,
++  type HumanInputResponse,
++} from "@/core/messages/human-input";
++import { cn } from "@/lib/utils";
++
++import type { HumanInputSubmitResult } from "./human-input-card";
++
++const toolIcons = new Map([
++  ["write_file", FilePlusIcon],
++  ["str_replace", FilePenLineIcon],
++  ["web_search", SearchIcon],
++  ["web_fetch", GlobeIcon],
++  ["execution_run", TerminalIcon],
++]);
++
++export function ToolApprovalCard({
++  request,
++  disabled,
++  pending,
++  answeredResponse,
++  onSubmit,
++}: {
++  request: HumanInputRequest;
++  disabled: boolean;
++  pending: boolean;
++  answeredResponse: HumanInputResponse | null;
++  onSubmit?: (
++    response: HumanInputResponse,
++  ) => HumanInputSubmitResult | Promise<HumanInputSubmitResult>;
++}) {
++  const { t } = useI18n();
++  const labels = t.toolApproval;
++  const titleId = useId();
++  const scopeId = useId();
++  const statusRef = useRef<HTMLSpanElement>(null);
++  const submittedFromCard = useRef(false);
++
++  useEffect(() => {
++    if (answeredResponse && submittedFromCard.current) {
++      submittedFromCard.current = false;
++      statusRef.current?.focus();
++    }
++  }, [answeredResponse]);
++
++  const approval = request.tool_approval ?? request.execution_approval;
++  if (!approval) {
++    return null;
++  }
++
++  const decision =
++    answeredResponse?.response_kind === "option"
++      ? answeredResponse.option_id
++      : null;
++  const status = decision === "reject"
++    ? labels.rejected
++    : decision === "auto_approve"
++      ? labels.autoApproved
++      : decision
++        ? labels.approved
++        : pending
++          ? labels.submitting
++          : labels.pending;
++  const result = decision === "reject"
++    ? labels.rejectedResult
++    : decision === "auto_approve"
++      ? labels.approvedAutomatically
++      : decision === "allow_session"
++        ? labels.approvedForSession
++        : labels.approvedOnce;
++  const toolName = request.tool_approval?.tool_name ?? "execution_run";
++  const Icon = toolIcons.get(toolName) ?? WrenchIcon;
++  const before = request.tool_approval?.before;
++  const after = request.tool_approval?.after;
++  const isNetworkRead = toolName === "web_search" || toolName === "web_fetch";
++  const facts = request.tool_approval?.facts ?? [
++    { label: labels.environment, value: request.execution_approval?.environment },
++    { label: labels.workspace, value: request.execution_approval?.workspace },
++    { label: labels.network, value: request.execution_approval?.network },
++  ];
++  const actions = [
++    { id: "reject", label: labels.reject },
++    { id: "allow_session", label: labels.session },
++    { id: "approve", label: labels.once },
++  ];
++  const sessionOption = approval.session_eligible &&
++    request.options?.some((option) =>
++      option.id === "allow_session" && option.value === "allow_session",
++    );
++
++  return (
++    <article
++      aria-labelledby={titleId}
++      className="@container w-full min-w-0 overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-sm"
++      data-testid="tool-approval-card"
++      data-tool={toolName}
++    >
++      <div className="space-y-4 p-4 sm:p-5">
++        <header className="flex items-start gap-3">
++          <span className="rounded-lg bg-emerald-50 p-2.5 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
++            <Icon aria-hidden="true" className="size-4" />
++          </span>
++          <div className="min-w-0">
++            <div className="flex flex-wrap items-center gap-2">
++              <h2 id={titleId} className="text-base font-semibold break-words">
++                {request.title || labels.fallbackTitle}
++              </h2>
++              <span
++                ref={statusRef}
++                role="status"
++                tabIndex={-1}
++                className={cn(
++                  "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium",
++                  decision === "reject"
++                    ? "bg-rose-50 text-rose-800 dark:bg-rose-950 dark:text-rose-300"
++                    : decision
++                      ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
++                      : "bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200",
++                )}
++              >
++                {pending && !decision ? (
++                  <Loader2Icon aria-hidden="true" className="size-3 animate-spin" />
++                ) : (
++                  <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
++                )}
++                {status}
++              </span>
++            </div>
++            {request.purpose && (
++              <p className="mt-1 text-sm whitespace-pre-wrap break-words text-muted-foreground">
++                <span className="mr-2 font-medium text-foreground">{labels.purpose}</span>
++                {request.purpose}
++              </p>
++            )}
++          </div>
++        </header>
++
++        <div className={cn("grid gap-3", facts.length > 0 && "@lg:grid-cols-2")}>
++          {facts.length > 0 && (
++            <dl className="min-w-0 divide-y divide-border">
++              {facts.map(({ label, value }, index) => (
++                <div key={index} className="grid grid-cols-[minmax(4rem,auto)_1fr] gap-2 py-2 text-sm">
++                  <dt className="text-muted-foreground">{label}</dt>
++                  <dd className="min-w-0 font-medium wrap-anywhere whitespace-pre-wrap">{value || labels.unavailable}</dd>
++                </div>
++              ))}
++            </dl>
++          )}
++          <section className={cn(
++            "min-w-0 rounded-lg border p-3",
++            isNetworkRead
++              ? "border-emerald-200 bg-emerald-50/70 text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100"
++              : "border-amber-200 bg-amber-50/70 text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100",
++          )}>
++            <h3 className="text-sm font-semibold">{request.tool_approval?.impact_title || labels.impact}</h3>
++            <ul className="mt-1.5 list-disc space-y-1 pl-4 text-sm break-words">
++              {(approval.impact.length ? approval.impact : [labels.unknownImpact]).map(
++                (item, index) => <li key={index}>{item}</li>,
++              )}
++            </ul>
++          </section>
++        </div>
++
++        <details className="group rounded-lg border border-border bg-muted/25">
++          <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
++            <ChevronRightIcon aria-hidden="true" className="size-4 shrink-0 transition-transform group-open:rotate-90" />
++            <span>{request.tool_approval?.detail_title || labels.details}</span>
++            {(approval.detail_label || request.content_type) && (
++              <span className="ml-auto text-right text-xs font-normal text-muted-foreground">
++                {approval.detail_label || request.content_type}
++              </span>
++            )}
++          </summary>
++          <div className="space-y-3 p-3 pt-1">
++            {(before !== undefined || after !== undefined) && (
++              <div className="grid gap-2 @lg:grid-cols-2">
++                <section className="min-w-0">
++                  <h3 className="mb-1.5 text-xs font-semibold">{labels.before}</h3>
++                  <pre className="max-h-64 overflow-auto rounded-md border border-rose-200 bg-rose-50 p-3 text-xs wrap-anywhere whitespace-pre-wrap text-rose-950 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-100">
++                    <code>{before === "" ? labels.emptyContent : before ?? labels.unavailable}</code>
++                  </pre>
++                </section>
++                <section className="min-w-0">
++                  <h3 className="mb-1.5 text-xs font-semibold">{labels.after}</h3>
++                  <pre className="max-h-64 overflow-auto rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs wrap-anywhere whitespace-pre-wrap text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100">
++                    <code>{after === "" ? labels.emptyContent : after ?? labels.unavailable}</code>
++                  </pre>
++                </section>
++              </div>
++            )}
++            {request.content && before === undefined && after === undefined && (
++              <pre className="max-h-64 overflow-auto rounded-md bg-[#20372e] p-3 text-xs wrap-anywhere whitespace-pre-wrap text-white">
++                <code>{request.content}</code>
++              </pre>
++            )}
++            <dl className="grid gap-2 text-xs @lg:grid-cols-2">
++              {[
++                { label: labels.tool, value: toolName },
++                { label: labels.requestId, value: request.request_id },
++                ...(request.technical_facts ?? []),
++              ].map(({ label, value }, index) => (
++                <div key={index} className="min-w-0">
++                  <dt className="text-muted-foreground">{label}</dt>
++                  <dd className="font-mono whitespace-pre-wrap wrap-anywhere">{value}</dd>
++                </div>
++              ))}
++            </dl>
++          </div>
++        </details>
++      </div>
++
++      <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-border bg-muted/20 px-4 py-3 sm:px-5">
++        {decision ? (
++          <div className="space-y-0.5 text-xs">
++            <p className="font-medium">{result}</p>
++            {decision !== "reject" && (
++              <p className="text-muted-foreground">{labels.executionResult}</p>
++            )}
++          </div>
++        ) : (
++          <>
++            <p id={scopeId} className="min-w-48 flex-1 text-xs text-muted-foreground">
++              {sessionOption ? labels.sessionScope : labels.individualScope}
++            </p>
++            <div className="flex flex-wrap gap-2">
++              {actions.map(({ id, label }) => {
++                const option = request.options?.find(
++                  (item) => item.id === id && item.value === id,
++                );
++                if (!option || (id === "allow_session" && !sessionOption)) {
++                  return null;
++                }
++                return (
++                  <Button
++                    key={id}
++                    type="button"
++                    variant={id === "approve" ? "default" : "outline"}
++                    disabled={disabled || pending || !onSubmit}
++                    aria-describedby={id === "allow_session" ? scopeId : undefined}
++                    className={cn(
++                      "min-h-10",
++                      id === "approve" && "bg-emerald-800 text-white hover:bg-emerald-900",
++                      id === "allow_session" && "bg-emerald-50 text-emerald-900 hover:bg-emerald-100 dark:bg-emerald-950 dark:text-emerald-200 dark:hover:bg-emerald-900",
++                    )}
++                    onClick={async () => {
++                      submittedFromCard.current = true;
++                      const submitted = await onSubmit?.(createHumanInputOptionResponse(request, option));
++                      if (submitted === false) {
++                        submittedFromCard.current = false;
++                      }
++                    }}
++                  >
++                    {label}
++                  </Button>
++                );
++              })}
++            </div>
++          </>
++        )}
++      </footer>
++    </article>
++  );
++}
+diff --git a/frontend/src/core/i18n/locales/en-US.ts b/frontend/src/core/i18n/locales/en-US.ts
+index 46868b4..50b202a 100644
+--- a/frontend/src/core/i18n/locales/en-US.ts
++++ b/frontend/src/core/i18n/locales/en-US.ts
+@@ -1192,0 +1193,35 @@ export const enUS: Translations = {
++  toolApproval: {
++    fallbackTitle: "Tool approval",
++    purpose: "Requested purpose",
++    environment: "Environment",
++    workspace: "Working directory",
++    network: "Network access",
++    impact: "Execution impact",
++    unavailable: "Unverified",
++    unknownImpact: "The scope could not be verified. Review the tool details.",
++    details: "View details",
++    before: "Before",
++    after: "After",
++    emptyContent: "(Empty content)",
++    tool: "Tool",
++    requestId: "Request ID",
++    pending: "Approval required",
++    submitting: "Submitting decision",
++    approved: "Approved",
++    rejected: "Rejected",
++    autoApproved: "Automatically approved",
++    once: "Allow once",
++    session: "Allow for this session",
++    reject: "Reject",
++    sessionScope: "Eligible tool requests in this conversation will be approved automatically, including file and network access.",
++    individualScope: "This request requires an individual decision.",
++    approvedOnce: "Allowed this operation",
++    approvedForSession: "Allowed this operation and requested consent for this conversation.",
++    approvedAutomatically: "Approved under the current conversation’s consent.",
++    rejectedResult: "This operation will not run.",
++    executionResult: "The tool message will show the execution result.",
++    sessionActive: "Automatic approval is on for this conversation",
++    revoke: "Revoke automatic approval",
++    revokeError: "Could not revoke automatic approval. Try again.",
++  },
++
+diff --git a/frontend/src/core/i18n/locales/types.ts b/frontend/src/core/i18n/locales/types.ts
+index d20060e..efa6209 100644
+--- a/frontend/src/core/i18n/locales/types.ts
++++ b/frontend/src/core/i18n/locales/types.ts
+@@ -994,0 +995,35 @@ export interface Translations {
++  toolApproval: {
++    fallbackTitle: string;
++    purpose: string;
++    environment: string;
++    workspace: string;
++    network: string;
++    impact: string;
++    unavailable: string;
++    unknownImpact: string;
++    details: string;
++    before: string;
++    after: string;
++    emptyContent: string;
++    tool: string;
++    requestId: string;
++    pending: string;
++    submitting: string;
++    approved: string;
++    rejected: string;
++    autoApproved: string;
++    once: string;
++    session: string;
++    reject: string;
++    sessionScope: string;
++    individualScope: string;
++    approvedOnce: string;
++    approvedForSession: string;
++    approvedAutomatically: string;
++    rejectedResult: string;
++    executionResult: string;
++    sessionActive: string;
++    revoke: string;
++    revokeError: string;
++  };
++
+diff --git a/frontend/src/core/i18n/locales/zh-CN.ts b/frontend/src/core/i18n/locales/zh-CN.ts
+index b514ac1..bec7e84 100644
+--- a/frontend/src/core/i18n/locales/zh-CN.ts
++++ b/frontend/src/core/i18n/locales/zh-CN.ts
+@@ -1116,0 +1117,35 @@ export const zhCN: Translations = {
++  toolApproval: {
++    fallbackTitle: "工具审批",
++    purpose: "请求用途",
++    environment: "执行环境",
++    workspace: "工作目录",
++    network: "网络访问",
++    impact: "执行影响",
++    unavailable: "无法确认",
++    unknownImpact: "操作范围无法确认，请核对工具详情。",
++    details: "查看详情",
++    before: "修改前",
++    after: "修改后",
++    emptyContent: "（空内容）",
++    tool: "工具",
++    requestId: "请求编号",
++    pending: "待审批",
++    submitting: "正在提交审批",
++    approved: "已批准",
++    rejected: "已拒绝",
++    autoApproved: "已自动批准",
++    once: "仅允许本次",
++    session: "本会话内允许",
++    reject: "拒绝",
++    sessionScope: "本会话后续符合条件的工具请求会自动批准，包括文件读写和联网。",
++    individualScope: "此请求仅支持逐次审批。",
++    approvedOnce: "已允许本次操作",
++    approvedForSession: "已允许本次操作，并请求会话授权。",
++    approvedAutomatically: "已按会话授权自动批准。",
++    rejectedResult: "本次操作不会执行。",
++    executionResult: "执行结果会在工具消息中显示。",
++    sessionActive: "本会话自动批准已开启",
++    revoke: "撤销自动批准",
++    revokeError: "撤销失败，请重试。",
++  },
++
+diff --git a/frontend/src/core/messages/human-input.ts b/frontend/src/core/messages/human-input.ts
+index 18e9669..363910f 100644
+--- a/frontend/src/core/messages/human-input.ts
++++ b/frontend/src/core/messages/human-input.ts
+@@ -39,0 +40,21 @@ export type HumanInputFact = {
++export type ExecutionApproval = {
++  environment?: string;
++  workspace?: string;
++  network?: string;
++  impact: string[];
++  detail_label?: string;
++  session_eligible: boolean;
++};
++
++export type ToolApproval = {
++  tool_name: string;
++  facts: HumanInputFact[];
++  impact: string[];
++  impact_title?: string;
++  detail_title?: string;
++  detail_label?: string;
++  session_eligible: boolean;
++  before?: string;
++  after?: string;
++};
++
+@@ -58,0 +80,2 @@ export type HumanInputRequest = {
++  tool_approval?: ToolApproval;
++  execution_approval?: ExecutionApproval;
+@@ -82,0 +106 @@ export type HumanInputThreadState = {
++  latestOpenRequest: HumanInputRequest | null;
+@@ -290,0 +315,35 @@ function parseFacts(value: unknown): HumanInputFact[] | undefined {
++function parseExecutionApproval(value: unknown): ExecutionApproval | undefined {
++  if (!isRecord(value) || Array.isArray(value)) {
++    return undefined;
++  }
++  return {
++    environment: readOptionalString(value.environment),
++    workspace: readOptionalString(value.workspace),
++    network: readOptionalString(value.network),
++    impact: Array.isArray(value.impact)
++      ? value.impact.filter(isNonEmptyString)
++      : [],
++    detail_label: readOptionalString(value.detail_label),
++    session_eligible: value.session_eligible === true,
++  };
++}
++
++function parseToolApproval(value: unknown): ToolApproval | undefined {
++  if (!isRecord(value) || Array.isArray(value) || !isNonEmptyString(value.tool_name)) {
++    return undefined;
++  }
++  return {
++    tool_name: value.tool_name,
++    facts: parseFacts(value.facts) ?? [],
++    impact: Array.isArray(value.impact)
++      ? value.impact.filter(isNonEmptyString)
++      : [],
++    impact_title: readOptionalString(value.impact_title),
++    detail_title: readOptionalString(value.detail_title),
++    detail_label: readOptionalString(value.detail_label),
++    session_eligible: value.session_eligible === true,
++    before: readOptionalString(value.before),
++    after: readOptionalString(value.after),
++  };
++}
++
+@@ -332,0 +392,7 @@ export function parseHumanInputRequest(
++  const isApproval =
++    value.source === "haifa_interaction" &&
++    value.clarification_type === "risk_confirmation" &&
++    value.input_mode === "single_choice";
++  const toolApproval = isApproval ? parseToolApproval(value.tool_approval) : undefined;
++  const executionApproval =
++    isApproval && !toolApproval ? parseExecutionApproval(value.execution_approval) : undefined;
+@@ -360,0 +427,2 @@ export function parseHumanInputRequest(
++    ...(toolApproval ? { tool_approval: toolApproval } : {}),
++    ...(executionApproval ? { execution_approval: executionApproval } : {}),
+@@ -489,0 +558 @@ export function deriveHumanInputThreadState(
++    const requested = response ? seenRequests.get(response.request_id) : undefined;
+@@ -492,2 +561,9 @@ export function deriveHumanInputThreadState(
+-      seenRequests.has(response.request_id) &&
+-      !answeredResponses.has(response.request_id)
++      requested &&
++      !answeredResponses.has(response.request_id) &&
++      (!(requested.tool_approval ?? requested.execution_approval) ||
++        (response.source === requested.source &&
++          response.response_kind === "option" &&
++          response.option_id === response.value &&
++          ["approve", "reject", "allow_session", "auto_approve"].includes(
++            response.option_id,
++          )))
+@@ -515 +591,6 @@ export function deriveHumanInputThreadState(
+-      if (latestUnansweredId !== undefined && request) {
++      if (
++        latestUnansweredId !== undefined &&
++        request &&
++        !request.tool_approval &&
++        !request.execution_approval
++      ) {
+@@ -533 +614,5 @@ export function deriveHumanInputThreadState(
+-  return { answeredResponses, latestOpenRequestId };
++  return {
++    answeredResponses,
++    latestOpenRequestId,
++    latestOpenRequest: seenRequests.get(latestOpenRequestId ?? "") ?? null,
++  };
+diff --git a/frontend/src/core/threads/api.ts b/frontend/src/core/threads/api.ts
+index bc58ac9..3d61f8e 100644
+--- a/frontend/src/core/threads/api.ts
++++ b/frontend/src/core/threads/api.ts
+@@ -5,0 +6,32 @@ import type { AgentThread, ThreadTokenUsageResponse } from "./types";
++export async function readExecutionApprovalSession(
++  threadId: string,
++  signal?: AbortSignal,
++): Promise<boolean> {
++  return executionApprovalSession(threadId, "GET", signal);
++}
++
++export async function revokeExecutionApprovalSession(
++  threadId: string,
++): Promise<boolean> {
++  return executionApprovalSession(threadId, "DELETE");
++}
++
++async function executionApprovalSession(
++  threadId: string,
++  method: "GET" | "DELETE",
++  signal?: AbortSignal,
++): Promise<boolean> {
++  const response = await fetchWithAuth(
++    `${getBackendBaseURL()}/api/threads/${encodeURIComponent(threadId)}/execution-approval-session`,
++    { method, signal, cache: "no-store" },
++  );
++  if (!response.ok) {
++    throw new Error("Could not load execution approval session");
++  }
++  const responseBody = (await response.json()) as { active?: unknown };
++  if (typeof responseBody.active !== "boolean") {
++    throw new Error("Invalid execution approval session");
++  }
++  return responseBody.active;
++}
++

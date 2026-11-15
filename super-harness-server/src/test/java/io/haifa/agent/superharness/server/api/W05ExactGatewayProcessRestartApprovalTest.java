@@ -103,7 +103,7 @@ class W05ExactGatewayProcessRestartApprovalTest {
             assertThat(requestId).isNotBlank();
             assertThat(toolCallId).isNotBlank();
             assertThat(pendingCard.path("artifact").path("human_input").path("options").findValuesAsText("id"))
-                    .containsExactly("approve", "reject");
+                    .containsExactly("approve", "reject", "allow_session");
             assertThat(getJson(base, location).path("status").asText()).isEqualTo("interrupted");
             assertThat(providerRequests).hasSize(1);
 

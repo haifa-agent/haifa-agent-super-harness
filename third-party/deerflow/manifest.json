@@ -99,11 +99,26 @@
           "frontend/.vscode/settings.json",
           "frontend/CLAUDE.md"
         ]
+      },
+      {
+        "id": "0007-unified-tool-approval",
+        "file": "third-party/deerflow/patches/0007-unified-tool-approval.patch",
+        "sha256": "52b3b22278fde892f95189bfef759370696667a60cc8a7784bc83189d9fc6310",
+        "reason": "Render tool-specific approval details in a unified card and support revocable session consent across eligible tool approvals.",
+        "affectedFiles": [
+          "frontend/src/components/workspace/messages/message-list.tsx",
+          "frontend/src/components/workspace/messages/tool-approval-card.tsx",
+          "frontend/src/core/i18n/locales/en-US.ts",
+          "frontend/src/core/i18n/locales/types.ts",
+          "frontend/src/core/i18n/locales/zh-CN.ts",
+          "frontend/src/core/messages/human-input.ts",
+          "frontend/src/core/threads/api.ts"
+        ]
       }
     ],
-    "fileCount": 985,
-    "totalBytes": 21214512,
-    "contentInventorySha256": "59aa372cbd724a1f614897c632b547412ca2c81e176e7099813358b9cbb8c523"
+    "fileCount": 986,
+    "totalBytes": 21240249,
+    "contentInventorySha256": "db0eab7870b62c1da73967e2dff0a467b0ca1713d2ba2c46b1e8c172b0cb3b8b"
   },
   "build": {
     "node": ">=22",
