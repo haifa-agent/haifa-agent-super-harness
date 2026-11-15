@@ -127,7 +127,9 @@ class W05PendingApprovalRecoveryTest {
         assertThat(replayedCard.path("artifact").path("human_input").path("tool_call_id").asText())
                 .isEqualTo(targetToolCall);
         assertThat(replayedCard.path("artifact").path("human_input").path("options").findValuesAsText("id"))
-                .containsExactly("approve", "reject");
+                .containsExactly("approve", "reject", "allow_session");
+        assertThat(replayedCard.path("artifact").path("human_input"))
+                .isEqualTo(card.path("artifact").path("human_input"));
 
         // Reload reads the same authoritative pending card without duplicating it.
         JsonNode state = getJson("/api/threads/reconnect-thread/state");

@@ -126,6 +126,7 @@ public final class HaifaRunBridge implements AutoCloseable {
     private final Set<String> mcpToolNames;
     private final Set<String> skillScriptToolNames;
     private final ApprovalPolicyConfig.Mode approvalMode;
+    private final ExecutionProvider executionProviderKind;
     private final AgentPromptContext agentContext;
     private final RestrictedWorkspaceService workspace;
     private final String ownerId;
@@ -147,6 +148,7 @@ public final class HaifaRunBridge implements AutoCloseable {
         this.mcpToolNames = Set.of();
         this.skillScriptToolNames = Set.of();
         this.approvalMode = ApprovalPolicyConfig.DEFAULT_MODE;
+        this.executionProviderKind = ExecutionProvider.DISABLED;
         this.agentContext = AgentPromptContext.defaults();
         this.workspace = null;
         this.ownerId = AccessOwner.current();
@@ -315,8 +317,22 @@ public final class HaifaRunBridge implements AutoCloseable {
             String ownerId,
             String threadId,
             ApprovalPolicyConfig.Mode approvalMode) {
+        this(binding, tools, foundation, mcpProjection, skillProjection, agentContext, delegation, childRunCapacity,
+                isPlanMode, executionExecutorFactory, executionProvider, skillScript, parentWallTimeMillisForTests,
+                workspace, ownerId, threadId, approvalMode, false);
+    }
+
+    public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
+            boolean isPlanMode, Supplier<? extends ExecutorService> executionExecutorFactory,
+            ExecutionProviderConfig executionProvider, SkillScriptToolConfig skillScript,
+            Long parentWallTimeMillisForTests, RestrictedWorkspaceService workspace, String ownerId, String threadId,
+            ApprovalPolicyConfig.Mode approvalMode, boolean requireWebReadApproval) {
         java.util.Objects.requireNonNull(childRunCapacity, "childRunCapacity");
         this.approvalMode = approvalMode == null ? ApprovalPolicyConfig.DEFAULT_MODE : approvalMode;
+        this.executionProviderKind = executionProvider == null ? ExecutionProvider.DISABLED : executionProvider.provider();
         this.agentContext = java.util.Objects.requireNonNull(agentContext, "agent context must not be null");
         this.isPlanMode = isPlanMode;
         List<McpServerSpec> mcpSpecs = mcpProjection.specs();
@@ -482,11 +498,12 @@ public final class HaifaRunBridge implements AutoCloseable {
                         PlanAuthoringResources.toolDescription(),
                         PlanAuthoringResources.systemPrompt()));
             }
-            // Human B1 decision: only these production read-only network tools skip the
-            // standard network ASK. All other network/MCP and writing tools retain their policy.
+            // The default B1 exemptions apply unless this ASK profile requests explicit review of web reads.
+            boolean askWebReads = this.approvalMode == ApprovalPolicyConfig.Mode.ASK && requireWebReadApproval;
             Set<ToolName> autoApproveReadOnlyNetwork = new LinkedHashSet<>(tools.stream()
-                    .filter(tool -> tool instanceof ProductionWebSearchTool
-                            || tool instanceof ProductionWebFetchTool || tool instanceof ProductionImageSearchTool)
+                    .filter(tool -> tool instanceof ProductionImageSearchTool
+                            || (!askWebReads && (tool instanceof ProductionWebSearchTool
+                                    || tool instanceof ProductionWebFetchTool)))
                     .map(tool -> tool.spec().name())
                     .collect(java.util.stream.Collectors.toSet()));
             // Host-declared read_only MCP servers lower their tools to the SDK read-only network
@@ -894,6 +911,10 @@ public final class HaifaRunBridge implements AutoCloseable {
 
     public List<ToolCallView> toolCalls(AgentRunId runId) {
         return agent.runs().toolCalls(runId);
+    }
+
+    public ExecutionProvider executionProviderKind() {
+        return executionProviderKind;
     }
 
     public InteractionResponseReceipt respond(InteractionResponseSubmission submission) {

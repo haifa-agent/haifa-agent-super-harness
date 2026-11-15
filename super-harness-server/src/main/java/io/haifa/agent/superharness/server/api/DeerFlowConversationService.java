@@ -796,6 +796,52 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         return thread;
     }
 
+    Map<String, Object> executionApprovalSession(String threadId, boolean revoke) throws ConversationException {
+        ThreadRecord thread = requireOwnedThread(threadId);
+        thread.lock.lock();
+        try {
+            if (revoke) thread.executionApprovalConsent = null;
+            return Map.of("active", hasExecutionApprovalConsent(thread));
+        } finally {
+            thread.lock.unlock();
+        }
+    }
+
+    private boolean hasExecutionApprovalConsent(ThreadRecord thread) {
+        var consent = thread.executionApprovalConsent;
+        if (consent == null) return false;
+        if (!consent.sessionId().equals(thread.persistedSessionId)) {
+            thread.executionApprovalConsent = null;
+            return false;
+        }
+        if (consent.active()) return true;
+        var submission = consent.submission();
+        var run = runs.get(submission.runId().value());
+        if (run != null && thread.threadId.equals(run.threadId)) {
+            try {
+                // The SDK returns the current receipt for an identical submission without admitting another execution.
+                var receipt = run.bridge.respond(submission);
+                if (receipt.status() == InteractionResponseReceiptStatus.DUPLICATE && matchesReceipt(submission, receipt)) {
+                    if (receipt.interactionState() == InteractionState.APPLIED) {
+                        thread.executionApprovalConsent = new ExecutionApprovalConsent(consent.sessionId(), null, true);
+                        return true;
+                    }
+                    if (receipt.interactionState() == InteractionState.RESPONDED) return false;
+                }
+            } catch (RuntimeException unavailable) {
+                // An unavailable exact receipt cannot authorize future Tool Calls.
+            }
+        }
+        thread.executionApprovalConsent = null;
+        return false;
+    }
+
+    private static boolean matchesReceipt(InteractionResponseSubmission submission, InteractionResponseReceipt receipt) {
+        return submission.responseId().equals(receipt.responseId())
+                && submission.requestId().equals(receipt.requestId())
+                && submission.runId().equals(receipt.runId());
+    }
+
     Map<String, Object> getThread(String threadId) throws ConversationException {
         ThreadRecord record = threads.get(threadId);
         if (record == null) {
@@ -2036,10 +2082,11 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                             || !pending.orElseThrow().requestId().value().equals(response.requestId())) {
                         throw ConversationException.conflict("Thread has no matching Interaction");
                     }
+                    PersistentThreadCatalog.InteractionDisplay approvalDisplay;
                     try {
                         // A legacy/restarted Run may have an SDK pending view but no saved
                         // presentation yet. Never accept its side effect before the card is durable.
-                        ensureSavedPendingDisplay(thread, run, pending.orElseThrow());
+                        approvalDisplay = ensureSavedPendingDisplay(thread, run, pending.orElseThrow());
                     } catch (IOException | IllegalArgumentException unavailablePresentation) {
                         INTERACTION_LOG.log(System.Logger.Level.WARNING,
                                 "Interaction card could not be saved: "
@@ -2048,10 +2095,30 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                         throw ConversationException.unavailable(
                                 "Interaction card could not be saved; approval was not submitted");
                     }
+                    boolean allowSession = ExecutionApprovalCard.ALLOW_SESSION.equals(response.optionId());
+                    boolean autoApprove = ExecutionApprovalCard.AUTO_APPROVE.equals(response.optionId());
+                    var sdkResponse = response;
+                    if (allowSession || autoApprove) {
+                        var view = pending.orElseThrow();
+                        var bridge = run.bridge;
+                        boolean eligible = approvalDisplay.toolApproval() != null
+                                && approvalDisplay.toolApproval().path("session_eligible").asBoolean(false)
+                                && ToolApprovalCard.targetCall(view, bridge.toolCalls(run.runId))
+                                        .filter(call -> ToolApprovalCard.sessionEligible(
+                                                view, call, bridge.executionProviderKind()))
+                                        .isPresent();
+                        if (!eligible || !view.sessionId().equals(thread.persistedSessionId)
+                                || (autoApprove && !hasExecutionApprovalConsent(thread))
+                                || !response.optionId().equals(response.value())) {
+                            throw ConversationException.conflict("Session approval is unavailable for this request");
+                        }
+                        sdkResponse = new DeerFlowInteractionHttpProjection.FrozenResponse(
+                                response.source(), response.requestId(), response.responseKind(), "approve", "approve");
+                    }
                     InteractionResponseSubmission submission;
                     try {
                         submission = DeerFlowInteractionHttpProjection.submission(
-                                pending.orElseThrow(), response, Instant.now());
+                                pending.orElseThrow(), sdkResponse, Instant.now());
                     } catch (IllegalArgumentException invalid) {
                         throw ConversationException.conflict("Thread has no matching Interaction");
                     }
@@ -2079,6 +2146,13 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                     }
                     if (receipt.status() == InteractionResponseReceiptStatus.DUPLICATE) {
                         throw ConversationException.conflict("Interaction response already accepted");
+                    }
+                    if (allowSession && matchesReceipt(submission, receipt)) {
+                        boolean applied = receipt.interactionState() == InteractionState.APPLIED;
+                        if (applied || receipt.interactionState() == InteractionState.RESPONDED) {
+                            thread.executionApprovalConsent = new ExecutionApprovalConsent(
+                                    thread.persistedSessionId, applied ? null : submission, applied);
+                        }
                     }
                     Map<String, Object> responseMessage =
                             DeerFlowInteractionHttpProjection.responseMessage(
@@ -2405,7 +2479,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         return AccessOwner.call(thread.ownerId, () -> new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt),
                 foundation, mcpProjection, skillProjection, agentPrompt, delegation, childRunCapacity, isPlanMode,
                 executionExecutorFactory, executionProviderConfig(thread), skillScriptConfig(thread, skillProjection),
-                parentWallTimeMillisForTests, null, thread.ownerId, thread.threadId, approvalMode()));
+                parentWallTimeMillisForTests, null, thread.ownerId, thread.threadId, approvalMode(),
+                ApprovalPolicyConfig.requireWebReadApproval(environment)));
     }
 
     /** Test-only: the exact bridge currently attached to a Thread, or null when none is. */
@@ -2718,7 +2793,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 McpRunTools.Projection.empty(), null, agentPrompt,
                 io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled(),
                 childRunCapacity, false, executionExecutorFactory, executionProviderConfig(thread), null,
-                parentWallTimeMillisForTests, null, thread.ownerId, thread.threadId, approvalMode()));
+                parentWallTimeMillisForTests, null, thread.ownerId, thread.threadId, approvalMode(),
+                ApprovalPolicyConfig.requireWebReadApproval(environment)));
     }
 
     static ScheduledRunStatus scheduledTerminal(AgentRunStatus status) {
@@ -5268,6 +5344,12 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     }
 
     private Map<String, Object> requestMessage(PersistentThreadCatalog.InteractionDisplay display) {
+        JsonNode toolApproval = display.toolApproval();
+        if (toolApproval == null) toolApproval = ToolApprovalCard.legacy(display.context());
+        if (toolApproval != null) {
+            return DeerFlowInteractionHttpProjection.structuredRequestMessage(
+                    display.runId(), display.requestId(), display.toolCallId(), display.options(), toolApproval);
+        }
         return DeerFlowInteractionHttpProjection.requestMessage(
                 display.runId(), display.requestId(), display.toolCallId(), display.title(),
                 display.question(), display.context(), display.options());
@@ -5295,12 +5377,18 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 .mapToLong(PersistentThreadCatalog.InteractionDisplay::requestSequence)
                 .max()
                 .orElse(0);
+        JsonNode toolApproval = ToolApprovalCard.targetCall(view, run.bridge.toolCalls(run.runId))
+                .map(call -> ToolApprovalCard.build(view, call, run.bridge.executionProviderKind(),
+                        io.haifa.agent.superharness.server.tool.web.WebToolConfig.fromEnvironment(environment)))
+                .orElse(null);
         var display = new PersistentThreadCatalog.InteractionDisplay(
                 run.runId.value(), requestId,
                 Math.max(Math.max(thread.nextMessageSequence, run.humanSequence + 1), latest + 1),
-                view.createdAt(), view.target().reference(), view.title(),
-                view.safePrompt(), view.target().safeSummary(),
-                view.allowedActions().stream().map(action -> action.value()).toList(), null);
+                view.createdAt(), view.target().reference(),
+                toolApproval == null ? view.title() : toolApproval.path("title").asText(),
+                toolApproval == null ? view.safePrompt() : toolApproval.path("purpose").asText(),
+                toolApproval == null ? view.target().safeSummary() : "",
+                view.allowedActions().stream().map(action -> action.value()).toList(), null, toolApproval);
         List<PersistentThreadCatalog.InteractionDisplay> updated =
                 new ArrayList<>(thread.interactionDisplays);
         updated.add(display);
@@ -6236,6 +6324,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         }
     }
 
+    private record ExecutionApprovalConsent(
+            AgentSessionId sessionId, InteractionResponseSubmission submission, boolean active) {}
+
     static final class ThreadRecord {
         private final String threadId;
         private final String ownerId;
@@ -6245,6 +6336,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         private volatile Instant updatedAt;
         private volatile HaifaRunBridge.SessionState session;
         private volatile AgentSessionId persistedSessionId;
+        // Product consent is in-memory and scoped to this owner's current SDK Session.
+        private ExecutionApprovalConsent executionApprovalConsent;
         private volatile HaifaRunBridge bridge;
         private volatile String modelBindingIdentity;
         private volatile String activeRunId;

@@ -215,12 +215,33 @@ final class DeerFlowInteractionHttpProjection {
             String runId, String requestId, String toolCallId, String title, String question,
             String context, List<String> actions, String purpose, String content, String contentType,
             String riskLevel, List<Map<String, String>> envFacts, List<Map<String, String>> techFacts) {
+        return requestMessage(runId, requestId, toolCallId, title, question, context, actions, purpose,
+                content, contentType, riskLevel, envFacts, techFacts, null);
+    }
+
+    static Map<String, Object> structuredRequestMessage(
+            String runId, String requestId, String toolCallId, List<String> actions, JsonNode toolApproval) {
+        String purpose = toolApproval.path("purpose").asText();
+        return requestMessage(runId, requestId, toolCallId, toolApproval.path("title").asText(),
+                purpose, "", actions, purpose, toolApproval.path("content").asText(),
+                toolApproval.path("content_type").asText(), null, List.of(), List.of(), toolApproval);
+    }
+
+    private static Map<String, Object> requestMessage(
+            String runId, String requestId, String toolCallId, String title, String question,
+            String context, List<String> actions, String purpose, String content, String contentType,
+            String riskLevel, List<Map<String, String>> envFacts, List<Map<String, String>> techFacts,
+            JsonNode toolApproval) {
         List<Map<String, Object>> options = new ArrayList<>();
         for (String value : actions) {
             options.add(Map.of(
                     "id", value,
                     "label", label(value),
                     "value", value));
+        }
+        if (toolApproval != null && toolApproval.path("session_eligible").asBoolean()) {
+            options.add(Map.of("id", ExecutionApprovalCard.ALLOW_SESSION, "label", "本会话内允许",
+                    "value", ExecutionApprovalCard.ALLOW_SESSION));
         }
 
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -252,6 +273,24 @@ final class DeerFlowInteractionHttpProjection {
         }
         if (techFacts != null && !techFacts.isEmpty()) {
             payload.put("technical_facts", techFacts);
+        }
+        if (toolApproval != null) {
+            var details = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+            if (toolApproval.hasNonNull("tool_name")) {
+                for (String field : List.of("tool_name", "facts", "impact", "impact_title", "detail_title",
+                        "detail_label", "session_eligible", "before", "after")) {
+                    if (toolApproval.hasNonNull(field)) details.set(field, toolApproval.get(field));
+                }
+                payload.put("tool_approval", details);
+            } else {
+                for (String field : List.of("environment", "workspace", "network", "impact", "detail_label", "session_eligible")) {
+                    details.set(field, toolApproval.path(field));
+                }
+                payload.put("execution_approval", details);
+            }
+            if (toolApproval.path("technical_facts").isArray()) {
+                payload.put("technical_facts", toolApproval.path("technical_facts"));
+            }
         }
 
         String interactionMessageId = "interaction-" + requestId;

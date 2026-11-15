@@ -119,7 +119,7 @@ class DeerFlowInteractionHttpApiTest {
         assertThat(request.path("source").asText()).isEqualTo("haifa_interaction");
         assertThat(request.path("input_mode").asText()).isEqualTo("single_choice");
         assertThat(request.path("options").findValuesAsText("id"))
-                .containsExactly("approve", "reject");
+                .containsExactly("approve", "reject", "allow_session");
         assertThat(requested.body()).contains("event: end\ndata: null\n\n");
         assertThat(toolInvocations).hasValue(0);
         assertThat(getJson(location).path("status").asText()).isEqualTo("interrupted");

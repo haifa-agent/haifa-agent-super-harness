@@ -222,6 +222,9 @@ Gateway 在启动时读取进程变量 `HAIFA_SUPER_HARNESS_APPROVAL_MODE`，决
 `auto` 是信任扩大，只适用于可信本地主机，不得用作验收或演示证据，也不得据此放宽任何 Oracle。逐项说明与开关清单见
 [开发手册](docs/development-manual.md)。
 
+`ask` 下设置 `HAIFA_SUPER_HARNESS_WEB_READ_APPROVAL=ask`，可让新建 Run 的 `web_search` 和
+`web_fetch` 进入标准网络审批。默认沿用这两个只读网络工具的免逐次审批策略。
+
 ## 定时任务调度（`HAIFA_SUPER_HARNESS_SCHEDULER_ENABLED`）
 
 Gateway 在启动时读取进程变量 `HAIFA_SUPER_HARNESS_SCHEDULER_ENABLED`：缺省（或 `0`/`false`/`no`）时调度器保持
