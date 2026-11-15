@@ -11,13 +11,16 @@ import io.haifa.agent.superharness.server.config.LocalServerConfiguration;
 import io.haifa.agent.superharness.server.run.HaifaPublicInteractionSpikeTest;
 import io.haifa.agent.superharness.server.run.HaifaRunBridge;
 import io.haifa.agent.superharness.server.testsupport.ControlledModel;
+import io.haifa.agent.superharness.server.testsupport.GatewayFixture;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -47,6 +50,7 @@ class ChatHistoryNarrationHttpTest extends AbstractDeerFlowThreadRunApiTest {
         createThread("narrated");
         HttpResponse<String> stream = client.send(runRequest("narrated", "old question"), HttpResponse.BodyHandlers.ofString());
         String location = stream.headers().firstValue("content-location").orElseThrow();
+        List<JsonNode> waitingMessages = new ArrayList<>();
         for (int round = 0; round < 2; round++) {
             String requestId = "";
             for (String line : stream.body().split("\n")) {
@@ -56,6 +60,18 @@ class ChatHistoryNarrationHttpTest extends AbstractDeerFlowThreadRunApiTest {
                 if (!id.isBlank()) requestId = id;
             }
             assertThat(requestId).as(stream.body()).isNotBlank();
+            if (round == 1) {
+                assertThat(getJson(location).path("diagnostics").path("sdk_status").asText())
+                        .isEqualTo("WAITING_APPROVAL");
+                JsonNode waitingPage = getJson("/api/threads/narrated/messages/page?limit=200").path("data");
+                JsonNode waitingState = getJson("/api/threads/narrated/state").path("values").path("messages");
+                var evidence = GatewayFixture.evidenceDirectory();
+                Files.writeString(evidence.resolve("waiting-page.json"), waitingPage.toPrettyString());
+                Files.writeString(evidence.resolve("waiting-state.json"), waitingState.toPrettyString());
+                Files.writeString(evidence.resolve("waiting-second-approval.sse"), stream.body());
+                waitingState.forEach(waitingMessages::add);
+                assertWaitingOrder(waitingPage, waitingMessages, requestId);
+            }
             stream = postJson("/api/threads/narrated/runs/stream", """
                     {"assistant_id":"lead_agent","input":{"messages":[{"type":"human","content":"approve",
                     "additional_kwargs":{"hide_from_ui":true,"human_input_response":{"version":1,
@@ -89,6 +105,14 @@ class ChatHistoryNarrationHttpTest extends AbstractDeerFlowThreadRunApiTest {
             contents.add(row.path("content"));
         }
         assertThat(state).containsExactlyElementsOf(contents);
+        // The optimistic user ID is replaced by the settled wire ID.
+        assertThat(messageSequence(contents.getFirst())).isEqualTo(messageSequence(waitingMessages.getFirst()));
+        assertThat(waitingMessages.subList(1, waitingMessages.size())).allSatisfy(waiting -> {
+            JsonNode settled = contents.stream()
+                    .filter(message -> message.path("id").equals(waiting.path("id")))
+                    .findFirst().orElseThrow();
+            assertThat(messageSequence(settled)).isEqualTo(messageSequence(waiting));
+        });
         for (int round = 1; round <= 2; round++) {
             final String text = "Narration " + round;
             List<JsonNode> narration = contents.stream().filter(message -> text.equals(message.path("content").asText())).toList();
@@ -141,5 +165,30 @@ class ChatHistoryNarrationHttpTest extends AbstractDeerFlowThreadRunApiTest {
             if (message.path("content").asText().startsWith("Narration "))
                 assertThat(refreshed.indexOf(message)).isLessThan(refreshed.indexOf(newestHuman));
         }
+    }
+
+    private static void assertWaitingOrder(
+            JsonNode waitingPage, List<JsonNode> messages, String pendingRequestId) {
+        assertThat(messages).extracting(message -> message.path("type").asText())
+                .containsExactly("human", "ai", "ai", "tool", "human", "tool", "ai", "ai", "tool");
+        assertThat(messages).extracting(ChatHistoryNarrationHttpTest::messageSequence)
+                .doesNotContain(0L).doesNotHaveDuplicates().isSorted();
+        assertThat(messages.get(1).path("content").asText()).isEqualTo("Narration 1");
+        assertThat(messages.get(6).path("content").asText()).isEqualTo("Narration 2");
+        assertThat(messages.get(4).path("additional_kwargs").path("hide_from_ui").asBoolean()).isTrue();
+        for (int requestIndex : List.of(2, 7)) {
+            assertThat(messages.get(requestIndex + 1).path("artifact").path("human_input").path("tool_call_id"))
+                    .isEqualTo(messages.get(requestIndex).path("tool_calls").get(0).path("id"));
+        }
+        assertThat(messages.get(8).path("artifact").path("human_input").path("request_id").asText())
+                .isEqualTo(pendingRequestId);
+        assertThat(StreamSupport.stream(waitingPage.spliterator(), false).map(row -> row.path("content")).toList())
+                .containsExactly(
+                messages.get(0), messages.get(1), messages.get(3),
+                messages.get(4), messages.get(6), messages.get(8));
+    }
+
+    private static long messageSequence(JsonNode message) {
+        return message.path("additional_kwargs").path("deerflow_seq").asLong();
     }
 }

@@ -1187,11 +1187,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     }
 
     /**
-     * SDK sequences include Tool turns; the saved card counter does not. Give the frozen
-     * feed one order by inserting each card after its Run's human turn, reserving both
-     * request and hidden-response slots. Later SDK turns receive the same two-slot offset
-     * even while a reply is pending or a stale card is hidden. This also repairs legacy
-     * saved card positions without changing Runtime state or the persisted catalog.
+     * Project the frozen feed from SDK model rounds. The persisted card counter omits
+     * Tool turns, so anchor a card by its Tool call and reserve both request and hidden
+     * response slots even while a reply is pending or a stale card is hidden.
      */
     private List<Map<String, Object>> paginatedMessageRows(
             ThreadRecord thread, List<ConversationTurn> turns, Map<Long, Integer> ordinals) {
@@ -1265,6 +1263,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         final Map<Object, Long> positions = new HashMap<>();
         String supportRun;
         List<SupportRound> supportRounds;
+        Set<String> suppressedCalls = Set.of();
+        boolean supportTerminal;
         FeedPrefix prefix;
         boolean prefixSafe = true;
 
@@ -1315,7 +1315,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         runs.values().stream()
                 .filter(run -> run.threadId.equals(thread.threadId))
                 .forEach(run -> cached.put(run.runId.value(), run));
-        Set<String> supportProjectedRuns = new HashSet<>();
+        Set<String> projectedRequests = new HashSet<>();
         Set<String> supportProjectedMessages = new HashSet<>();
         Map<String, RunUsageFacts> usageFactsByRun = new HashMap<>();
         Map<String, DisplayTurn> visibleAssistantTexts = new HashMap<>();
@@ -1363,30 +1363,22 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             if (turn.role() == io.haifa.agent.core.message.MessageRole.USER
                     && turn.runId().isPresent()) {
                 AgentRunId runId = turn.runId().orElseThrow();
-                // The SDK turn scan keeps only User/Assistant turns: native Tool messages and pure
-                // Tool assistants produce no durable ConversationTurn at all, so a settled Run's
-                // Tool round vanishes from the page feed even when a final assistant answer exists.
-                // Project all settled Tool rounds, including narration and failed Runs.
-                // Terminal eligibility is remembered once per Run, but a later same-Run Steer
-                // USER turn must still replay only its own Tool rounds, so this is never a skip.
-                // Native public message IDs own the identity; the visibleAssistantTexts /
-                // supportProjectedMessages dedup keeps ordinary Tool-assistant text on its round.
-                boolean terminal = supportProjectedRuns.contains(runId.value())
-                        || isTerminalRun(thread, runId, cached.get(runId.value()));
-                if (!terminal) output.prefixSafe = false;
-                if (terminal && !prepareSupportRounds(thread, runId, cached.get(runId.value()), output).isEmpty()) {
-                    supportProjectedRuns.add(runId.value());
+                RunRecord run = cached.get(runId.value());
+                prepareSupportRounds(thread, runId, run, output);
+                if (!output.supportTerminal) output.prefixSafe = false;
+                if (!output.supportRounds.isEmpty()) {
                     RunUsageFacts supportUsage = output.positionsOnly
                             ? RunUsageFacts.EMPTY
-                            : usageFactsFor(thread, runId, cached.get(runId.value()), usageFactsByRun);
+                            : usageFactsFor(thread, runId, run, usageFactsByRun);
                     supportSlots = appendRunSupportRows(
-                            thread, runId, cached.get(runId.value()), sequence + 1, turn.createdAt(), output,
-                            visibleAssistantTexts, ordinals, supportProjectedMessages,
+                            thread, runId, sequence + 1, turn.createdAt(), output,
+                            visibleAssistantTexts, ordinals, supportProjectedMessages, projectedRequests,
                             turn.sequence(), runSteerCeilings.get(turn.sequence()), supportUsage);
                 }
             }
             List<PersistentThreadCatalog.InteractionDisplay> cards = anchored.getOrDefault(turn.sequence(), List.of())
-                    .stream().filter(display -> !supportProjectedRuns.contains(display.runId())).toList();
+                    .stream().filter(display -> !output.suppressedCalls.contains(display.toolCallId()))
+                    .filter(display -> !projectedRequests.contains(display.requestId())).toList();
             offset += supportSlots + appendInteractionRows(thread, cards, sequence + supportSlots, output);
         }
         Set<String> durableHumanRuns = turns.stream()
@@ -1401,10 +1393,17 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             long baseSequence = Math.max(run.humanSequence, latest + 1);
             long sequence = baseSequence + offset;
             output.add(run.runId.value(), sequence, run.createdAt, pendingHumanMessage(run));
+            prepareSupportRounds(thread, run.runId, run, output);
+            output.prefixSafe = false;
+            long supportSlots = appendRunSupportRows(thread, run.runId, sequence + 1, run.createdAt, output,
+                    Map.of(), ordinals, supportProjectedMessages, projectedRequests,
+                    Long.MIN_VALUE, null, RunUsageFacts.EMPTY);
             List<PersistentThreadCatalog.InteractionDisplay> cards = displays.stream()
                     .filter(display -> display.runId().equals(run.runId.value())
-                            && !anchoredRequests.contains(display.requestId())).toList();
-            offset += appendInteractionRows(thread, cards, sequence, output);
+                            && !anchoredRequests.contains(display.requestId())
+                            && !output.suppressedCalls.contains(display.toolCallId())
+                            && !projectedRequests.contains(display.requestId())).toList();
+            offset += supportSlots + appendInteractionRows(thread, cards, sequence + supportSlots, output);
             latest = baseSequence;
         }
     }
@@ -1472,7 +1471,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     }
 
     /**
-     * Page rows for settled Tool rounds, windowed per USER turn.
+     * Tool round positions, windowed per USER turn.
      * Mirrors the history overlay's one-AI-message-per-model-round projection (that round's whole
      * Tool call list, then each call's result), retaining each Interaction before that round's
      * results and reserving both of its display slots even when hidden. Rounds are placed by the
@@ -1480,20 +1479,29 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
      * driving USER turn's native sequence and strictly before the next same-Run Steer USER turn's
      * native sequence when one exists. The ordinary turn loop does not emit these rows again.
      */
-    private List<SupportRound> prepareSupportRounds(ThreadRecord thread, AgentRunId runId,
+    private void prepareSupportRounds(ThreadRecord thread, AgentRunId runId,
             RunRecord cached, FeedRows output) {
         if (!runId.value().equals(output.supportRun)) {
             output.supportRun = runId.value();
             HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
-            output.supportRounds = supportRounds(bridge, runId);
+            output.supportTerminal = isKnownTerminal(() -> bridge.findRun(runId));
+            List<ToolCallView> calls = bridge.toolCalls(runId);
+            List<ToolCallView> visible = DeerFlowToolTranscriptProjection.upToClarificationBoundary(calls);
+            output.suppressedCalls = suppressedToolCallIds(calls, visible);
+            output.supportRounds = supportRounds(bridge, runId, visible, output.supportTerminal);
         }
-        return output.supportRounds;
+    }
+
+    private static Set<String> suppressedToolCallIds(List<ToolCallView> calls, List<ToolCallView> visible) {
+        if (calls.size() == visible.size()) return Set.of();
+        return calls.subList(visible.size(), calls.size()).stream().map(call -> call.id().value())
+                .collect(java.util.stream.Collectors.toSet());
     }
 
     private record SupportRound(String messageId, long sequence, Instant createdAt, List<ToolCallView> calls) {}
 
-    private List<SupportRound> supportRounds(HaifaRunBridge bridge, AgentRunId runId) {
-        List<ToolCallView> calls = DeerFlowToolTranscriptProjection.upToClarificationBoundary(bridge.toolCalls(runId));
+    private List<SupportRound> supportRounds(
+            HaifaRunBridge bridge, AgentRunId runId, List<ToolCallView> calls, boolean terminal) {
         if (calls.isEmpty()) return List.of();
         Map<String, ToolCallView> visible = new HashMap<>();
         calls.forEach(call -> visible.put(call.id().value(), call));
@@ -1517,20 +1525,23 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             requireAnotherScanPage(++pages);
             cursor = page.nextCursor();
         }
-        if (!placed.containsAll(visible.keySet())) {
+        // A live call can be visible while its SDK assistant message is still being written.
+        // The existing live overlay carries it until a later read can place it.
+        if (terminal && !placed.containsAll(visible.keySet())) {
             throw new IllegalStateException("Tool round native message position is unavailable");
         }
         return rounds;
     }
 
     private long appendRunSupportRows(
-            ThreadRecord thread, AgentRunId runId, RunRecord cached, long startSequence,
+            ThreadRecord thread, AgentRunId runId, long startSequence,
             Instant createdAt, FeedRows output, Map<String, DisplayTurn> visibleAssistantTexts,
-            Map<Long, Integer> ordinals, Set<String> supportProjectedMessages,
+            Map<Long, Integer> ordinals, Set<String> supportProjectedMessages, Set<String> projectedRequests,
             long afterNativeSequence, Long beforeNativeSequence, RunUsageFacts usageFacts) {
         // A Steer can reference the same Run several times. Read its public message
         // pages once, and release the prior Run's plan as the feed advances.
-        List<SupportRound> rounds = prepareSupportRounds(thread, runId, cached, output);
+        List<SupportRound> rounds = output.supportRounds;
+        if (rounds.isEmpty()) return 0;
         Map<String, Integer> roundByCall = new HashMap<>();
         for (int index = 0; index < rounds.size(); index++) {
             for (ToolCallView call : rounds.get(index).calls()) roundByCall.put(call.id().value(), index);
@@ -1540,8 +1551,12 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         try {
             for (var display : thread.interactionDisplays) {
                 if (display.runId().equals(runId.value())) {
-                    cardsByRound.computeIfAbsent(roundByCall.getOrDefault(display.toolCallId(), 0),
-                            ignored -> new ArrayList<>()).add(display);
+                    if (output.suppressedCalls.contains(display.toolCallId())) continue;
+                    Integer round = roundByCall.get(display.toolCallId());
+                    if (round == null && !output.supportTerminal) continue;
+                    cardsByRound.computeIfAbsent(round == null ? 0 : round, ignored -> new ArrayList<>())
+                            .add(display);
+                    projectedRequests.add(display.requestId());
                 }
             }
         } finally {
@@ -1564,16 +1579,24 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             Map<String, Object> requestUsage = narration == null
                     ? usageFacts.usageByToolCallId().get(round.calls().getFirst().id().value())
                     : null;
-            output.add(runId.value(), startSequence + slot++, createdAt,
-                    DeerFlowToolTranscriptProjection.requestMessageId(round.calls().getFirst()),
-                    () -> DeerFlowToolTranscriptProjection.requestMessage(round.calls(), requestUsage));
+            String requestId = DeerFlowToolTranscriptProjection.requestMessageId(round.calls().getFirst());
+            long requestSequence = startSequence + slot++;
+            // The state/stream overlay carries Tool rows of an active Run. Reserve the
+            // same positions in the page without changing when it materializes Tool rows.
+            if (output.supportTerminal || output.positionsOnly) {
+                output.add(runId.value(), requestSequence, createdAt, requestId,
+                        () -> DeerFlowToolTranscriptProjection.requestMessage(round.calls(), requestUsage));
+            }
             slot += appendInteractionRows(thread, cardsByRound.getOrDefault(index, List.of()),
                     startSequence + slot - 1, output);
             for (ToolCallView call : round.calls()) {
                 Optional<String> id = DeerFlowToolTranscriptProjection.resultMessageId(call);
                 if (id.isPresent()) {
-                    output.add(runId.value(), startSequence + slot++, createdAt, id.orElseThrow(),
-                            () -> DeerFlowToolTranscriptProjection.resultMessage(call).orElseThrow());
+                    long resultSequence = startSequence + slot++;
+                    if (output.supportTerminal || output.positionsOnly) {
+                        output.add(runId.value(), resultSequence, createdAt, id.orElseThrow(),
+                                () -> DeerFlowToolTranscriptProjection.resultMessage(call).orElseThrow());
+                    }
                 }
             }
         }
@@ -5032,25 +5055,25 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             projectMessageRows(thread, turns.stream().map(DisplayTurn::position).toList(), ordinals, output);
             positions = output.positions;
         }
-        for (Map<String, Object> message : messages) {
-            Long sequence = positions.get(message.get("id"));
-            if (sequence != null) stampMessagePosition(message, sequence);
-        }
         applyLatestRunFailure(thread, messages);
-        // Pending Tool requests have no page row yet. Keep the active Run's established
-        // request/card order together instead of moving its unpositioned rows to the tail.
-        Map<String, Long> activeAnchors = new HashMap<>();
+        // Transient support messages keep their overlay order after the preceding
+        // positioned message of that Run, until the SDK provides their own position.
+        Map<Object, Long> lastPositionByRun = new HashMap<>();
+        Map<Object, Long> transientAnchors = new HashMap<>();
         for (Map<String, Object> message : messages) {
-            if (!(message.get("run_id") instanceof String runId)
-                    || !"human".equals(message.get("type")) || activeAnchors.containsKey(runId)) continue;
-            RunRecord run = cached.get(runId);
-            if (run != null && !run.bridge.snapshot(run.runId).status().isTerminal()) {
-                activeAnchors.put(runId, positions.getOrDefault(message.get("id"), Long.MAX_VALUE));
+            Object id = message.get("id");
+            Object runId = message.get("run_id");
+            Long sequence = positions.get(id);
+            if (sequence == null) {
+                transientAnchors.put(id, lastPositionByRun.getOrDefault(runId, Long.MAX_VALUE));
+            } else {
+                stampMessagePosition(message, sequence);
+                lastPositionByRun.put(runId, sequence);
             }
         }
-        messages.sort(java.util.Comparator.comparingLong(message ->
-                activeAnchors.getOrDefault(message.get("run_id"),
-                        positions.getOrDefault(message.get("id"), Long.MAX_VALUE))));
+        messages.sort(java.util.Comparator.<Map<String, Object>>comparingLong(message ->
+                positions.getOrDefault(message.get("id"), transientAnchors.getOrDefault(message.get("id"), Long.MAX_VALUE)))
+                .thenComparing(message -> !positions.containsKey(message.get("id"))));
         return messages;
     }
 
@@ -5062,11 +5085,11 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             Set<String> visibleAssistantMessageIds,
             RunUsageFacts usageFacts) {
         HaifaRunBridge bridge = cached == null ? bridgeForPersistedThread(thread) : cached.bridge;
-        List<ToolCallView> calls = DeerFlowToolTranscriptProjection.upToClarificationBoundary(
-                bridge.toolCalls(runId));
-        List<List<ToolCallView>> rounds = toolCallRounds(bridge, runId, calls);
+        List<ToolCallView> calls = bridge.toolCalls(runId);
+        List<ToolCallView> visible = DeerFlowToolTranscriptProjection.upToClarificationBoundary(calls);
+        List<List<ToolCallView>> rounds = toolCallRounds(bridge, runId, visible);
         Map<Integer, List<Map<String, Object>>> interactions =
-                interactionMessagesByRound(thread, runId.value(), cached, rounds);
+                interactionMessagesByRound(thread, runId.value(), cached, rounds, suppressedToolCallIds(calls, visible));
         // Frozen DeerFlow stores one model round at a time: one assistant message carrying that
         // round's whole Tool call list, then its Interaction request/response, then that round's Tool
         // results, before the next round. A single-round Run therefore projects byte-for-byte the same
@@ -5145,7 +5168,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
      * the first round, so the existing single-round approval ordering is unchanged.
      */
     private Map<Integer, List<Map<String, Object>>> interactionMessagesByRound(
-            ThreadRecord thread, String runId, RunRecord run, List<List<ToolCallView>> rounds) {
+            ThreadRecord thread, String runId, RunRecord run, List<List<ToolCallView>> rounds,
+            Set<String> suppressedCalls) {
         Map<String, Integer> roundByCall = new HashMap<>();
         for (int index = 0; index < rounds.size(); index++) {
             for (ToolCallView call : rounds.get(index)) {
@@ -5161,7 +5185,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 }
             }
             for (var display : thread.interactionDisplays) {
-                if (!display.runId().equals(runId)) continue;
+                if (!display.runId().equals(runId) || suppressedCalls.contains(display.toolCallId())) continue;
                 if (!isVisibleInteractionDisplay(thread, display)) continue;
                 int round = roundByCall.getOrDefault(display.toolCallId(), 0);
                 List<Map<String, Object>> bucket =
@@ -5178,10 +5202,12 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                         && thread.interactionDisplays.stream().noneMatch(display ->
                                 display.runId().equals(runId)
                                         && display.requestId().equals(run.interactionRequestId))) {
-                    int round = roundByCall.getOrDefault(
-                            interactionMessageToolCallId(run.interactionRequestMessage), 0);
-                    byRound.computeIfAbsent(round, ignored -> new ArrayList<>())
-                            .add(run.interactionRequestMessage);
+                    String toolCallId = interactionMessageToolCallId(run.interactionRequestMessage);
+                    if (!suppressedCalls.contains(toolCallId)) {
+                        int round = roundByCall.getOrDefault(toolCallId, 0);
+                        byRound.computeIfAbsent(round, ignored -> new ArrayList<>())
+                                .add(run.interactionRequestMessage);
+                    }
                 }
             }
         }
@@ -5227,6 +5253,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     }
 
     private static String interactionMessageToolCallId(Map<String, Object> message) {
+        if (message.get("artifact") instanceof Map<?, ?> artifact
+                && artifact.get("human_input") instanceof Map<?, ?> input
+                && input.get("tool_call_id") instanceof String callId) return callId;
         return message.get("tool_call_id") instanceof String value ? value : "";
     }
 
