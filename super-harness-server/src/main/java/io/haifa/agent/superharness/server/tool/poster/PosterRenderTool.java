@@ -2,6 +2,9 @@ package io.haifa.agent.superharness.server.tool.poster;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.zxing.WriterException;
+import io.haifa.agent.project.filesystem.WorkspaceFileService;
+import io.haifa.agent.project.path.ProjectPath;
+import io.haifa.agent.project.path.WorkspacePath;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
@@ -20,7 +23,6 @@ import java.text.Normalizer;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.regex.Pattern;
@@ -81,9 +83,10 @@ public final class PosterRenderTool implements JavaTool<PosterRenderTool.Input, 
             var qr = PosterArtwork.qr(recipe.qrUrl());
             BufferedImage a = PosterArtwork.render("a", recipe, visual, qr);
             BufferedImage b = PosterArtwork.render("b", recipe, visual, qr);
-            String comparison = "outputs/" + filenameStem(recipe.title()) + "-A-B对比-v1.png";
-            String draftA = writeDraft(binding, recipe, "a", 1, a);
-            String draftB = writeDraft(binding, recipe, "b", 1, b);
+            int version = availableVersion(binding, recipe.title(), List.of("a", "b"), 1, context);
+            String comparison = comparisonPath(recipe.title(), version);
+            String draftA = writeDraft(binding, recipe, "a", version, a);
+            String draftB = writeDraft(binding, recipe, "b", version, b);
             write(binding, comparison, PosterArtwork.png(PosterArtwork.compare(a, b)));
             context.cancellation().throwIfCancellationRequested();
             write(binding, INDEX_PATH, JSON.writeValueAsBytes(new Drafts(draftA, draftB, "")));
@@ -151,7 +154,8 @@ public final class PosterRenderTool implements JavaTool<PosterRenderTool.Input, 
         var picture = PosterArtwork.render(original.layout(), recipe,
                 PosterArtwork.readVisual(read(binding, recipe.visual())), PosterArtwork.qr(recipe.qrUrl()));
         context.cancellation().throwIfCancellationRequested();
-        String revised = writeDraft(binding, recipe, original.layout(), original.version() + 1, picture);
+        int version = availableVersion(binding, recipe.title(), List.of(original.layout()), original.version() + 1, context);
+        String revised = writeDraft(binding, recipe, original.layout(), version, picture);
         replaceIndex(binding, index, "a".equals(original.layout())
                 ? new Drafts(revised, drafts.b(), revised) : new Drafts(drafts.a(), revised, revised));
         return currentOutput(List.of(revised), revised, recipe);
@@ -267,15 +271,39 @@ public final class PosterRenderTool implements JavaTool<PosterRenderTool.Input, 
         return workspace.readVerifiedBytes(binding.ownerId(), binding.workspaceId(), path);
     }
 
-    private void write(WorkspaceBinding binding, String path, byte[] bytes) {
-        try {
-            workspace.createWorkingFile(binding.ownerId(), binding.workspaceId(), path, bytes);
-        } catch (WorkspaceException conflict) {
-            // A previous attempt can already have written part of the same revision.
-            if (conflict.error() != WorkspaceError.HASH_CONFLICT || !Arrays.equals(read(binding, path), bytes)) {
-                throw conflict;
+    private int availableVersion(WorkspaceBinding binding, String title, List<String> layouts, int first,
+                                 JavaToolContext context) {
+        // Cancellation can leave unpublished files behind. Reserve a new number without replacing those bytes.
+        var files = workspace.workspaceFiles(binding.ownerId(), binding.workspaceId());
+        for (int candidate = first, attempts = 0; candidate > 0 && attempts < 64; candidate++, attempts++) {
+            context.cancellation().throwIfCancellationRequested();
+            int version = candidate;
+            boolean draftTaken = layouts.stream().map(layout -> draftPath(title, layout, version))
+                    .anyMatch(path -> exists(binding, files, path) || exists(binding, files, recipePath(path)));
+            if (!draftTaken && (layouts.size() == 1 || !exists(binding, files, comparisonPath(title, version)))) {
+                return version;
             }
         }
+        throw new IllegalArgumentException("可用的海报版本编号不足，请在新的对话里出稿。");
+    }
+
+    private static boolean exists(WorkspaceBinding binding, WorkspaceFileService files,
+                                  String path) {
+        try {
+            files.stat(new WorkspacePath(binding.workspaceId(), ProjectPath.of(path)), false);
+            return true;
+        } catch (WorkspaceException missing) {
+            if (missing.error() != WorkspaceError.FILE_NOT_FOUND) throw missing;
+            return false;
+        }
+    }
+
+    private static String comparisonPath(String title, int version) {
+        return "outputs/" + filenameStem(title) + "-A-B对比-v" + version + ".png";
+    }
+
+    private void write(WorkspaceBinding binding, String path, byte[] bytes) {
+        workspace.createWorkingFile(binding.ownerId(), binding.workspaceId(), path, bytes);
     }
 
     private static String logical(String path) {
