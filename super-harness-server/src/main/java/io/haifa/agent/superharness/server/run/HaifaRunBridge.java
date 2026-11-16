@@ -113,6 +113,7 @@ import java.util.stream.Collectors;
 
 /** Adapter that exposes only public Haifa Agent SDK types to the HTTP boundary. */
 public final class HaifaRunBridge implements AutoCloseable {
+    private static final String PLAN_TOOL_ALIAS = "write_todos";
     /** Test/compatibility starter path only; production always renders the frozen lead prompt. */
     private static final String STARTER_INSTRUCTIONS = "Return a concise answer to the local user's request.";
 
@@ -495,7 +496,7 @@ public final class HaifaRunBridge implements AutoCloseable {
             }
             if (isPlanMode) {
                 builder.planAuthoring(PlanAuthoringSpec.of(
-                        "write_todos",
+                        PLAN_TOOL_ALIAS,
                         PlanAuthoringResources.toolDescription(),
                         PlanAuthoringResources.systemPrompt()));
             }
@@ -809,6 +810,10 @@ public final class HaifaRunBridge implements AutoCloseable {
 
     public boolean isPlanMode() {
         return isPlanMode;
+    }
+
+    public boolean wasPlanMode(AgentRunId runId) {
+        return agent.runs().hasFrozenTool(runId, PLAN_TOOL_ALIAS);
     }
 
     public Optional<AgentPlanView> plan(AgentRunId runId) {

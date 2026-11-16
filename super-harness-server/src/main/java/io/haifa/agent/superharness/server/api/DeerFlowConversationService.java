@@ -2379,9 +2379,15 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     }
 
     private HaifaRunBridge bridgeForPersistedThread(ThreadRecord thread) {
+        return bridgeForPersistedThread(thread, null);
+    }
+
+    private HaifaRunBridge bridgeForPersistedThread(ThreadRecord thread, Boolean planMode) {
         thread.lock.lock();
         try {
-            if (thread.bridge != null) return thread.bridge;
+            if (thread.bridge != null && (planMode == null || thread.bridge.isPlanMode() == planMode)) {
+                return thread.bridge;
+            }
             HaifaRunBridge.ModelBinding binding = null;
             String lastBinding = thread.modelBindingIdentity;
             if (lastBinding != null && lastBinding.lastIndexOf('@') > 0) {
@@ -2422,7 +2428,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 }
             }
             HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection,
-                    skillProjections.forRecovery(thread.skillSelection(), thread.skillVersions()), restored);
+                    skillProjections.forRecovery(thread.skillSelection(), thread.skillVersions()), restored,
+                    io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled(),
+                    Boolean.TRUE.equals(planMode));
             boolean claimBinding = thread.modelBindingIdentity == null
                     || thread.modelBindingIdentity.equals(bridge.bindingIdentity());
             // Conversation/run reads use shared SQLite. The last selected model is preferred
@@ -2436,17 +2444,6 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
 
     private void attachBridge(ThreadRecord thread, HaifaRunBridge bridge) {
         attachBridge(thread, bridge, true);
-    }
-
-    private HaifaRunBridge newBridge(
-            HaifaRunBridge.ModelBinding binding,
-            ThreadRecord thread,
-            McpRunTools.Projection mcpProjection,
-            SkillRunTools.Projection skillProjection,
-            AgentPromptContext agentPrompt) {
-        // Restart history only reads SDK facts. A later Run separately admits fresh declarations.
-        return newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt,
-                io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled(), false);
     }
 
     private HaifaRunBridge newBridge(HaifaRunBridge.ModelBinding binding, ThreadRecord thread,
@@ -5607,7 +5604,14 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         AgentRunId requested = turn.runId().orElseThrow();
         RunRecord cached = runs.get(requested.value());
         if (cached != null && cached.threadId.equals(thread.threadId)) return Optional.of(cached);
-        if (bridge.findRun(requested).isEmpty()) return Optional.empty();
+        var snapshot = bridge.findRun(requested);
+        if (snapshot.isEmpty()) return Optional.empty();
+        var status = snapshot.orElseThrow().status();
+        HaifaRunBridge runBridge = bridge;
+        if (status == AgentRunStatus.WAITING_APPROVAL || status == AgentRunStatus.WAITING_INTERACTION) {
+            // Plan authoring is frozen at admission, even before the model first invokes write_todos.
+            runBridge = bridgeForPersistedThread(thread, bridge.wasPlanMode(requested));
+        }
         RunRecord restored = new RunRecord(
                 requested,
                 thread.threadId,
@@ -5615,13 +5619,13 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 turn.text(),
                 thread.clientHumanMessageId(requested),
                 false,
-                bridge,
+                runBridge,
                 turn.createdAt(),
                 turn.sequence(),
                 false,
                 thread.runStreamModes(requested),
                 false);
-        bridge.pendingInteraction(requested).ifPresent(pending -> {
+        runBridge.pendingInteraction(requested).ifPresent(pending -> {
             try {
                 var saved = thread.interactionDisplays.stream()
                         .filter(display -> display.runId().equals(requested.value())
