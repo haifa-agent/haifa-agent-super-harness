@@ -1,3 +1,20 @@
+diff --git a/frontend/src/components/workspace/messages/human-input-card.tsx b/frontend/src/components/workspace/messages/human-input-card.tsx
+index 16618cf..8f1e18f 100644
+--- a/frontend/src/components/workspace/messages/human-input-card.tsx
++++ b/frontend/src/components/workspace/messages/human-input-card.tsx
+@@ -523 +523,3 @@ export function HumanInputCard({
+-                      {request.content_type || "command"}
++                      {request.content_type?.length
++                        ? request.content_type
++                        : "command"}
+diff --git a/frontend/src/components/workspace/messages/message-list.tsx b/frontend/src/components/workspace/messages/message-list.tsx
+index 9516928..7eb20ca 100644
+--- a/frontend/src/components/workspace/messages/message-list.tsx
++++ b/frontend/src/components/workspace/messages/message-list.tsx
+@@ -101 +100,0 @@ import { ConversationOutline } from "./conversation-outline";
+-import { ToolApprovalCard } from "./tool-approval-card";
+@@ -116,0 +116 @@ import { SubtaskCard } from "./subtask-card";
++import { ToolApprovalCard } from "./tool-approval-card";
 diff --git a/frontend/src/components/workspace/messages/tool-approval-card.tsx b/frontend/src/components/workspace/messages/tool-approval-card.tsx
 index 967aec3..219c802 100644
 --- a/frontend/src/components/workspace/messages/tool-approval-card.tsx

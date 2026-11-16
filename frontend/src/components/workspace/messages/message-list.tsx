@@ -98,7 +98,6 @@ import { useMaybeSidecar } from "../sidecar/context";
 import { Tooltip } from "../tooltip";
 
 import { ConversationOutline } from "./conversation-outline";
-import { ToolApprovalCard } from "./tool-approval-card";
 import {
   HumanInputCard,
   type HumanInputSubmitResult,
@@ -114,6 +113,7 @@ import { RunActivity, RunDuration } from "./run-duration";
 import { RunFailureNotice } from "./run-failure-notice";
 import { MessageListSkeleton } from "./skeleton";
 import { SubtaskCard } from "./subtask-card";
+import { ToolApprovalCard } from "./tool-approval-card";
 import {
   VirtualMessageList,
   type VirtualMessageListHandle,
