@@ -114,11 +114,21 @@
           "frontend/src/core/messages/human-input.ts",
           "frontend/src/core/threads/api.ts"
         ]
+      },
+      {
+        "id": "0008-compact-resolved-tool-approvals",
+        "file": "third-party/deerflow/patches/0008-compact-resolved-tool-approvals.patch",
+        "sha256": "1bf25f1d5e19381d4bbe7454e675dd43733730ff001de5d0906febc4c6d05946",
+        "reason": "Collapse settled tool approvals to an expandable summary row.",
+        "affectedFiles": [
+          "frontend/src/components/workspace/messages/tool-approval-card.tsx",
+          "frontend/tests/unit/components/workspace/messages/tool-approval-card.dom.test.tsx"
+        ]
       }
     ],
-    "fileCount": 986,
-    "totalBytes": 21240249,
-    "contentInventorySha256": "db0eab7870b62c1da73967e2dff0a467b0ca1713d2ba2c46b1e8c172b0cb3b8b"
+    "fileCount": 987,
+    "totalBytes": 21247094,
+    "contentInventorySha256": "d847e683321fa8c6bbbef3188d8c46704fa3cad62dea28483a4f74034c516e71"
   },
   "build": {
     "node": ">=22",

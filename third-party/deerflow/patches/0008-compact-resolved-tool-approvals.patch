@@ -1,0 +1,564 @@
+diff --git a/frontend/src/components/workspace/messages/tool-approval-card.tsx b/frontend/src/components/workspace/messages/tool-approval-card.tsx
+index 967aec3..219c802 100644
+--- a/frontend/src/components/workspace/messages/tool-approval-card.tsx
++++ b/frontend/src/components/workspace/messages/tool-approval-card.tsx
+@@ -33,0 +34,18 @@ const toolIcons = new Map([
++function approvalSubject(request: HumanInputRequest, toolName: string) {
++  const firstFact = request.tool_approval?.facts[0]?.value;
++  if (firstFact === toolName) return undefined;
++
++  // The structured Gateway cards put the target in the first fact for these tools.
++  switch (toolName) {
++    case "write_file":
++    case "str_replace":
++    case "edit_file":
++      return firstFact?.split(/[/\\]/).filter(Boolean).at(-1);
++    case "web_search":
++    case "web_fetch":
++      return firstFact;
++    default:
++      return request.purpose;
++  }
++}
++
+@@ -53 +71 @@ export function ToolApprovalCard({
+-  const statusRef = useRef<HTMLSpanElement>(null);
++  const summaryRef = useRef<HTMLElement>(null);
+@@ -59 +77 @@ export function ToolApprovalCard({
+-      statusRef.current?.focus();
++      summaryRef.current?.focus();
+@@ -72,16 +90,10 @@ export function ToolApprovalCard({
+-  const status = decision === "reject"
+-    ? labels.rejected
+-    : decision === "auto_approve"
+-      ? labels.autoApproved
+-      : decision
+-        ? labels.approved
+-        : pending
+-          ? labels.submitting
+-          : labels.pending;
+-  const result = decision === "reject"
+-    ? labels.rejectedResult
+-    : decision === "auto_approve"
+-      ? labels.approvedAutomatically
+-      : decision === "allow_session"
+-        ? labels.approvedForSession
+-        : labels.approvedOnce;
++  const status =
++    decision === "reject"
++      ? labels.rejected
++      : decision === "auto_approve"
++        ? labels.autoApproved
++        : decision
++          ? labels.approved
++          : pending
++            ? labels.submitting
++            : labels.pending;
+@@ -88,0 +101,3 @@ export function ToolApprovalCard({
++  const title = request.title ?? labels.fallbackTitle;
++  const detailLabel = approval.detail_label ?? request.content_type;
++  const subject = decision ? approvalSubject(request, toolName) : undefined;
+@@ -94 +109,4 @@ export function ToolApprovalCard({
+-    { label: labels.environment, value: request.execution_approval?.environment },
++    {
++      label: labels.environment,
++      value: request.execution_approval?.environment,
++    },
+@@ -103,3 +121,5 @@ export function ToolApprovalCard({
+-  const sessionOption = approval.session_eligible &&
+-    request.options?.some((option) =>
+-      option.id === "allow_session" && option.value === "allow_session",
++  const sessionOption =
++    approval.session_eligible &&
++    request.options?.some(
++      (option) =>
++        option.id === "allow_session" && option.value === "allow_session",
+@@ -107,0 +128,93 @@ export function ToolApprovalCard({
++  const purpose = request.purpose && (
++    <p className="text-muted-foreground text-sm break-words whitespace-pre-wrap">
++      <span className="text-foreground mr-2 font-medium">{labels.purpose}</span>
++      {request.purpose}
++    </p>
++  );
++  const requestFacts = (
++    <div className={cn("grid gap-3", facts.length > 0 && "@lg:grid-cols-2")}>
++      {facts.length > 0 && (
++        <dl className="divide-border min-w-0 divide-y">
++          {facts.map(({ label, value }, index) => (
++            <div
++              key={index}
++              className="grid grid-cols-[minmax(4rem,auto)_1fr] gap-2 py-2 text-sm"
++            >
++              <dt className="text-muted-foreground">{label}</dt>
++              <dd className="min-w-0 font-medium wrap-anywhere whitespace-pre-wrap">
++                {value?.length ? value : labels.unavailable}
++              </dd>
++            </div>
++          ))}
++        </dl>
++      )}
++      <section
++        className={cn(
++          "min-w-0 rounded-lg border p-3",
++          isNetworkRead
++            ? "border-emerald-200 bg-emerald-50/70 text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100"
++            : "border-amber-200 bg-amber-50/70 text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100",
++        )}
++      >
++        <h3 className="text-sm font-semibold">
++          {request.tool_approval?.impact_title ?? labels.impact}
++        </h3>
++        <ul className="mt-1.5 list-disc space-y-1 pl-4 text-sm break-words">
++          {(approval.impact.length
++            ? approval.impact
++            : [labels.unknownImpact]
++          ).map((item, index) => (
++            <li key={index}>{item}</li>
++          ))}
++        </ul>
++      </section>
++    </div>
++  );
++  const toolDetails = (
++    <div className="space-y-3">
++      {(before !== undefined || after !== undefined) && (
++        <div className="grid gap-2 @lg:grid-cols-2">
++          <section className="min-w-0">
++            <h3 className="mb-1.5 text-xs font-semibold">{labels.before}</h3>
++            <pre className="max-h-64 overflow-auto rounded-md border border-rose-200 bg-rose-50 p-3 text-xs wrap-anywhere whitespace-pre-wrap text-rose-950 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-100">
++              <code>
++                {before === ""
++                  ? labels.emptyContent
++                  : (before ?? labels.unavailable)}
++              </code>
++            </pre>
++          </section>
++          <section className="min-w-0">
++            <h3 className="mb-1.5 text-xs font-semibold">{labels.after}</h3>
++            <pre className="max-h-64 overflow-auto rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs wrap-anywhere whitespace-pre-wrap text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100">
++              <code>
++                {after === ""
++                  ? labels.emptyContent
++                  : (after ?? labels.unavailable)}
++              </code>
++            </pre>
++          </section>
++        </div>
++      )}
++      {request.content && before === undefined && after === undefined && (
++        <pre className="max-h-64 overflow-auto rounded-md bg-[#20372e] p-3 text-xs wrap-anywhere whitespace-pre-wrap text-white">
++          <code>{request.content}</code>
++        </pre>
++      )}
++      <dl className="grid gap-2 text-xs @lg:grid-cols-2">
++        {[
++          { label: labels.tool, value: toolName },
++          { label: labels.requestId, value: request.request_id },
++          ...(request.technical_facts ?? []),
++        ].map(({ label, value }, index) => (
++          <div key={index} className="min-w-0">
++            <dt className="text-muted-foreground">{label}</dt>
++            <dd className="font-mono wrap-anywhere whitespace-pre-wrap">
++              {value}
++            </dd>
++          </div>
++        ))}
++      </dl>
++    </div>
++  );
++
+@@ -111 +224,4 @@ export function ToolApprovalCard({
+-      className="@container w-full min-w-0 overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-sm"
++      className={cn(
++        "border-border bg-card text-card-foreground @container w-full min-w-0 overflow-hidden border",
++        decision ? "rounded-lg" : "rounded-2xl shadow-sm",
++      )}
+@@ -115,61 +231,29 @@ export function ToolApprovalCard({
+-      <div className="space-y-4 p-4 sm:p-5">
+-        <header className="flex items-start gap-3">
+-          <span className="rounded-lg bg-emerald-50 p-2.5 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+-            <Icon aria-hidden="true" className="size-4" />
+-          </span>
+-          <div className="min-w-0">
+-            <div className="flex flex-wrap items-center gap-2">
+-              <h2 id={titleId} className="text-base font-semibold break-words">
+-                {request.title || labels.fallbackTitle}
+-              </h2>
+-              <span
+-                ref={statusRef}
+-                role="status"
+-                tabIndex={-1}
+-                className={cn(
+-                  "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium",
+-                  decision === "reject"
+-                    ? "bg-rose-50 text-rose-800 dark:bg-rose-950 dark:text-rose-300"
+-                    : decision
+-                      ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+-                      : "bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200",
+-                )}
+-              >
+-                {pending && !decision ? (
+-                  <Loader2Icon aria-hidden="true" className="size-3 animate-spin" />
+-                ) : (
+-                  <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
+-                )}
+-                {status}
+-              </span>
+-            </div>
+-            {request.purpose && (
+-              <p className="mt-1 text-sm whitespace-pre-wrap break-words text-muted-foreground">
+-                <span className="mr-2 font-medium text-foreground">{labels.purpose}</span>
+-                {request.purpose}
+-              </p>
+-            )}
+-          </div>
+-        </header>
+-
+-        <div className={cn("grid gap-3", facts.length > 0 && "@lg:grid-cols-2")}>
+-          {facts.length > 0 && (
+-            <dl className="min-w-0 divide-y divide-border">
+-              {facts.map(({ label, value }, index) => (
+-                <div key={index} className="grid grid-cols-[minmax(4rem,auto)_1fr] gap-2 py-2 text-sm">
+-                  <dt className="text-muted-foreground">{label}</dt>
+-                  <dd className="min-w-0 font-medium wrap-anywhere whitespace-pre-wrap">{value || labels.unavailable}</dd>
+-                </div>
+-              ))}
+-            </dl>
+-          )}
+-          <section className={cn(
+-            "min-w-0 rounded-lg border p-3",
+-            isNetworkRead
+-              ? "border-emerald-200 bg-emerald-50/70 text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100"
+-              : "border-amber-200 bg-amber-50/70 text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100",
+-          )}>
+-            <h3 className="text-sm font-semibold">{request.tool_approval?.impact_title || labels.impact}</h3>
+-            <ul className="mt-1.5 list-disc space-y-1 pl-4 text-sm break-words">
+-              {(approval.impact.length ? approval.impact : [labels.unknownImpact]).map(
+-                (item, index) => <li key={index}>{item}</li>,
++      {decision ? (
++        <details key={request.request_id} className="group">
++          <summary
++            ref={summaryRef}
++            className="hover:bg-muted/25 focus-visible:outline-ring flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm focus-visible:outline-2 focus-visible:-outline-offset-2 [&::-webkit-details-marker]:hidden"
++          >
++            <Icon
++              aria-hidden="true"
++              className="text-muted-foreground size-4 shrink-0"
++            />
++            <span
++              id={titleId}
++              className="max-w-1/2 shrink-0 truncate font-medium"
++            >
++              {title}
++            </span>
++            <span
++              className="text-muted-foreground min-w-0 flex-1 truncate"
++              title={subject}
++            >
++              {subject}
++            </span>
++            <span
++              role="status"
++              className={cn(
++                "shrink-0 rounded-md px-2 py-0.5 text-xs font-medium",
++                decision === "reject"
++                  ? "bg-rose-50 text-rose-800 dark:bg-rose-950 dark:text-rose-300"
++                  : "bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+@@ -177,13 +261,7 @@ export function ToolApprovalCard({
+-            </ul>
+-          </section>
+-        </div>
+-
+-        <details className="group rounded-lg border border-border bg-muted/25">
+-          <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+-            <ChevronRightIcon aria-hidden="true" className="size-4 shrink-0 transition-transform group-open:rotate-90" />
+-            <span>{request.tool_approval?.detail_title || labels.details}</span>
+-            {(approval.detail_label || request.content_type) && (
+-              <span className="ml-auto text-right text-xs font-normal text-muted-foreground">
+-                {approval.detail_label || request.content_type}
+-              </span>
+-            )}
++            >
++              {decision === "allow_session" ? labels.session : status}
++            </span>
++            <ChevronRightIcon
++              aria-hidden="true"
++              className="text-muted-foreground size-4 shrink-0 transition-transform group-open:rotate-90"
++            />
+@@ -191,34 +269,4 @@ export function ToolApprovalCard({
+-          <div className="space-y-3 p-3 pt-1">
+-            {(before !== undefined || after !== undefined) && (
+-              <div className="grid gap-2 @lg:grid-cols-2">
+-                <section className="min-w-0">
+-                  <h3 className="mb-1.5 text-xs font-semibold">{labels.before}</h3>
+-                  <pre className="max-h-64 overflow-auto rounded-md border border-rose-200 bg-rose-50 p-3 text-xs wrap-anywhere whitespace-pre-wrap text-rose-950 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-100">
+-                    <code>{before === "" ? labels.emptyContent : before ?? labels.unavailable}</code>
+-                  </pre>
+-                </section>
+-                <section className="min-w-0">
+-                  <h3 className="mb-1.5 text-xs font-semibold">{labels.after}</h3>
+-                  <pre className="max-h-64 overflow-auto rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs wrap-anywhere whitespace-pre-wrap text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100">
+-                    <code>{after === "" ? labels.emptyContent : after ?? labels.unavailable}</code>
+-                  </pre>
+-                </section>
+-              </div>
+-            )}
+-            {request.content && before === undefined && after === undefined && (
+-              <pre className="max-h-64 overflow-auto rounded-md bg-[#20372e] p-3 text-xs wrap-anywhere whitespace-pre-wrap text-white">
+-                <code>{request.content}</code>
+-              </pre>
+-            )}
+-            <dl className="grid gap-2 text-xs @lg:grid-cols-2">
+-              {[
+-                { label: labels.tool, value: toolName },
+-                { label: labels.requestId, value: request.request_id },
+-                ...(request.technical_facts ?? []),
+-              ].map(({ label, value }, index) => (
+-                <div key={index} className="min-w-0">
+-                  <dt className="text-muted-foreground">{label}</dt>
+-                  <dd className="font-mono whitespace-pre-wrap wrap-anywhere">{value}</dd>
+-                </div>
+-              ))}
+-            </dl>
++          <div className="border-border space-y-4 border-t p-4 sm:p-5">
++            {purpose}
++            {requestFacts}
++            {toolDetails}
+@@ -227,9 +275,54 @@ export function ToolApprovalCard({
+-      </div>
+-
+-      <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-border bg-muted/20 px-4 py-3 sm:px-5">
+-        {decision ? (
+-          <div className="space-y-0.5 text-xs">
+-            <p className="font-medium">{result}</p>
+-            {decision !== "reject" && (
+-              <p className="text-muted-foreground">{labels.executionResult}</p>
+-            )}
++      ) : (
++        <>
++          <div className="space-y-4 p-4 sm:p-5">
++            <header className="flex items-start gap-3">
++              <span className="rounded-lg bg-emerald-50 p-2.5 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
++                <Icon aria-hidden="true" className="size-4" />
++              </span>
++              <div className="min-w-0">
++                <div className="flex flex-wrap items-center gap-2">
++                  <h2
++                    id={titleId}
++                    className="text-base font-semibold break-words"
++                  >
++                    {title}
++                  </h2>
++                  <span
++                    role="status"
++                    className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-950 dark:text-amber-200"
++                  >
++                    {pending ? (
++                      <Loader2Icon
++                        aria-hidden="true"
++                        className="size-3 animate-spin"
++                      />
++                    ) : (
++                      <span
++                        aria-hidden="true"
++                        className="size-1.5 rounded-full bg-current"
++                      />
++                    )}
++                    {status}
++                  </span>
++                </div>
++                {purpose && <div className="mt-1">{purpose}</div>}
++              </div>
++            </header>
++            {requestFacts}
++            <details className="group border-border bg-muted/25 rounded-lg border">
++              <summary className="focus-visible:outline-ring flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium focus-visible:outline-2 [&::-webkit-details-marker]:hidden">
++                <ChevronRightIcon
++                  aria-hidden="true"
++                  className="size-4 shrink-0 transition-transform group-open:rotate-90"
++                />
++                <span>
++                  {request.tool_approval?.detail_title ?? labels.details}
++                </span>
++                {detailLabel && (
++                  <span className="text-muted-foreground ml-auto text-right text-xs font-normal">
++                    {detailLabel}
++                  </span>
++                )}
++              </summary>
++              <div className="p-3 pt-1">{toolDetails}</div>
++            </details>
+@@ -237,3 +330,6 @@ export function ToolApprovalCard({
+-        ) : (
+-          <>
+-            <p id={scopeId} className="min-w-48 flex-1 text-xs text-muted-foreground">
++
++          <footer className="border-border bg-muted/20 flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 sm:px-5">
++            <p
++              id={scopeId}
++              className="text-muted-foreground min-w-48 flex-1 text-xs"
++            >
+@@ -256 +352,3 @@ export function ToolApprovalCard({
+-                    aria-describedby={id === "allow_session" ? scopeId : undefined}
++                    aria-describedby={
++                      id === "allow_session" ? scopeId : undefined
++                    }
+@@ -259,2 +357,4 @@ export function ToolApprovalCard({
+-                      id === "approve" && "bg-emerald-800 text-white hover:bg-emerald-900",
+-                      id === "allow_session" && "bg-emerald-50 text-emerald-900 hover:bg-emerald-100 dark:bg-emerald-950 dark:text-emerald-200 dark:hover:bg-emerald-900",
++                      id === "approve" &&
++                        "bg-emerald-800 text-white hover:bg-emerald-900",
++                      id === "allow_session" &&
++                        "bg-emerald-50 text-emerald-900 hover:bg-emerald-100 dark:bg-emerald-950 dark:text-emerald-200 dark:hover:bg-emerald-900",
+@@ -264 +364,3 @@ export function ToolApprovalCard({
+-                      const submitted = await onSubmit?.(createHumanInputOptionResponse(request, option));
++                      const submitted = await onSubmit?.(
++                        createHumanInputOptionResponse(request, option),
++                      );
+@@ -275,3 +377,3 @@ export function ToolApprovalCard({
+-          </>
+-        )}
+-      </footer>
++          </footer>
++        </>
++      )}
+diff --git a/frontend/tests/unit/components/workspace/messages/tool-approval-card.dom.test.tsx b/frontend/tests/unit/components/workspace/messages/tool-approval-card.dom.test.tsx
+new file mode 100644
+index 0000000..145b682
+--- /dev/null
++++ b/frontend/tests/unit/components/workspace/messages/tool-approval-card.dom.test.tsx
+@@ -0,0 +1,134 @@
++import { afterEach, expect, it, rs } from "@rstest/core";
++import { cleanup, fireEvent, render, screen } from "@testing-library/react";
++
++import { ToolApprovalCard } from "@/components/workspace/messages/tool-approval-card";
++import { I18nProvider } from "@/core/i18n/context";
++import {
++  createHumanInputOptionResponse,
++  type HumanInputRequest,
++  type HumanInputResponse,
++} from "@/core/messages/human-input";
++
++const approve = { id: "approve", label: "批准", value: "approve" };
++const reject = { id: "reject", label: "拒绝", value: "reject" };
++const session = {
++  id: "allow_session",
++  label: "本会话内允许",
++  value: "allow_session",
++};
++const path = "/mnt/user-data/workspace/build_deck.py";
++const request: HumanInputRequest = {
++  version: 1,
++  kind: "human_input_request",
++  source: "haifa_interaction",
++  request_id: "approval-1",
++  title: "修改文件",
++  question: "是否允许修改文件？",
++  purpose: "替换匹配的文本。",
++  input_mode: "single_choice",
++  options: [reject, session, approve],
++  tool_approval: {
++    tool_name: "str_replace",
++    facts: [
++      { label: "目标文件", value: path },
++      { label: "工作区", value: "当前任务工作区" },
++    ],
++    impact: ["会写入目标文件"],
++    before: "old",
++    after: "new",
++    session_eligible: true,
++  },
++};
++
++function card({
++  response = null,
++  pending = false,
++  onSubmit,
++  approvalRequest = request,
++}: {
++  response?: HumanInputResponse | null;
++  pending?: boolean;
++  onSubmit?: (response: HumanInputResponse) => boolean;
++  approvalRequest?: HumanInputRequest;
++} = {}) {
++  return (
++    <I18nProvider initialLocale="en-US">
++      <ToolApprovalCard
++        request={approvalRequest}
++        answeredResponse={response}
++        disabled={false}
++        pending={pending}
++        onSubmit={onSubmit}
++      />
++    </I18nProvider>
++  );
++}
++
++afterEach(cleanup);
++
++it("collapses and focuses the summary after a confirmed response", () => {
++  const onSubmit = rs.fn(() => true);
++  const { rerender } = render(card({ onSubmit }));
++  expect(screen.getByText(path)).toBeTruthy();
++  fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
++  const response = createHumanInputOptionResponse(request, approve);
++  expect(onSubmit).toHaveBeenCalledWith(response);
++
++  rerender(card({ pending: true, onSubmit }));
++  expect(screen.getByRole("status").textContent).toBe("Submitting decision");
++  expect(screen.getByText(path)).toBeTruthy();
++
++  rerender(card({ response, onSubmit }));
++  const summary = screen.getByText("build_deck.py").closest("summary")!;
++  expect(summary.parentElement?.hasAttribute("open")).toBe(false);
++  expect(summary.textContent).toContain("Approved");
++  expect(summary.textContent).not.toContain(path);
++  expect(document.activeElement).toBe(summary);
++  expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
++});
++
++it.each([
++  [approve, "Approved"],
++  [reject, "Rejected"],
++  [session, "Allow for this session"],
++  [
++    { id: "auto_approve", label: "自动批准", value: "auto_approve" },
++    "Automatically approved",
++  ],
++])("starts closed for a historical response (%s)", (option, label) => {
++  const { container } = render(
++    card({ response: createHumanInputOptionResponse(request, option) }),
++  );
++  const details = container.querySelector("details")!;
++  expect(details.open).toBe(false);
++  expect(details.querySelector("summary")?.textContent).toContain(label);
++  expect(details.querySelector("summary")?.textContent).not.toContain(
++    "会写入目标文件",
++  );
++  expect(details.textContent).toContain(path);
++  expect(details.textContent).toContain("Before");
++  expect(details.textContent).toContain("After");
++});
++
++it("summarizes a legacy command by its purpose", () => {
++  const approvalRequest: HumanInputRequest = {
++    ...request,
++    title: "运行本机命令",
++    purpose: "重新构建 HTML 幻灯片",
++    content: "python build_deck.py",
++    tool_approval: undefined,
++    execution_approval: {
++      environment: "宿主机",
++      impact: [],
++      session_eligible: false,
++    },
++  };
++  const response = createHumanInputOptionResponse(approvalRequest, approve);
++  const { container } = render(card({ response, approvalRequest }));
++  const summary = container.querySelector("summary")!;
++  expect(summary.textContent).toContain("重新构建 HTML 幻灯片");
++  expect(summary.textContent).not.toContain("python build_deck.py");
++  expect(container.querySelector("details")?.textContent).toContain(
++    "python build_deck.py",
++  );
++});
