@@ -339,7 +339,9 @@ test.describe("UX-V1 DeerFlow default tools with live DeepSeek", () => {
     const { status, approvals } = await driveToTerminal(page, context, identity, { timeoutMs: 240_000, testInfo });
     const state = await threadState(context.request, identity.threadId);
     const sequence = toolCallNames(state);
-    const search = toolResults(state, "web_search").map((m) => String(m.content));
+    const search = toolResults(state, "web_search").map(
+      (message) => message.additional_kwargs?.haifa_tool_result?.result ?? "",
+    );
     const fetched = toolResults(state, "web_fetch").map((m) => String(m.content));
     const searchBlocked = search.length > 0 && search.every((text) => text.includes("\"error\""));
     const fetchBlocked = fetched.length > 0 && fetched.every((text) => text.startsWith("Error:"));
@@ -368,9 +370,14 @@ test.describe("UX-V1 DeerFlow default tools with live DeepSeek", () => {
     expect(sequence).toContain("web_fetch");
     expect(fetchBlocked, "web_fetch must return actual content").toBe(false);
     expect(fetched.join("\n").length).toBeGreaterThan(50);
-    const results = JSON.parse(search.at(-1)).results;
-    expect(Array.isArray(results)).toBe(true);
-    expect(results.length).toBeGreaterThan(0);
+    const searchResult = search.at(-1);
+    expect(searchResult).toMatch(/"results"\s*:\s*\[/);
+    // The bounded tool result can end mid-JSON. Decode only complete URL fields.
+    const resultUrls = Array.from(
+      searchResult.matchAll(/"url"\s*:\s*("(?:[^"\\]|\\.)*")/g),
+      ([, url]) => JSON.parse(url),
+    );
+    expect(resultUrls.length).toBeGreaterThan(0);
     const fetchCall = state.values.messages.flatMap((message) => message.tool_calls ?? [])
       .findLast((call) => call.name === "web_fetch");
     const canonicalUrl = (value) => {
@@ -378,7 +385,7 @@ test.describe("UX-V1 DeerFlow default tools with live DeepSeek", () => {
       return url.hostname === "duckduckgo.com" && url.pathname === "/l/" && url.searchParams.has("uddg")
         ? new URL(url.searchParams.get("uddg")).href : url.href;
     };
-    expect(results.map((item) => canonicalUrl(item.url)), "fetch must consume an actual search result URL")
+    expect(resultUrls.map(canonicalUrl), "fetch must consume an actual search result URL")
       .toContain(canonicalUrl(fetchCall.args.url));
     const moreSteps = page.getByRole("button", { name: /^\d+ more steps?$/ });
     for (const button of await moreSteps.all()) await button.click();
