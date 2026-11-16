@@ -373,12 +373,13 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
   };
 
   const handleChangeAppSubmit = () => {
+    const replacingApp = data?.app_configured === true;
     // Pre-open the browser tab synchronously inside the click gesture: the
     // subsequent user authorization runs only after the switch POST resolves,
     // and opening the window then would be outside the gesture and blocked by
     // the browser (same constraint as handleConnect).
     authRequestRef.current = buildAuthRequest();
-    const browserWindow = openPendingBrowserWindow();
+    const browserWindow = replacingApp ? openPendingBrowserWindow() : null;
     const generation = beginFlow();
     switchApp.mutate(
       {
@@ -390,9 +391,13 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
         onSuccess: (result) => {
           if (!isActiveFlow(generation)) return;
           queryClient.setQueryData(larkIntegrationQueryKey, result.status);
-          toast.success(t.settings.integrations.lark.changeAppSwitched);
           setChangeAppSecret("");
           setShowChangeApp(false);
+          if (!replacingApp) {
+            toast.success(t.settings.integrations.lark.existingAppSaved);
+            return;
+          }
+          toast.success(t.settings.integrations.lark.changeAppSwitched);
           // The new app has no user authorization yet; drive the browser auth
           // flow immediately so the switch ends in a usable connection.
           startUserAuth(
@@ -852,7 +857,7 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
                 ) : null}
                 {connectButtonLabel}
               </Button>
-              {data.installed && data.cli.available && data.app_configured && (
+              {data.installed && data.cli.available && (
                 <Button
                   variant="ghost"
                   onClick={() => setShowChangeApp((current) => !current)}
@@ -861,7 +866,9 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
                     integrationBusy
                   }
                 >
-                  {t.settings.integrations.lark.changeAppButton}
+                  {data.app_configured
+                    ? t.settings.integrations.lark.changeAppButton
+                    : t.settings.integrations.lark.useExistingApp}
                 </Button>
               )}
               {!isAdmin && (
@@ -874,10 +881,14 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
               <div className="space-y-3 rounded-lg border p-3">
                 <div className="space-y-1">
                   <div className="text-sm font-medium">
-                    {t.settings.integrations.lark.changeAppTitle}
+                    {data.app_configured
+                      ? t.settings.integrations.lark.changeAppTitle
+                      : t.settings.integrations.lark.useExistingApp}
                   </div>
                   <p className="text-muted-foreground text-sm">
-                    {t.settings.integrations.lark.changeAppDescription}
+                    {data.app_configured
+                      ? t.settings.integrations.lark.changeAppDescription
+                      : t.settings.integrations.lark.existingAppDescription}
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -908,6 +919,7 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
                   />
                   <Input
                     type="password"
+                    autoComplete="new-password"
                     value={changeAppSecret}
                     onChange={(event) =>
                       setChangeAppSecret(event.currentTarget.value)
@@ -920,9 +932,11 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
                       t.settings.integrations.lark.changeAppSecretLabel
                     }
                   />
-                  <p className="text-muted-foreground text-xs">
-                    {t.settings.integrations.lark.changeAppAuthResetNote}
-                  </p>
+                  {data.app_configured && (
+                    <p className="text-muted-foreground text-xs">
+                      {t.settings.integrations.lark.changeAppAuthResetNote}
+                    </p>
+                  )}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button
@@ -937,17 +951,21 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
                     {switchApp.isPending ? (
                       <RefreshCwIcon className="size-4 animate-spin" />
                     ) : null}
-                    {t.settings.integrations.lark.changeAppSubmit}
+                    {data.app_configured
+                      ? t.settings.integrations.lark.changeAppSubmit
+                      : t.settings.integrations.lark.saveExistingApp}
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleReRegisterInBrowser}
-                    disabled={integrationBusy}
-                  >
-                    <ExternalLinkIcon className="size-4" />
-                    {t.settings.integrations.lark.changeAppReRegister}
-                  </Button>
+                  {data.app_configured && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleReRegisterInBrowser}
+                      disabled={integrationBusy}
+                    >
+                      <ExternalLinkIcon className="size-4" />
+                      {t.settings.integrations.lark.changeAppReRegister}
+                    </Button>
+                  )}
                 </div>
               </div>
             )}

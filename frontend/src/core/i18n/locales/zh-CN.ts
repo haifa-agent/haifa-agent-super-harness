@@ -1506,6 +1506,11 @@ export const zhCN: Translations = {
         requestPermissions: "申请新权限",
         alreadyConnected:
           "飞书已连接，无需重复授权。如果授权已过期，刷新状态后可重新连接。",
+        useExistingApp: "使用已有 App",
+        existingAppDescription:
+          "为当前账号配置已有的飞书办公应用。需要以个人身份操作时，保存后可点「连接飞书」授权。",
+        saveExistingApp: "保存办公 App",
+        existingAppSaved: "办公 App 已保存",
         changeAppButton: "切换飞书 Bot",
         changeAppTitle: "切换到其他飞书 App",
         changeAppDescription:

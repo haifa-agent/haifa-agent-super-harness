@@ -1599,6 +1599,11 @@ export const enUS: Translations = {
         requestPermissions: "Request permissions",
         alreadyConnected:
           "Lark is already connected. If authorization expires, refresh the status and reconnect.",
+        useExistingApp: "Use an existing app",
+        existingAppDescription:
+          "Set up an existing Lark office app for this account. To act as a user, save the app and select Connect Lark to authorize.",
+        saveExistingApp: "Save office app",
+        existingAppSaved: "Office app saved",
         changeAppButton: "Change Lark app",
         changeAppTitle: "Switch to a different Lark app",
         changeAppDescription:
