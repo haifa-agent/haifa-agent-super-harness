@@ -38,9 +38,10 @@ async function readErrorDetail(response: Response): Promise<string> {
 
 export async function loadLarkIntegrationStatus(
   signal?: AbortSignal,
+  verify = false,
 ): Promise<LarkIntegrationStatus> {
   const response = await fetch(
-    `${getBackendBaseURL()}/api/integrations/lark/status`,
+    `${getBackendBaseURL()}/api/integrations/lark/status${verify ? "?verify=true" : ""}`,
     { signal },
   );
   if (!response.ok) {

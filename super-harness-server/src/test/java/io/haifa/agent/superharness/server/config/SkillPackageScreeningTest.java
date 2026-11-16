@@ -187,6 +187,7 @@ class SkillPackageScreeningTest {
         assertThat(receipt.path("reason_excerpt").asText()).isEqualTo(reason);
         assertThat(receipt.path("file").asText()).isEqualTo("SKILL.md");
         assertThat(receipt.path("executable").asBoolean()).isFalse();
+        assertThat(receipt.path("usage").path("cacheWriteTokens").isNull()).isTrue();
     }
 
     @Test void allowReceiptHasFileAndExecutableButNoReasonExcerpt() throws Exception {
@@ -195,13 +196,17 @@ class SkillPackageScreeningTest {
         Map<String, byte[]> files = Map.of("SKILL.md", "---\nname: sample-helper\ndescription: A test package\n---\nUse known facts.\n".getBytes(StandardCharsets.UTF_8));
         Files.write(directory.resolve("SKILL.md"), files.get("SKILL.md"));
         var model = new ControlledModel((request, count) -> ControlledModel.response(request, "screen", "{\"decision\":\"allow\"}",
-                List.of(), ModelFinishReason.STOP, ModelUsage.unpriced(10, 2)));
+                List.of(), ModelFinishReason.STOP, ModelUsage.inclusiveInput(
+                        java.util.OptionalLong.of(10), 2, java.util.OptionalLong.of(4),
+                        java.util.OptionalLong.of(0), java.util.OptionalLong.of(6), 0, false, 0)));
         scanner.writes(ignored -> LocalProbeModelTestSupport.binding(model)).screen(directory, files);
         var receipt = json.readTree(Files.readString(temporary.resolve("data/skills/scanner/screen-receipts.jsonl")));
         assertThat(receipt.path("file").asText()).isEqualTo("SKILL.md");
         assertThat(receipt.path("executable").asBoolean()).isFalse();
         assertThat(receipt.path("decision").asText()).isEqualTo("allow");
         assertThat(receipt.has("reason_excerpt")).isFalse();
+        assertThat(receipt.path("usage").path("cacheWriteTokens").isIntegralNumber()).isTrue();
+        assertThat(receipt.path("usage").path("cacheWriteTokens").asLong()).isZero();
     }
 
     @Test void reasonExcerptIsRedactedAndLengthBounded() throws Exception {

@@ -32,6 +32,8 @@ import com.lark.oapi.service.im.v1.model.Emoji;
 import com.lark.oapi.service.im.v1.model.GetMessageResourceReq;
 import com.lark.oapi.service.im.v1.model.GetMessageResourceResp;
 import java.io.ByteArrayOutputStream;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Locale;
@@ -48,6 +50,7 @@ import java.util.regex.Pattern;
 public final class LarkSdkFeishuTransport implements FeishuTransport {
     private static final System.Logger LOG = System.getLogger(LarkSdkFeishuTransport.class.getName());
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final VarHandle SOCKET = connectionHandle();
     /** Bounded attempts for a reply: one initial send plus at most one duplicate-safe retry. */
     private static final int REPLY_MAX_ATTEMPTS = 2;
     private static final long REPLY_RETRY_BACKOFF_MILLIS = 300L;
@@ -150,6 +153,27 @@ public final class LarkSdkFeishuTransport implements FeishuTransport {
     @Override
     public boolean running() {
         return running.get();
+    }
+
+    @Override
+    public Boolean online() {
+        synchronized (lock) {
+            if (wsClient == null) return false;
+            // The pinned SDK's listener assigns conn on handshake and clears it on disconnect.
+            // Client.start() returns before the handshake, so thread lifetime is not reachability.
+            return SOCKET == null ? null : SOCKET.getVolatile(wsClient) != null;
+        }
+    }
+
+    private static VarHandle connectionHandle() {
+        try {
+            Class<?> client = com.lark.oapi.ws.Client.class;
+            return MethodHandles.privateLookupIn(client, MethodHandles.lookup())
+                    .unreflectVarHandle(client.getDeclaredField("conn"));
+        } catch (ReflectiveOperationException | SecurityException unavailable) {
+            LOG.log(System.Logger.Level.WARNING, "Feishu socket status is unavailable for the installed SDK");
+            return null;
+        }
     }
 
     @Override

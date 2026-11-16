@@ -43,7 +43,9 @@ public final class LarkIntegrationFakes {
         private volatile String path = "C:/fake/lark-cli.exe";
         private volatile String version = "1.0.65";
         private volatile int authStatusExit;
-        private volatile String authStatusJson = "{\"identities\":{\"user\":{\"userName\":\"Fake User\"}}}";
+        private volatile String authStatusJson = """
+                {"identities":{"user":{"userName":"Fake User","status":"ready","available":true,"verified":true}}}
+                """;
         private volatile boolean failConfigInit;
         private final AtomicLong probes = new AtomicLong();
 

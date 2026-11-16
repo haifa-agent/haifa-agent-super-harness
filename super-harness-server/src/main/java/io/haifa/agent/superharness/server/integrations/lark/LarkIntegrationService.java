@@ -80,7 +80,12 @@ public final class LarkIntegrationService {
     public record CliState(boolean available, String path, String version, String error) {}
 
     /** Per-user authorization probe. */
-    public record AuthState(String status, String message, String user, boolean verified) {}
+    public record AuthState(String status, String message, String user, boolean verified,
+            String appName, Boolean botVerified, boolean userAuthorized, List<String> grantedScopes) {
+        public AuthState(String status, String message, String user, boolean verified) {
+            this(status, message, user, verified, null, null, false, null);
+        }
+    }
 
     /** Frozen {@code LarkIntegrationStatusResponse}. */
     public record Status(
@@ -258,6 +263,14 @@ public final class LarkIntegrationService {
     // ------------------------------------------------------------------ status
 
     public Status status(String ownerId) {
+        return status(ownerId, false);
+    }
+
+    public Status verifyStatus(String ownerId) {
+        return withUserLock(ownerId, () -> status(ownerId, true));
+    }
+
+    private Status status(String ownerId, boolean verify) {
         Optional<LarkSkillPackInstaller.Manifest> manifest = packs.manifest();
         Set<String> installed = packs.installedNames();
         AppCredentials app = readAppCredentials(ownerId);
@@ -283,7 +296,7 @@ public final class LarkIntegrationService {
                 enabled,
                 packs.packRoot().toString(),
                 new CliState(probe.available(), probe.path(), probe.version(), probe.error()),
-                cachedAuth(ownerId, probe),
+                cachedAuth(ownerId, probe, verify),
                 executionProvider == ExecutionProvider.DOCKER_AIO ? "gateway-download" : "none",
                 false,
                 switch (executionProvider) {
@@ -299,6 +312,7 @@ public final class LarkIntegrationService {
     private List<String> enabledSkills() {
         try {
             return skills.list().stream()
+                    .filter(row -> "integration-managed".equals(row.get("source")))
                     .filter(row -> LarkSkillCatalog.NAME_SET.contains(String.valueOf(row.get("name"))))
                     .filter(row -> Boolean.TRUE.equals(row.get("enabled")))
                     .map(row -> String.valueOf(row.get("name")))
@@ -409,13 +423,13 @@ public final class LarkIntegrationService {
         }
     }
 
-    private AuthState cachedAuth(String ownerId, LarkCliGateway.Probe probe) {
+    private AuthState cachedAuth(String ownerId, LarkCliGateway.Probe probe, boolean verify) {
         long now = nanoTime.getAsLong();
         AuthCache cached = authCache.get(ownerId);
-        if (cached != null && now - cached.atNanos() < AUTH_STATE_TTL_NANOS) {
+        if (!verify && cached != null && now - cached.atNanos() < AUTH_STATE_TTL_NANOS) {
             return cached.state();
         }
-        AuthState state = probeAuth(ownerId, probe, false);
+        AuthState state = probeAuth(ownerId, probe, verify);
         authCache.put(ownerId, new AuthCache(state, now));
         return state;
     }
@@ -647,15 +661,8 @@ public final class LarkIntegrationService {
             requireFlowLocked(ownerId, generation, "auth", code);
             // Authorization just changed; the cached status must not mask the new state.
             invalidateCliObservations(ownerId);
-            Status verified = status(ownerId);
-            AuthState auth = probeAuth(ownerId, cli.probe(), true);
-            Status withVerification = new Status(verified.installed(), verified.version(),
-                    verified.manifestVersion(), verified.latestAvailableVersion(),
-                    verified.runtimeVersionMismatch(), verified.appConfigured(), verified.appId(),
-                    verified.appBrand(), verified.skillsExpected(), verified.skillsInstalled(),
-                    verified.installedSkills(), verified.enabledSkills(), verified.installPath(),
-                    verified.cli(), auth, verified.sandboxRuntimeMode(), verified.sandboxRuntimeReady(),
-                    verified.sandboxRuntimeDetail());
+            Status withVerification = status(ownerId, true);
+            AuthState auth = withVerification.auth();
             boolean success = "authenticated".equals(auth.status());
             String message = success ? "Lark/Feishu authorization completed."
                     : (blank(auth.message()) ? "Lark/Feishu authorization status is still pending." : auth.message());
@@ -713,14 +720,8 @@ public final class LarkIntegrationService {
                         List.of(requireCliPath(), "auth", "status", "--json", "--verify"), AUTH_STATUS_TIMEOUT, false);
                 JsonNode user = status.path("identities").path("user");
                 if (!appId.equals(status.path("appId").asText()) || !user.path("verified").asBoolean()) return false;
-                JsonNode granted = user.has("scopes") ? user.path("scopes") : user.path("scope");
-                Set<String> actual = new java.util.HashSet<>();
-                if (granted.isArray()) {
-                    granted.forEach(scope -> actual.add(scope.asText()));
-                } else {
-                    actual.addAll(List.of(granted.asText().split("\\s+")));
-                }
-                return actual.containsAll(scopes);
+                List<String> actual = grantedScopes(user);
+                return actual != null && actual.containsAll(scopes);
             } catch (RuntimeException unavailable) {
                 return false;
             }
@@ -759,25 +760,39 @@ public final class LarkIntegrationService {
                             : message,
                     null, false);
         }
-        String user = null;
-        if (data != null) {
-            JsonNode identities = data.get("identities");
-            if (identities != null && identities.isObject()) {
-                JsonNode userInfo = identities.get("user");
-                if (userInfo != null && userInfo.isObject()) {
-                    user = firstText(userInfo, "userName", "openId");
-                }
-            }
-            if (user == null) {
-                String userName = text(data, "userName");
-                user = userName.isBlank() ? null : userName;
-            }
+        if (data == null) {
+            return new AuthState("error", "Lark CLI did not return authorization details", null, false);
         }
-        if (verify) {
-            return new AuthState("authenticated", "Lark/Feishu authorization is live-verified.", user, true);
+        JsonNode userInfo = data.path("identities").path("user");
+        JsonNode bot = data.path("identities").path("bot");
+        String user = firstText(userInfo, "userName", "openId");
+        if (blank(user)) user = firstText(data, "userName");
+        List<String> grants = grantedScopes(userInfo);
+        boolean userAuthorized = userInfo.hasNonNull("status")
+                ? "ready".equals(userInfo.path("status").asText()) && userInfo.path("available").asBoolean(true)
+                : !blank(user) || grants != null;
+        boolean userVerified = verify && userAuthorized && userInfo.path("verified").asBoolean();
+        return new AuthState("authenticated", userVerified
+                ? "Lark/Feishu authorization is live-verified."
+                : "Lark/Feishu credentials are configured locally but not live-verified.",
+                blank(user) ? null : user, userVerified, firstText(bot, "appName"),
+                verify && bot.path("verified").isBoolean() ? bot.path("verified").asBoolean() : null,
+                userAuthorized, userAuthorized ? grants : null);
+    }
+
+    private static List<String> grantedScopes(JsonNode user) {
+        JsonNode granted = user.has("scopes") ? user.path("scopes") : user.path("scope");
+        if (!granted.isTextual() && !granted.isArray()) return null;
+        Set<String> result = new TreeSet<>();
+        if (granted.isTextual()) {
+            result.addAll(List.of(granted.asText().strip().split("\\s+")));
+        } else {
+            granted.forEach(scope -> {
+                if (scope.isTextual()) result.add(scope.asText());
+            });
         }
-        return new AuthState("authenticated",
-                "Lark/Feishu credentials are configured locally but not live-verified.", user, false);
+        result.remove("");
+        return List.copyOf(result);
     }
 
     private void validateCredentialsWithCli(String ownerId, String appId, String appSecret, String brand) {

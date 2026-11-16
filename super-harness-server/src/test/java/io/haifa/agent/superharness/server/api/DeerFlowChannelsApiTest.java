@@ -79,6 +79,8 @@ class DeerFlowChannelsApiTest {
         assertThat(feishu.path("display_name").asText()).isEqualTo("Feishu");
         assertThat(feishu.path("auth_mode").asText()).isEqualTo("binding_code");
         assertThat(feishu.path("configured").asBoolean()).isFalse();
+        assertThat(feishu.path("runtime_online").isBoolean()).isTrue();
+        assertThat(feishu.path("runtime_online").asBoolean()).isFalse();
         assertThat(feishu.path("connectable").asBoolean()).isFalse();
         assertThat(feishu.path("credential_fields")).extracting(node -> node.path("name").asText())
                 .containsExactly("app_id", "app_secret", "domain");
@@ -89,6 +91,7 @@ class DeerFlowChannelsApiTest {
                 "{\"values\":{\"app_id\":\"cli_test_app\",\"app_secret\":\"feishu-secret-value\"}}");
         assertThat(configured.path("configured").asBoolean()).isTrue();
         assertThat(configured.path("connectable").asBoolean()).isTrue();
+        assertThat(configured.path("runtime_online").asBoolean()).isTrue();
         assertThat(configured.path("credential_values").path("app_id").asText()).isEqualTo("cli_test_app");
         assertThat(configured.path("credential_values").path("app_secret").asText()).isEqualTo("********");
         assertThat(configured.toString()).doesNotContain("feishu-secret-value");

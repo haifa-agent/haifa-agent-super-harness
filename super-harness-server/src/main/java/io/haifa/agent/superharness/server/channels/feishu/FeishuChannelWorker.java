@@ -147,6 +147,12 @@ public final class FeishuChannelWorker implements AutoCloseable {
         }
     }
 
+    public Boolean online() {
+        synchronized (lock) {
+            return transport == null ? false : transport.online();
+        }
+    }
+
     /**
      * Start or restart with the given runtime credentials. Throws on invalid domain or transport
      * construction failure (mapped to HTTP 400 by the channels API).

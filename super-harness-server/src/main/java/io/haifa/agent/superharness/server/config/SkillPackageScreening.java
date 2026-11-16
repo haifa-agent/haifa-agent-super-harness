@@ -8,6 +8,7 @@ import io.haifa.agent.model.api.AgentChatRequest;
 import io.haifa.agent.model.api.ModelCallId;
 import io.haifa.agent.model.api.ModelMessage;
 import io.haifa.agent.model.api.ModelMessageRole;
+import io.haifa.agent.model.api.ModelUsage;
 import io.haifa.agent.superharness.server.run.HaifaRunBridge;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -262,7 +263,7 @@ public final class SkillPackageScreening {
                     binding.snapshot(), List.of(ModelMessage.text(ModelMessageRole.SYSTEM, RUBRIC + REVIEW_SCOPE),
                     ModelMessage.text(ModelMessageRole.USER, content)),
                     List.of(), Math.min(512, binding.snapshot().maxOutputTokens()), Duration.ofSeconds(30), Map.of()));
-            receipt.set("usage", json.valueToTree(response.usage()));
+            recordUsage(receipt.putObject("usage"), response.usage());
             String raw = response.content() == null ? "" : response.content().strip();
             if (raw.startsWith("```")) raw = raw.replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "");
             JsonNode decision = json.readTree(raw);
@@ -294,6 +295,22 @@ public final class SkillPackageScreening {
             summary.set("static_findings", facts.path("findings"));
             summary.set("semantic_files", json.valueToTree(new java.util.TreeSet<>(changed)));
             return summary;
+    }
+
+    private static void recordUsage(ObjectNode target, ModelUsage usage) {
+        target.put("inputTokens", usage.inputTokens())
+                .put("outputTokens", usage.outputTokens())
+                .put("cacheHitTokens", usage.cacheHitTokens())
+                .put("cacheMissTokens", usage.cacheMissTokens())
+                .put("reasoningTokens", usage.reasoningTokens())
+                .put("costKnown", usage.costKnown())
+                .put("costMinorUnits", usage.costMinorUnits())
+                .put("inputTokensKnown", usage.inputTokensKnown())
+                .put("cacheHitTokensKnown", usage.cacheHitTokensKnown())
+                .put("cacheMissTokensKnown", usage.cacheMissTokensKnown());
+        usage.cacheWriteTokens().ifPresentOrElse(
+                value -> target.put("cacheWriteTokens", value),
+                () -> target.putNull("cacheWriteTokens"));
     }
 
     private static String redact(String text) {

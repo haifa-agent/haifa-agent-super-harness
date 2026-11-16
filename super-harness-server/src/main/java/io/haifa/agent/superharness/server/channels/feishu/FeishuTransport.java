@@ -38,6 +38,11 @@ public interface FeishuTransport extends AutoCloseable {
 
     boolean running();
 
+    /** Current transport connection. Null when this transport cannot inspect it. */
+    default Boolean online() {
+        return running();
+    }
+
     /** Reply with a simple interactive card (final assistant text or bind status). */
     void replyCard(String messageId, String text) throws Exception;
 

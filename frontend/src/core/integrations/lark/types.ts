@@ -15,6 +15,10 @@ export interface LarkAuthProbe {
   message: string | null;
   user: string | null;
   verified: boolean;
+  app_name?: string | null;
+  bot_verified?: boolean | null;
+  user_authorized?: boolean;
+  granted_scopes?: string[] | null;
 }
 
 export type LarkSandboxRuntimeMode =

@@ -1869,7 +1869,7 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
       body: readFileSync(
         path.resolve(
           process.cwd(),
-          "../backend/packages/harness/deerflow/capabilities/builtin.json",
+          "../super-harness-server/src/main/resources/upstream/deerflow/capabilities/builtin.json",
         ),
         "utf8",
       ),

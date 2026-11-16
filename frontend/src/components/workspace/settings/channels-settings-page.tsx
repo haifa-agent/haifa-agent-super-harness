@@ -7,6 +7,7 @@ import {
   PlugIcon,
   UnplugIcon,
 } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -39,11 +40,16 @@ import {
 } from "@/core/channels/provider-state";
 import type { ChannelConnection, ChannelProvider } from "@/core/channels/types";
 import { useI18n } from "@/core/i18n/hooks";
+import {
+  feishuChatState,
+  LARK_OFFICE_URL,
+} from "@/core/integrations/lark/overview";
 import { cn } from "@/lib/utils";
 
 import { ChannelProviderIcon } from "../channels/channel-provider-icon";
 import { ChannelRuntimeConfigDialog } from "../channels/channel-runtime-config-dialog";
 
+import { setSettingsDialogOpen } from "./settings-dialog-store";
 import { SettingsSection } from "./settings-section";
 
 function getProviderDescription(
@@ -141,6 +147,8 @@ function ChannelProviderItem({
     disconnectProviderMutation.variables === provider.provider;
   const connectionLabel = connection ? getConnectionLabel(connection) : null;
   const statusLabel = getStatusLabel(provider, connection, t);
+  const isFeishu = provider.provider === "feishu";
+  const lark = t.settings.integrations.lark;
   const unavailableReason = getProviderUnavailableReason(provider, t);
 
   const startConnect = (
@@ -188,7 +196,14 @@ function ChannelProviderItem({
         </ItemMedia>
         <ItemContent className="min-w-0">
           <ItemTitle className="w-full">
-            <span className="truncate">{provider.display_name}</span>
+            <span className="truncate">
+              {isFeishu ? lark.chatChannel : provider.display_name}
+            </span>
+            {isFeishu && (
+              <Badge variant="secondary">
+                {lark.chatStatuses[feishuChatState(provider)]}
+              </Badge>
+            )}
             <Badge
               variant={isConnected ? "default" : "outline"}
               className={cn(!isConnected && "text-muted-foreground")}
@@ -205,6 +220,18 @@ function ChannelProviderItem({
             {!isConnected && provider.unavailable_reason
               ? ` ${provider.unavailable_reason}`
               : ""}
+            {isFeishu && (
+              <>
+                {" "}
+                <Link
+                  className="underline underline-offset-4"
+                  href={LARK_OFFICE_URL}
+                  onClick={() => setSettingsDialogOpen(false)}
+                >
+                  {lark.officeTitle}
+                </Link>
+              </>
+            )}
           </ItemDescription>
         </ItemContent>
         <ItemActions className="ml-auto">

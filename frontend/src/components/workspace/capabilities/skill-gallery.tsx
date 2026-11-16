@@ -7,6 +7,7 @@ import {
   UploadIcon,
 } from "lucide-react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type ChangeEvent, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -31,6 +32,11 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/core/auth/AuthProvider";
 import { useI18n } from "@/core/i18n/hooks";
+import { useLarkIntegrationStatus } from "@/core/integrations/lark";
+import {
+  LARK_OFFICE_URL,
+  larkSkillCounts,
+} from "@/core/integrations/lark/overview";
 import {
   formatSkillSecurityFindings,
   MAX_SKILL_ARCHIVE_UPLOAD_BYTES,
@@ -51,7 +57,13 @@ const SkillExportDialog = dynamic(() => import("./skill-export-dialog"), {
   ssr: false,
 });
 
-export function SkillGallery({ query = "" }: { query?: string } = {}) {
+export function SkillGallery({
+  query = "",
+  initialFilter = "public",
+}: {
+  query?: string;
+  initialFilter?: "public" | "lark";
+} = {}) {
   const { t } = useI18n();
   const { skills, isLoading, error } = useSkills();
   const adminRequired =
@@ -69,19 +81,31 @@ export function SkillGallery({ query = "" }: { query?: string } = {}) {
           {t.common.error} {error.message}
         </div>
       ) : (
-        <SkillList skills={skills} query={query} />
+        <SkillList
+          skills={skills}
+          query={query}
+          initialFilter={initialFilter}
+        />
       )}
     </div>
   );
 }
 
-function SkillList({ skills, query }: { skills: Skill[]; query: string }) {
+function SkillList({
+  skills,
+  query,
+  initialFilter,
+}: {
+  skills: Skill[];
+  query: string;
+  initialFilter: "public" | "lark";
+}) {
   const { t, locale } = useI18n();
   const router = useRouter();
   function sourceLabel(skill: Skill) {
     if (skill.category === "public") return t.capabilities.builtin;
     if (skill.category === "custom") return t.capabilities.custom;
-    if (skill.category === "integrations")
+    if (skill.category === "integration" || skill.category === "integrations")
       return t.capabilities.integrationSkills;
     return t.capabilities.sharedSkills;
   }
@@ -89,7 +113,10 @@ function SkillList({ skills, query }: { skills: Skill[]; query: string }) {
   const { user } = useAuth();
   const isAdmin = user?.system_role === "admin";
   const [exportName, setExportName] = useState<string | null>(null);
-  const [filter, setFilter] = useState<string>("public");
+  const [filter, setFilter] = useState<string>(initialFilter);
+  const lark = useLarkIntegrationStatus(filter === "lark");
+  const larkCopy = t.settings.integrations.lark;
+  const counts = lark.data?.installed ? larkSkillCounts(lark.data) : null;
   const { mutate: enableSkill, isPending: isEnabling } = useEnableSkill();
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -102,13 +129,18 @@ function SkillList({ skills, query }: { skills: Skill[]; query: string }) {
       skills.filter((skill) => {
         const presented = presentSkill(skill, locale);
         return (
-          (filter === "all" || skill.category === filter) &&
+          (filter === "all" ||
+            skill.category === filter ||
+            (filter === "lark" &&
+              lark.data?.installed === true &&
+              skill.source === "integration-managed" &&
+              lark.data.installed_skills.includes(skill.name))) &&
           `${skill.name} ${skill.description} ${presented.title} ${presented.description}`
             .toLowerCase()
             .includes(query.trim().toLowerCase())
         );
       }),
-    [skills, filter, query, locale],
+    [skills, filter, query, locale, lark.data],
   );
   const handleCreateSkill = () => {
     router.push("/workspace/chats/new?mode=skill");
@@ -194,11 +226,36 @@ function SkillList({ skills, query }: { skills: Skill[]; query: string }) {
             <TabsTrigger value="custom" className="rounded-md px-3 text-xs">
               {t.capabilities.custom}
             </TabsTrigger>
+            <TabsTrigger value="lark" className="rounded-md px-3 text-xs">
+              {larkCopy.officeTitle}
+            </TabsTrigger>
             <TabsTrigger value="all" className="rounded-md px-3 text-xs">
               {t.capabilities.allSkills}
             </TabsTrigger>
           </TabsList>
         </Tabs>
+        {filter === "lark" && (
+          <div
+            className="flex flex-wrap items-center gap-2 text-sm"
+            role="status"
+          >
+            <span>
+              {counts
+                ? `${larkCopy.skillsInstalled(counts.installed, counts.expected)} · ${larkCopy.skillsEnabled(counts.enabled)}`
+                : lark.isLoading
+                  ? t.common.loading
+                  : lark.isError
+                    ? t.settings.integrations.loadFailed
+                    : larkCopy.notInstalled}
+            </span>
+            <Link
+              className="text-muted-foreground underline underline-offset-4"
+              href={LARK_OFFICE_URL}
+            >
+              {larkCopy.officeTitle}
+            </Link>
+          </div>
+        )}
         <div className="flex gap-2">
           <input
             ref={fileInputRef}

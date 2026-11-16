@@ -57,7 +57,7 @@ final class DeerFlowLarkIntegrationsApi implements HttpHandler {
                         methodNotAllowed(exchange, "GET");
                         return;
                     }
-                    send(exchange, 200, statusBody(owner));
+                    send(exchange, 200, statusBody(owner, "verify=true".equals(exchange.getRequestURI().getRawQuery())));
                 }
                 case INSTALL -> {
                     if (!"POST".equals(method)) {
@@ -181,8 +181,8 @@ final class DeerFlowLarkIntegrationsApi implements HttpHandler {
         }
     }
 
-    private Map<String, Object> statusBody(String owner) {
-        LarkIntegrationService.Status status = service.status(owner);
+    private Map<String, Object> statusBody(String owner, boolean verify) {
+        LarkIntegrationService.Status status = verify ? service.verifyStatus(owner) : service.status(owner);
         return status(AccessOwner.admin() ? status : status.redacted());
     }
 
@@ -212,6 +212,10 @@ final class DeerFlowLarkIntegrationsApi implements HttpHandler {
         auth.put("message", status.auth().message());
         auth.put("user", status.auth().user());
         auth.put("verified", status.auth().verified());
+        auth.put("app_name", status.auth().appName());
+        auth.put("bot_verified", status.auth().botVerified());
+        auth.put("user_authorized", status.auth().userAuthorized());
+        auth.put("granted_scopes", status.auth().grantedScopes());
         response.put("auth", auth);
         response.put("sandbox_runtime_mode", status.sandboxRuntimeMode());
         response.put("sandbox_runtime_ready", status.sandboxRuntimeReady());

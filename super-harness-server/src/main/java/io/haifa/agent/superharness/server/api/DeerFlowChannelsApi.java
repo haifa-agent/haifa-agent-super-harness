@@ -383,6 +383,10 @@ final class DeerFlowChannelsApi implements HttpHandler {
         }
         response.put("auth_mode", meta.authMode);
         response.put("connection_status", connectionStatus);
+        if ("feishu".equals(provider)) {
+            Boolean online = enabled && configured && feishuWorker != null ? feishuWorker.online() : Boolean.FALSE;
+            response.put("runtime_online", online);
+        }
         ArrayNode fields = response.putArray("credential_fields");
         for (CredentialField field : meta.fields) {
             ObjectNode node = fields.addObject();

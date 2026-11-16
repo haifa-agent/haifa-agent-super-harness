@@ -34,9 +34,10 @@ export function CapabilityCenter() {
   const router = useRouter();
   const pathname = usePathname();
   const tab = params.get("tab") === "skills" ? "skills" : "plugins";
-  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState({ tab, query: "" });
+  const query = search.tab === tab ? search.query : "";
   function changeTab(value: string) {
-    setQuery("");
+    setSearch({ tab, query: "" });
     router.replace(`${pathname}?tab=${value}`, { scroll: false });
   }
   return (
@@ -74,7 +75,9 @@ export function CapabilityCenter() {
                     : t.capabilities.searchSkills
                 }
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) =>
+                  setSearch({ tab, query: event.target.value })
+                }
               />
             </div>
           </header>
@@ -93,7 +96,13 @@ export function CapabilityCenter() {
           {tab === "plugins" ? (
             <PluginGallery query={query} />
           ) : (
-            <SkillGallery query={query} />
+            <SkillGallery
+              key={params.get("source") === "lark" ? "lark" : "all"}
+              query={query}
+              initialFilter={
+                params.get("source") === "lark" ? "lark" : "public"
+              }
+            />
           )}
         </div>
       </div>

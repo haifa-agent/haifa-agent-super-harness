@@ -23,6 +23,8 @@ import {
 import type { CapabilityInstallation } from "@/core/capabilities/types";
 import { useI18n } from "@/core/i18n/hooks";
 import type { Translations } from "@/core/i18n/locales/types";
+import { useLarkIntegrationStatus } from "@/core/integrations/lark";
+import { larkSkillCounts } from "@/core/integrations/lark/overview";
 import { isStaticWebsiteOnly } from "@/core/static-mode";
 import { cn } from "@/lib/utils";
 
@@ -55,7 +57,6 @@ function getPluginStatusLabel(
     return labels.installed;
   }
   if (adapter === "guide") return t.capabilities.directory.candidate;
-  if (adapter === "lark") return t.capabilities.notInstalled;
   return labels.notConfigured;
 }
 
@@ -83,10 +84,13 @@ export function PluginGallery({ query }: { query: string }) {
     ...new Set(
       definitions
         .map((item) => item.adapter)
-        .filter((name) => name !== "guide"),
+        .filter((name) => name !== "guide" && name !== "lark"),
     ),
   ];
   const states = useQueries({ queries: adapterNames.map(installationQuery) });
+  const lark = useLarkIntegrationStatus(
+    definitions.some((item) => item.adapter === "lark"),
+  );
   const client = useQueryClient();
   const [filter, setFilter] = useState("all");
   const [category, setCategory] = useState<PluginCategory | "all">("all");
@@ -126,14 +130,20 @@ export function PluginGallery({ query }: { query: string }) {
         (item) => item.plugin_id === plugin.id && item.installed,
       );
       const unavailable = states[adapterNames.indexOf(plugin.adapter)]?.isError;
+      const isLark = plugin.adapter === "lark";
+      const installed = isLark ? lark.data?.installed === true : !!status;
+      const counts = lark.data?.installed ? larkSkillCounts(lark.data) : null;
+      const larkCopy = t.settings.integrations.lark;
       return {
         id: plugin.id,
         category: plugin.category,
-        installed: !!status,
+        installed,
         search: `${Object.values(plugin.name).join(" ")} ${Object.values(plugin.description).join(" ")} ${plugin.aliases.join(" ")}`,
         node: (
           <PluginRow
-            name={catalogText(plugin.name, locale)}
+            name={
+              isLark ? larkCopy.officeTitle : catalogText(plugin.name, locale)
+            }
             description={catalogText(plugin.description, locale)}
             icon={
               <PluginIcon
@@ -142,13 +152,23 @@ export function PluginGallery({ query }: { query: string }) {
                 capabilityId={plugin.id}
               />
             }
-            label={getPluginStatusLabel(
-              plugin.adapter,
-              status,
-              unavailable,
-              t,
-              labels,
-            )}
+            label={
+              isLark
+                ? counts
+                  ? `${larkCopy.skillsInstalled(counts.installed, counts.expected)} · ${larkCopy.skillsEnabled(counts.enabled)}`
+                  : lark.isError
+                    ? labels.adapterError
+                    : lark.isLoading
+                      ? t.common.loading
+                      : larkCopy.notInstalled
+                : getPluginStatusLabel(
+                    plugin.adapter,
+                    status,
+                    unavailable,
+                    t,
+                    labels,
+                  )
+            }
             onDetails={() => setSelectedId(plugin.id)}
             detailsLabel={`${t.capabilities.details} ${catalogText(plugin.name, locale)}`}
           >
@@ -159,7 +179,7 @@ export function PluginGallery({ query }: { query: string }) {
               aria-label={`${plugin.adapter === "guide" ? copy.guide : t.capabilities.configure} ${catalogText(plugin.name, locale)}`}
               onClick={() => setSelectedId(plugin.id)}
             >
-              {getPluginActionLabel(plugin.adapter, !!status, canManage, t)}
+              {getPluginActionLabel(plugin.adapter, installed, canManage, t)}
             </Button>
           </PluginRow>
         ),

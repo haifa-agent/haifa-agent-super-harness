@@ -1376,6 +1376,28 @@ export interface Translations {
         authStarted: string;
         authorizationStillPending: string;
         permissionTitle: string;
+        officeTitle: string;
+        officeApp: string;
+        personalIdentity: string;
+        personalAuthorized: string;
+        personalNotAuthorized: string;
+        verifyStatus: string;
+        botVerified: string;
+        botVerificationFailed: string;
+        manageSkills: string;
+        skillsEnabled: (enabled: number) => string;
+        chatChannel: string;
+        chatStatuses: Record<
+          "online" | "offline" | "disabled" | "unconfigured" | "unknown",
+          string
+        >;
+        calendarGrants: string;
+        calendarGrantHint: string;
+        calendarOperations: Record<
+          "read" | "freeBusy" | "create" | "update" | "reply",
+          string
+        >;
+        grantStates: Record<"granted" | "missing" | "unknown", string>;
         recoveryTitle: string;
         recoveryDescription: string;
         recoveryAuthorizedTitle: string;

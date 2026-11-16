@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { larkIntegrationQueryKey } from "@/core/integrations/lark";
+
 import { enableSkill, SkillRequestError, uploadSkillArchive } from "./api";
 
 import { loadSkills } from ".";
@@ -25,8 +27,17 @@ export function useEnableSkill() {
     }) => {
       await enableSkill(skillName, enabled);
     },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["skills"] });
+    onSuccess: async (_result, { skillName }) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["skills"] }),
+        ...(skillName.startsWith("lark-")
+          ? [
+              queryClient.invalidateQueries({
+                queryKey: larkIntegrationQueryKey,
+              }),
+            ]
+          : []),
+      ]);
     },
   });
 }

@@ -14,17 +14,29 @@ import type { ChannelProviderId, ChannelRuntimeConfigValues } from "./types";
 
 export const channelProviderQueryKey = ["channelProviders"] as const;
 export const channelConnectionsQueryKey = ["channelConnections"] as const;
+const FEISHU_STATUS_REFRESH_MS = 15_000;
 
 export function useChannelProviders() {
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: channelProviderQueryKey,
     queryFn: () => listChannelProviders(),
+    refetchInterval: (query) =>
+      query.state.data?.providers.some(
+        (provider) =>
+          provider.provider === "feishu" &&
+          provider.enabled &&
+          provider.configured,
+      )
+        ? FEISHU_STATUS_REFRESH_MS
+        : false,
+    refetchIntervalInBackground: false,
   });
   return {
     enabled: data?.enabled ?? false,
     providers: data?.providers ?? [],
     isLoading,
     error,
+    refetch,
   };
 }
 

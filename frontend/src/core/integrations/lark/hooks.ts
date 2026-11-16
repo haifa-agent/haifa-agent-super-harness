@@ -12,10 +12,22 @@ import {
 
 export const larkIntegrationQueryKey = ["integrations", "lark"] as const;
 
-export function useLarkIntegrationStatus() {
+export function useLarkIntegrationStatus(enabled = true) {
   return useQuery({
     queryKey: larkIntegrationQueryKey,
     queryFn: ({ signal }) => loadLarkIntegrationStatus(signal),
+    enabled,
+    staleTime: 15_000,
+  });
+}
+
+export function useVerifyLarkIntegration() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => loadLarkIntegrationStatus(undefined, true),
+    onSuccess: (status) => {
+      queryClient.setQueryData(larkIntegrationQueryKey, status);
+    },
   });
 }
 

@@ -30,6 +30,7 @@ import {
 } from "@/core/channels/provider-state";
 import type { ChannelProvider } from "@/core/channels/types";
 import { useI18n } from "@/core/i18n/hooks";
+import { feishuChatState } from "@/core/integrations/lark/overview";
 import { cn } from "@/lib/utils";
 
 import { ChannelProviderIcon } from "./channel-provider-icon";
@@ -123,6 +124,8 @@ export function WorkspaceChannelsList() {
       <SidebarGroupLabel>{t.sidebar.channels}</SidebarGroupLabel>
       <SidebarMenu>
         {visibleProviders.map((provider) => {
+          const isFeishu = provider.provider === "feishu";
+          const lark = t.settings.integrations.lark;
           const canEditRuntimeConfig = providerCanEditRuntimeConfig(provider);
           const isConnected =
             !provider.unavailable_reason &&
@@ -142,9 +145,16 @@ export function WorkspaceChannelsList() {
                   provider={provider.provider}
                   className="size-5 shrink-0"
                 />
-                <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                  {provider.display_name}
-                </span>
+                <div className="min-w-0 flex-1">
+                  <span className="block truncate text-sm leading-tight font-medium">
+                    {isFeishu ? lark.chatChannel : provider.display_name}
+                  </span>
+                  {isFeishu && (
+                    <span className="text-muted-foreground block truncate text-xs leading-tight">
+                      {lark.chatStatuses[feishuChatState(provider)]}
+                    </span>
+                  )}
+                </div>
                 <Button
                   type="button"
                   size="sm"

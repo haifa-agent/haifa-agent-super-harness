@@ -3,12 +3,14 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2Icon,
+  CheckIcon,
   CopyIcon,
   ExternalLinkIcon,
   PlugZapIcon,
   RefreshCwIcon,
   XCircleIcon,
 } from "lucide-react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -26,6 +28,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/core/auth/AuthProvider";
+import { useChannelProviders } from "@/core/channels/hooks";
 import { writeTextToClipboard } from "@/core/clipboard";
 import { useI18n } from "@/core/i18n/hooks";
 import {
@@ -42,7 +45,15 @@ import {
   useSetLarkAppCredentials,
   useStartLarkAuthorization,
   useStartLarkConfiguration,
+  useVerifyLarkIntegration,
 } from "@/core/integrations/lark";
+import {
+  calendarGrant,
+  calendarOperations,
+  feishuChatState,
+  LARK_SKILLS_URL,
+  larkSkillCounts,
+} from "@/core/integrations/lark/overview";
 import { parseLarkRecoveryScope } from "@/core/integrations/lark/recovery";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
@@ -140,6 +151,16 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
   const isAdmin = user?.system_role === "admin";
   const { data, isLoading, error, refetch, isFetching } =
     useLarkIntegrationStatus();
+  const channels = useChannelProviders();
+  const verify = useVerifyLarkIntegration();
+  const copy = t.settings.integrations.lark;
+  const chatProvider = channels.providers.find(
+    (provider) => provider.provider === "feishu",
+  );
+  const chatState =
+    !chatProvider && !channels.isLoading && !channels.error
+      ? "disabled"
+      : feishuChatState(chatProvider, Boolean(channels.error));
   const install = useInstallLarkIntegration();
   const startConfig = useStartLarkConfiguration();
   const completeConfig = useCompleteLarkConfiguration();
@@ -178,9 +199,11 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
     connectBusy ||
     isCheckingConnection ||
     pendingFlow != null ||
-    install.isPending;
-  const credentialsConfigured = data?.auth.status === "authenticated";
-  const isConnected = credentialsConfigured && data?.auth.verified === true;
+    install.isPending ||
+    verify.isPending;
+  const credentialsConfigured = data?.app_configured === true;
+  const isConnected = data?.auth.verified === true;
+  const skills = data ? larkSkillCounts(data) : null;
   // The sandbox-runtime readiness row only applies when the sandbox actually
   // runs lark-cli (AIO / provisioner modes report a non-"none" mode).
   const showSandboxRuntime = !!data && data.sandbox_runtime_mode !== "none";
@@ -651,7 +674,7 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
             <PlugZapIcon className="size-5" />
           </div>
           <div>
-            <CardTitle>{t.settings.integrations.lark.title}</CardTitle>
+            <CardTitle>{copy.officeTitle}</CardTitle>
             <CardDescription>
               {t.settings.integrations.lark.description}
             </CardDescription>
@@ -661,13 +684,27 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void refetch()}
-            disabled={isFetching}
+            onClick={() => {
+              void channels.refetch();
+              if (!data?.app_configured || !data.cli.available) {
+                void refetch();
+                return;
+              }
+              verify.mutate(undefined, {
+                onError: (err) => toast.error(err.message),
+              });
+            }}
+            disabled={isFetching || integrationBusy}
           >
             <RefreshCwIcon
-              className={cn("size-4", isFetching && "animate-spin")}
+              className={cn(
+                "size-4",
+                (isFetching || verify.isPending) && "animate-spin",
+              )}
             />
-            {t.settings.integrations.refresh}
+            {data?.app_configured && data.cli.available
+              ? copy.verifyStatus
+              : t.settings.integrations.refresh}
           </Button>
         </CardAction>
       </CardHeader>
@@ -684,12 +721,56 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
               {error instanceof Error ? error.message : String(error)}
             </AlertDescription>
           </Alert>
-        ) : data ? (
+        ) : data && skills ? (
           <>
+            <div className="grid gap-3 md:grid-cols-3">
+              <OverviewItem
+                label={copy.chatChannel}
+                value={copy.chatStatuses[chatState]}
+              />
+              <OverviewItem
+                label={copy.officeApp}
+                value={
+                  data.auth.app_name ?? data.app_id ?? copy.authNotConfigured
+                }
+                detail={
+                  data.auth.bot_verified === true
+                    ? copy.botVerified
+                    : data.auth.bot_verified === false
+                      ? copy.botVerificationFailed
+                      : credentialsConfigured
+                        ? copy.authConfigured
+                        : undefined
+                }
+              />
+              <OverviewItem
+                label={copy.personalIdentity}
+                value={
+                  data.auth.user ??
+                  (data.auth.status === "error" ||
+                  data.auth.status === "unavailable"
+                    ? copy.grantStates.unknown
+                    : isConnected
+                      ? copy.connectedTitle
+                      : data.auth.user_authorized
+                        ? copy.personalAuthorized
+                        : copy.personalNotAuthorized)
+                }
+                detail={
+                  data.auth.user
+                    ? isConnected
+                      ? copy.connectedTitle
+                      : data.auth.user_authorized
+                        ? copy.personalAuthorized
+                        : copy.grantStates.unknown
+                    : undefined
+                }
+              />
+            </div>
             <div
               className={cn(
                 "grid gap-3",
-                showSandboxRuntime ? "md:grid-cols-4" : "md:grid-cols-3",
+                showSandboxRuntime ? "md:grid-cols-3" : "md:grid-cols-2",
               )}
             >
               <StatusItem
@@ -698,34 +779,31 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
                 value={
                   data.installed
                     ? t.settings.integrations.lark.skillsInstalled(
-                        data.skills_installed,
-                        data.skills_expected,
+                        skills.installed,
+                        skills.expected,
                       )
                     : t.settings.integrations.lark.notInstalled
                 }
-              />
+              >
+                {data.installed && (
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                    <span>{copy.skillsEnabled(skills.enabled)}</span>
+                    <Link
+                      className="underline underline-offset-4"
+                      href={LARK_SKILLS_URL}
+                    >
+                      {copy.manageSkills}
+                    </Link>
+                  </div>
+                )}
+              </StatusItem>
               <StatusItem
-                label={t.settings.integrations.lark.gatewayCli}
+                label={copy.title}
                 ok={data.cli.available}
                 value={
                   data.cli.available
                     ? (data.cli.version ?? t.settings.integrations.available)
                     : (data.cli.error ?? t.settings.integrations.unavailable)
-                }
-              />
-              <StatusItem
-                label={t.settings.integrations.lark.auth}
-                ok={isConnected}
-                value={
-                  data.auth.status === "authenticated"
-                    ? data.auth.verified
-                      ? (data.auth.user ?? t.settings.integrations.connected)
-                      : data.auth.user
-                        ? t.settings.integrations.lark.authConfiguredFor(
-                            data.auth.user,
-                          )
-                        : t.settings.integrations.lark.authConfigured
-                    : t.settings.integrations.lark.authNotConfigured
                 }
               />
               {showSandboxRuntime && (
@@ -747,6 +825,44 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
                 />
               )}
             </div>
+            {data.app_configured && (
+              <section
+                aria-label={copy.calendarGrants}
+                className="space-y-2 rounded-lg border p-3"
+              >
+                <h3 className="text-sm font-medium">{copy.calendarGrants}</h3>
+                <ul className="grid gap-2 sm:grid-cols-2">
+                  {(
+                    Object.keys(
+                      calendarOperations,
+                    ) as (keyof typeof calendarOperations)[]
+                  ).map((operation) => {
+                    const granted = calendarGrant(
+                      data,
+                      calendarOperations[operation],
+                    );
+                    return (
+                      <li
+                        key={operation}
+                        className="flex items-center justify-between gap-2 text-sm"
+                      >
+                        <span>{copy.calendarOperations[operation]}</span>
+                        <Badge
+                          variant={
+                            granted === "granted" ? "secondary" : "outline"
+                          }
+                        >
+                          {copy.grantStates[granted]}
+                        </Badge>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <p className="text-muted-foreground text-xs">
+                  {copy.calendarGrantHint}
+                </p>
+              </section>
+            )}
             {data.installed && (
               <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
                 <span>
@@ -773,7 +889,6 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
             <IntegrationNextStep
               installed={data.installed}
               cliReady={data.cli.available}
-              connected={isConnected}
               credentialsConfigured={credentialsConfigured}
             />
             {recoveryScope && (
@@ -800,7 +915,11 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
                     {t.settings.integrations.lark.permissionDescription}
                   </p>
                 </div>
-                <div className="mt-3 flex flex-wrap gap-2">
+                <div
+                  className="mt-3 flex flex-wrap gap-2"
+                  role="group"
+                  aria-label={copy.permissionTitle}
+                >
                   {permissionDomains.map((domain) => {
                     const selected = selectedAuthDomains.includes(domain.id);
                     return (
@@ -809,10 +928,14 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
                         type="button"
                         size="sm"
                         variant={selected ? "default" : "outline"}
+                        aria-pressed={selected}
                         onClick={() => toggleAuthDomain(domain.id)}
                         disabled={integrationBusy}
                         title={domain.description}
                       >
+                        {selected && (
+                          <CheckIcon aria-hidden="true" className="size-4" />
+                        )}
                         {domain.label}
                       </Button>
                     );
@@ -837,7 +960,11 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
               </div>
             )}
             <div className="flex flex-wrap items-center gap-2">
-              <Button onClick={handleInstall} disabled={installDisabled}>
+              <Button
+                variant={data.installed ? "outline" : "default"}
+                onClick={handleInstall}
+                disabled={installDisabled}
+              >
                 {install.isPending ? (
                   <RefreshCwIcon className="size-4 animate-spin" />
                 ) : null}
@@ -848,7 +975,7 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
                     : t.settings.integrations.install}
               </Button>
               <Button
-                variant="outline"
+                variant={data.installed ? "default" : "outline"}
                 onClick={() => void handleConnect()}
                 disabled={authDisabled}
               >
@@ -898,6 +1025,7 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
                       type="button"
                       size="sm"
                       variant={changeAppBrand === brand ? "default" : "outline"}
+                      aria-pressed={changeAppBrand === brand}
                       onClick={() => setChangeAppBrand(brand)}
                       disabled={integrationBusy}
                     >
@@ -1069,14 +1197,34 @@ function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
   );
 }
 
+function OverviewItem({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail?: string;
+}) {
+  return (
+    <div className="space-y-1 rounded-lg border p-3">
+      <div className="text-muted-foreground text-xs">{label}</div>
+      <div className="text-sm font-medium break-words">{value}</div>
+      {detail && <div className="text-muted-foreground text-xs">{detail}</div>}
+    </div>
+  );
+}
+
 function StatusItem({
   label,
   ok,
   value,
+  children,
 }: {
   label: string;
   ok: boolean;
   value: string;
+  children?: React.ReactNode;
 }) {
   const { t } = useI18n();
   return (
@@ -1093,6 +1241,7 @@ function StatusItem({
         </Badge>
       </div>
       <div className="text-muted-foreground text-sm break-words">{value}</div>
+      {children}
     </div>
   );
 }
@@ -1100,12 +1249,10 @@ function StatusItem({
 function IntegrationNextStep({
   installed,
   cliReady,
-  connected,
   credentialsConfigured,
 }: {
   installed: boolean;
   cliReady: boolean;
-  connected: boolean;
   credentialsConfigured: boolean;
 }) {
   const { t } = useI18n();
@@ -1129,27 +1276,8 @@ function IntegrationNextStep({
       </Alert>
     );
   }
-  if (connected) {
-    return (
-      <Alert>
-        <CheckCircle2Icon />
-        <AlertTitle>{t.settings.integrations.lark.connectedTitle}</AlertTitle>
-        <AlertDescription>
-          {t.settings.integrations.lark.connectedDescription}
-        </AlertDescription>
-      </Alert>
-    );
-  }
   if (credentialsConfigured) {
-    return (
-      <Alert>
-        <CheckCircle2Icon />
-        <AlertTitle>{t.settings.integrations.lark.configuredTitle}</AlertTitle>
-        <AlertDescription>
-          {t.settings.integrations.lark.configuredDescription}
-        </AlertDescription>
-      </Alert>
-    );
+    return null;
   }
   return (
     <Alert>

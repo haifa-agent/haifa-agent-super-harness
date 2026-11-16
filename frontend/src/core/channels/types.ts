@@ -18,6 +18,7 @@ export interface ChannelProvider {
   unavailable_reason?: string | null;
   auth_mode: string;
   connection_status: string;
+  runtime_online?: boolean | null;
   credential_fields: ChannelCredentialField[];
   credential_values?: ChannelRuntimeConfigValues;
 }

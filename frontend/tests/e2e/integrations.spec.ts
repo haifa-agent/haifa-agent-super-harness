@@ -36,6 +36,170 @@ function configuredLarkStatus() {
 }
 
 test.describe("Integrations settings", () => {
+  test("keeps Feishu office and skill status consistent across entries", async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page);
+    await page.clock.install();
+    let calendarEnabled = false;
+    let chatOnline = true;
+    let verificationRequests = 0;
+    const calendar = "lark-calendar";
+    const catalogRequests: string[] = [];
+    await page.route("**/api/capabilities/installations/lark", (route) => {
+      catalogRequests.push(route.request().url());
+      return route.fulfill({ status: 404, json: {} });
+    });
+    await page.route("**/api/channels/providers", (route) =>
+      route.fulfill({
+        json: {
+          enabled: true,
+          providers: [
+            {
+              provider: "feishu",
+              display_name: "Feishu",
+              enabled: true,
+              configured: true,
+              auth_mode: "binding_code",
+              connection_status: "connected",
+              runtime_online: chatOnline,
+              credential_fields: [],
+            },
+          ],
+        },
+      }),
+    );
+    await page.route(/\/api\/integrations\/lark\/status(?:\?.*)?$/, (route) => {
+      const verifies =
+        new URL(route.request().url()).searchParams.get("verify") === "true";
+      if (verifies) verificationRequests += 1;
+      const status = configuredLarkStatus();
+      return route.fulfill({
+        json: {
+          ...status,
+          skills_installed: 2,
+          installed_skills: [calendar, "lark-doc"],
+          enabled_skills: calendarEnabled
+            ? [calendar, "lark-doc"]
+            : ["lark-doc"],
+          auth: {
+            ...status.auth,
+            verified: verifies,
+            app_name: "Fixture Office App",
+            bot_verified: verifies ? true : null,
+            user_authorized: true,
+            granted_scopes: [
+              "calendar:calendar.event:read",
+              "calendar:calendar.free_busy:read",
+              "calendar:calendar.event:create",
+            ],
+          },
+        },
+      });
+    });
+    await page.route("**/api/skills", (route) =>
+      route.fulfill({
+        json: {
+          skills: [
+            {
+              name: calendar,
+              description: "Calendar",
+              category: "integration",
+              source: "integration-managed",
+              enabled: calendarEnabled,
+            },
+            {
+              name: "lark-doc",
+              description: "Documents",
+              category: "integration",
+              source: "integration-managed",
+              enabled: true,
+            },
+            {
+              name: "other-skill",
+              description: "Unrelated",
+              category: "custom",
+              enabled: true,
+            },
+          ],
+        },
+      }),
+    );
+    await page.route(`**/api/skills/${calendar}`, (route) => {
+      expect(route.request().method()).toBe("PUT");
+      const payload = route.request().postDataJSON() as { enabled: boolean };
+      calendarEnabled = payload.enabled;
+      return route.fulfill({ json: { success: true } });
+    });
+
+    await page.goto("/workspace/capabilities?tab=plugins");
+    await expect(
+      page.getByText("2/27 skills installed · 1 enabled", { exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Configure Lark / Feishu", exact: true })
+      .click();
+    const dialog = page.getByRole("dialog", { name: "Lark / Feishu" });
+    await expect(dialog.getByText("Online", { exact: true })).toBeVisible();
+    chatOnline = false;
+    await page.clock.fastForward(15_000);
+    await expect(dialog.getByText("Offline", { exact: true })).toBeVisible();
+    chatOnline = true;
+    await page.clock.fastForward(15_000);
+    await expect(dialog.getByText("Online", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("Fixture Office App")).toBeVisible();
+    await expect(dialog.getByText("existing-user")).toBeVisible();
+    const permissions = dialog.getByRole("region", {
+      name: "Personal calendar permissions",
+    });
+    await expect(
+      permissions.getByRole("listitem").filter({ hasText: "Read events" }),
+    ).toHaveText(/Read events\s*Granted/);
+    await expect(
+      permissions
+        .getByRole("listitem")
+        .filter({ hasText: "Check availability" }),
+    ).toHaveText(/Check availability\s*Granted/);
+    await expect(
+      permissions.getByRole("listitem").filter({ hasText: "Create events" }),
+    ).toHaveText(/Create events\s*Not granted/);
+    const calendarToggle = dialog
+      .getByRole("group", { name: "Permissions to request" })
+      .getByRole("button", { name: /Calendar/ });
+    await expect(calendarToggle).toHaveAttribute("aria-pressed", "false");
+    await calendarToggle.focus();
+    await page.keyboard.press("Space");
+    await expect(calendarToggle).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Enter");
+    await expect(calendarToggle).toHaveAttribute("aria-pressed", "false");
+    await dialog.getByRole("button", { name: "Verify connection" }).click();
+    await expect(dialog.getByText("App identity verified")).toBeVisible();
+    expect(verificationRequests).toBe(1);
+
+    await dialog.getByRole("link", { name: "Manage Feishu skills" }).click();
+    await expect(
+      page.getByRole("tab", { name: "Feishu office" }),
+    ).toHaveAttribute("aria-selected", "true");
+    await expect(
+      page.getByText("2/27 skills installed · 1 enabled", { exact: true }),
+    ).toBeVisible();
+    const calendarSkill = page.getByRole("switch", { name: /lark-calendar/ });
+    await expect(calendarSkill).not.toBeChecked();
+    await expect(page.getByText("other-skill", { exact: true })).toHaveCount(0);
+    await calendarSkill.click();
+    await expect(calendarSkill).toBeChecked();
+    await expect(
+      page.getByText("2/27 skills installed · 2 enabled", { exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole("link", { name: "Feishu office", exact: true })
+      .click();
+    await expect(dialog.getByText("2 enabled", { exact: true })).toBeVisible();
+    await page.reload();
+    await expect(dialog.getByText("2 enabled", { exact: true })).toBeVisible();
+    expect(catalogRequests).toEqual([]);
+  });
+
   test("opens the Lark plugin from a capability deep link", async ({
     page,
   }) => {

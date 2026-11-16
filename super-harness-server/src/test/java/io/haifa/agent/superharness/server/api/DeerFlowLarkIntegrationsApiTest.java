@@ -120,6 +120,36 @@ class DeerFlowLarkIntegrationsApiTest {
     }
 
     @Test
+    void statusSeparatesApplicationVerificationFromPersonalGrants() throws Exception {
+        cli.makeAvailable("1.0.65");
+        cli.authStatus(0, """
+                {"identities":{
+                  "bot":{"appName":"Office App","verified":true},
+                  "user":{"userName":"Office User","status":"ready","available":true,"verified":false,
+                          "scope":"calendar:calendar.free_busy:read calendar:calendar.event:read calendar:calendar.event:read"}
+                }}
+                """);
+        service.switchCredentials("alice", "cli_alice", "fixture-app-secret", "feishu");
+
+        JsonNode local = json.readTree(request("GET", "/api/integrations/lark/status", null, "alice", "user").body())
+                .path("auth");
+        assertThat(local.path("user_authorized").asBoolean()).isTrue();
+        assertThat(local.path("user").asText()).isEqualTo("Office User");
+        assertThat(local.path("bot_verified").isNull()).isTrue();
+        assertThat(local.path("granted_scopes")).extracting(JsonNode::asText)
+                .containsExactly("calendar:calendar.event:read", "calendar:calendar.free_busy:read");
+
+        JsonNode checked = json.readTree(request("GET", "/api/integrations/lark/status?verify=true", null, "alice", "user").body())
+                .path("auth");
+        assertThat(checked.path("app_name").asText()).isEqualTo("Office App");
+        assertThat(checked.path("bot_verified").asBoolean()).isTrue();
+        assertThat(checked.path("verified").asBoolean()).isFalse();
+        assertThat(checked.path("granted_scopes")).isEqualTo(local.path("granted_scopes"));
+        assertThat(json.readTree(request("GET", "/api/integrations/lark/status", null, "alice", "user").body())
+                .path("auth")).isEqualTo(checked);
+    }
+
+    @Test
     void installRequiresAdminAndReinstallsIdempotently() throws Exception {
         HttpResponse<String> denied = request("POST", "/api/integrations/lark/install", null, "alice", "user");
         assertThat(denied.statusCode()).isEqualTo(403);
