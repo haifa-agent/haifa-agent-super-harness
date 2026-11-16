@@ -520,7 +520,9 @@ export function HumanInputCard({
                     <span className="size-2 rounded-full bg-amber-500/80 inline-block" />
                     <span className="size-2 rounded-full bg-emerald-500/80 inline-block" />
                     <span className="ml-2 font-medium text-slate-300">
-                      {request.content_type || "command"}
+                      {request.content_type?.length
+                        ? request.content_type
+                        : "command"}
                     </span>
                   </div>
                 </div>

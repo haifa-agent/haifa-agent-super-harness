@@ -77,6 +77,9 @@ and revocable session consent to the chat UI. The card displays each tool's
 target, effects, and details. Approval responses use the existing Human Input
 reply, and session status and revocation use the same-origin Gateway proxy.
 
+Patch `0008-compact-resolved-tool-approvals.patch` collapses answered approvals
+to a summary row. Users can expand the row to review the original request.
+
 Do not follow DeerFlow `main`. An update requires an explicit new approved
 commit, a fresh archive import, license review, manifest/hash regeneration,
 patch-state review, and the relevant frontend checks. Never refresh the
