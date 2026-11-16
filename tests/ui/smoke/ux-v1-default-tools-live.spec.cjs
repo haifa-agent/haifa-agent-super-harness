@@ -140,8 +140,9 @@ async function driveToTerminal(page, context, identity, { timeoutMs = 300_000, t
     // A Run waiting on a frozen approval card reports "interrupted"; it is terminal only when no
     // approvable card appears for that Run.
     const approve = page
-      .getByTestId("human-input-card")
-      .getByRole("button", { name: "Approve", exact: true });
+      .getByTestId("tool-approval-card")
+      .getByRole("button", { name: "Allow once", exact: true })
+      .or(page.getByTestId("human-input-card").getByRole("button", { name: "Approve", exact: true }));
     const approvable = (await approve.count()) > 0 && (await approve.last().isEnabled());
     if (!approvable && TERMINAL.has(status)) {
       if (status !== "interrupted") return { status, approvals };
