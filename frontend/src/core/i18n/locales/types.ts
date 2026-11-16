@@ -1356,6 +1356,10 @@ export interface Translations {
         connectedAction: string;
         requestPermissions: string;
         alreadyConnected: string;
+        useExistingApp: string;
+        existingAppDescription: string;
+        saveExistingApp: string;
+        existingAppSaved: string;
         changeAppButton: string;
         changeAppTitle: string;
         changeAppDescription: string;
