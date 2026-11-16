@@ -700,6 +700,33 @@ public final class LarkIntegrationService {
         throw new LarkTimeoutException("Lark app registration is still pending: " + lastDetail);
     }
 
+    public String configuredAppId(String ownerId) {
+        return readAppCredentials(ownerId).appId();
+    }
+
+    /** Check the actual personal grant before letting the channel continue the original task. */
+    public boolean hasVerifiedUserScopes(String ownerId, String appId, List<String> scopes) {
+        return withUserLock(ownerId, () -> {
+            if (appId == null || !appId.equals(configuredAppId(ownerId)) || scopes.isEmpty()) return false;
+            try {
+                JsonNode status = runJson(ownerId,
+                        List.of(requireCliPath(), "auth", "status", "--json", "--verify"), AUTH_STATUS_TIMEOUT, false);
+                JsonNode user = status.path("identities").path("user");
+                if (!appId.equals(status.path("appId").asText()) || !user.path("verified").asBoolean()) return false;
+                JsonNode granted = user.has("scopes") ? user.path("scopes") : user.path("scope");
+                Set<String> actual = new java.util.HashSet<>();
+                if (granted.isArray()) {
+                    granted.forEach(scope -> actual.add(scope.asText()));
+                } else {
+                    actual.addAll(List.of(granted.asText().split("\\s+")));
+                }
+                return actual.containsAll(scopes);
+            } catch (RuntimeException unavailable) {
+                return false;
+            }
+        });
+    }
+
     private AuthState probeAuth(String ownerId, LarkCliGateway.Probe probe, boolean verify) {
         if (!probe.available()) {
             return new AuthState("unavailable", "lark-cli is not installed on the Gateway", null, false);

@@ -87,6 +87,8 @@ Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业�
 
 Lark 办公插件的冻结界面定向验收使用现有 UI runner 的 `-W20Lark`，只消费主控提供的真实产品安装种子和官方归档；范围与命令见[开发手册](docs/development-manual.md#lark-办公插件定向-ui-验收)。此用例证明技能展示、启用和真实 Skill 加载，真实 OAuth 与办公文档 Run 仍须单独验收。
 
+部署飞书聊天渠道时，在 Gateway 环境配置 `HAIFA_SUPER_HARNESS_PUBLIC_WEB_URL` 为用户能打开的 Super Harness 前端地址，例如 `https://harness.example.com`。使用本机调试地址时可填 `http://127.0.0.1:35618`。原 Bot 的个人办公操作返回缺失权限时，授权卡会用该地址打开已填好缺失权限的插件页。用户完成飞书授权后，回原消息点「继续原任务」。Gateway 检查当前个人权限并在原对话启动续做，写操作使用既有审批。配置前端地址后重启 Gateway 生效。
+
 ## 冻结前端本地准备与启动
 
 每个验收 worktree 使用独立的 `frontend/node_modules`、`.next`、端口和数据目录；冻结来源按固定 DeerFlow

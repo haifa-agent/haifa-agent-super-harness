@@ -1620,6 +1620,12 @@ export const enUS: Translations = {
         authorizationStillPending:
           'Authorization is not complete yet. Finish it in the browser; DeerFlow keeps checking automatically. You can click "I completed authorization" if the page does not update.',
         permissionTitle: "Authorization scope",
+        recoveryTitle: "Grant the Feishu permissions for this task",
+        recoveryDescription:
+          "The missing personal permissions are filled in below. Confirm them in Feishu, then return to your original chat.",
+        recoveryAuthorizedTitle: "Feishu authorization completed",
+        recoveryAuthorizedDescription:
+          "Return to the original Feishu chat and click Continue original task on the authorization card.",
         permissionDescription:
           "By default, DeerFlow only completes the base sign-in and does not request any business permissions. Select the domains you need here; connected users can re-authorize to add more (scopes accumulate).",
         authDomains: {

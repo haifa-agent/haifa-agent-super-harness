@@ -1,5 +1,6 @@
 package io.haifa.agent.superharness.server.channels.feishu;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.haifa.agent.superharness.server.api.DeerFlowConversationService;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -35,6 +36,8 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
     private final Set<String> sharedToolKeys;
     private final long minGapMs;
     private final int maxProgressEvents;
+    private final String runId;
+    private final Set<String> missingLarkScopes = new LinkedHashSet<>();
 
     private boolean sawEnd;
     private boolean sawError;
@@ -68,7 +71,14 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
      */
     FeishuRunProjector(
             ProgressListener progress, long minGapMs, int maxProgressEvents, Set<String> sharedToolKeys) {
+        this(progress, minGapMs, maxProgressEvents, sharedToolKeys, "");
+    }
+
+    FeishuRunProjector(
+            ProgressListener progress, long minGapMs, int maxProgressEvents, Set<String> sharedToolKeys,
+            String runId) {
         this.sharedToolKeys = sharedToolKeys;
+        this.runId = runId;
         this.progress = progress == null ? summary -> {} : progress;
         this.minGapMs = Math.max(0L, minGapMs);
         this.maxProgressEvents = Math.max(1, maxProgressEvents);
@@ -153,6 +163,23 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
         return List.copyOf(progressLog);
     }
 
+    FeishuAgentBridge.LarkAuthorization larkAuthorization() {
+        List<String> scopes = FeishuLarkAuthorization.parseScopes(String.join(" ", missingLarkScopes));
+        return runId.isBlank() || scopes.isEmpty() ? null : new FeishuAgentBridge.LarkAuthorization(runId, scopes);
+    }
+
+    void recoverLarkScopes(JsonNode messages) {
+        // Approving another command rejoins the same Run with a new observer. Its progress
+        // cursor can skip earlier receipts, which are still available in the durable state.
+        for (JsonNode message : messages) {
+            if (runId.equals(message.path("run_id").asText()) && "tool".equals(message.path("type").asText())
+                    && "execution_run".equals(message.path("name").asText())) {
+                missingLarkScopes.addAll(FeishuLarkAuthorization.missingScopes(
+                        FeishuInteraction.messageText(message)));
+            }
+        }
+    }
+
     public int toolProgressCount() {
         return toolStarted.size() + toolFinished.size();
     }
@@ -204,7 +231,15 @@ public final class FeishuRunProjector implements DeerFlowConversationService.Run
             }
             String key = callId.isBlank() ? name : callId;
             if (toolFinished.add(key) && claimToolCard("finish:" + key)) {
-                String result = truncate(messageText(message.get("content")), TOOL_RESULT_TRUNCATE);
+                String content = messageText(message.get("content"));
+                if ("execution_run".equals(name)) {
+                    List<String> missing = FeishuLarkAuthorization.missingScopes(content);
+                    if (!missing.isEmpty()) {
+                        missingLarkScopes.addAll(missing);
+                        return;
+                    }
+                }
+                String result = truncate(content, TOOL_RESULT_TRUNCATE);
                 if (result.isBlank()) {
                     emit("✅ 工具完成：`" + name + "`");
                 } else {

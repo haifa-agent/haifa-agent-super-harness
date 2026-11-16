@@ -61,6 +61,23 @@ public final class LarkExecutionFixture {
                 }
                 stdout.flush();
             }
+            case "calendar-agenda", "calendar-freebusy" -> {
+                boolean agenda = "calendar-agenda".equals(mode);
+                Path authorization = Path.of(System.getenv("LARKSUITE_CLI_DATA_DIR"), "token.json");
+                if (!Files.isRegularFile(authorization)) {
+                    System.err.print("""
+                            {"ok":false,"error":{"type":"permission","subtype":"missing_scope","identity":"user",
+                            "missing_scopes":["%s"]}}
+                            """.formatted(agenda ? "calendar:calendar.event:read" : "calendar:calendar.free_busy:read"));
+                    System.exit(3);
+                }
+                String result = agenda ? """
+                        {"ok":true,"identity":"user","data":{"date":"2026-11-16","timezone":"Asia/Shanghai","events":0}}
+                        """ : """
+                        {"ok":true,"identity":"user","data":{"window":"16:00–17:00","busy":null}}
+                        """;
+                System.out.writeBytes(result.getBytes(StandardCharsets.UTF_8));
+            }
             default -> {
                 System.err.println("unknown fixture mode: " + mode);
                 System.exit(2);

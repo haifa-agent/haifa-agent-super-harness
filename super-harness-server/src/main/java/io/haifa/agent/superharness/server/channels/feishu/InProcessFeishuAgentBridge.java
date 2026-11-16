@@ -386,7 +386,7 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
         String runInput = options.steer() ? "steer" : null;
         DeerFlowConversationService.AdmittedTurn turn;
         try {
-            turn = threads.admitTurn(threadId, body, runInput, null);
+            turn = threads.admitTurn(threadId, body, runInput, null, options.afterRunId());
         } catch (DeerFlowConversationService.ConversationException rejected) {
             throw new FeishuRunRejected(rejected.kind().status(), boundedDetail(rejected.detail()));
         }
@@ -398,7 +398,8 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
                 options.progress(),
                 FeishuRunProjector.MIN_PROGRESS_GAP_MS,
                 FeishuRunProjector.MAX_PROGRESS_EVENTS,
-                toolCardScope(threadId));
+                toolCardScope(threadId),
+                turn.runId());
         threads.observeTurn(turn, projector);
         if (projector.sawError()) {
             String detail = projector.errorDetail();
@@ -546,12 +547,17 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
         List<String> artifacts = projector == null ? List.of() : projector.artifacts();
         List<String> todos = projector == null ? List.of() : projector.todoLines();
         List<String> progress = projector == null ? List.of() : projector.progressLog();
+        LarkAuthorization authorization = null;
         if (pending == null) {
             assistant = assistant
                     + FeishuRunProjector.todoAppendix(todos)
                     + FeishuRunProjector.artifactHints(threadId, artifacts);
+            if (projector != null) {
+                projector.recoverLarkScopes(messages);
+                authorization = projector.larkAuthorization();
+            }
         }
-        return new TurnResult(threadId, assistant, pending, artifacts, todos, progress);
+        return new TurnResult(threadId, assistant, pending, artifacts, todos, progress, authorization);
     }
 
     private JsonNode threadState(String threadId) throws Exception {

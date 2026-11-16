@@ -390,6 +390,19 @@ public final class FeishuInteraction {
         return card;
     }
 
+    static Map<String, Object> larkAuthorizationCard(String url, String runId, String scopeRequest) {
+        Map<String, Object> open = Map.of(
+                "tag", "button", "text", Map.of("tag", "plain_text", "content", "授权飞书权限"),
+                "type", "primary", "behaviors", List.of(Map.of("type", "open_url", "default_url", url)));
+        Map<String, Object> resume = Map.of(
+                "tag", "button", "text", Map.of("tag", "plain_text", "content", "继续原任务"),
+                "type", "default", "behaviors", List.of(Map.of("type", "callback", "value", Map.of(
+                        "source", FeishuLarkAuthorization.SOURCE, "request_id", runId,
+                        "option_id", FeishuLarkAuthorization.RESUME, "value", scopeRequest))));
+        return card2(List.of(Map.of("tag", "markdown", "content",
+                "这项任务缺少飞书个人权限。请先完成授权，再回到这条消息点击「继续原任务」。"), open, resume));
+    }
+
     /**
      * Web-compatible Form v2 submission value: readable summary plus {@code [values: {...}]} JSON
      * block (see frozen {@code buildHumanInputFormSubmissionValue}).
@@ -508,6 +521,11 @@ public final class FeishuInteraction {
 
     /** Card shown after a click. No buttons, so the same action cannot be submitted again. */
     public static Map<String, Object> settledCard(FeishuInboundMessage message, String toast) {
+        if (message != null && message.cardAction() != null
+                && FeishuLarkAuthorization.SOURCE.equals(message.cardAction().source())) {
+            // The asynchronous authorization check can fail. Preserve the buttons for a retry.
+            return null;
+        }
         if (!PROCESSING.equals(toast) && !ALREADY_HANDLED.equals(toast)) {
             return null;
         }

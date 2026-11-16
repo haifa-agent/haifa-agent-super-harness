@@ -1372,6 +1372,10 @@ export interface Translations {
         authStarted: string;
         authorizationStillPending: string;
         permissionTitle: string;
+        recoveryTitle: string;
+        recoveryDescription: string;
+        recoveryAuthorizedTitle: string;
+        recoveryAuthorizedDescription: string;
         permissionDescription: string;
         authDomains: Record<
           | "approval"

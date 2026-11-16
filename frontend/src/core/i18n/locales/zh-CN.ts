@@ -1525,6 +1525,12 @@ export const zhCN: Translations = {
         authorizationStillPending:
           "还没有检测到授权完成。请在浏览器完成授权；DeerFlow 会继续自动检测。如果页面没有更新，可点击“我已完成授权”。",
         permissionTitle: "授权范围",
+        recoveryTitle: "补齐这次任务的飞书权限",
+        recoveryDescription:
+          "本次缺少的个人权限已填在下方。请在飞书授权页确认，完成后回原对话继续。",
+        recoveryAuthorizedTitle: "已完成飞书授权",
+        recoveryAuthorizedDescription:
+          "回到原飞书对话，在授权卡片上点击「继续原任务」。",
         permissionDescription:
           "默认只完成基础登录，不会申请任何业务权限。按需在这里勾选要授权的业务域；已连接用户可以重新授权继续追加（scope 会累积）。",
         authDomains: {

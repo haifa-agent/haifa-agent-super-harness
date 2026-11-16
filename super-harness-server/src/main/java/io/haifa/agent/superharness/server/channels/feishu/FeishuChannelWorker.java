@@ -34,6 +34,7 @@ import java.util.regex.Pattern;
  * {@code HAIFA_SUPER_HARNESS_FEISHU_REACTIONS=false} (falls back to the legacy text progress card).
  */
 public final class FeishuChannelWorker implements AutoCloseable {
+    public static final String PUBLIC_WEB_URL_ENV = FeishuLarkAuthorization.PUBLIC_WEB_URL_ENV;
     private static final System.Logger LOG = System.getLogger(FeishuChannelWorker.class.getName());
     private static final Pattern CONNECT_CODE =
             Pattern.compile("^/connect\\s+(\\S+)\\s*$", Pattern.CASE_INSENSITIVE);
@@ -107,16 +108,30 @@ public final class FeishuChannelWorker implements AutoCloseable {
     private FeishuTransport.Factory transportFactory;
     private FeishuTransport transport;
     private volatile boolean running;
+    private final io.haifa.agent.superharness.server.integrations.lark.LarkIntegrationService lark;
+    private final String publicWebUrl;
 
     public FeishuChannelWorker(
             ChannelConnectionStore connections,
             FeishuChatThreadStore threadMap,
             FeishuAgentBridge agentBridge,
             FeishuTransport.Factory transportFactory) {
+        this(connections, threadMap, agentBridge, transportFactory, null, "");
+    }
+
+    public FeishuChannelWorker(
+            ChannelConnectionStore connections,
+            FeishuChatThreadStore threadMap,
+            FeishuAgentBridge agentBridge,
+            FeishuTransport.Factory transportFactory,
+            io.haifa.agent.superharness.server.integrations.lark.LarkIntegrationService lark,
+            String publicWebUrl) {
         this.connections = connections;
         this.threadMap = threadMap;
         this.agentBridge = agentBridge;
         this.transportFactory = transportFactory;
+        this.lark = lark;
+        this.publicWebUrl = FeishuLarkAuthorization.publicWebUrl(publicWebUrl);
     }
 
     /** Package/test seam: swap the transport factory before the next start. */
@@ -218,7 +233,7 @@ public final class FeishuChannelWorker implements AutoCloseable {
         if (message.cardAction() != null) {
             // A card callback is answered only through its immutable request_id alias. Without one it
             // is unroutable: never fall back to the current chat pointer or bind a card message id.
-            return threadMap.findAlias(connectionId, chat, requestAlias(message.cardAction().requestId()))
+            return threadMap.findAlias(connectionId, chat, cardAlias(message.cardAction()))
                     .orElse(null);
         }
         for (String alias : List.of(message.rootId(), message.parentId(), message.feishuThreadId())) {
@@ -831,6 +846,10 @@ public final class FeishuChannelWorker implements AutoCloseable {
         if (!authorized(message)) {
             return FeishuInteraction.FORBIDDEN;
         }
+        if (larkResume(message.cardAction())) {
+            enqueueInbound(message);
+            return FeishuInteraction.PROCESSING;
+        }
         if (alreadyClosed(message)) {
             return FeishuInteraction.ALREADY_HANDLED;
         }
@@ -927,10 +946,14 @@ public final class FeishuChannelWorker implements AutoCloseable {
         String connectionId = connection.path("id").asText("");
         // Card callbacks are read-only routing: only the immutable request_id alias may resolve them.
         String threadId = resolveThread(connectionId, message, false);
+        FeishuInboundMessage.CardAction action = message.cardAction();
+        if (larkResume(action)) {
+            continueLarkTask(message, owner, connectionId, threadId, action);
+            return;
+        }
         FeishuPendingInput pending = threadId == null || threadId.isBlank()
                 ? null
                 : agentBridge.currentPending(owner, threadId).orElse(null);
-        FeishuInboundMessage.CardAction action = message.cardAction();
         if (pending == null
                 || (pending.formUnsupported() && !pending.formSupported())
                 || !pending.requestId().equals(action.requestId())) {
@@ -989,6 +1012,46 @@ public final class FeishuChannelWorker implements AutoCloseable {
         present(message, result, threadId);
         deliverArtifactImages(message, result, owner, threadId);
         markProcessingSuccess(message.messageId());
+    }
+
+    private static boolean larkResume(FeishuInboundMessage.CardAction action) {
+        return FeishuLarkAuthorization.SOURCE.equals(action.source())
+                && FeishuLarkAuthorization.RESUME.equals(action.optionId());
+    }
+
+    private static String cardAlias(FeishuInboundMessage.CardAction action) {
+        return requestAlias(larkResume(action)
+                ? FeishuLarkAuthorization.SOURCE + ":" + action.requestId()
+                : action.requestId());
+    }
+
+    private void continueLarkTask(FeishuInboundMessage message, String owner, String connectionId, String threadId,
+            FeishuInboundMessage.CardAction action) throws Exception {
+        String[] request = action.value().split(" ", 2);
+        int digestSeparator = action.requestId().lastIndexOf('.');
+        if (lark == null || threadId == null || request.length != 2 || digestSeparator < 1
+                || action.value().length() > 1100) {
+            reply(message.messageId(), FeishuLarkAuthorization.STALE);
+            return;
+        }
+        String runId = action.requestId().substring(0, digestSeparator);
+        List<String> scopes = FeishuLarkAuthorization.parseScopes(request[1]);
+        if (scopes.isEmpty() || !FeishuLarkAuthorization.requestId(runId, action.value()).equals(action.requestId())) {
+            reply(message.messageId(), FeishuLarkAuthorization.STALE);
+            return;
+        }
+        if (!lark.hasVerifiedUserScopes(owner, request[0], scopes)) {
+            reply(message.messageId(), FeishuLarkAuthorization.NOT_AUTHORIZED);
+            return;
+        }
+        try {
+            runChat(owner, connectionId, message, FeishuLarkAuthorization.CONTINUE_TEXT,
+                    FeishuAgentBridge.TurnOptions.defaults().continueAfter(runId));
+        } catch (Exception failure) {
+            FeishuRunRejected rejected = FeishuRunRejected.find(failure);
+            if (rejected == null || !rejected.detail().contains("originating channel turn")) throw failure;
+            reply(message.messageId(), FeishuLarkAuthorization.STALE);
+        }
     }
 
     /**
@@ -1231,7 +1294,44 @@ public final class FeishuChannelWorker implements AutoCloseable {
         if (FeishuInteraction.BUSY.equals(text)) {
             return;
         }
+        if (result.larkAuthorization() != null && deliverLarkAuthorization(message, result.larkAuthorization(), threadId)) {
+            text = FeishuLarkAuthorization.withoutLegacyLink(text);
+            if (!text.isBlank() && !"(no assistant response)".equals(text)) {
+                deliverTextAndBind(message, text, threadId);
+            }
+            return;
+        }
         deliverTextAndBind(message, text, threadId);
+    }
+
+    private boolean deliverLarkAuthorization(FeishuInboundMessage message, FeishuAgentBridge.LarkAuthorization recovery,
+            String threadId) throws Exception {
+        String url = FeishuLarkAuthorization.link(publicWebUrl, recovery.scopes());
+        if (lark == null || url.isBlank()) return false;
+        ObjectNode connection = connections.findConnectionByExternalIdentity("feishu", message.openId(), message.chatId())
+                .orElse(null);
+        if (connection == null || !authorized(message)) return false;
+        String owner = connection.path("owner_user_id").asText(AccessOwner.DEFAULT);
+        String appId = lark.configuredAppId(owner);
+        if (appId == null || appId.isBlank()) return false;
+        String scopeRequest = appId + " " + String.join(" ", recovery.scopes());
+        String id = FeishuLarkAuthorization.requestId(recovery.runId(), scopeRequest);
+        threadMap.bindAliasIfAbsent(connection.path("id").asText(""), message.chatId(),
+                requestAlias(FeishuLarkAuthorization.SOURCE + ":" + id), threadId);
+        FeishuTransport active;
+        synchronized (lock) {
+            active = transport;
+        }
+        if (active == null) return false;
+        try {
+            Optional<String> replyId = active.replyInteractiveId(message.messageId(),
+                    FeishuInteraction.larkAuthorizationCard(url, id, scopeRequest));
+            bindReplyId(message, replyId, threadId);
+        } catch (Exception failure) {
+            replyTextAndBind(message, "请打开飞书个人授权页 " + url
+                    + "\n授权后请回复本条消息「继续刚才的任务」。", threadId);
+        }
+        return true;
     }
 
     /**

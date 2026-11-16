@@ -29,13 +29,25 @@ public interface FeishuAgentBridge {
         return Optional.empty();
     }
 
+    record LarkAuthorization(String runId, List<String> scopes) {
+        public LarkAuthorization {
+            scopes = List.copyOf(scopes);
+        }
+    }
+
     record TurnResult(
             String threadId,
             String assistantText,
             FeishuPendingInput pending,
             List<String> artifacts,
             List<String> todoLines,
-            List<String> progressLog) {
+            List<String> progressLog,
+            LarkAuthorization larkAuthorization) {
+        public TurnResult(String threadId, String assistantText, FeishuPendingInput pending,
+                List<String> artifacts, List<String> todoLines, List<String> progressLog) {
+            this(threadId, assistantText, pending, artifacts, todoLines, progressLog, null);
+        }
+
         public TurnResult(String threadId, String assistantText) {
             this(threadId, assistantText, null, List.of(), List.of(), List.of());
         }
@@ -68,7 +80,13 @@ public interface FeishuAgentBridge {
             FeishuRunProjector.ProgressListener progress,
             boolean steer,
             boolean bootstrap,
-            String agentName) {
+            String agentName,
+            String afterRunId) {
+        public TurnOptions(String mode, FeishuRunProjector.ProgressListener progress,
+                boolean steer, boolean bootstrap, String agentName) {
+            this(mode, progress, steer, bootstrap, agentName, null);
+        }
+
         public static TurnOptions defaults() {
             return new TurnOptions("flash", null, false, false, null);
         }
@@ -79,23 +97,27 @@ public interface FeishuAgentBridge {
         }
 
         public TurnOptions withMode(String nextMode) {
-            return new TurnOptions(nextMode, progress, steer, bootstrap, agentName);
+            return new TurnOptions(nextMode, progress, steer, bootstrap, agentName, afterRunId);
         }
 
         public TurnOptions withProgress(FeishuRunProjector.ProgressListener next) {
-            return new TurnOptions(mode, next, steer, bootstrap, agentName);
+            return new TurnOptions(mode, next, steer, bootstrap, agentName, afterRunId);
         }
 
         public TurnOptions asSteer() {
-            return new TurnOptions(mode, progress, true, bootstrap, agentName);
+            return new TurnOptions(mode, progress, true, bootstrap, agentName, afterRunId);
         }
 
         public TurnOptions asBootstrap() {
-            return new TurnOptions(mode, progress, steer, true, agentName);
+            return new TurnOptions(mode, progress, steer, true, agentName, afterRunId);
         }
 
         public TurnOptions withAgentName(String nextAgent) {
-            return new TurnOptions(mode, progress, steer, bootstrap, nextAgent);
+            return new TurnOptions(mode, progress, steer, bootstrap, nextAgent, afterRunId);
+        }
+
+        public TurnOptions continueAfter(String runId) {
+            return new TurnOptions(mode, progress, steer, bootstrap, agentName, runId);
         }
     }
 
