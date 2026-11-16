@@ -1658,6 +1658,12 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     }
 
     public AdmittedTurn admitTurn(String threadId, JsonNode body, String runInput, String lastEventId) throws IOException {
+        return admitTurn(threadId, body, runInput, lastEventId, null);
+    }
+
+    /** Conditional admission for an explicit continuation tied to a particular channel turn. */
+    public AdmittedTurn admitTurn(String threadId, JsonNode body, String runInput, String lastEventId,
+            String afterRunId) throws IOException {
         ThreadRecord thread = threads.get(threadId);
         if (thread == null || !AccessOwner.current().equals(thread.ownerId)) {
             throw ConversationException.notFound("Thread not found");
@@ -1770,6 +1776,16 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         thread.lock.lock();
         try {
             restoreDurableAdmission(thread);
+            if (afterRunId != null) {
+                String latest = thread.latestRunId;
+                if (latest == null) {
+                    latest = durableRuns(thread).stream().findFirst().map(previous -> previous.runId.value())
+                            .orElse(null);
+                }
+                if (!afterRunId.equals(latest)) {
+                    throw ConversationException.conflict("The originating channel turn is no longer the latest Run");
+                }
+            }
             if (clarificationAck != null && clarificationAlreadyAnswered(thread, clarificationAck.requestId())) {
                 throw ConversationException.conflict("Interaction response already accepted");
             }

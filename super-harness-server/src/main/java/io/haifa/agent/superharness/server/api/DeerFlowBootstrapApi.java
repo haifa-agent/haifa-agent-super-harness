@@ -320,19 +320,21 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         FeishuAgentBridge feishuAgentBridge =
                 new InProcessFeishuAgentBridge(
                         objectMapper, threadRunApi.conversations(), toolWorkspace, feishuCatalog);
+        var lark = io.haifa.agent.superharness.server.integrations.lark.LarkIntegrationService.production(
+                objectMapper, dataDirectory, skillStore);
         this.feishuWorker = new FeishuChannelWorker(
                 channelConnectionStore,
                 new FeishuChatThreadStore(objectMapper, dataDirectory),
                 feishuAgentBridge,
-                transportFactory);
+                transportFactory,
+                lark,
+                environment == null ? null : environment.get(FeishuChannelWorker.PUBLIC_WEB_URL_ENV));
         this.channelsApi = new DeerFlowChannelsApi(
                 objectMapper, channelRuntimeStore, channelConnectionStore, feishuWorker);
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi.conversations()::hasThread);
         this.skillsApi = new DeerFlowSkillsApi(objectMapper, skillStore, workspaceApi);
-        this.larkIntegrationsApi = new DeerFlowLarkIntegrationsApi(objectMapper,
-                io.haifa.agent.superharness.server.integrations.lark.LarkIntegrationService.production(
-                        objectMapper, dataDirectory, skillStore));
+        this.larkIntegrationsApi = new DeerFlowLarkIntegrationsApi(objectMapper, lark);
         this.projectApi = new DeerFlowProjectApi(objectMapper, projects, threadRunApi.conversations(), workspaceApi);
         this.trashApi = new DeerFlowTrashApi(objectMapper, projects);
         this.inputPolishApi = new DeerFlowInputPolishApi(objectMapper, modelResolver);

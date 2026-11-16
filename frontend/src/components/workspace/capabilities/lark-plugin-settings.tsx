@@ -9,6 +9,7 @@ import {
   RefreshCwIcon,
   XCircleIcon,
 } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -42,6 +43,7 @@ import {
   useStartLarkAuthorization,
   useStartLarkConfiguration,
 } from "@/core/integrations/lark";
+import { parseLarkRecoveryScope } from "@/core/integrations/lark/recovery";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
 
@@ -116,17 +118,22 @@ function uniqueScopes(scopes: string[]) {
 
 export function LarkPluginSettings() {
   const { t } = useI18n();
+  const params = useSearchParams();
+  const recoveryScope =
+    params.get("plugin") === "lark"
+      ? parseLarkRecoveryScope(params.get("lark_scope"))
+      : "";
   return (
     <SettingsSection
       title={t.settings.integrations.title}
       description={t.settings.integrations.description}
     >
-      <LarkIntegrationCard />
+      <LarkIntegrationCard key={recoveryScope} recoveryScope={recoveryScope} />
     </SettingsSection>
   );
 }
 
-function LarkIntegrationCard() {
+function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const { user } = useAuth();
@@ -150,7 +157,8 @@ function LarkIntegrationCard() {
   const [selectedAuthDomains, setSelectedAuthDomains] = useState<
     LarkAuthDomain[]
   >([]);
-  const [customAuthScope, setCustomAuthScope] = useState("");
+  const [customAuthScope, setCustomAuthScope] = useState(recoveryScope);
+  const [recoveryAuthorized, setRecoveryAuthorized] = useState(false);
   const browserWindowRef = useRef<Window | null>(null);
   const authRequestRef = useRef<LarkAuthStartRequest>({ recommend: false });
   const authToastIdRef = useRef<string | number | null>(null);
@@ -489,6 +497,7 @@ function LarkIntegrationCard() {
           queryClient.setQueryData(larkIntegrationQueryKey, result.status);
           if (result.success) {
             clearAuthRetryTimer();
+            if (recoveryScope) setRecoveryAuthorized(true);
             toast.success(result.message, toastOptions);
             authToastIdRef.current = null;
             setPendingFlow(null);
@@ -762,6 +771,20 @@ function LarkIntegrationCard() {
               connected={isConnected}
               credentialsConfigured={credentialsConfigured}
             />
+            {recoveryScope && (
+              <Alert>
+                <AlertTitle>
+                  {recoveryAuthorized
+                    ? t.settings.integrations.lark.recoveryAuthorizedTitle
+                    : t.settings.integrations.lark.recoveryTitle}
+                </AlertTitle>
+                <AlertDescription>
+                  {recoveryAuthorized
+                    ? t.settings.integrations.lark.recoveryAuthorizedDescription
+                    : t.settings.integrations.lark.recoveryDescription}
+                </AlertDescription>
+              </Alert>
+            )}
             {data.installed && data.cli.available && (
               <div className="rounded-lg border p-3">
                 <div className="space-y-1">
