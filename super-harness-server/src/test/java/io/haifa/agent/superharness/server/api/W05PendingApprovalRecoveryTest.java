@@ -40,6 +40,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Deterministic L2 proof for the V2 pending-Approval exact-recovery slice (case V2-M4-01..03 and the
@@ -143,11 +145,14 @@ class W05PendingApprovalRecoveryTest {
                 + " resume_observed_card=true tool_calls=" + toolInvocations.get());
     }
 
-    @Test
-    void restartKeepsTheSamePendingInteractionAndApprovesExactlyOnce() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void restartKeepsTheSamePendingInteractionAndApprovesExactlyOnce(boolean planMode) throws Exception {
         createThread("restart-exact-thread");
+        var body = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(ordinaryRunBody("restart approval"));
+        body.putObject("context").put("is_plan_mode", planMode);
         HttpResponse<String> requested =
-                postJson("/api/threads/restart-exact-thread/runs/stream", ordinaryRunBody("restart approval"));
+                postJson("/api/threads/restart-exact-thread/runs/stream", json.writeValueAsString(body));
         assertThat(requested.statusCode()).isEqualTo(200);
         String location = requested.headers().firstValue("content-location").orElseThrow();
         JsonNode beforeCard = humanInputCard(requested.body());

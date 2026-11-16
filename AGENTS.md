@@ -6,14 +6,14 @@
 - 以 `private-docs/roadmap/35-super-harness-deerflow-parity.md` 及其产品、PRD 配套目录为范围与验收依据。
 - DeerFlow 前后端固定为 `bytedance/deer-flow@e545c28ac301e6f9feae247c513d8ea8f83df294`，禁止随 `main` 漂移。
 - 直接复用冻结的 DeerFlow 前端并由 Haifa 后端兼容其真实 REST/SSE/WS/文件/auth 协议，禁止自研平行 UI 或让产品回落到 DeerFlow 后端；冻结参考后端只用于差分对照（见「冻结 DeerFlow 参考后端」）。
-- 仅通过本地 Maven 仓库消费 Haifa Agent 公开 JAR/BOM（HA 0.1.4 开发线专门承接本项目 SDK 功能缺口，见 `private-docs/prompts/038-*`），禁止源码路径依赖、复制 SDK 或依赖产品 JAR。SDK 版本规则：
-  - 上游每个 SDK worktree 发布到自己的坐标 `0.1.4-<worktree 目录名>-SNAPSHOT`；基线 `0.1.4-SNAPSHOT` 只从上游主检出的 `dev` 发布，代表已由人工合并的 SDK。
+- 仅通过本地 Maven 仓库消费 Haifa Agent 公开 JAR/BOM（HA 0.1.6 开发线专门承接本项目 SDK 功能缺口，见 `private-docs/prompts/038-*`），禁止源码路径依赖、复制 SDK 或依赖产品 JAR。SDK 版本规则：
+  - 上游每个 SDK worktree 发布到自己的坐标 `0.1.6-<worktree 目录名>-SNAPSHOT`；基线 `0.1.6-SNAPSHOT` 只从上游主检出的 `dev` 发布，代表已由人工合并的 SDK。
   - `main` 只消费基线；带 worktree 标识的版本不得进入被跟踪文件（检查见 README「定向测试与 SDK 版本选择」）。
   - 工作包 worktree 消费哪个上游 worktree 的 SDK 由主控通过 `local-tmp/sdk-selection.json` 指定；执行者不得自行更换版本或直接传 `-Dhaifa.version`。
   - 已发布的上游 SDK worktree 只在主控验收发现 SDK 问题后才修改并重新发布。构建戳以 Java 输入指纹（含每个 Haifa JAR 的 SHA-256 身份）比较，能识别同版本重新发布的内容变化，消费方据此自动重建。
   - 依赖尚未合入上游 `dev` 的 SDK 改动的分支不能合入 `main`：须等上游 PR 人工合并、基线从 `dev` 重新发布，删除 `local-tmp/sdk-selection.json` 后在基线上重跑门禁。带标识版本下的验证结果只证明候选分支。
 - 新增或修改能力前必须先按 `docs/runtime-product-boundary.md` 判断其归属：可复用的 Agent Runtime 语义必须上游到 Haifa Agent，并通过公开 API/SPI 与已发布 JAR/BOM 消费；Super Harness 只拥有 DeerFlow 兼容、产品语义、UI/BFF、业务集成与窄适配层，禁止实现第二套 Run/Loop/Memory/Tool/Skill/MCP/Sandbox/Artifact/Checkpoint/Permission/Multi-Agent Runtime。若归属不清，在新增领域对象、状态机或持久化表之前停止并进行架构裁决。
-- 按上一条判定须上游，或验收过程中确认必须完善上游 Haifa Agent SDK 时，只能在 `D:\workspace\haifa-agent` 仓库以 `dev`（HA `0.1.4-SNAPSHOT`，不设 baseline 分支）为起点，为每个功能创建独立 worktree 和新的 `feat-*` 开发分支；禁止直接修改或提交到 `dev`。完成后须用上游发布脚本把公开 JAR/BOM 发布到该 worktree 自己的坐标，由本项目按上面的 SDK 版本规则消费，同时记录 SDK commit（取自上游发布清单）、发布与回归证据；随后从该 `feat-*` 分支向 `dev` 发起 GitHub PR，由主控在 SHPM 登记对应任务与 PR/验证状态（`shpm verify add`/`shpm issue add`），并明确提醒人工审查合并。任何智能体不得自行合并该 PR，除非人工针对该具体 PR 另行书面授权。
+- 按上一条判定须上游，或验收过程中确认必须完善上游 Haifa Agent SDK 时，只能在 `D:\workspace\haifa-agent` 仓库以 `dev`（HA `0.1.6-SNAPSHOT`，不设 baseline 分支）为起点，为每个功能创建独立 worktree 和新的 `feat-*` 开发分支；禁止直接修改或提交到 `dev`。完成后须用上游发布脚本把公开 JAR/BOM 发布到该 worktree 自己的坐标，由本项目按上面的 SDK 版本规则消费，同时记录 SDK commit（取自上游发布清单）、发布与回归证据；随后从该 `feat-*` 分支向 `dev` 发起 GitHub PR，由主控在 SHPM 登记对应任务与 PR/验证状态（`shpm verify add`/`shpm issue add`），并明确提醒人工审查合并。任何智能体不得自行合并该 PR，除非人工针对该具体 PR 另行书面授权。
 - 为同一功能引入的领域模型复杂度必须与冻结 DeerFlow 的对应实现保持平衡或更低，禁止为了协议兼容复制、叠加或扩张不必要的领域对象、状态机、持久化概念和抽象层。若有证据表明只有更高的领域复杂度才能实现验收范围，执行智能体必须在编码前提交包含 DeerFlow 对照、复杂度增量、不可替代原因、风险与简化备选的设计说明，先经主控 Agent 评审，再等待人工裁决，未获人工明确同意不得实施或合入。
 
 ## 开发、测试与证据

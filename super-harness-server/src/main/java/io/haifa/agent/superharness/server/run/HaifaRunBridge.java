@@ -22,6 +22,7 @@ import io.haifa.agent.policy.core.DefaultPolicyDecisionService;
 import io.haifa.agent.runtime.api.AgentRunSnapshot;
 import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
 import io.haifa.agent.runtime.api.FrozenInstructionDiagnostic;
+import io.haifa.agent.runtime.api.InteractionRequestId;
 import io.haifa.agent.runtime.api.InteractionResponseReceipt;
 import io.haifa.agent.runtime.api.InteractionResponseSubmission;
 import io.haifa.agent.runtime.api.InteractionView;
@@ -112,6 +113,7 @@ import java.util.stream.Collectors;
 
 /** Adapter that exposes only public Haifa Agent SDK types to the HTTP boundary. */
 public final class HaifaRunBridge implements AutoCloseable {
+    private static final String PLAN_TOOL_ALIAS = "write_todos";
     /** Test/compatibility starter path only; production always renders the frozen lead prompt. */
     private static final String STARTER_INSTRUCTIONS = "Return a concise answer to the local user's request.";
 
@@ -494,7 +496,7 @@ public final class HaifaRunBridge implements AutoCloseable {
             }
             if (isPlanMode) {
                 builder.planAuthoring(PlanAuthoringSpec.of(
-                        "write_todos",
+                        PLAN_TOOL_ALIAS,
                         PlanAuthoringResources.toolDescription(),
                         PlanAuthoringResources.systemPrompt()));
             }
@@ -810,6 +812,10 @@ public final class HaifaRunBridge implements AutoCloseable {
         return isPlanMode;
     }
 
+    public boolean wasPlanMode(AgentRunId runId) {
+        return agent.runs().hasFrozenTool(runId, PLAN_TOOL_ALIAS);
+    }
+
     public Optional<AgentPlanView> plan(AgentRunId runId) {
         return agent.runs().plan(runId);
     }
@@ -919,6 +925,10 @@ public final class HaifaRunBridge implements AutoCloseable {
 
     public InteractionResponseReceipt respond(InteractionResponseSubmission submission) {
         return agent.runs().respond(submission);
+    }
+
+    public void resumeApprovedTool(AgentRunId runId, InteractionRequestId requestId) {
+        agent.runs().resumeApprovedTool(runId, requestId);
     }
 
     public RunInputResult submitInput(RunInputCommand command) {
@@ -1191,6 +1201,7 @@ public final class HaifaRunBridge implements AutoCloseable {
                 request.callId(),
                 request.requestId(),
                 request.runId(),
+                request.sessionAffinity(),
                 request.iteration(),
                 request.attempt(),
                 request.model(),

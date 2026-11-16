@@ -16,6 +16,7 @@ import io.haifa.agent.superharness.server.plan.PlanAuthoringResources;
 import io.haifa.agent.runtime.api.AgentRunSnapshot;
 import io.haifa.agent.runtime.api.AgentRunViewSnapshot;
 import io.haifa.agent.runtime.api.FrozenInstructionDiagnostic;
+import io.haifa.agent.runtime.api.InteractionRequestId;
 import io.haifa.agent.runtime.api.InteractionResponseReceiptStatus;
 import io.haifa.agent.runtime.api.InteractionResponseSubmission;
 import io.haifa.agent.runtime.api.InteractionResponseReceipt;
@@ -2117,8 +2118,12 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                         throw ConversationException.conflict("Run is no longer accepting an Interaction response");
                     }
                     Optional<InteractionView> pending = run.bridge.pendingInteraction(run.runId);
-                    if (pending.isEmpty()
-                            || !pending.orElseThrow().requestId().value().equals(response.requestId())) {
+                    if (pending.isEmpty()) {
+                        presentationDegraded = resumeSavedApproval(thread, run, response);
+                        return new AdmittedTurn(thread, run, responseCursor, true, onDisconnect, true, false,
+                                presentationDegraded);
+                    }
+                    if (!pending.orElseThrow().requestId().value().equals(response.requestId())) {
                         throw ConversationException.conflict("Thread has no matching Interaction");
                     }
                     PersistentThreadCatalog.InteractionDisplay approvalDisplay;
@@ -2196,35 +2201,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                     Map<String, Object> responseMessage =
                             DeerFlowInteractionHttpProjection.responseMessage(
                                     response, submittedText, run.runId.value());
-                    List<PersistentThreadCatalog.InteractionDisplay> updated =
-                            new ArrayList<>(thread.interactionDisplays);
-                    boolean savedDisplay = false;
-                    for (int index = 0; index < updated.size(); index++) {
-                        var display = updated.get(index);
-                        if (display.runId().equals(run.runId.value())
-                                && display.requestId().equals(response.requestId())) {
-                            updated.set(index, display.answered(response.optionId()));
-                            savedDisplay = true;
-                            break;
-                        }
-                    }
-                    if (!savedDisplay) throw new IllegalStateException(
-                            "Saved Interaction card disappeared after SDK accepted the response");
-                    thread.interactionDisplays = List.copyOf(updated);
-                    try {
-                        persistThread(thread);
-                    } catch (IOException | RuntimeException failedPersistence) {
-                        // The SDK has already accepted this response. Keep the in-process
-                        // display answered, expose the degraded durability explicitly, and
-                        // continue the same Run. A restart filters the stale unaccepted card
-                        // against the SDK's current pending ID.
-                        presentationDegraded = true;
-                        INTERACTION_LOG.log(System.Logger.Level.ERROR,
-                                "INTERACTION_PRESENTATION_SAVE_AFTER_ACCEPT_FAILURE run="
-                                        + run.runId.value() + " request=" + response.requestId()
-                                        + " sdk_receipt=ACCEPTED cause="
-                                        + failedPersistence.getClass().getSimpleName());
-                    }
+                    presentationDegraded = saveAnsweredInteraction(thread, run, response);
                     run.acceptedInteractionResponse = new AcceptedInteractionResponse(
                             response, submission, responseMessage);
                     thread.updatedAt = Instant.now();
@@ -2243,6 +2220,50 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 true,
                 false,
                 presentationDegraded);
+    }
+
+    private boolean resumeSavedApproval(
+            ThreadRecord thread, RunRecord run, DeerFlowInteractionHttpProjection.FrozenResponse response) {
+        if (!DeerFlowInteractionHttpProjection.SOURCE.equals(response.source())
+                || !"option".equals(response.responseKind())
+                || !"approve".equals(response.optionId()) || !"approve".equals(response.value())
+                || thread.interactionDisplays.stream().noneMatch(display -> display.runId().equals(run.runId.value())
+                        && display.requestId().equals(response.requestId()))) {
+            throw ConversationException.conflict("Thread has no matching Interaction");
+        }
+        try {
+            run.bridge.resumeApprovedTool(run.runId, new InteractionRequestId(response.requestId()));
+        } catch (RuntimeException rejected) {
+            sendInteractionFailure(run, "stored-approval", rejected);
+            throw ConversationException.conflict("Stored approval could not resume the Run");
+        }
+        thread.updatedAt = Instant.now();
+        return saveAnsweredInteraction(thread, run, response);
+    }
+
+    private boolean saveAnsweredInteraction(
+            ThreadRecord thread, RunRecord run, DeerFlowInteractionHttpProjection.FrozenResponse response) {
+        List<PersistentThreadCatalog.InteractionDisplay> updated = new ArrayList<>(thread.interactionDisplays);
+        for (int index = 0; index < updated.size(); index++) {
+            var display = updated.get(index);
+            if (display.runId().equals(run.runId.value()) && display.requestId().equals(response.requestId())) {
+                updated.set(index, display.answered(response.optionId()));
+                thread.interactionDisplays = List.copyOf(updated);
+                try {
+                    persistThread(thread);
+                    return false;
+                } catch (IOException | RuntimeException failedPersistence) {
+                    // The SDK has accepted the response. Keep the answered card in memory so the Run can continue.
+                    INTERACTION_LOG.log(System.Logger.Level.ERROR,
+                            "INTERACTION_PRESENTATION_SAVE_AFTER_ACCEPT_FAILURE run="
+                                    + run.runId.value() + " request=" + response.requestId()
+                                    + " sdk_receipt=ACCEPTED cause="
+                                    + failedPersistence.getClass().getSimpleName());
+                    return true;
+                }
+            }
+        }
+        throw new IllegalStateException("Saved Interaction card disappeared after SDK accepted the response");
     }
 
     private InteractionResponseReceipt respondWithRetry(
@@ -2374,9 +2395,15 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     }
 
     private HaifaRunBridge bridgeForPersistedThread(ThreadRecord thread) {
+        return bridgeForPersistedThread(thread, null);
+    }
+
+    private HaifaRunBridge bridgeForPersistedThread(ThreadRecord thread, Boolean planMode) {
         thread.lock.lock();
         try {
-            if (thread.bridge != null) return thread.bridge;
+            if (thread.bridge != null && (planMode == null || thread.bridge.isPlanMode() == planMode)) {
+                return thread.bridge;
+            }
             HaifaRunBridge.ModelBinding binding = null;
             String lastBinding = thread.modelBindingIdentity;
             if (lastBinding != null && lastBinding.lastIndexOf('@') > 0) {
@@ -2417,7 +2444,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 }
             }
             HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection,
-                    skillProjections.forRecovery(thread.skillSelection(), thread.skillVersions()), restored);
+                    skillProjections.forRecovery(thread.skillSelection(), thread.skillVersions()), restored,
+                    io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled(),
+                    Boolean.TRUE.equals(planMode));
             boolean claimBinding = thread.modelBindingIdentity == null
                     || thread.modelBindingIdentity.equals(bridge.bindingIdentity());
             // Conversation/run reads use shared SQLite. The last selected model is preferred
@@ -2431,17 +2460,6 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
 
     private void attachBridge(ThreadRecord thread, HaifaRunBridge bridge) {
         attachBridge(thread, bridge, true);
-    }
-
-    private HaifaRunBridge newBridge(
-            HaifaRunBridge.ModelBinding binding,
-            ThreadRecord thread,
-            McpRunTools.Projection mcpProjection,
-            SkillRunTools.Projection skillProjection,
-            AgentPromptContext agentPrompt) {
-        // Restart history only reads SDK facts. A later Run separately admits fresh declarations.
-        return newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt,
-                io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled(), false);
     }
 
     private HaifaRunBridge newBridge(HaifaRunBridge.ModelBinding binding, ThreadRecord thread,
@@ -5602,7 +5620,14 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         AgentRunId requested = turn.runId().orElseThrow();
         RunRecord cached = runs.get(requested.value());
         if (cached != null && cached.threadId.equals(thread.threadId)) return Optional.of(cached);
-        if (bridge.findRun(requested).isEmpty()) return Optional.empty();
+        var snapshot = bridge.findRun(requested);
+        if (snapshot.isEmpty()) return Optional.empty();
+        var status = snapshot.orElseThrow().status();
+        HaifaRunBridge runBridge = bridge;
+        if (status == AgentRunStatus.WAITING_APPROVAL || status == AgentRunStatus.WAITING_INTERACTION) {
+            // Plan authoring is frozen at admission, even before the model first invokes write_todos.
+            runBridge = bridgeForPersistedThread(thread, bridge.wasPlanMode(requested));
+        }
         RunRecord restored = new RunRecord(
                 requested,
                 thread.threadId,
@@ -5610,13 +5635,13 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 turn.text(),
                 thread.clientHumanMessageId(requested),
                 false,
-                bridge,
+                runBridge,
                 turn.createdAt(),
                 turn.sequence(),
                 false,
                 thread.runStreamModes(requested),
                 false);
-        bridge.pendingInteraction(requested).ifPresent(pending -> {
+        runBridge.pendingInteraction(requested).ifPresent(pending -> {
             try {
                 var saved = thread.interactionDisplays.stream()
                         .filter(display -> display.runId().equals(requested.value())
