@@ -150,6 +150,37 @@ class DeerFlowLarkIntegrationsApiTest {
     }
 
     @Test
+    void statusRecognizesStoredAppReferenceAndRefreshablePersonalGrant() throws Exception {
+        cli.makeAvailable("1.0.65");
+        cli.authStatus(0, """
+                {"appId":"cli_alice","identities":{
+                  "bot":{"appName":"Office App","available":true,"verified":true,"status":"ready"},
+                  "user":{"userName":"Office User","available":true,"verified":true,"status":"needs_refresh",
+                          "scope":"calendar:calendar.event:read"}
+                }}
+                """);
+        Path config = service.userConfigDirectory("alice").resolve("config.json");
+        java.nio.file.Files.createDirectories(config.getParent());
+        java.nio.file.Files.writeString(config, """
+                {"apps":[{"appId":"cli_alice","brand":"feishu",
+                          "appSecret":{"source":"keychain","id":"fixture-keychain-reference"}}]}
+                """);
+
+        HttpResponse<String> response = request("GET", "/api/integrations/lark/status?verify=true", null, "alice", "user");
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.body()).doesNotContain("fixture-keychain-reference");
+        JsonNode status = json.readTree(response.body());
+        assertThat(status.path("app_configured").asBoolean()).isTrue();
+        assertThat(status.path("app_id").asText()).isEqualTo("cli_alice");
+        JsonNode auth = status.path("auth");
+        assertThat(auth.path("bot_verified").asBoolean()).isTrue();
+        assertThat(auth.path("user_authorized").asBoolean()).isTrue();
+        assertThat(auth.path("verified").asBoolean()).isTrue();
+        assertThat(auth.path("granted_scopes")).extracting(JsonNode::asText)
+                .containsExactly("calendar:calendar.event:read");
+    }
+
+    @Test
     void installRequiresAdminAndReinstallsIdempotently() throws Exception {
         HttpResponse<String> denied = request("POST", "/api/integrations/lark/install", null, "alice", "user");
         assertThat(denied.statusCode()).isEqualTo(403);

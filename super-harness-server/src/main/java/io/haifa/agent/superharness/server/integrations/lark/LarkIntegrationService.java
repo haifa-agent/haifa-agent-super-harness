@@ -768,8 +768,9 @@ public final class LarkIntegrationService {
         String user = firstText(userInfo, "userName", "openId");
         if (blank(user)) user = firstText(data, "userName");
         List<String> grants = grantedScopes(userInfo);
-        boolean userAuthorized = userInfo.hasNonNull("status")
-                ? "ready".equals(userInfo.path("status").asText()) && userInfo.path("available").asBoolean(true)
+        JsonNode available = userInfo.path("available");
+        boolean userAuthorized = available.isBoolean() ? available.asBoolean()
+                : userInfo.hasNonNull("status") ? "ready".equals(userInfo.path("status").asText())
                 : !blank(user) || grants != null;
         boolean userVerified = verify && userAuthorized && userInfo.path("verified").asBoolean();
         return new AuthState("authenticated", userVerified
@@ -1160,13 +1161,22 @@ public final class LarkIntegrationService {
                 return AppCredentials.NONE;
             }
             String appId = app.path("appId").asText("").strip();
-            String appSecret = app.path("appSecret").asText("");
             String brand = app.path("brand").asText("feishu").strip();
-            return new AppCredentials(!appId.isEmpty() && !appSecret.isEmpty(), appId.isEmpty() ? null : appId,
+            return new AppCredentials(!appId.isEmpty() && hasConfiguredSecret(app.path("appSecret")),
+                    appId.isEmpty() ? null : appId,
                     brand.isEmpty() ? "feishu" : brand);
         } catch (IOException invalid) {
             return AppCredentials.NONE;
         }
+    }
+
+    private static boolean hasConfiguredSecret(JsonNode secret) {
+        if (secret.isTextual()) return !secret.asText().isBlank();
+        if (!secret.isObject()) return false;
+        // The CLI resolves these references. Status only needs their presence.
+        String source = secret.path("source").textValue();
+        String id = secret.path("id").textValue();
+        return ("keychain".equals(source) || "file".equals(source)) && id != null && !id.isBlank();
     }
 
     private JsonNode runJson(String ownerId, List<String> argv, Duration timeout, boolean allowEmpty) {
