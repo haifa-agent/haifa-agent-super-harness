@@ -101,6 +101,87 @@ class DeerFlowProjectApiTest {
     }
 
     @Test
+    void movingThreadChangesOnlyProjectMembershipAndPersistsAcrossRestart() throws Exception {
+        String source = body(request("POST", "/api/projects", "{\"name\":\"Source\"}")).path("id").asText();
+        String target = body(request("POST", "/api/projects", "{\"name\":\"Target\"}")).path("id").asText();
+        String thread = "/api/threads/movable";
+        assertThat(request("POST", "/api/threads", """
+                {"thread_id":"movable","metadata":{"title":"Existing chat","custom":"kept"}}
+                """).statusCode()).isEqualTo(200);
+        String toSource = """
+                {"project_id":"%s"}
+                """.formatted(source);
+        String toTarget = """
+                {"project_id":"%s"}
+                """.formatted(target);
+
+        HttpResponse<String> assigned = request("POST", thread + "/move", toSource);
+        assertThat(assigned.statusCode()).as(assigned.body()).isEqualTo(200);
+        assertThat(body(assigned).path("metadata").path("deerflow_project_id").asText()).isEqualTo(source);
+        assertThat(body(get("/api/projects/" + source + "/threads"))).hasSize(1);
+
+        HttpResponse<String> stream = request("POST", thread + "/runs/stream", """
+                {"assistant_id":"lead_agent","input":{"messages":[{"id":"human-1","type":"human","content":"move probe"}]},
+                "stream_mode":["messages-tuple","updates","custom"],"on_disconnect":"continue","multitask_strategy":"reject"}
+                """);
+        assertThat(stream.statusCode()).as(stream.body()).isEqualTo(200);
+        String run = stream.headers().firstValue("content-location").orElseThrow();
+        assertThat(body(get(run)).path("status").asText()).isEqualTo("success");
+        JsonNode messages = body(get(thread + "/messages/page")).path("data");
+        assertThat(messages).hasSize(2);
+        String attachment = "File attached before move";
+        JsonNode document = body(multipart(source, "file", "move.txt", bytes(attachment))).path("document");
+        JsonNode attached = body(request("POST", "/api/projects/" + source + "/documents/"
+                + document.path("id").asText() + "/attach-to-thread/movable", null));
+        String fileUrl = attached.path("artifact_url").asText();
+        assertThat(get(fileUrl).body()).isEqualTo(attachment);
+        JsonNode before = body(get(thread));
+
+        HttpResponse<String> moved = request("POST", thread + "/move", toTarget);
+        assertThat(moved.statusCode()).as(moved.body()).isEqualTo(200);
+        assertThat(body(moved).path("thread_id")).isEqualTo(before.path("thread_id"));
+        assertThat(body(moved).path("created_at")).isEqualTo(before.path("created_at"));
+        assertThat(body(moved).path("updated_at")).isEqualTo(before.path("updated_at"));
+        assertThat(body(moved).path("metadata").path("custom").asText()).isEqualTo("kept");
+        assertThat(body(get(thread)).path("values")).isEqualTo(before.path("values"));
+        assertThat(body(get(thread + "/messages/page")).path("data")).isEqualTo(messages);
+        assertThat(body(get(run)).path("status").asText()).isEqualTo("success");
+        assertThat(get(fileUrl).body()).isEqualTo(attachment);
+        assertThat(body(get("/api/projects/" + source + "/threads"))).isEmpty();
+        assertThat(body(get("/api/projects/" + target + "/threads")).get(0).path("thread_id").asText())
+                .isEqualTo("movable");
+
+        api.close();
+        startServer();
+        assertThat(body(get(thread)).path("metadata").path("deerflow_project_id").asText()).isEqualTo(target);
+        HttpResponse<String> removed = request("POST", thread + "/move", "{\"project_id\":null}");
+        assertThat(removed.statusCode()).as(removed.body()).isEqualTo(200);
+        assertThat(body(removed).path("metadata").has("deerflow_project_id")).isFalse();
+        assertThat(body(get("/api/projects/" + target + "/threads"))).isEmpty();
+    }
+
+    @Test
+    void rejectedThreadMovesLeaveMembershipUnchanged() throws Exception {
+        String source = body(request("POST", "/api/projects", "{\"name\":\"Source\"}")).path("id").asText();
+        String archived = body(request("POST", "/api/projects", "{\"name\":\"Archived\"}")).path("id").asText();
+        assertThat(request("POST", "/api/projects/" + archived + "/archive", "{}").statusCode()).isEqualTo(200);
+        assertThat(request("POST", "/api/threads", """
+                {"thread_id":"movable","project_id":"%s"}
+                """.formatted(source)).statusCode()).isEqualTo(200);
+        String move = "/api/threads/movable/move";
+        assertThat(request("POST", move, "{}").statusCode()).isEqualTo(422);
+        assertThat(request("POST", move, "{\"project_id\":42}").statusCode()).isEqualTo(422);
+        assertThat(request("POST", move, "{\"project_id\":\"missing\"}").statusCode()).isEqualTo(404);
+        assertThat(request("POST", move, """
+                {"project_id":"%s"}
+                """.formatted(archived)).statusCode()).isEqualTo(404);
+        assertThat(request("POST", "/api/threads/unknown/move", "{\"project_id\":null}").statusCode())
+                .isEqualTo(404);
+        assertThat(body(get("/api/threads/movable")).path("metadata").path("deerflow_project_id").asText())
+                .isEqualTo(source);
+    }
+
+    @Test
     void projectRoutesFailClosedForInvalidInputMissingProjectsAndUnimplementedOperations() throws Exception {
         assertThat(request("POST", "/api/threads", """
                 {"thread_id":"missing-project","project_id":"missing","metadata":{"deerflow_project_id":"missing"}}

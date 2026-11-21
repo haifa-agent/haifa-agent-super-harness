@@ -95,7 +95,7 @@ final class DeerFlowProjectApi implements HttpHandler {
                 if (!requireMethod(exchange, "POST")) {
                     return;
                 }
-                sendJson(exchange, 200, response(projects.archiveProject(ownerId(), match.group(1))));
+                sendJson(exchange, 200, response(threads.archiveProject(ownerId(), match.group(1))));
                 return;
             }
             match = PROJECT_RESTORE.matcher(path);
@@ -194,7 +194,7 @@ final class DeerFlowProjectApi implements HttpHandler {
     }
 
     private void deleteProject(HttpExchange exchange, String projectId) throws IOException {
-        projects.deleteProject(ownerId(), projectId, () -> threads.unbindProject(projectId));
+        threads.deleteProject(ownerId(), projectId);
         sendNoContent(exchange);
     }
 

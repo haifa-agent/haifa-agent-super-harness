@@ -65,6 +65,7 @@ import io.haifa.agent.superharness.workspace.StagedRunChanges;
 import io.haifa.agent.superharness.workspace.WorkspaceBinding;
 import io.haifa.agent.superharness.workspace.WorkspaceChangeLimits;
 import io.haifa.agent.superharness.workspace.WorkspaceChanges;
+import io.haifa.agent.superharness.workspace.ProjectProfile;
 import io.haifa.agent.superharness.workspace.WorkspaceError;
 import io.haifa.agent.superharness.workspace.WorkspaceException;
 import io.haifa.agent.superharness.workspace.WorkspaceLineCounts;
@@ -213,6 +214,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     private final BiFunction<HaifaRunBridge, AgentRunId, Optional<FrozenInstructionDiagnostic>> instructionDiagnostics;
     private final Predicate<String> projectExists;
     private final PersistentProjectWorkspaceService workspaceChanges;
+    // Coordinate membership changes with project archive/delete without taking the workspace
+    // service's monitor across a thread write.
+    private final Object projectMembershipLock = new Object();
     private final Function<ThreadToolScope, List<? extends JavaTool<?, ?>>> runToolsForThread;
     private final McpProjectionProvider mcpProjections;
     private final SkillProjectionProvider skillProjections;
@@ -697,6 +701,52 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 threadId, ignored -> new ThreadRecord(threadId, metadata, Instant.now(), owner));
         persistThread(record);
         return threadResponse(record);
+    }
+
+    Map<String, Object> moveThread(String threadId, JsonNode body) throws IOException {
+        ThreadRecord thread = requireOwnedThread(threadId);
+        JsonNode target = body.get("project_id");
+        if (target == null || (!target.isNull() && !target.isTextual())) {
+            throw ConversationException.invalid("project_id must be a string or null");
+        }
+        String projectId = target.textValue();
+        synchronized (projectMembershipLock) {
+            if (projectId != null && !activeProjectExists(thread.ownerId, projectId)) {
+                throw ConversationException.notFound("Thread or project not found");
+            }
+            thread.lock.lock();
+            try {
+                if (threads.get(threadId) != thread) {
+                    throw ConversationException.notFound("Thread not found");
+                }
+                String status = threadStatus(thread);
+                Map<String, Object> updated = new LinkedHashMap<>(thread.metadata);
+                updated.remove("project_id");
+                if (projectId == null) {
+                    updated.remove("deerflow_project_id");
+                } else {
+                    updated.put("deerflow_project_id", projectId);
+                }
+                if (!updated.equals(thread.metadata)) {
+                    saveThread(thread, updated);
+                    thread.metadata = Collections.unmodifiableMap(updated);
+                }
+                return threadMetadataResponse(thread, status);
+            } finally {
+                thread.lock.unlock();
+            }
+        }
+    }
+
+    private boolean activeProjectExists(String ownerId, String projectId) {
+        try {
+            return "active".equals(workspaceChanges.getProject(ownerId, projectId).status());
+        } catch (WorkspaceException failure) {
+            return switch (failure.error()) {
+                case PROJECT_NOT_FOUND, OWNER_MISMATCH, INVALID_IDENTITY -> false;
+                default -> throw failure;
+            };
+        }
     }
 
     /**
@@ -2979,19 +3029,23 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             if (threads.get(thread.threadId) != thread) {
                 return;
             }
-            threadCatalog.save(new PersistentThreadCatalog.Entry(
-                    thread.threadId,
-                    thread.metadata,
-                    thread.createdAt,
-                    thread.updatedAt,
-                    Optional.ofNullable(thread.persistedSessionId),
-                    Optional.ofNullable(thread.modelBindingIdentity),
-                    thread.interactionDisplays,
-                    thread.clarificationDisplays,
-                    thread.ownerId));
+            saveThread(thread, thread.metadata);
         } finally {
             thread.lock.unlock();
         }
+    }
+
+    private void saveThread(ThreadRecord thread, Map<String, Object> metadata) throws IOException {
+        threadCatalog.save(new PersistentThreadCatalog.Entry(
+                thread.threadId,
+                metadata,
+                thread.createdAt,
+                thread.updatedAt,
+                Optional.ofNullable(thread.persistedSessionId),
+                Optional.ofNullable(thread.modelBindingIdentity),
+                thread.interactionDisplays,
+                thread.clarificationDisplays,
+                thread.ownerId));
     }
 
     /**
@@ -5943,13 +5997,18 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         return Set.copyOf(requested);
     }
 
-    private Map<String, Object> threadResponse(ThreadRecord record) {
+    private static Map<String, Object> threadMetadataResponse(ThreadRecord record, String status) {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("thread_id", record.threadId);
-        response.put("status", threadStatus(record));
+        response.put("status", status);
         response.put("created_at", record.createdAt.toString());
         response.put("updated_at", record.updatedAt.toString());
         response.put("metadata", record.publicMetadata());
+        return response;
+    }
+
+    private Map<String, Object> threadResponse(ThreadRecord record) {
+        Map<String, Object> response = threadMetadataResponse(record, threadStatus(record));
         Map<String, Object> values = new LinkedHashMap<>();
         Object title = record.metadata.get("title");
         if (title instanceof String) {
@@ -5986,7 +6045,19 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         return record != null && projectId.equals(record.metadata.get("deerflow_project_id"));
     }
 
-    void unbindProject(String projectId) throws IOException {
+    ProjectProfile archiveProject(String ownerId, String projectId) {
+        synchronized (projectMembershipLock) {
+            return workspaceChanges.archiveProject(ownerId, projectId);
+        }
+    }
+
+    void deleteProject(String ownerId, String projectId) {
+        synchronized (projectMembershipLock) {
+            workspaceChanges.deleteProject(ownerId, projectId, () -> unbindProject(projectId));
+        }
+    }
+
+    private void unbindProject(String projectId) throws IOException {
         if (projectId == null || projectId.isBlank()) {
             return;
         }
