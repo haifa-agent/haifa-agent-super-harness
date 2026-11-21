@@ -45,6 +45,7 @@ import javax.crypto.SecretKey;
 public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
 
     private static final Pattern THREAD = Pattern.compile("^/api/threads/([^/]+)$");
+    private static final Pattern THREAD_MOVE = Pattern.compile("^/api/threads/([^/]+)/move$");
     private static final Pattern THREAD_STATE = Pattern.compile("^/api/threads/([^/]+)/state$");
     private static final Pattern EXECUTION_APPROVAL_SESSION =
             Pattern.compile("^/api/threads/([^/]+)/execution-approval-session$");
@@ -222,7 +223,17 @@ public final class DeerFlowThreadRunApi implements HttpHandler, AutoCloseable {
                 searchThreads(exchange);
                 return;
             }
-            Matcher match = EXECUTION_APPROVAL_SESSION.matcher(path);
+            Matcher match = THREAD_MOVE.matcher(path);
+            if (match.matches()) {
+                if ("POST".equals(exchange.getRequestMethod())) {
+                    sendJson(exchange, 200, conversations.moveThread(match.group(1), readBody(exchange)));
+                } else {
+                    exchange.getResponseHeaders().set("Allow", "POST");
+                    sendJson(exchange, 405, Map.of("detail", "Method Not Allowed"));
+                }
+                return;
+            }
+            match = EXECUTION_APPROVAL_SESSION.matcher(path);
             if (match.matches()) {
                 String method = exchange.getRequestMethod();
                 if ("GET".equals(method) || "DELETE".equals(method)) {

@@ -46,6 +46,90 @@ class ProductionWriteFileHttpTest {
     void close() throws InterruptedException { if (http != null) http.close(); }
 
     @Test
+    void movePreservesPendingRunProjectAndUsesTargetProjectForNextRun() throws Exception {
+        String threadId = "move-file-thread";
+        String runPath = "/api/threads/" + threadId + "/runs/stream";
+        String outputDirectory = "/mnt/user-data/outputs/";
+        String providerModel = "demo-provider-id";
+        try (var provider = new ControlledProvider(evidence, true, (request, call) -> {
+            String responseId = "move-file-" + call;
+            if (call == 1 || call == 3) {
+                String filename = call == 1 ? "before.txt" : "after.txt";
+                return ControlledProvider.call(responseId, providerModel, "write-" + call, "write_file",
+                        Map.of("path", outputDirectory + filename, "content", filename));
+            }
+            return ControlledProvider.stop(responseId, providerModel, "File written.");
+        })) {
+            String source;
+            String target;
+            String firstRun;
+            String firstRequest;
+            String runBody = """
+                    {"assistant_id":"lead_agent","input":{"messages":[{"type":"human","content":"%s"}]},
+                    "stream_mode":["messages-tuple","updates","custom"],
+                    "context":{"model_name":"demo-model","mode":"flash","reasoning_effort":"minimal",
+                    "thinking_enabled":false,"is_plan_mode":false,"subagent_enabled":false},
+                    "on_disconnect":"continue","multitask_strategy":"reject"}
+                    """;
+            try (var api = GatewayFixture.production(dataRoot, 0, Map.of(), evidence)) {
+                String config = """
+                        {"config":{"name":"demo-model","display_name":"Demo Model","provider":"openai-compatible",
+                        "model":"%s","base_url":"http://127.0.0.1:%d/v1","enabled":true,"supports_vision":false,
+                        "context_window":32768,"max_tokens":1024,"api_key":"controlled-key"},"expected_revision":null}
+                        """.formatted(providerModel, provider.port());
+                assertThat(http.request(api.base, "PUT", "/api/managed-models", config).statusCode()).isEqualTo(200);
+                var sourceResponse = http.request(api.base, "POST", "/api/projects", "{\"name\":\"Source\"}");
+                var targetResponse = http.request(api.base, "POST", "/api/projects", "{\"name\":\"Target\"}");
+                assertThat(sourceResponse.statusCode()).isEqualTo(201);
+                assertThat(targetResponse.statusCode()).isEqualTo(201);
+                source = json.readTree(sourceResponse.body()).path("id").asText();
+                target = json.readTree(targetResponse.body()).path("id").asText();
+                assertThat(http.request(api.base, "POST", "/api/threads", """
+                        {"thread_id":"%s","project_id":"%s"}
+                        """.formatted(threadId, source)).statusCode()).isEqualTo(200);
+                var pending = http.request(api.base, "POST", runPath, runBody.formatted("write before moving"), "before.sse");
+                assertThat(pending.statusCode()).as(pending.body()).isEqualTo(200);
+                firstRun = pending.headers().firstValue("content-location").orElseThrow();
+                firstRequest = api.pending(threadId, firstRun).requestId();
+                assertThat(firstRequest).isNotBlank();
+                assertThat(http.request(api.base, "POST", "/api/threads/" + threadId + "/move", """
+                        {"project_id":"%s"}
+                        """.formatted(target), "move.json").statusCode()).isEqualTo(200);
+            }
+            try (var api = GatewayFixture.production(dataRoot, 0, Map.of(), evidence)) {
+                var approvedBefore = http.request(api.base, "POST", runPath,
+                        SseEvents.PendingApproval.reply(firstRequest, "approve"), "approve-before.sse");
+                assertThat(approvedBefore.statusCode()).as(approvedBefore.body()).isEqualTo(200);
+                assertThat(http.get(api.base, firstRun, "run-before.json").path("status").asText()).isEqualTo("success");
+
+                var pending = http.request(api.base, "POST", runPath, runBody.formatted("write after moving"), "after.sse");
+                assertThat(pending.statusCode()).as(pending.body()).isEqualTo(200);
+                String secondRun = pending.headers().firstValue("content-location").orElseThrow();
+                String requestId = api.pending(threadId, secondRun).requestId();
+                assertThat(requestId).isNotBlank();
+                var approvedAfter = http.request(api.base, "POST", runPath,
+                        SseEvents.PendingApproval.reply(requestId, "approve"), "approve-after.sse");
+                assertThat(approvedAfter.statusCode()).as(approvedAfter.body()).isEqualTo(200);
+                assertThat(http.get(api.base, secondRun, "run-after.json").path("status").asText()).isEqualTo("success");
+
+                Path workspaceRoot = dataRoot.resolve("workspace");
+                var service = new PersistentProjectWorkspaceService(
+                        workspaceRoot, WorkspaceLimits.defaults(), WorkspaceChangeLimits.defaults());
+                var workspaceId = service.requireThreadWorkspace("default", threadId).workspaceId();
+                var artifacts = new RestrictedWorkspaceService(workspaceRoot, WorkspaceLimits.defaults());
+                assertThat(artifacts.findArtifacts("default", workspaceId, source)).singleElement().satisfies(artifact -> {
+                    assertThat(artifact.provenance().runId().value()).isEqualTo(firstRun.substring(firstRun.lastIndexOf('/') + 1));
+                    assertThat(artifacts.loadArtifact("default", artifact)).isEqualTo("before.txt".getBytes(StandardCharsets.UTF_8));
+                });
+                assertThat(artifacts.findArtifacts("default", workspaceId, target)).singleElement().satisfies(artifact -> {
+                    assertThat(artifact.provenance().runId().value()).isEqualTo(secondRun.substring(secondRun.lastIndexOf('/') + 1));
+                    assertThat(artifacts.loadArtifact("default", artifact)).isEqualTo("after.txt".getBytes(StandardCharsets.UTF_8));
+                });
+            }
+        }
+    }
+
+    @Test
     void productionPendingWriteCancellationLeavesNoFileOrArtifactAfterLateApprovalAndRestart() throws Exception {
         String assignedRoot = System.getProperty("w05.pendingCancel.dataRoot");
         if (assignedRoot != null) {

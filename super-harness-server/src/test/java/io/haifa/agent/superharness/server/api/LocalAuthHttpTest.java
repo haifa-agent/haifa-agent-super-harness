@@ -187,6 +187,19 @@ class LocalAuthHttpTest {
             projectId = json.readTree(project.body()).get("id").asText();
             threadBefore = send(base, "GET", "/api/threads/" + threadId, null, admin.headers()).body();
 
+            HttpResponse<String> otherThread = send(base, "POST", "/api/threads",
+                    "{\"thread_id\":\"other-owner-thread\"}", user.jsonHeaders());
+            assertThat(otherThread.statusCode()).isEqualTo(200);
+            String move = """
+                    {"project_id":"%s"}
+                    """.formatted(projectId);
+            assertThat(send(base, "POST", "/api/threads/" + threadId + "/move",
+                    move, user.jsonHeaders()).statusCode()).isEqualTo(404);
+            assertThat(send(base, "POST", "/api/threads/other-owner-thread/move",
+                    move, user.jsonHeaders()).statusCode()).isEqualTo(404);
+            assertThat(json.readTree(send(base, "GET", "/api/threads/other-owner-thread", null, user.headers()).body())
+                    .path("metadata").has("deerflow_project_id")).isFalse();
+
             assertThat(send(base, "POST", "/api/threads/" + threadId + "/runs/stream",
                     "{\"input\":{\"messages\":[]}}", user.jsonHeaders()).statusCode()).isEqualTo(404);
             assertThat(send(base, "POST", "/api/threads/" + threadId + "/runs/run-b/cancel",
