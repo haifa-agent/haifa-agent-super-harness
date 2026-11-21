@@ -1,0 +1,1126 @@
+diff --git a/frontend/src/app/connect/feishu/page.tsx b/frontend/src/app/connect/feishu/page.tsx
+new file mode 100644
+index 0000000..a4350d2
+--- /dev/null
++++ b/frontend/src/app/connect/feishu/page.tsx
+@@ -0,0 +1,22 @@
++import { redirect } from "next/navigation";
++
++import { getServerSideUser } from "@/core/auth/server";
++import { buildLoginUrl } from "@/core/auth/types";
++import { parseLarkRecoveryScope } from "@/core/integrations/lark/recovery";
++
++// Feishu may open a browser without a Super Harness login cookie.
++export default async function FeishuAuthorizationLink({
++  searchParams,
++}: {
++  searchParams: Promise<{ lark_scope?: string | string[] }>;
++}) {
++  const { lark_scope: rawScope } = await searchParams;
++  const scope = parseLarkRecoveryScope(
++    typeof rawScope === "string" ? rawScope : null,
++  );
++  const params = new URLSearchParams({ tab: "plugins", plugin: "lark" });
++  if (scope) params.set("lark_scope", scope);
++  const target = `/workspace/capabilities?${params}`;
++  const user = await getServerSideUser();
++  redirect(user.tag === "unauthenticated" ? buildLoginUrl(target) : target);
++}
+diff --git a/frontend/src/components/workspace/capabilities/capability-center.tsx b/frontend/src/components/workspace/capabilities/capability-center.tsx
+index 63757f1..e8e03ac 100644
+--- a/frontend/src/components/workspace/capabilities/capability-center.tsx
++++ b/frontend/src/components/workspace/capabilities/capability-center.tsx
+@@ -37 +37,2 @@ export function CapabilityCenter() {
+-  const [query, setQuery] = useState("");
++  const [search, setSearch] = useState({ tab, query: "" });
++  const query = search.tab === tab ? search.query : "";
+@@ -39 +40 @@ export function CapabilityCenter() {
+-    setQuery("");
++    setSearch({ tab, query: "" });
+@@ -77 +78,3 @@ export function CapabilityCenter() {
+-                onChange={(event) => setQuery(event.target.value)}
++                onChange={(event) =>
++                  setSearch({ tab, query: event.target.value })
++                }
+@@ -96 +99,7 @@ export function CapabilityCenter() {
+-            <SkillGallery query={query} />
++            <SkillGallery
++              key={params.get("source") === "lark" ? "lark" : "all"}
++              query={query}
++              initialFilter={
++                params.get("source") === "lark" ? "lark" : "public"
++              }
++            />
+diff --git a/frontend/src/components/workspace/capabilities/lark-plugin-settings.tsx b/frontend/src/components/workspace/capabilities/lark-plugin-settings.tsx
+index 2241d90..5cdf418 100644
+--- a/frontend/src/components/workspace/capabilities/lark-plugin-settings.tsx
++++ b/frontend/src/components/workspace/capabilities/lark-plugin-settings.tsx
+@@ -5,0 +6 @@ import {
++  CheckIcon,
+@@ -11,0 +13,2 @@ import {
++import Link from "next/link";
++import { useSearchParams } from "next/navigation";
+@@ -27,0 +31 @@ import { useAuth } from "@/core/auth/AuthProvider";
++import { useChannelProviders } from "@/core/channels/hooks";
+@@ -43,0 +48 @@ import {
++  useVerifyLarkIntegration,
+@@ -44,0 +50,8 @@ import {
++import {
++  calendarGrant,
++  calendarOperations,
++  feishuChatState,
++  LARK_SKILLS_URL,
++  larkSkillCounts,
++} from "@/core/integrations/lark/overview";
++import { parseLarkRecoveryScope } from "@/core/integrations/lark/recovery";
+@@ -118,0 +132,5 @@ export function LarkPluginSettings() {
++  const params = useSearchParams();
++  const recoveryScope =
++    params.get("plugin") === "lark"
++      ? parseLarkRecoveryScope(params.get("lark_scope"))
++      : "";
+@@ -124 +142 @@ export function LarkPluginSettings() {
+-      <LarkIntegrationCard />
++      <LarkIntegrationCard key={recoveryScope} recoveryScope={recoveryScope} />
+@@ -129 +147 @@ export function LarkPluginSettings() {
+-function LarkIntegrationCard() {
++function LarkIntegrationCard({ recoveryScope }: { recoveryScope: string }) {
+@@ -135,0 +154,10 @@ function LarkIntegrationCard() {
++  const channels = useChannelProviders();
++  const verify = useVerifyLarkIntegration();
++  const copy = t.settings.integrations.lark;
++  const chatProvider = channels.providers.find(
++    (provider) => provider.provider === "feishu",
++  );
++  const chatState =
++    !chatProvider && !channels.isLoading && !channels.error
++      ? "disabled"
++      : feishuChatState(chatProvider, Boolean(channels.error));
+@@ -153 +181,2 @@ function LarkIntegrationCard() {
+-  const [customAuthScope, setCustomAuthScope] = useState("");
++  const [customAuthScope, setCustomAuthScope] = useState(recoveryScope);
++  const [recoveryAuthorized, setRecoveryAuthorized] = useState(false);
+@@ -173,3 +202,5 @@ function LarkIntegrationCard() {
+-    install.isPending;
+-  const credentialsConfigured = data?.auth.status === "authenticated";
+-  const isConnected = credentialsConfigured && data?.auth.verified === true;
++    install.isPending ||
++    verify.isPending;
++  const credentialsConfigured = data?.app_configured === true;
++  const isConnected = data?.auth.verified === true;
++  const skills = data ? larkSkillCounts(data) : null;
+@@ -367,0 +399 @@ function LarkIntegrationCard() {
++    const replacingApp = data?.app_configured === true;
+@@ -373 +405 @@ function LarkIntegrationCard() {
+-    const browserWindow = openPendingBrowserWindow();
++    const browserWindow = replacingApp ? openPendingBrowserWindow() : null;
+@@ -385 +416,0 @@ function LarkIntegrationCard() {
+-          toast.success(t.settings.integrations.lark.changeAppSwitched);
+@@ -387,0 +419,5 @@ function LarkIntegrationCard() {
++          if (!replacingApp) {
++            toast.success(t.settings.integrations.lark.existingAppSaved);
++            return;
++          }
++          toast.success(t.settings.integrations.lark.changeAppSwitched);
+@@ -491,0 +528 @@ function LarkIntegrationCard() {
++            if (recoveryScope) setRecoveryAuthorized(true);
+@@ -640 +677 @@ function LarkIntegrationCard() {
+-            <CardTitle>{t.settings.integrations.lark.title}</CardTitle>
++            <CardTitle>{copy.officeTitle}</CardTitle>
+@@ -650,2 +687,11 @@ function LarkIntegrationCard() {
+-            onClick={() => void refetch()}
+-            disabled={isFetching}
++            onClick={() => {
++              void channels.refetch();
++              if (!data?.app_configured || !data.cli.available) {
++                void refetch();
++                return;
++              }
++              verify.mutate(undefined, {
++                onError: (err) => toast.error(err.message),
++              });
++            }}
++            disabled={isFetching || integrationBusy}
+@@ -654 +700,4 @@ function LarkIntegrationCard() {
+-              className={cn("size-4", isFetching && "animate-spin")}
++              className={cn(
++                "size-4",
++                (isFetching || verify.isPending) && "animate-spin",
++              )}
+@@ -656 +705,3 @@ function LarkIntegrationCard() {
+-            {t.settings.integrations.refresh}
++            {data?.app_configured && data.cli.available
++              ? copy.verifyStatus
++              : t.settings.integrations.refresh}
+@@ -673 +724 @@ function LarkIntegrationCard() {
+-        ) : data ? (
++        ) : data && skills ? (
+@@ -674,0 +726,44 @@ function LarkIntegrationCard() {
++            <div className="grid gap-3 md:grid-cols-3">
++              <OverviewItem
++                label={copy.chatChannel}
++                value={copy.chatStatuses[chatState]}
++              />
++              <OverviewItem
++                label={copy.officeApp}
++                value={
++                  data.auth.app_name ?? data.app_id ?? copy.authNotConfigured
++                }
++                detail={
++                  data.auth.bot_verified === true
++                    ? copy.botVerified
++                    : data.auth.bot_verified === false
++                      ? copy.botVerificationFailed
++                      : credentialsConfigured
++                        ? copy.authConfigured
++                        : undefined
++                }
++              />
++              <OverviewItem
++                label={copy.personalIdentity}
++                value={
++                  data.auth.user ??
++                  (data.auth.status === "error" ||
++                  data.auth.status === "unavailable"
++                    ? copy.grantStates.unknown
++                    : isConnected
++                      ? copy.connectedTitle
++                      : data.auth.user_authorized
++                        ? copy.personalAuthorized
++                        : copy.personalNotAuthorized)
++                }
++                detail={
++                  data.auth.user
++                    ? isConnected
++                      ? copy.connectedTitle
++                      : data.auth.user_authorized
++                        ? copy.personalAuthorized
++                        : copy.grantStates.unknown
++                    : undefined
++                }
++              />
++            </div>
+@@ -678 +773 @@ function LarkIntegrationCard() {
+-                showSandboxRuntime ? "md:grid-cols-4" : "md:grid-cols-3",
++                showSandboxRuntime ? "md:grid-cols-3" : "md:grid-cols-2",
+@@ -687,2 +782,2 @@ function LarkIntegrationCard() {
+-                        data.skills_installed,
+-                        data.skills_expected,
++                        skills.installed,
++                        skills.expected,
+@@ -692 +787,13 @@ function LarkIntegrationCard() {
+-              />
++              >
++                {data.installed && (
++                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
++                    <span>{copy.skillsEnabled(skills.enabled)}</span>
++                    <Link
++                      className="underline underline-offset-4"
++                      href={LARK_SKILLS_URL}
++                    >
++                      {copy.manageSkills}
++                    </Link>
++                  </div>
++                )}
++              </StatusItem>
+@@ -694 +801 @@ function LarkIntegrationCard() {
+-                label={t.settings.integrations.lark.gatewayCli}
++                label={copy.title}
+@@ -702,15 +808,0 @@ function LarkIntegrationCard() {
+-              <StatusItem
+-                label={t.settings.integrations.lark.auth}
+-                ok={isConnected}
+-                value={
+-                  data.auth.status === "authenticated"
+-                    ? data.auth.verified
+-                      ? (data.auth.user ?? t.settings.integrations.connected)
+-                      : data.auth.user
+-                        ? t.settings.integrations.lark.authConfiguredFor(
+-                            data.auth.user,
+-                          )
+-                        : t.settings.integrations.lark.authConfigured
+-                    : t.settings.integrations.lark.authNotConfigured
+-                }
+-              />
+@@ -735,0 +828,38 @@ function LarkIntegrationCard() {
++            {data.app_configured && (
++              <section
++                aria-label={copy.calendarGrants}
++                className="space-y-2 rounded-lg border p-3"
++              >
++                <h3 className="text-sm font-medium">{copy.calendarGrants}</h3>
++                <ul className="grid gap-2 sm:grid-cols-2">
++                  {(
++                    Object.keys(
++                      calendarOperations,
++                    ) as (keyof typeof calendarOperations)[]
++                  ).map((operation) => {
++                    const granted = calendarGrant(
++                      data,
++                      calendarOperations[operation],
++                    );
++                    return (
++                      <li
++                        key={operation}
++                        className="flex items-center justify-between gap-2 text-sm"
++                      >
++                        <span>{copy.calendarOperations[operation]}</span>
++                        <Badge
++                          variant={
++                            granted === "granted" ? "secondary" : "outline"
++                          }
++                        >
++                          {copy.grantStates[granted]}
++                        </Badge>
++                      </li>
++                    );
++                  })}
++                </ul>
++                <p className="text-muted-foreground text-xs">
++                  {copy.calendarGrantHint}
++                </p>
++              </section>
++            )}
+@@ -762 +891,0 @@ function LarkIntegrationCard() {
+-              connected={isConnected}
+@@ -764,0 +894,14 @@ function LarkIntegrationCard() {
++            {recoveryScope && (
++              <Alert>
++                <AlertTitle>
++                  {recoveryAuthorized
++                    ? t.settings.integrations.lark.recoveryAuthorizedTitle
++                    : t.settings.integrations.lark.recoveryTitle}
++                </AlertTitle>
++                <AlertDescription>
++                  {recoveryAuthorized
++                    ? t.settings.integrations.lark.recoveryAuthorizedDescription
++                    : t.settings.integrations.lark.recoveryDescription}
++                </AlertDescription>
++              </Alert>
++            )}
+@@ -775 +918,5 @@ function LarkIntegrationCard() {
+-                <div className="mt-3 flex flex-wrap gap-2">
++                <div
++                  className="mt-3 flex flex-wrap gap-2"
++                  role="group"
++                  aria-label={copy.permissionTitle}
++                >
+@@ -783,0 +931 @@ function LarkIntegrationCard() {
++                        aria-pressed={selected}
+@@ -787,0 +936,3 @@ function LarkIntegrationCard() {
++                        {selected && (
++                          <CheckIcon aria-hidden="true" className="size-4" />
++                        )}
+@@ -812 +963,5 @@ function LarkIntegrationCard() {
+-              <Button onClick={handleInstall} disabled={installDisabled}>
++              <Button
++                variant={data.installed ? "outline" : "default"}
++                onClick={handleInstall}
++                disabled={installDisabled}
++              >
+@@ -823 +978 @@ function LarkIntegrationCard() {
+-                variant="outline"
++                variant={data.installed ? "default" : "outline"}
+@@ -832 +987 @@ function LarkIntegrationCard() {
+-              {data.installed && data.cli.available && data.app_configured && (
++              {data.installed && data.cli.available && (
+@@ -841 +996,3 @@ function LarkIntegrationCard() {
+-                  {t.settings.integrations.lark.changeAppButton}
++                  {data.app_configured
++                    ? t.settings.integrations.lark.changeAppButton
++                    : t.settings.integrations.lark.useExistingApp}
+@@ -854 +1011,3 @@ function LarkIntegrationCard() {
+-                    {t.settings.integrations.lark.changeAppTitle}
++                    {data.app_configured
++                      ? t.settings.integrations.lark.changeAppTitle
++                      : t.settings.integrations.lark.useExistingApp}
+@@ -857 +1016,3 @@ function LarkIntegrationCard() {
+-                    {t.settings.integrations.lark.changeAppDescription}
++                    {data.app_configured
++                      ? t.settings.integrations.lark.changeAppDescription
++                      : t.settings.integrations.lark.existingAppDescription}
+@@ -866,0 +1028 @@ function LarkIntegrationCard() {
++                      aria-pressed={changeAppBrand === brand}
+@@ -887,0 +1050 @@ function LarkIntegrationCard() {
++                    autoComplete="new-password"
+@@ -900,3 +1063,5 @@ function LarkIntegrationCard() {
+-                  <p className="text-muted-foreground text-xs">
+-                    {t.settings.integrations.lark.changeAppAuthResetNote}
+-                  </p>
++                  {data.app_configured && (
++                    <p className="text-muted-foreground text-xs">
++                      {t.settings.integrations.lark.changeAppAuthResetNote}
++                    </p>
++                  )}
+@@ -917,10 +1082,3 @@ function LarkIntegrationCard() {
+-                    {t.settings.integrations.lark.changeAppSubmit}
+-                  </Button>
+-                  <Button
+-                    size="sm"
+-                    variant="outline"
+-                    onClick={handleReRegisterInBrowser}
+-                    disabled={integrationBusy}
+-                  >
+-                    <ExternalLinkIcon className="size-4" />
+-                    {t.settings.integrations.lark.changeAppReRegister}
++                    {data.app_configured
++                      ? t.settings.integrations.lark.changeAppSubmit
++                      : t.settings.integrations.lark.saveExistingApp}
+@@ -927,0 +1086,11 @@ function LarkIntegrationCard() {
++                  {data.app_configured && (
++                    <Button
++                      size="sm"
++                      variant="outline"
++                      onClick={handleReRegisterInBrowser}
++                      disabled={integrationBusy}
++                    >
++                      <ExternalLinkIcon className="size-4" />
++                      {t.settings.integrations.lark.changeAppReRegister}
++                    </Button>
++                  )}
+@@ -1030,0 +1200,18 @@ function LarkIntegrationCard() {
++function OverviewItem({
++  label,
++  value,
++  detail,
++}: {
++  label: string;
++  value: string;
++  detail?: string;
++}) {
++  return (
++    <div className="space-y-1 rounded-lg border p-3">
++      <div className="text-muted-foreground text-xs">{label}</div>
++      <div className="text-sm font-medium break-words">{value}</div>
++      {detail && <div className="text-muted-foreground text-xs">{detail}</div>}
++    </div>
++  );
++}
++
+@@ -1034,0 +1222 @@ function StatusItem({
++  children,
+@@ -1038,0 +1227 @@ function StatusItem({
++  children?: React.ReactNode;
+@@ -1054,0 +1244 @@ function StatusItem({
++      {children}
+@@ -1062 +1251,0 @@ function IntegrationNextStep({
+-  connected,
+@@ -1067 +1255,0 @@ function IntegrationNextStep({
+-  connected: boolean;
+@@ -1091,11 +1278,0 @@ function IntegrationNextStep({
+-  if (connected) {
+-    return (
+-      <Alert>
+-        <CheckCircle2Icon />
+-        <AlertTitle>{t.settings.integrations.lark.connectedTitle}</AlertTitle>
+-        <AlertDescription>
+-          {t.settings.integrations.lark.connectedDescription}
+-        </AlertDescription>
+-      </Alert>
+-    );
+-  }
+@@ -1103,9 +1280 @@ function IntegrationNextStep({
+-    return (
+-      <Alert>
+-        <CheckCircle2Icon />
+-        <AlertTitle>{t.settings.integrations.lark.configuredTitle}</AlertTitle>
+-        <AlertDescription>
+-          {t.settings.integrations.lark.configuredDescription}
+-        </AlertDescription>
+-      </Alert>
+-    );
++    return null;
+diff --git a/frontend/src/components/workspace/capabilities/plugin-gallery.tsx b/frontend/src/components/workspace/capabilities/plugin-gallery.tsx
+index 1e0479c..a8502ce 100644
+--- a/frontend/src/components/workspace/capabilities/plugin-gallery.tsx
++++ b/frontend/src/components/workspace/capabilities/plugin-gallery.tsx
+@@ -25,0 +26,2 @@ import type { Translations } from "@/core/i18n/locales/types";
++import { useLarkIntegrationStatus } from "@/core/integrations/lark";
++import { larkSkillCounts } from "@/core/integrations/lark/overview";
+@@ -58 +59,0 @@ function getPluginStatusLabel(
+-  if (adapter === "lark") return t.capabilities.notInstalled;
+@@ -86 +87 @@ export function PluginGallery({ query }: { query: string }) {
+-        .filter((name) => name !== "guide"),
++        .filter((name) => name !== "guide" && name !== "lark"),
+@@ -89,0 +91,3 @@ export function PluginGallery({ query }: { query: string }) {
++  const lark = useLarkIntegrationStatus(
++    definitions.some((item) => item.adapter === "lark"),
++  );
+@@ -128,0 +133,4 @@ export function PluginGallery({ query }: { query: string }) {
++      const isLark = plugin.adapter === "lark";
++      const installed = isLark ? lark.data?.installed === true : !!status;
++      const counts = lark.data?.installed ? larkSkillCounts(lark.data) : null;
++      const larkCopy = t.settings.integrations.lark;
+@@ -132 +140 @@ export function PluginGallery({ query }: { query: string }) {
+-        installed: !!status,
++        installed,
+@@ -136 +144,3 @@ export function PluginGallery({ query }: { query: string }) {
+-            name={catalogText(plugin.name, locale)}
++            name={
++              isLark ? larkCopy.officeTitle : catalogText(plugin.name, locale)
++            }
+@@ -145,7 +155,17 @@ export function PluginGallery({ query }: { query: string }) {
+-            label={getPluginStatusLabel(
+-              plugin.adapter,
+-              status,
+-              unavailable,
+-              t,
+-              labels,
+-            )}
++            label={
++              isLark
++                ? counts
++                  ? `${larkCopy.skillsInstalled(counts.installed, counts.expected)} · ${larkCopy.skillsEnabled(counts.enabled)}`
++                  : lark.isError
++                    ? labels.adapterError
++                    : lark.isLoading
++                      ? t.common.loading
++                      : larkCopy.notInstalled
++                : getPluginStatusLabel(
++                    plugin.adapter,
++                    status,
++                    unavailable,
++                    t,
++                    labels,
++                  )
++            }
+@@ -162 +182 @@ export function PluginGallery({ query }: { query: string }) {
+-              {getPluginActionLabel(plugin.adapter, !!status, canManage, t)}
++              {getPluginActionLabel(plugin.adapter, installed, canManage, t)}
+diff --git a/frontend/src/components/workspace/capabilities/skill-gallery.tsx b/frontend/src/components/workspace/capabilities/skill-gallery.tsx
+index ecbbc61..a6602e6 100644
+--- a/frontend/src/components/workspace/capabilities/skill-gallery.tsx
++++ b/frontend/src/components/workspace/capabilities/skill-gallery.tsx
+@@ -9,0 +10 @@ import dynamic from "next/dynamic";
++import Link from "next/link";
+@@ -33,0 +35,5 @@ import { useI18n } from "@/core/i18n/hooks";
++import { useLarkIntegrationStatus } from "@/core/integrations/lark";
++import {
++  LARK_OFFICE_URL,
++  larkSkillCounts,
++} from "@/core/integrations/lark/overview";
+@@ -54 +60,7 @@ const SkillExportDialog = dynamic(() => import("./skill-export-dialog"), {
+-export function SkillGallery({ query = "" }: { query?: string } = {}) {
++export function SkillGallery({
++  query = "",
++  initialFilter = "public",
++}: {
++  query?: string;
++  initialFilter?: "public" | "lark";
++} = {}) {
+@@ -72 +84,5 @@ export function SkillGallery({ query = "" }: { query?: string } = {}) {
+-        <SkillList skills={skills} query={query} />
++        <SkillList
++          skills={skills}
++          query={query}
++          initialFilter={initialFilter}
++        />
+@@ -78 +94,9 @@ export function SkillGallery({ query = "" }: { query?: string } = {}) {
+-function SkillList({ skills, query }: { skills: Skill[]; query: string }) {
++function SkillList({
++  skills,
++  query,
++  initialFilter,
++}: {
++  skills: Skill[];
++  query: string;
++  initialFilter: "public" | "lark";
++}) {
+@@ -84 +108 @@ function SkillList({ skills, query }: { skills: Skill[]; query: string }) {
+-    if (skill.category === "integrations")
++    if (skill.category === "integration" || skill.category === "integrations")
+@@ -92 +116,4 @@ function SkillList({ skills, query }: { skills: Skill[]; query: string }) {
+-  const [filter, setFilter] = useState<string>("public");
++  const [filter, setFilter] = useState<string>(initialFilter);
++  const lark = useLarkIntegrationStatus(filter === "lark");
++  const larkCopy = t.settings.integrations.lark;
++  const counts = lark.data?.installed ? larkSkillCounts(lark.data) : null;
+@@ -105 +132,6 @@ function SkillList({ skills, query }: { skills: Skill[]; query: string }) {
+-          (filter === "all" || skill.category === filter) &&
++          (filter === "all" ||
++            skill.category === filter ||
++            (filter === "lark" &&
++              lark.data?.installed === true &&
++              skill.source === "integration-managed" &&
++              lark.data.installed_skills.includes(skill.name))) &&
+@@ -111 +143 @@ function SkillList({ skills, query }: { skills: Skill[]; query: string }) {
+-    [skills, filter, query, locale],
++    [skills, filter, query, locale, lark.data],
+@@ -196,0 +229,3 @@ function SkillList({ skills, query }: { skills: Skill[]; query: string }) {
++            <TabsTrigger value="lark" className="rounded-md px-3 text-xs">
++              {larkCopy.officeTitle}
++            </TabsTrigger>
+@@ -201,0 +237,22 @@ function SkillList({ skills, query }: { skills: Skill[]; query: string }) {
++        {filter === "lark" && (
++          <div
++            className="flex flex-wrap items-center gap-2 text-sm"
++            role="status"
++          >
++            <span>
++              {counts
++                ? `${larkCopy.skillsInstalled(counts.installed, counts.expected)} · ${larkCopy.skillsEnabled(counts.enabled)}`
++                : lark.isLoading
++                  ? t.common.loading
++                  : lark.isError
++                    ? t.settings.integrations.loadFailed
++                    : larkCopy.notInstalled}
++            </span>
++            <Link
++              className="text-muted-foreground underline underline-offset-4"
++              href={LARK_OFFICE_URL}
++            >
++              {larkCopy.officeTitle}
++            </Link>
++          </div>
++        )}
+diff --git a/frontend/src/components/workspace/channels/workspace-channels-list.tsx b/frontend/src/components/workspace/channels/workspace-channels-list.tsx
+index 6108e56..0f97eb4 100644
+--- a/frontend/src/components/workspace/channels/workspace-channels-list.tsx
++++ b/frontend/src/components/workspace/channels/workspace-channels-list.tsx
+@@ -32,0 +33 @@ import { useI18n } from "@/core/i18n/hooks";
++import { feishuChatState } from "@/core/integrations/lark/overview";
+@@ -125,0 +127,2 @@ export function WorkspaceChannelsList() {
++          const isFeishu = provider.provider === "feishu";
++          const lark = t.settings.integrations.lark;
+@@ -145,3 +148,10 @@ export function WorkspaceChannelsList() {
+-                <span className="min-w-0 flex-1 truncate text-sm font-medium">
+-                  {provider.display_name}
+-                </span>
++                <div className="min-w-0 flex-1">
++                  <span className="block truncate text-sm leading-tight font-medium">
++                    {isFeishu ? lark.chatChannel : provider.display_name}
++                  </span>
++                  {isFeishu && (
++                    <span className="text-muted-foreground block truncate text-xs leading-tight">
++                      {lark.chatStatuses[feishuChatState(provider)]}
++                    </span>
++                  )}
++                </div>
+diff --git a/frontend/src/components/workspace/settings/channels-settings-page.tsx b/frontend/src/components/workspace/settings/channels-settings-page.tsx
+index ff5e5c6..5c5d2e7 100644
+--- a/frontend/src/components/workspace/settings/channels-settings-page.tsx
++++ b/frontend/src/components/workspace/settings/channels-settings-page.tsx
+@@ -9,0 +10 @@ import {
++import Link from "next/link";
+@@ -41,0 +43,4 @@ import { useI18n } from "@/core/i18n/hooks";
++import {
++  feishuChatState,
++  LARK_OFFICE_URL,
++} from "@/core/integrations/lark/overview";
+@@ -46,0 +52 @@ import { ChannelRuntimeConfigDialog } from "../channels/channel-runtime-config-d
++import { setSettingsDialogOpen } from "./settings-dialog-store";
+@@ -143,0 +150,2 @@ function ChannelProviderItem({
++  const isFeishu = provider.provider === "feishu";
++  const lark = t.settings.integrations.lark;
+@@ -191 +199,8 @@ function ChannelProviderItem({
+-            <span className="truncate">{provider.display_name}</span>
++            <span className="truncate">
++              {isFeishu ? lark.chatChannel : provider.display_name}
++            </span>
++            {isFeishu && (
++              <Badge variant="secondary">
++                {lark.chatStatuses[feishuChatState(provider)]}
++              </Badge>
++            )}
+@@ -207,0 +223,12 @@ function ChannelProviderItem({
++            {isFeishu && (
++              <>
++                {" "}
++                <Link
++                  className="underline underline-offset-4"
++                  href={LARK_OFFICE_URL}
++                  onClick={() => setSettingsDialogOpen(false)}
++                >
++                  {lark.officeTitle}
++                </Link>
++              </>
++            )}
+diff --git a/frontend/src/core/channels/hooks.ts b/frontend/src/core/channels/hooks.ts
+index 450b076..2e01974 100644
+--- a/frontend/src/core/channels/hooks.ts
++++ b/frontend/src/core/channels/hooks.ts
+@@ -16,0 +17 @@ export const channelConnectionsQueryKey = ["channelConnections"] as const;
++const FEISHU_STATUS_REFRESH_MS = 15_000;
+@@ -19 +20 @@ export function useChannelProviders() {
+-  const { data, isLoading, error } = useQuery({
++  const { data, isLoading, error, refetch } = useQuery({
+@@ -21,0 +23,10 @@ export function useChannelProviders() {
++    refetchInterval: (query) =>
++      query.state.data?.providers.some(
++        (provider) =>
++          provider.provider === "feishu" &&
++          provider.enabled &&
++          provider.configured,
++      )
++        ? FEISHU_STATUS_REFRESH_MS
++        : false,
++    refetchIntervalInBackground: false,
+@@ -27,0 +39 @@ export function useChannelProviders() {
++    refetch,
+diff --git a/frontend/src/core/channels/types.ts b/frontend/src/core/channels/types.ts
+index 2e9e85d..7d6322b 100644
+--- a/frontend/src/core/channels/types.ts
++++ b/frontend/src/core/channels/types.ts
+@@ -20,0 +21 @@ export interface ChannelProvider {
++  runtime_online?: boolean | null;
+diff --git a/frontend/src/core/i18n/locales/en-US.ts b/frontend/src/core/i18n/locales/en-US.ts
+index 50b202a..a4ff11d 100644
+--- a/frontend/src/core/i18n/locales/en-US.ts
++++ b/frontend/src/core/i18n/locales/en-US.ts
+@@ -1601,0 +1602,5 @@ export const enUS: Translations = {
++        useExistingApp: "Use an existing app",
++        existingAppDescription:
++          "Set up an existing Lark office app for this account. To act as a user, save the app and select Connect Lark to authorize.",
++        saveExistingApp: "Save office app",
++        existingAppSaved: "Office app saved",
+@@ -1622 +1627,40 @@ export const enUS: Translations = {
+-        permissionTitle: "Authorization scope",
++        permissionTitle: "Permissions to request",
++        officeTitle: "Feishu office",
++        officeApp: "Office app identity",
++        personalIdentity: "Personal identity",
++        personalAuthorized: "Authorized",
++        personalNotAuthorized: "Not authorized",
++        verifyStatus: "Verify connection",
++        botVerified: "App identity verified",
++        botVerificationFailed: "App identity could not be verified",
++        manageSkills: "Manage Feishu skills",
++        skillsEnabled: (enabled: number) => `${enabled} enabled`,
++        chatChannel: "Feishu chat bot",
++        chatStatuses: {
++          online: "Online",
++          offline: "Offline",
++          disabled: "Disabled",
++          unconfigured: "Not configured",
++          unknown: "Status unknown",
++        },
++        calendarGrants: "Personal calendar permissions",
++        calendarGrantHint:
++          "Based on the current personal grant. The target calendar still requires access.",
++        calendarOperations: {
++          read: "Read events",
++          freeBusy: "Check availability",
++          create: "Create events",
++          update: "Update events",
++          reply: "Respond to events",
++        },
++        grantStates: {
++          granted: "Granted",
++          missing: "Not granted",
++          unknown: "Unverified",
++        },
++        recoveryTitle: "Grant the Feishu permissions for this task",
++        recoveryDescription:
++          "The missing personal permissions are filled in below. Confirm them in Feishu, then return to your original chat.",
++        recoveryAuthorizedTitle: "Feishu authorization completed",
++        recoveryAuthorizedDescription:
++          "Return to the original Feishu chat and click Continue original task on the authorization card.",
+diff --git a/frontend/src/core/i18n/locales/types.ts b/frontend/src/core/i18n/locales/types.ts
+index efa6209..0ff57d4 100644
+--- a/frontend/src/core/i18n/locales/types.ts
++++ b/frontend/src/core/i18n/locales/types.ts
+@@ -1358,0 +1359,4 @@ export interface Translations {
++        useExistingApp: string;
++        existingAppDescription: string;
++        saveExistingApp: string;
++        existingAppSaved: string;
+@@ -1374,0 +1379,26 @@ export interface Translations {
++        officeTitle: string;
++        officeApp: string;
++        personalIdentity: string;
++        personalAuthorized: string;
++        personalNotAuthorized: string;
++        verifyStatus: string;
++        botVerified: string;
++        botVerificationFailed: string;
++        manageSkills: string;
++        skillsEnabled: (enabled: number) => string;
++        chatChannel: string;
++        chatStatuses: Record<
++          "online" | "offline" | "disabled" | "unconfigured" | "unknown",
++          string
++        >;
++        calendarGrants: string;
++        calendarGrantHint: string;
++        calendarOperations: Record<
++          "read" | "freeBusy" | "create" | "update" | "reply",
++          string
++        >;
++        grantStates: Record<"granted" | "missing" | "unknown", string>;
++        recoveryTitle: string;
++        recoveryDescription: string;
++        recoveryAuthorizedTitle: string;
++        recoveryAuthorizedDescription: string;
+diff --git a/frontend/src/core/i18n/locales/zh-CN.ts b/frontend/src/core/i18n/locales/zh-CN.ts
+index bec7e84..ebaea24 100644
+--- a/frontend/src/core/i18n/locales/zh-CN.ts
++++ b/frontend/src/core/i18n/locales/zh-CN.ts
+@@ -1508,0 +1509,5 @@ export const zhCN: Translations = {
++        useExistingApp: "使用已有 App",
++        existingAppDescription:
++          "为当前账号配置已有的飞书办公应用。需要以个人身份操作时，保存后可点「连接飞书」授权。",
++        saveExistingApp: "保存办公 App",
++        existingAppSaved: "办公 App 已保存",
+@@ -1527 +1532,40 @@ export const zhCN: Translations = {
+-        permissionTitle: "授权范围",
++        permissionTitle: "本次申请的权限",
++        officeTitle: "飞书办公能力",
++        officeApp: "办公 App（应用身份）",
++        personalIdentity: "办公账号（个人身份）",
++        personalAuthorized: "已授权",
++        personalNotAuthorized: "未授权",
++        verifyStatus: "验证连接",
++        botVerified: "应用身份已验证",
++        botVerificationFailed: "应用身份验证未通过",
++        manageSkills: "管理飞书技能",
++        skillsEnabled: (enabled: number) => `已启用 ${enabled} 个`,
++        chatChannel: "飞书聊天 Bot",
++        chatStatuses: {
++          online: "在线",
++          offline: "离线",
++          disabled: "已停用",
++          unconfigured: "未配置",
++          unknown: "状态未知",
++        },
++        calendarGrants: "个人日历权限",
++        calendarGrantHint:
++          "根据当前个人授权显示。执行时仍需有目标日历的访问权限。",
++        calendarOperations: {
++          read: "读取日程",
++          freeBusy: "查询忙闲",
++          create: "创建日程",
++          update: "更新日程",
++          reply: "回复日程",
++        },
++        grantStates: {
++          granted: "已授权",
++          missing: "未授权",
++          unknown: "待核验",
++        },
++        recoveryTitle: "补齐这次任务的飞书权限",
++        recoveryDescription:
++          "本次缺少的个人权限已填在下方。请在飞书授权页确认，完成后回原对话继续。",
++        recoveryAuthorizedTitle: "已完成飞书授权",
++        recoveryAuthorizedDescription:
++          "回到原飞书对话，在授权卡片上点击「继续原任务」。",
+diff --git a/frontend/src/core/integrations/lark/api.ts b/frontend/src/core/integrations/lark/api.ts
+index 1c6b28d..24db810 100644
+--- a/frontend/src/core/integrations/lark/api.ts
++++ b/frontend/src/core/integrations/lark/api.ts
+@@ -40,0 +41 @@ export async function loadLarkIntegrationStatus(
++  verify = false,
+@@ -43 +44 @@ export async function loadLarkIntegrationStatus(
+-    `${getBackendBaseURL()}/api/integrations/lark/status`,
++    `${getBackendBaseURL()}/api/integrations/lark/status${verify ? "?verify=true" : ""}`,
+diff --git a/frontend/src/core/integrations/lark/hooks.ts b/frontend/src/core/integrations/lark/hooks.ts
+index 8c20f80..102bbf0 100644
+--- a/frontend/src/core/integrations/lark/hooks.ts
++++ b/frontend/src/core/integrations/lark/hooks.ts
+@@ -15 +15 @@ export const larkIntegrationQueryKey = ["integrations", "lark"] as const;
+-export function useLarkIntegrationStatus() {
++export function useLarkIntegrationStatus(enabled = true) {
+@@ -18,0 +19,12 @@ export function useLarkIntegrationStatus() {
++    enabled,
++    staleTime: 15_000,
++  });
++}
++
++export function useVerifyLarkIntegration() {
++  const queryClient = useQueryClient();
++  return useMutation({
++    mutationFn: () => loadLarkIntegrationStatus(undefined, true),
++    onSuccess: (status) => {
++      queryClient.setQueryData(larkIntegrationQueryKey, status);
++    },
+diff --git a/frontend/src/core/integrations/lark/overview.ts b/frontend/src/core/integrations/lark/overview.ts
+new file mode 100644
+index 0000000..6985ed6
+--- /dev/null
++++ b/frontend/src/core/integrations/lark/overview.ts
+@@ -0,0 +1,53 @@
++import type { ChannelProvider } from "@/core/channels/types";
++
++import type { LarkIntegrationStatus } from "./types";
++
++export const LARK_OFFICE_URL =
++  "/workspace/capabilities?tab=plugins&plugin=lark";
++export const LARK_SKILLS_URL = "/workspace/capabilities?tab=skills&source=lark";
++
++export const calendarOperations = {
++  read: ["calendar:calendar.event:read"],
++  freeBusy: ["calendar:calendar.free_busy:read"],
++  create: ["calendar:calendar.event:create", "calendar:calendar.event:update"],
++  update: ["calendar:calendar.event:update"],
++  reply: ["calendar:calendar.event:reply"],
++} as const;
++
++export function calendarGrant(
++  status: LarkIntegrationStatus,
++  required: readonly string[],
++): "granted" | "missing" | "unknown" {
++  if (status.auth.status === "error" || status.auth.status === "unavailable") {
++    return "unknown";
++  }
++  const scopes = status.auth.granted_scopes;
++  if (scopes == null) {
++    return status.auth.user_authorized === false ? "missing" : "unknown";
++  }
++  return required.every((scope) => scopes.includes(scope))
++    ? "granted"
++    : "missing";
++}
++
++export function larkSkillCounts(status: LarkIntegrationStatus) {
++  const installed = new Set(status.installed_skills);
++  return {
++    installed: status.skills_installed,
++    expected: status.skills_expected,
++    enabled: status.enabled_skills.filter((skill) => installed.has(skill))
++      .length,
++  };
++}
++
++export function feishuChatState(
++  provider: ChannelProvider | undefined,
++  failed = false,
++): "online" | "offline" | "unconfigured" | "disabled" | "unknown" {
++  if (failed || !provider) return "unknown";
++  if (!provider.enabled) return "disabled";
++  if (!provider.configured) return "unconfigured";
++  if (provider.runtime_online === true) return "online";
++  if (provider.runtime_online === false) return "offline";
++  return "unknown";
++}
+diff --git a/frontend/src/core/integrations/lark/recovery.ts b/frontend/src/core/integrations/lark/recovery.ts
+new file mode 100644
+index 0000000..87dd494
+--- /dev/null
++++ b/frontend/src/core/integrations/lark/recovery.ts
+@@ -0,0 +1,15 @@
++export function parseLarkRecoveryScope(raw: string | null): string {
++  if (!raw || raw.length > 1024) return "";
++  const scopes = raw.trim().split(/\s+/);
++  if (
++    scopes.length > 24 ||
++    scopes.some(
++      (scope) =>
++        scope.length > 100 ||
++        !/^[a-z][a-z0-9_.-]*(?::[a-z0-9_.-]+){1,4}$/.test(scope),
++    )
++  ) {
++    return "";
++  }
++  return [...new Set(scopes)].join(" ");
++}
+diff --git a/frontend/src/core/integrations/lark/types.ts b/frontend/src/core/integrations/lark/types.ts
+index e5c7699..c9f704c 100644
+--- a/frontend/src/core/integrations/lark/types.ts
++++ b/frontend/src/core/integrations/lark/types.ts
+@@ -17,0 +18,4 @@ export interface LarkAuthProbe {
++  app_name?: string | null;
++  bot_verified?: boolean | null;
++  user_authorized?: boolean;
++  granted_scopes?: string[] | null;
+diff --git a/frontend/src/core/skills/hooks.ts b/frontend/src/core/skills/hooks.ts
+index 7b5121d..0426ac6 100644
+--- a/frontend/src/core/skills/hooks.ts
++++ b/frontend/src/core/skills/hooks.ts
+@@ -2,0 +3,2 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
++import { larkIntegrationQueryKey } from "@/core/integrations/lark";
++
+@@ -28,2 +30,11 @@ export function useEnableSkill() {
+-    onSuccess: () => {
+-      void queryClient.invalidateQueries({ queryKey: ["skills"] });
++    onSuccess: async (_result, { skillName }) => {
++      await Promise.all([
++        queryClient.invalidateQueries({ queryKey: ["skills"] }),
++        ...(skillName.startsWith("lark-")
++          ? [
++              queryClient.invalidateQueries({
++                queryKey: larkIntegrationQueryKey,
++              }),
++            ]
++          : []),
++      ]);
+diff --git a/frontend/src/core/skills/type.ts b/frontend/src/core/skills/type.ts
+index 1d879be..3d888d2 100644
+--- a/frontend/src/core/skills/type.ts
++++ b/frontend/src/core/skills/type.ts
+@@ -4,0 +5 @@ export interface Skill {
++  source?: string;
+diff --git a/frontend/tests/e2e/integrations.spec.ts b/frontend/tests/e2e/integrations.spec.ts
+index cfe4e70..3eaae46 100644
+--- a/frontend/tests/e2e/integrations.spec.ts
++++ b/frontend/tests/e2e/integrations.spec.ts
+@@ -38,0 +39,164 @@ test.describe("Integrations settings", () => {
++  test("keeps Feishu office and skill status consistent across entries", async ({
++    page,
++  }) => {
++    mockLangGraphAPI(page);
++    await page.clock.install();
++    let calendarEnabled = false;
++    let chatOnline = true;
++    let verificationRequests = 0;
++    const calendar = "lark-calendar";
++    const catalogRequests: string[] = [];
++    await page.route("**/api/capabilities/installations/lark", (route) => {
++      catalogRequests.push(route.request().url());
++      return route.fulfill({ status: 404, json: {} });
++    });
++    await page.route("**/api/channels/providers", (route) =>
++      route.fulfill({
++        json: {
++          enabled: true,
++          providers: [
++            {
++              provider: "feishu",
++              display_name: "Feishu",
++              enabled: true,
++              configured: true,
++              auth_mode: "binding_code",
++              connection_status: "connected",
++              runtime_online: chatOnline,
++              credential_fields: [],
++            },
++          ],
++        },
++      }),
++    );
++    await page.route(/\/api\/integrations\/lark\/status(?:\?.*)?$/, (route) => {
++      const verifies =
++        new URL(route.request().url()).searchParams.get("verify") === "true";
++      if (verifies) verificationRequests += 1;
++      const status = configuredLarkStatus();
++      return route.fulfill({
++        json: {
++          ...status,
++          skills_installed: 2,
++          installed_skills: [calendar, "lark-doc"],
++          enabled_skills: calendarEnabled
++            ? [calendar, "lark-doc"]
++            : ["lark-doc"],
++          auth: {
++            ...status.auth,
++            verified: verifies,
++            app_name: "Fixture Office App",
++            bot_verified: verifies ? true : null,
++            user_authorized: true,
++            granted_scopes: [
++              "calendar:calendar.event:read",
++              "calendar:calendar.free_busy:read",
++              "calendar:calendar.event:create",
++            ],
++          },
++        },
++      });
++    });
++    await page.route("**/api/skills", (route) =>
++      route.fulfill({
++        json: {
++          skills: [
++            {
++              name: calendar,
++              description: "Calendar",
++              category: "integration",
++              source: "integration-managed",
++              enabled: calendarEnabled,
++            },
++            {
++              name: "lark-doc",
++              description: "Documents",
++              category: "integration",
++              source: "integration-managed",
++              enabled: true,
++            },
++            {
++              name: "other-skill",
++              description: "Unrelated",
++              category: "custom",
++              enabled: true,
++            },
++          ],
++        },
++      }),
++    );
++    await page.route(`**/api/skills/${calendar}`, (route) => {
++      expect(route.request().method()).toBe("PUT");
++      const payload = route.request().postDataJSON() as { enabled: boolean };
++      calendarEnabled = payload.enabled;
++      return route.fulfill({ json: { success: true } });
++    });
++
++    await page.goto("/workspace/capabilities?tab=plugins");
++    await expect(
++      page.getByText("2/27 skills installed · 1 enabled", { exact: true }),
++    ).toBeVisible();
++    await page
++      .getByRole("button", { name: "Configure Lark / Feishu", exact: true })
++      .click();
++    const dialog = page.getByRole("dialog", { name: "Lark / Feishu" });
++    await expect(dialog.getByText("Online", { exact: true })).toBeVisible();
++    chatOnline = false;
++    await page.clock.fastForward(15_000);
++    await expect(dialog.getByText("Offline", { exact: true })).toBeVisible();
++    chatOnline = true;
++    await page.clock.fastForward(15_000);
++    await expect(dialog.getByText("Online", { exact: true })).toBeVisible();
++    await expect(dialog.getByText("Fixture Office App")).toBeVisible();
++    await expect(dialog.getByText("existing-user")).toBeVisible();
++    const permissions = dialog.getByRole("region", {
++      name: "Personal calendar permissions",
++    });
++    await expect(
++      permissions.getByRole("listitem").filter({ hasText: "Read events" }),
++    ).toHaveText(/Read events\s*Granted/);
++    await expect(
++      permissions
++        .getByRole("listitem")
++        .filter({ hasText: "Check availability" }),
++    ).toHaveText(/Check availability\s*Granted/);
++    await expect(
++      permissions.getByRole("listitem").filter({ hasText: "Create events" }),
++    ).toHaveText(/Create events\s*Not granted/);
++    const calendarToggle = dialog
++      .getByRole("group", { name: "Permissions to request" })
++      .getByRole("button", { name: /Calendar/ });
++    await expect(calendarToggle).toHaveAttribute("aria-pressed", "false");
++    await calendarToggle.focus();
++    await page.keyboard.press("Space");
++    await expect(calendarToggle).toHaveAttribute("aria-pressed", "true");
++    await page.keyboard.press("Enter");
++    await expect(calendarToggle).toHaveAttribute("aria-pressed", "false");
++    await dialog.getByRole("button", { name: "Verify connection" }).click();
++    await expect(dialog.getByText("App identity verified")).toBeVisible();
++    expect(verificationRequests).toBe(1);
++
++    await dialog.getByRole("link", { name: "Manage Feishu skills" }).click();
++    await expect(
++      page.getByRole("tab", { name: "Feishu office" }),
++    ).toHaveAttribute("aria-selected", "true");
++    await expect(
++      page.getByText("2/27 skills installed · 1 enabled", { exact: true }),
++    ).toBeVisible();
++    const calendarSkill = page.getByRole("switch", { name: /lark-calendar/ });
++    await expect(calendarSkill).not.toBeChecked();
++    await expect(page.getByText("other-skill", { exact: true })).toHaveCount(0);
++    await calendarSkill.click();
++    await expect(calendarSkill).toBeChecked();
++    await expect(
++      page.getByText("2/27 skills installed · 2 enabled", { exact: true }),
++    ).toBeVisible();
++    await page
++      .getByRole("link", { name: "Feishu office", exact: true })
++      .click();
++    await expect(dialog.getByText("2 enabled", { exact: true })).toBeVisible();
++    await page.reload();
++    await expect(dialog.getByText("2 enabled", { exact: true })).toBeVisible();
++    expect(catalogRequests).toEqual([]);
++  });
++
+diff --git a/frontend/tests/e2e/utils/mock-api.ts b/frontend/tests/e2e/utils/mock-api.ts
+index 9fbdfda..dbd4710 100644
+--- a/frontend/tests/e2e/utils/mock-api.ts
++++ b/frontend/tests/e2e/utils/mock-api.ts
+@@ -1872 +1872 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
+-          "../backend/packages/harness/deerflow/capabilities/builtin.json",
++          "../super-harness-server/src/main/resources/upstream/deerflow/capabilities/builtin.json",

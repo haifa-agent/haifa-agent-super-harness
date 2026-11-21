@@ -126,11 +126,40 @@
           "frontend/src/components/workspace/messages/tool-approval-card.tsx",
           "frontend/tests/unit/components/workspace/messages/tool-approval-card.dom.test.tsx"
         ]
+      },
+      {
+        "id": "0009-feishu-office-frontend",
+        "file": "third-party/deerflow/patches/0009-feishu-office-frontend.patch",
+        "sha256": "e81e610c9de48d3b1d2daa543af2b9adf595235fe8c5d05394eb057fd523356f",
+        "reason": "Record the already-merged Feishu Office frontend changes through commit 21e6063 (PRs #116, #117, and #118).",
+        "affectedFiles": [
+          "frontend/src/app/connect/feishu/page.tsx",
+          "frontend/src/components/workspace/capabilities/capability-center.tsx",
+          "frontend/src/components/workspace/capabilities/lark-plugin-settings.tsx",
+          "frontend/src/components/workspace/capabilities/plugin-gallery.tsx",
+          "frontend/src/components/workspace/capabilities/skill-gallery.tsx",
+          "frontend/src/components/workspace/channels/workspace-channels-list.tsx",
+          "frontend/src/components/workspace/settings/channels-settings-page.tsx",
+          "frontend/src/core/channels/hooks.ts",
+          "frontend/src/core/channels/types.ts",
+          "frontend/src/core/i18n/locales/en-US.ts",
+          "frontend/src/core/i18n/locales/types.ts",
+          "frontend/src/core/i18n/locales/zh-CN.ts",
+          "frontend/src/core/integrations/lark/api.ts",
+          "frontend/src/core/integrations/lark/hooks.ts",
+          "frontend/src/core/integrations/lark/overview.ts",
+          "frontend/src/core/integrations/lark/recovery.ts",
+          "frontend/src/core/integrations/lark/types.ts",
+          "frontend/src/core/skills/hooks.ts",
+          "frontend/src/core/skills/type.ts",
+          "frontend/tests/e2e/integrations.spec.ts",
+          "frontend/tests/e2e/utils/mock-api.ts"
+        ]
       }
     ],
-    "fileCount": 987,
-    "totalBytes": 21247172,
-    "contentInventorySha256": "3e282ce3f6740869714edcf8e7dbb202b2292ae460e833815c9f95d779341830"
+    "fileCount": 990,
+    "totalBytes": 21273743,
+    "contentInventorySha256": "b043e77e42ec579196bffc7b70a796c0686755c4418601209990cff9c869ba6f"
   },
   "build": {
     "node": ">=22",
