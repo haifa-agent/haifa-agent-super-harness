@@ -188,6 +188,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     public static final String SKILL_SELECTION_METADATA_KEY = "haifa_skill_names";
     public static final String SKILL_VERSIONS_METADATA_KEY = "haifa_skill_versions";
     public static final String LEAD_SIGNATURE_METADATA_KEY = "haifa_lead_prompt_signature";
+    private static final String RUN_PROJECT_METADATA_KEY = "haifa_run_project_id";
     static final String AGENT_NAME_METADATA_KEY = "haifa_agent_name";
     static final String AGENT_BOOTSTRAP_METADATA_KEY = "haifa_agent_bootstrap";
     /**
@@ -677,6 +678,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         metadata.remove(SKILL_SELECTION_METADATA_KEY);
         metadata.remove(SKILL_VERSIONS_METADATA_KEY);
         metadata.remove(LEAD_SIGNATURE_METADATA_KEY);
+        metadata.remove(RUN_PROJECT_METADATA_KEY);
         metadata.remove(MODEL_CONFIGURATION_DIGEST_METADATA_KEY);
         metadata.remove(AGENT_NAME_METADATA_KEY);
         metadata.remove(AGENT_BOOTSTRAP_METADATA_KEY);
@@ -728,6 +730,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                     updated.put("deerflow_project_id", projectId);
                 }
                 if (!updated.equals(thread.metadata)) {
+                    if (thread.persistedSessionId != null && !updated.containsKey(RUN_PROJECT_METADATA_KEY)) {
+                        updated.put(RUN_PROJECT_METADATA_KEY, thread.projectId().orElse(""));
+                    }
                     saveThread(thread, updated);
                     thread.metadata = Collections.unmodifiableMap(updated);
                 }
@@ -1900,7 +1905,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             }
             if (steerRun == null) {
             boolean createdBridge = thread.bridge == null;
+            Optional<String> projectId = thread.projectId();
             HaifaRunBridge selectedBridge;
+            boolean switchingBridge;
             boolean switchingModel;
             boolean switchingPlanMode;
             boolean switchingMcp;
@@ -1918,10 +1925,11 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             boolean isPlanMode = DeerFlowReasoningSettings.isPlanMode(body.path("context"));
             try {
                 if (thread.bridge == null) {
-                    HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt, delegation, isPlanMode);
+                    HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt,
+                            delegation, isPlanMode, projectId);
                     // Restoring the Conversation is read-only; claim the selected model only
                     // after the SDK has admitted the new Run successfully.
-                    attachBridge(thread, bridge, false);
+                    attachBridge(thread, bridge, false, projectId);
                 }
                 // A Conversation is durable across Turns, but the SDK freezes its model per Run.
                 // Keep the old Run's bridge for replay/Interaction; only the new Turn changes model.
@@ -1948,8 +1956,13 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 switchingDelegation = !selectedBridge.delegationSignature().equals(
                         delegation.signature(toolsForThread(thread, agentPrompt), mcpProjection.fingerprint(),
                                 skillProjection == null ? "" : skillProjection.fingerprint(), selectedBridge.mcpToolNames()));
-                if (switchingModel || switchingMcp || switchingSkills || switchingPrompt || switchingDelegation || switchingPlanMode) {
-                    selectedBridge = newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt, delegation, isPlanMode);
+                // Tool declarations can stay identical even when their callbacks publish
+                // artifacts to a different project. Refresh only on a new Run.
+                switchingBridge = switchingModel || switchingMcp || switchingSkills || switchingPrompt
+                        || switchingDelegation || switchingPlanMode || !thread.bridgeProjectId.equals(projectId);
+                if (switchingBridge) {
+                    selectedBridge = newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt,
+                            delegation, isPlanMode, projectId);
                 }
             } catch (RuntimeException failure) {
                 ADMISSION_LOG.log(System.Logger.Level.WARNING, admissionFailureMessage(failure));
@@ -1990,7 +2003,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 // switchingModel cannot both be true. On a failed switch the old bridge stays
                 // attached for durable history and a subsequent Turn; only the rejected new
                 // bridge is closed here.
-                if (switchingModel || switchingMcp || switchingSkills || switchingPrompt || switchingDelegation || createdBridge) {
+                if (switchingBridge || createdBridge) {
                     if (createdBridge) thread.bridge = null;
                     ownedBridges.remove(selectedBridge);
                     selectedBridge.close();
@@ -1998,8 +2011,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 workspaceChanges.discardRunChanges(staged);
                 throw ConversationException.internal("Run could not start");
             }
-            if (switchingModel || switchingMcp || switchingSkills || switchingPrompt || switchingDelegation) {
+            if (switchingBridge) {
                 thread.bridge = selectedBridge;
+                thread.bridgeProjectId = projectId;
                 ownedBridges.add(selectedBridge);
             }
             thread.modelBindingIdentity = selectedBridge.bindingIdentity();
@@ -2493,30 +2507,20 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                     // A deleted agent does not prevent read-only historical access.
                 }
             }
+            Optional<String> projectId = thread.runProjectId();
             HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection,
                     skillProjections.forRecovery(thread.skillSelection(), thread.skillVersions()), restored,
                     io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled(),
-                    Boolean.TRUE.equals(planMode));
+                    Boolean.TRUE.equals(planMode), projectId);
             boolean claimBinding = thread.modelBindingIdentity == null
                     || thread.modelBindingIdentity.equals(bridge.bindingIdentity());
             // Conversation/run reads use shared SQLite. The last selected model is preferred
             // so a pending Run resumes with its own model after a gateway restart.
-            attachBridge(thread, bridge, claimBinding);
+            attachBridge(thread, bridge, claimBinding, projectId);
             return bridge;
         } finally {
             thread.lock.unlock();
         }
-    }
-
-    private void attachBridge(ThreadRecord thread, HaifaRunBridge bridge) {
-        attachBridge(thread, bridge, true);
-    }
-
-    private HaifaRunBridge newBridge(HaifaRunBridge.ModelBinding binding, ThreadRecord thread,
-            McpRunTools.Projection mcpProjection, SkillRunTools.Projection skillProjection,
-            AgentPromptContext agentPrompt,
-            io.haifa.agent.superharness.server.config.SubagentRunConfiguration delegation) {
-        return newBridge(binding, thread, mcpProjection, skillProjection, agentPrompt, delegation, false);
     }
 
     /** Resolved execution provider configuration for the given thread, or null when disabled. */
@@ -2581,9 +2585,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             McpRunTools.Projection mcpProjection, SkillRunTools.Projection skillProjection,
             AgentPromptContext agentPrompt,
             io.haifa.agent.superharness.server.config.SubagentRunConfiguration delegation,
-            boolean isPlanMode) {
+            boolean isPlanMode, Optional<String> projectId) {
         bridgeBuilds.incrementAndGet();
-        return AccessOwner.call(thread.ownerId, () -> new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt),
+        return AccessOwner.call(thread.ownerId, () -> new HaifaRunBridge(binding, toolsForThread(thread, agentPrompt, projectId),
                 foundation, mcpProjection, skillProjection, agentPrompt, delegation, childRunCapacity, isPlanMode,
                 executionExecutorFactory, executionProviderConfig(thread), skillScriptConfig(thread, skillProjection),
                 parentWallTimeMillisForTests, null, thread.ownerId, thread.threadId, approvalMode(),
@@ -2630,8 +2634,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             } catch (RuntimeException unavailable) {
                 throw new IllegalStateException("Scheduled Run model is unavailable", unavailable);
             }
-            List<? extends JavaTool<?, ?>> tools = nonInteractiveTools(thread, agentPrompt);
-            HaifaRunBridge bridge = newBackgroundBridge(binding, thread, tools, agentPrompt);
+            HaifaRunBridge bridge;
             HaifaRunBridge.StartedRun started;
             RunRecord run;
             thread.lock.lock();
@@ -2640,9 +2643,10 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 if (activeRunInFlight(thread)) {
                     // A background scheduled Run must never replace an active Run on the same
                     // Thread; the caller keeps its occurrence waiting instead of starting a second.
-                    bridge.close();
                     throw new ScheduledRunLauncher.ActiveRunConflict(thread.threadId);
                 }
+                List<? extends JavaTool<?, ?>> tools = nonInteractiveTools(thread, agentPrompt);
+                bridge = newBackgroundBridge(binding, thread, tools, agentPrompt);
                 try {
                     started = bridge.start(thread.threadId, request.message(),
                             Optional.ofNullable(thread.session));
@@ -2653,6 +2657,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 thread.session = started.session();
                 thread.persistedSessionId = started.session().sessionId();
                 thread.bridge = bridge;
+                thread.bridgeProjectId = thread.projectId();
                 thread.modelBindingIdentity = bridge.bindingIdentity();
                 thread.activeRunId = started.runId().value();
                 thread.latestRunId = started.runId().value();
@@ -2923,12 +2928,13 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     }
 
     private List<? extends JavaTool<?, ?>> toolsForThread(ThreadRecord thread, AgentPromptContext agentPrompt) {
-        Object projectId = thread.metadata.get("deerflow_project_id");
-        Optional<String> project = projectId instanceof String value && !value.isBlank()
-                ? Optional.of(value)
-                : Optional.empty();
+        return toolsForThread(thread, agentPrompt, thread.projectId());
+    }
+
+    private List<? extends JavaTool<?, ?>> toolsForThread(ThreadRecord thread, AgentPromptContext agentPrompt,
+            Optional<String> projectId) {
         return runToolsForThread.apply(
-                new ThreadToolScope(thread.threadId, project, thread.currentRunUploads, agentPrompt));
+                new ThreadToolScope(thread.threadId, projectId, thread.currentRunUploads, agentPrompt));
     }
 
     private static boolean validAgentMetadata(ThreadRecord thread) {
@@ -2963,7 +2969,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 && signature.matches("[0-9a-f]{64}");
     }
 
-    private void attachBridge(ThreadRecord thread, HaifaRunBridge bridge, boolean claimBinding) {
+    private void attachBridge(ThreadRecord thread, HaifaRunBridge bridge, boolean claimBinding,
+            Optional<String> projectId) {
         HaifaRunBridge previousBridge = thread.bridge;
         String previousBinding = thread.modelBindingIdentity;
         HaifaRunBridge.SessionState previousSession = thread.session;
@@ -2973,6 +2980,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             if (claimBinding) thread.modelBindingIdentity = bridge.bindingIdentity();
             restoreSession(thread);
             ownedBridges.add(bridge);
+            thread.bridgeProjectId = projectId;
         } catch (RuntimeException | Error failure) {
             thread.bridge = previousBridge;
             thread.modelBindingIdentity = previousBinding;
@@ -6480,6 +6488,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         // Product consent is in-memory and scoped to this owner's current SDK Session.
         private ExecutionApprovalConsent executionApprovalConsent;
         private volatile HaifaRunBridge bridge;
+        private Optional<String> bridgeProjectId = Optional.empty();
         private volatile String modelBindingIdentity;
         private volatile String activeRunId;
         private volatile String latestRunId;
@@ -6527,7 +6536,23 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             Map<String, Object> result = new LinkedHashMap<>(metadata);
             result.remove(RUN_STREAM_MODES_METADATA_KEY);
             result.remove(RUN_CLIENT_HUMAN_ID_METADATA_KEY);
+            result.remove(RUN_PROJECT_METADATA_KEY);
             return Collections.unmodifiableMap(result);
+        }
+
+        private Optional<String> projectId() {
+            return textProjectId(metadata.get("deerflow_project_id"));
+        }
+
+        /** Preserve the last Run's tool scope across a Gateway restart. */
+        private Optional<String> runProjectId() {
+            return metadata.containsKey(RUN_PROJECT_METADATA_KEY)
+                    ? textProjectId(metadata.get(RUN_PROJECT_METADATA_KEY))
+                    : projectId();
+        }
+
+        private static Optional<String> textProjectId(Object value) {
+            return value instanceof String id && !id.isBlank() ? Optional.of(id) : Optional.empty();
         }
 
         private String clientHumanMessageId(AgentRunId runId) {
@@ -6637,6 +6662,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                     .collect(java.util.stream.Collectors.toMap(SkillRunTools.Package::name,
                             pkg -> pkg.source().descriptor().reference().sourceId() + "@" + pkg.version())));
             updated.put(LEAD_SIGNATURE_METADATA_KEY, signature);
+            updated.put(RUN_PROJECT_METADATA_KEY, bridgeProjectId.orElse(""));
             updated.put(AGENT_NAME_METADATA_KEY, agentPrompt.agentName() == null ? "" : agentPrompt.agentName());
             updated.put(AGENT_BOOTSTRAP_METADATA_KEY, agentPrompt.bootstrap());
             this.metadata = Collections.unmodifiableMap(updated);
