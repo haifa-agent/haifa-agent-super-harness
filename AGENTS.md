@@ -176,9 +176,31 @@ $env:no_proxy=$env:NO_PROXY
 
 - bun 运行时必须是 exact file（符号链接曾打死 Run 准入）：SDK 的 `SkillScriptPlatforms$SkillScriptRuntime.preflight` 要求声明的 bun 可执行文件是**非符号链接的普通文件**，否则 `SkillScriptPlatforms.trusted` 抛 `HaifaAgentException: trusted script runtime executable does not exist as an exact file`（`SkillScriptPlatforms.java:356/182`）。该异常发生在 `HaifaRunBridge` 构造期，被 `DeerFlowThreadRunApi` 的准入 catch 收敛为 `500 {"detail":"Run could not start"}`，Run 从未准入（无 durable 记录），被吞后日志里也看不到原因。症状矩阵：`HAIFA_SUPER_HARNESS_HOST_SHELL` 关闭、或未声明 `HAIFA_SUPER_HARNESS_BUN_PATH` 时 Run 正常（技能脚本平台不装配）；两者同时满足且 bun 路径是 symlink 时**每个**新 Run 都 500。检查：`ls -la <bun>`、`stat -c '%A %n' <bun>`。现行修复：`SkillScriptToolConfig.bunExecutable` 把声明的 symlink 解析到真实文件（`/usr/bin/bun -> ../lib/node_modules/bun/bin/bun.exe` 这类打包布局可直接使用），解析不到则保持工具关闭；准入 catch 另补一条有界诊断（frozen route + 异常类 + 有界 cause 类链，不记 reason 文本，避免客户端文本/凭据经异常消息入日志）。只能停在未含该修复的旧构件时，把 `HAIFA_SUPER_HARNESS_BUN_PATH` 写成真实文件绝对路径。
 
+### W15 静态扫描的 Python 虚拟环境
+
+W15 Gateway 通过 `python -I -B` 运行冻结静态扫描器。默认 Python 可能只有用户级 PyYAML，隔离模式会忽略这处安装。典型错误是 `ModuleNotFoundError: No module named 'yaml'`。这会使静态 review 拒绝，并影响 `SkillPackageScreeningTest`、`SkillPackageRunHttpTest` 中依赖真实扫描结果的断言。
+
+在主检出根目录用 PowerShell 7 一次性创建专用环境。以下配置用 Python 3.11 和冻结 DeerFlow `backend/uv.lock` 中的 PyYAML 6.0.3 验证通过。虚拟环境留在已忽略的 `local-tmp/` 下。
+
+```powershell
+$scannerEnv = Join-Path (Get-Location).Path 'local-tmp/python/w15-skill-scanner'
+py -3.11 -m venv $scannerEnv
+$scannerPython = Join-Path $scannerEnv 'Scripts/python.exe'
+& $scannerPython -m pip install --only-binary=:all: 'PyYAML==6.0.3'
+& $scannerPython -I -B -c 'import sys, yaml; assert sys.prefix != sys.base_prefix; assert yaml.__version__ == "6.0.3"; print(sys.executable, yaml.__version__)'
+```
+
+在启动 Gateway、UI 验收或 Maven 门禁的同一终端，将 `HAIFA_SUPER_HARNESS_SKILL_PYTHON` 设置为上述解释器的绝对路径。其他 worktree 可引用主检出的同一个解释器，按各自测试 profile 继续选用独立的 data-root。已启动的 Gateway 需要用新环境重启才会采用该设置。保留 `-I -B`。
+
+```powershell
+$env:HAIFA_SUPER_HARNESS_SKILL_PYTHON = $scannerPython
+pwsh -NoProfile -File scripts/test-targeted.ps1 -Test 'SkillPackageScreeningTest,SkillPackageRunHttpTest' -LowMemory
+```
+
+若路径或导入检查失败，先在该环境重新核对安装，再运行定向测试。通过隔离导入只说明前置满足，真实扫描结果仍由测试断言确认。
+
 ### 真实模型诊断
 
-- 静态 review 的 Python：W15 静态 review 使用 `python -I -B`，隔离模式不加载用户 site-packages。系统 Python 普通导入 `yaml` 成功，不能证明隔离子进程可用；检查：`<python> -I -B -c 'import yaml; print(yaml.__version__)'`。缺 PyYAML 时 review 拒绝，不能去掉 `-I` 或在线安装目标依赖绕过。以进程变量 `HAIFA_SUPER_HARNESS_SKILL_PYTHON` 指向已经具备该依赖的解释器；本机现有 `D:/agents/deer-flow/backend/.venv/Scripts/python.exe` 带 PyYAML 6.0.3（须先实际 `Test-Path` 并用该解释器 `-I -B -c 'import yaml; print(yaml.__version__)'` 核对）；`D:/workspace/haifa-agent-super-harness/deer-flow/backend/.venv/Scripts/python.exe` 当前不存在，不能因前端冻结来源在该目录就推断解释器也在，仅用于运行纯静态审查模块，不启用其后端或目标脚本。
 - `base_url` 决定 SDK 方言：`DeerFlowConfigurationApi.binding` 仅在 endpoint 精确为 `https://api.deepseek.com` 时使用 DeepSeek 方言并固定 `thinking=disabled`。把真实模型临时改到本地代理路径时，standard 方言会在发 HTTP 前拒绝（`provider endpoint path must be /v1`，Run 为 `MODEL_CALL_FAILED`）；改成 `/v1` 虽可发出本地请求，但请求缺少原 DeepSeek thinking 选项，不能视为同语义采集。检查：核对实际 model config、SDK bytecode `validateSnapshot`、原 `model.call.failed` 与 Provider 是否收到 HTTP。处理：恢复直接 HTTPS 配置，采集前置 FAIL 单独保留，不以代理改写请求或更换方言掩盖差异；后续采集须先证明保持原请求语义。
 
 ### Windows 快照目录观察
