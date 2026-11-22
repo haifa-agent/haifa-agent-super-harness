@@ -5,9 +5,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.haifa.agent.credential.api.CredentialRequirement;
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
 import java.time.Instant;
 import java.util.List;
@@ -26,15 +28,19 @@ import java.util.Optional;
  */
 public final class ProductionWebSearchTool
         implements JavaTool<ProductionWebSearchTool.Input, ProductionWebSearchTool.Output> {
-    static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final System.Logger LOG =
             System.getLogger("io.haifa.agent.superharness.server.tool.web");
+    private final SdkCaller caller;
     private final JavaToolSpec<Input, Output> spec;
 
     private final WebToolConfig config;
     private final DuckDuckGoClient duckDuckGoClient;
     private final DeepSeekWebClient deepSeekClient;
+
+    public ProductionWebSearchTool(WebToolConfig config, SdkCaller caller) {
+        this(config, new DuckDuckGoClient(config), new DeepSeekWebClient(config), caller);
+    }
 
     public ProductionWebSearchTool(WebToolConfig config) {
         this(config, DuckDuckGoClient.defaultLog());
@@ -56,6 +62,14 @@ public final class ProductionWebSearchTool
             WebToolConfig config,
             DuckDuckGoClient duckDuckGoClient,
             DeepSeekWebClient deepSeekClient) {
+        this(config, duckDuckGoClient, deepSeekClient, SdkCaller.defaultPublicUser());
+    }
+
+    public ProductionWebSearchTool(
+            WebToolConfig config,
+            DuckDuckGoClient duckDuckGoClient,
+            DeepSeekWebClient deepSeekClient, SdkCaller caller) {
+        this.caller = java.util.Objects.requireNonNull(caller, "caller");
         this.config = Objects.requireNonNull(config, "config");
         this.duckDuckGoClient = Objects.requireNonNull(duckDuckGoClient, "duckDuckGoClient");
         this.deepSeekClient = Objects.requireNonNull(deepSeekClient, "deepSeekClient");
@@ -97,8 +111,7 @@ public final class ProductionWebSearchTool
     private Output doInvoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(context, "context");
-        if (!SDK_LOCAL_PRINCIPAL.equals(context.principal().principalId())
-                || !"user".equals(context.principal().principalType())) {
+        if (!AccountSdkIdentity.matches(caller, context)) {
             return refused("principal", input.query(), context,
                     "web_search requires the local Thread owner");
         }

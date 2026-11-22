@@ -1,8 +1,10 @@
 package io.haifa.agent.superharness.server.tool.agent;
 
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
 import io.haifa.agent.superharness.server.tool.clarification.ClarificationBoundaryRegistry;
 import io.haifa.agent.tool.api.ToolSideEffect;
@@ -21,6 +23,7 @@ public final class ProductionSetupAgentTool
             .description(ToolDescriptions.load("setup_agent"))
             .sideEffects(ToolSideEffect.FILE_WRITE)
             .build();
+    private final SdkCaller caller;
     private final String agentName;
     private final Function<Input, Output> write;
     private final BooleanSupplier configAdmin;
@@ -30,6 +33,11 @@ public final class ProductionSetupAgentTool
     }
 
     public ProductionSetupAgentTool(String agentName, Function<Input, Output> write, BooleanSupplier configAdmin) {
+        this(agentName, write, configAdmin, SdkCaller.defaultPublicUser());
+    }
+
+    public ProductionSetupAgentTool(String agentName, Function<Input, Output> write, BooleanSupplier configAdmin, SdkCaller caller) {
+        this.caller = java.util.Objects.requireNonNull(caller, "caller");
         this.agentName = agentName;
         this.write = Objects.requireNonNull(write, "write");
         this.configAdmin = Objects.requireNonNull(configAdmin, "configAdmin");
@@ -40,9 +48,8 @@ public final class ProductionSetupAgentTool
         return SPEC;
     }
 
-    static void requireOwner(JavaToolContext context) {
-        if (!"default-public-user".equals(context.principal().principalId())
-                || !"user".equals(context.principal().principalType())) {
+    static void requireOwner(JavaToolContext context, SdkCaller caller) {
+        if (!AccountSdkIdentity.matches(caller, context)) {
             throw new IllegalArgumentException("agent configuration requires the local Thread owner");
         }
         context.cancellation().throwIfCancellationRequested();
@@ -57,7 +64,7 @@ public final class ProductionSetupAgentTool
     @Override
     public Output invoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
-        requireOwner(Objects.requireNonNull(context, "context"));
+        requireOwner(Objects.requireNonNull(context, "context"), caller);
         if (!configAdmin.getAsBoolean()) return new Output(false, "Error: Admin privileges are required.");
         if (agentName == null || agentName.isBlank()) return new Output(false, "Error: no current agent_name");
         if (input.soul() == null || input.soul().isBlank()) {

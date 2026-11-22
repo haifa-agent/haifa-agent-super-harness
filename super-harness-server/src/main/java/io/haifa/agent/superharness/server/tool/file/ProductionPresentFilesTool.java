@@ -1,9 +1,11 @@
 package io.haifa.agent.superharness.server.tool.file;
 
 import io.haifa.agent.artifact.Artifact;
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import io.haifa.agent.superharness.server.auth.ThreadOwners;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
 import io.haifa.agent.superharness.server.tool.clarification.ClarificationBoundaryRegistry;
@@ -39,7 +41,6 @@ public final class ProductionPresentFilesTool
         implements JavaTool<ProductionPresentFilesTool.Input, ProductionPresentFilesTool.Output> {
     static final String OUTPUTS_LOGICAL_PREFIX = "outputs/";
     static final String SUCCESS_TEXT = "Successfully presented files";
-    private static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
     private static final JavaToolSpec<Input, Output> SPEC =
             JavaToolSpec.builder("present_files", Input.class, Output.class)
                     .title("Present output files to the user")
@@ -47,6 +48,7 @@ public final class ProductionPresentFilesTool
                     .sideEffects(ToolSideEffect.FILE_READ)
                     .build();
 
+    private final SdkCaller caller;
     private final String threadId;
     private final String artifactProjectRef;
     private final PersistentProjectWorkspaceService bindings;
@@ -57,6 +59,15 @@ public final class ProductionPresentFilesTool
             String artifactProjectRef,
             PersistentProjectWorkspaceService bindings,
             RestrictedWorkspaceService workspace) {
+        this(threadId, artifactProjectRef, bindings, workspace, SdkCaller.defaultPublicUser());
+    }
+
+    public ProductionPresentFilesTool(
+            String threadId,
+            String artifactProjectRef,
+            PersistentProjectWorkspaceService bindings,
+            RestrictedWorkspaceService workspace, SdkCaller caller) {
+        this.caller = java.util.Objects.requireNonNull(caller, "caller");
         this.threadId = Objects.requireNonNull(threadId, "threadId");
         this.artifactProjectRef = Objects.requireNonNull(artifactProjectRef, "artifactProjectRef");
         this.bindings = Objects.requireNonNull(bindings, "bindings");
@@ -72,8 +83,7 @@ public final class ProductionPresentFilesTool
     public Output invoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(context, "context");
-        if (!SDK_LOCAL_PRINCIPAL.equals(context.principal().principalId())
-                || !"user".equals(context.principal().principalType())) {
+        if (!AccountSdkIdentity.matches(caller, context)) {
             throw new IllegalArgumentException("present_files requires the local Thread owner");
         }
         context.cancellation().throwIfCancellationRequested();

@@ -250,6 +250,12 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                             }
 
                             @Override
+                            public SkillRunTools.Projection forRun(
+                                    JsonNode body, io.haifa.agent.sdk.api.SdkCaller caller) {
+                                return skillStore.projection(configurationApi.resolveSkillSelection(body), caller);
+                            }
+
+                            @Override
                             public SkillRunTools.Projection forRecovery(SkillRunTools.Selection selection) {
                                 return skillStore.recoveryProjection(selection);
                             }
@@ -257,6 +263,12 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                             @Override
                             public SkillRunTools.Projection forRecovery(SkillRunTools.Selection selection, Map<String, String> versions) {
                                 return skillStore.recoveryProjection(selection, versions);
+                            }
+
+                            @Override
+                            public SkillRunTools.Projection forRecovery(SkillRunTools.Selection selection,
+                                    Map<String, String> versions, io.haifa.agent.sdk.api.SdkCaller caller) {
+                                return skillStore.recoveryProjection(selection, versions, caller);
                             }
                         },
                 new DeerFlowUploadContext(toolWorkspace),
@@ -389,13 +401,13 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             AgentPromptContext nextAgent = new AgentPromptContext(
                     candidate.path("name").asText(), false, candidate.path("soul").asText());
             var nextScope = new DeerFlowConversationService.ThreadToolScope(
-                    scope.threadId(), scope.projectId(), scope.currentRunUploads(), nextAgent);
+                    scope.threadId(), scope.projectId(), scope.currentRunUploads(), nextAgent, scope.sdkCaller());
             // Pure M2 composition checks the complete registered catalog and SDK instruction limit
             // before the existing ConfigurationStore performs its single atomic replacement.
             HaifaRunBridge.promptSignatureFor(
                     promptReadyTools(configured, projects, toolWorkspace, nextScope, configuration, skills,
                             skillScreening, localAuth, environment),
-                    skills.projection(selectedSkills), nextAgent);
+                    skills.projection(selectedSkills, scope.sdkCaller()), nextAgent);
         };
         java.util.function.BooleanSupplier configAdmin = () -> localAuth == null
                 || localAuth.allowsGlobalConfigMutation(
@@ -405,23 +417,23 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 configuration.setupAgentForTool(agent.agentName(), input, validateCandidate);
                 return new ProductionSetupAgentTool.Output(true,
                         "Agent '" + agent.agentName() + "' created successfully!");
-            }, configAdmin));
+            }, configAdmin, scope.sdkCaller()));
         } else if (agent.agentName() != null) {
             tools.add(new ProductionUpdateAgentTool(agent.agentName(), input -> {
                 configuration.updateAgentForTool(agent.agentName(), input, validateCandidate);
                 return new ProductionUpdateAgentTool.Output(true,
                         "Agent '" + agent.agentName() + "' updated successfully!");
-            }, configAdmin));
+            }, configAdmin, scope.sdkCaller()));
         }
         if (tools.stream().noneMatch(tool -> tool.spec().name().equals("skill_manage"))) {
             tools.add(new io.haifa.agent.superharness.server.tool.skill.ProductionSkillManageTool(
-                    skills, scope.threadId(), configAdmin));
+                    skills, scope.threadId(), configAdmin, scope.sdkCaller()));
         }
         if (tools.stream().noneMatch(tool -> tool.spec().name().equals("review_skill_package"))) {
             tools.add(new io.haifa.agent.superharness.server.tool.skill.ProductionReviewSkillPackageTool(skills, skillScreening, path -> {
                 try { return DeerFlowWorkspaceApi.readSkillReviewTarget(projects, toolWorkspace, scope.threadId(), path); }
                 catch (IOException invalid) { throw new java.io.UncheckedIOException(invalid); }
-            }));
+            }, scope.sdkCaller()));
         }
         return tools;
     }
@@ -451,22 +463,22 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         WebToolConfig web = WebToolConfig.fromEnvironment(environment == null ? System.getenv() : environment);
         return List.of(
                 new ProductionWriteFileTool(
-                        scope.threadId(), scope.artifactProjectRef(), projects, workspace, session),
-                new ProductionReadFileTool(scope.threadId(), projects, workspace, session),
-                new ProductionViewImageTool(scope.threadId(), projects, workspace),
+                        scope.threadId(), scope.artifactProjectRef(), projects, workspace, session, scope.sdkCaller()),
+                new ProductionReadFileTool(scope.threadId(), projects, workspace, session, scope.sdkCaller()),
+                new ProductionViewImageTool(scope.threadId(), projects, workspace, scope.sdkCaller()),
                 new ProductionStrReplaceTool(
-                        scope.threadId(), scope.artifactProjectRef(), projects, workspace, session),
-                new ProductionLsTool(scope.threadId(), projects, workspace),
-                new ProductionGlobTool(scope.threadId(), projects, workspace),
-                new ProductionGrepTool(scope.threadId(), projects, workspace),
+                        scope.threadId(), scope.artifactProjectRef(), projects, workspace, session, scope.sdkCaller()),
+                new ProductionLsTool(scope.threadId(), projects, workspace, scope.sdkCaller()),
+                new ProductionGlobTool(scope.threadId(), projects, workspace, scope.sdkCaller()),
+                new ProductionGrepTool(scope.threadId(), projects, workspace, scope.sdkCaller()),
                 new ProductionListUploadedFilesTool(
-                        scope.threadId(), projects, workspace, scope.currentRunUploads()),
+                        scope.threadId(), projects, workspace, scope.currentRunUploads(), scope.sdkCaller()),
                 new ProductionPresentFilesTool(
-                        scope.threadId(), scope.artifactProjectRef(), projects, workspace),
-                new ProductionAskClarificationTool(),
-                new ProductionWebSearchTool(web),
-                new ProductionWebFetchTool(web),
-                new ProductionImageSearchTool(web));
+                        scope.threadId(), scope.artifactProjectRef(), projects, workspace, scope.sdkCaller()),
+                new ProductionAskClarificationTool(scope.sdkCaller()),
+                new ProductionWebSearchTool(web, scope.sdkCaller()),
+                new ProductionWebFetchTool(web, scope.sdkCaller()),
+                new ProductionImageSearchTool(web, scope.sdkCaller()));
     }
 
     public static DeerFlowBootstrapApi create(LocalServerConfiguration configuration)

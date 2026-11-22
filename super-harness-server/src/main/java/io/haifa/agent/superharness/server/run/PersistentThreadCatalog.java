@@ -102,11 +102,18 @@ public final class PersistentThreadCatalog {
                     optionalText(item, "model_binding"),
                     readInteractionDisplays(item.path("interaction_displays")),
                     readClarificationDisplays(item.path("clarification_displays")),
-                    optionalText(item, "owner_id").orElse("default"));
+                    optionalText(item, "owner_id").orElse("default"), readAccountSdkIdentity(item));
             if (entries.putIfAbsent(entry.threadId(), entry) != null) {
                 throw new IOException("thread catalog contains a duplicate thread_id");
             }
         }
+    }
+
+    private static boolean readAccountSdkIdentity(JsonNode item) throws IOException {
+        JsonNode value = item.get("account_sdk_identity");
+        if (value == null) return false;
+        if (!value.isBoolean()) throw new IOException("Invalid Thread SDK identity binding");
+        return value.booleanValue();
     }
 
     private void persist() throws IOException {
@@ -155,6 +162,7 @@ public final class PersistentThreadCatalog {
                 putNullable(encoded, "answeredRunId", display.answeredRunId());
             }
             if (!"default".equals(entry.ownerId())) item.put("owner_id", entry.ownerId());
+            if (entry.accountSdkIdentity()) item.put("account_sdk_identity", true);
         }
         byte[] bytes = json.writerWithDefaultPrettyPrinter().writeValueAsBytes(root);
         if (bytes.length > MAXIMUM_CATALOG_BYTES) {
@@ -471,7 +479,16 @@ public final class PersistentThreadCatalog {
             Optional<String> modelBindingIdentity,
             List<InteractionDisplay> interactionDisplays,
             List<ClarificationDisplay> clarificationDisplays,
-            String ownerId) {
+            String ownerId,
+            boolean accountSdkIdentity) {
+        public Entry(String threadId, Map<String, Object> metadata, Instant createdAt, Instant updatedAt,
+                Optional<AgentSessionId> sessionId, Optional<String> modelBindingIdentity,
+                List<InteractionDisplay> interactionDisplays, List<ClarificationDisplay> clarificationDisplays,
+                String ownerId) {
+            this(threadId, metadata, createdAt, updatedAt, sessionId, modelBindingIdentity,
+                    interactionDisplays, clarificationDisplays, ownerId, false);
+        }
+
         public Entry(String threadId, Map<String, Object> metadata, Instant createdAt, Instant updatedAt,
                 Optional<AgentSessionId> sessionId, Optional<String> modelBindingIdentity) {
             this(threadId, metadata, createdAt, updatedAt, sessionId, modelBindingIdentity,
@@ -497,6 +514,9 @@ public final class PersistentThreadCatalog {
             clarificationDisplays = List.copyOf(clarificationDisplays);
             validateClarificationDisplays(clarificationDisplays);
             if (ownerId == null || ownerId.isBlank()) ownerId = "default";
+            if (accountSdkIdentity && "default".equals(ownerId)) {
+                throw new IllegalArgumentException("Account SDK identity requires a Thread owner");
+            }
         }
     }
 }

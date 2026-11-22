@@ -12,9 +12,13 @@ import io.haifa.agent.core.session.AgentSessionId;
 import io.haifa.agent.core.tool.ToolCallId;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.superharness.server.auth.AccessOwner;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import io.haifa.agent.superharness.server.auth.LocalAuthService;
 import io.haifa.agent.superharness.server.config.LocalServerConfiguration;
+import io.haifa.agent.superharness.server.run.PersistentThreadCatalog;
+import io.haifa.agent.superharness.server.testsupport.ControlledProvider;
 import io.haifa.agent.superharness.server.testsupport.GatewayFixture;
+import io.haifa.agent.superharness.server.testsupport.SseEvents;
 import io.haifa.agent.superharness.server.tool.agent.ProductionSetupAgentTool;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
 import io.haifa.agent.superharness.workspace.RestrictedWorkspaceService;
@@ -23,11 +27,15 @@ import io.haifa.agent.superharness.workspace.WorkspaceLimits;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.DriverManager;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -234,6 +242,229 @@ class LocalAuthHttpTest {
     }
 
     @Test
+    void accountRunsAndToolsStayIsolatedWhileLegacyApprovalAndHistorySurviveRestart() throws Exception {
+        Path data = GatewayFixture.dataDirectory();
+        Path evidence = GatewayFixture.evidenceDirectory();
+        Map<String, String> environment = Map.of(LocalAuthService.ENABLED, "1",
+                AccountSdkIdentity.BIND_NEW_THREADS, "true");
+        Map<String, String> rollbackEnvironment = Map.of(LocalAuthService.ENABLED, "1",
+                AccountSdkIdentity.BIND_NEW_THREADS, "false");
+        int gatewayPort = Integer.getInteger("w13.gatewayPort", 0);
+        String legacy = "legacy-account-thread";
+        String aliceThread = "alice-account-thread";
+        String bobThread = "bob-account-thread";
+        try (var provider = new ControlledProvider(evidence, true, (request, call) -> {
+            String responseId = "identity-" + call;
+            String filename = switch (call) {
+                case 2 -> "legacy";
+                case 5 -> "alice";
+                case 7 -> "bob";
+                default -> null;
+            };
+            if (filename != null) {
+                return ControlledProvider.call(responseId, "identity-provider", "write-" + filename, "write_file",
+                        Map.of("path", "/mnt/user-data/outputs/" + filename + ".txt", "content", filename));
+            }
+            return ControlledProvider.stop(responseId, "identity-provider", "completed turn " + call);
+        })) {
+            try (var gateway = GatewayFixture.production(data, gatewayPort, environment, evidence)) {
+                String account = "{\"email\":\"%s\",\"password\":\"%s\"}";
+                assertThat(send(gateway.base, "POST", "/api/v1/auth/initialize",
+                        account.formatted("alice@example.com", PHRASE),
+                        Map.of("Content-Type", "application/json")).statusCode()).isEqualTo(201);
+                assertThat(send(gateway.base, "POST", "/api/v1/auth/register",
+                        account.formatted("bob@example.com", PHRASE),
+                        Map.of("Content-Type", "application/json")).statusCode()).isEqualTo(201);
+                Session alice = login(gateway.base, "alice@example.com");
+                String config = """
+                        {"config":{"name":"identity-model","display_name":"Identity model","provider":"openai-compatible",
+                        "model":"identity-provider","base_url":"http://127.0.0.1:%d/v1","enabled":true,
+                        "supports_vision":false,"context_window":32768,"max_tokens":1024,"api_key":"controlled-key"},
+                        "expected_revision":null}
+                        """.formatted(provider.port());
+                assertThat(send(gateway.base, "PUT", "/api/managed-models", config, alice.jsonHeaders()).statusCode())
+                        .isEqualTo(200);
+                Instant created = Instant.now();
+                new PersistentThreadCatalog(json, data).save(new PersistentThreadCatalog.Entry(
+                        legacy, Map.of(), created, created, Optional.empty(), Optional.empty(),
+                        java.util.List.of(), java.util.List.of(), alice.userId));
+            }
+
+            String legacyLocation;
+            SseEvents.PendingApproval legacyPending;
+            try (var gateway = GatewayFixture.production(data, gatewayPort, environment, evidence)) {
+                Session alice = login(gateway.base, "alice@example.com");
+                run(gateway.base, alice, legacy, "legacy history marker", evidence.resolve("legacy-history.sse"));
+                legacyLocation = run(gateway.base, alice, legacy, "legacy file approval",
+                        evidence.resolve("legacy-pending.sse"));
+                legacyPending = pending(gateway.base, alice, legacy, legacyLocation, evidence);
+                assertThat(provider.calls).hasValue(2);
+                assertThat(send(gateway.base, "GET", artifact(legacy, "legacy"), null, alice.headers()).statusCode())
+                        .isEqualTo(404);
+            }
+
+            String continued;
+            String aliceLocation;
+            String bobLocation;
+            Session alice;
+            Session bob;
+            try (var gateway = GatewayFixture.production(data, gatewayPort, environment, evidence)) {
+                URI base = gateway.base;
+                alice = login(base, "alice@example.com");
+                bob = login(base, "bob@example.com");
+                assertThat(alice.userId).isNotEqualTo(bob.userId);
+                JsonNode history = authenticatedGet(base, alice, thread(legacy) + "/state");
+                Files.writeString(evidence.resolve("legacy-restarted-state.json"), history.toPrettyString());
+                assertThat(history.toString()).contains("legacy history marker", "completed turn 1");
+                var recovered = pending(base, alice, legacy, legacyLocation, evidence);
+                assertThat(recovered.requestId()).isEqualTo(legacyPending.requestId());
+                assertThat(recovered.card().path("id")).isEqualTo(legacyPending.card().path("id"));
+                assertThat(send(base, "GET", legacyLocation, null, bob.headers()).statusCode()).isEqualTo(404);
+                assertThat(send(base, "POST", thread(legacy) + "/runs/stream",
+                        SseEvents.PendingApproval.reply(recovered.requestId(), "approve"), bob.jsonHeaders())
+                        .statusCode()).isEqualTo(404);
+                assertThat(provider.calls).hasValue(2);
+                approve(base, alice, legacy, legacyLocation, recovered, "legacy", evidence.resolve("legacy-approved.sse"));
+                assertThat(send(base, "POST", thread(legacy) + "/runs/stream",
+                        SseEvents.PendingApproval.reply(recovered.requestId(), "approve"), alice.jsonHeaders())
+                        .statusCode()).isEqualTo(409);
+                continued = run(base, alice, legacy, "continue old Session", evidence.resolve("legacy-continued.sse"));
+                assertThat(authenticatedGet(base, alice, continued).path("status").asText()).isEqualTo("success");
+
+                aliceLocation = accountWrite(base, alice, aliceThread, "alice", evidence);
+                bobLocation = accountWrite(base, bob, bobThread, "bob", evidence);
+                assertThat(send(base, "GET", thread(aliceThread) + "/state", null, bob.headers()).statusCode())
+                        .isEqualTo(404);
+                assertThat(send(base, "GET", artifact(aliceThread, "alice"), null, bob.headers()).statusCode())
+                        .isEqualTo(404);
+                assertThat(send(base, "GET", bobLocation, null, alice.headers()).statusCode()).isEqualTo(404);
+                assertThat(send(base, "GET", "/api/memory", null, alice.headers()).statusCode()).isEqualTo(404);
+                assertThat(provider.calls).hasValue(8);
+            }
+
+            String rollbackLocation;
+            try (var gateway = GatewayFixture.production(data, gatewayPort, rollbackEnvironment, evidence)) {
+                URI base = gateway.base;
+                Session rollbackAlice = login(base, "alice@example.com");
+                Session rollbackBob = login(base, "bob@example.com");
+                assertThat(authenticatedGet(base, rollbackAlice, aliceLocation)
+                        .path("status").asText()).isEqualTo("success");
+                assertThat(authenticatedGet(base, rollbackBob, bobLocation)
+                        .path("status").asText()).isEqualTo("success");
+                assertThat(authenticatedGet(base, rollbackAlice, thread(aliceThread) + "/state").toString())
+                        .contains("completed turn 6");
+                assertThat(send(base, "GET", thread(aliceThread) + "/state", null, rollbackBob.headers()).statusCode())
+                        .isEqualTo(404);
+                assertThat(send(base, "GET", thread(bobThread) + "/state", null, rollbackAlice.headers()).statusCode())
+                        .isEqualTo(404);
+                String rollbackThread = "new-thread-in-rollback";
+                assertThat(send(base, "POST", "/api/threads",
+                        "{\"thread_id\":\"new-thread-in-rollback\"}", rollbackAlice.jsonHeaders()).statusCode())
+                        .isEqualTo(200);
+                rollbackLocation = run(base, rollbackAlice, rollbackThread, "rollback creates public SDK session",
+                        evidence.resolve("rollback-new-thread.sse"));
+            }
+            assertSdkOwner(data, rollbackLocation, "public", "default-public-user");
+            String legacySession = assertSdkOwner(data, legacyLocation, "public", "default-public-user");
+            assertThat(assertSdkOwner(data, continued, "public", "default-public-user")).isEqualTo(legacySession);
+            assertThat(assertSdkOwner(data, aliceLocation, "super-harness", alice.userId))
+                    .isNotEqualTo(assertSdkOwner(data, bobLocation, "super-harness", bob.userId));
+            System.out.println("W13_ACCOUNT_IDENTITY_EVIDENCE evidence=" + evidence.toAbsolutePath()
+                    + " legacy=" + legacyLocation + " alice=" + aliceLocation + " bob=" + bobLocation
+                    + " legacyRequest=" + legacyPending.requestId());
+        }
+    }
+
+    private Session login(URI base, String email) throws Exception {
+        HttpResponse<String> response = send(base, "POST", "/api/v1/auth/login/local",
+                "username=" + URLEncoder.encode(email, StandardCharsets.UTF_8)
+                        + "&password=" + URLEncoder.encode(PHRASE, StandardCharsets.UTF_8),
+                Map.of("Content-Type", "application/x-www-form-urlencoded"));
+        assertThat(response.statusCode()).isEqualTo(200);
+        Session cookies = Session.from(response, "");
+        String id = authenticatedGet(base, cookies, "/api/v1/auth/me").path("id").asText();
+        assertThat(id).isNotBlank();
+        return Session.from(response, id);
+    }
+
+    private String accountWrite(URI base, Session session, String threadId, String filename, Path evidence)
+            throws Exception {
+        assertThat(send(base, "POST", "/api/threads", "{\"thread_id\":\"%s\"}".formatted(threadId),
+                session.jsonHeaders()).statusCode()).isEqualTo(200);
+        String location = run(base, session, threadId, "write " + filename, evidence.resolve(filename + "-pending.sse"));
+        approve(base, session, threadId, location, pending(base, session, threadId, location, evidence), filename,
+                evidence.resolve(filename + "-approved.sse"));
+        return location;
+    }
+
+    private void approve(URI base, Session session, String threadId, String location,
+            SseEvents.PendingApproval pending, String filename, Path evidence) throws Exception {
+        var response = send(base, "POST", thread(threadId) + "/runs/stream",
+                SseEvents.PendingApproval.reply(pending.requestId(), "approve"), session.jsonHeaders());
+        Files.writeString(evidence, response.body());
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        assertThat(response.headers().firstValue("content-location")).contains(location);
+        assertThat(authenticatedGet(base, session, location).path("status").asText()).isEqualTo("success");
+        var download = send(base, "GET", artifact(threadId, filename), null, session.headers());
+        assertThat(download.statusCode()).isEqualTo(200);
+        assertThat(download.body()).isEqualTo(filename);
+    }
+
+    private SseEvents.PendingApproval pending(URI base, Session session, String threadId, String location, Path evidence)
+            throws Exception {
+        return SseEvents.PendingApproval.locate(threadId, location, authenticatedGet(base, session, location),
+                authenticatedGet(base, session, thread(threadId) + "/state"), evidence);
+    }
+
+    private String run(URI base, Session session, String threadId, String input, Path evidence) throws Exception {
+        String body = """
+                {"assistant_id":"lead_agent","input":{"messages":[{"type":"human","content":"%s"}]},
+                "stream_mode":["messages-tuple","updates","custom"],"on_disconnect":"continue",
+                "context":{"model_name":"identity-model","mode":"flash","thinking_enabled":false}}
+                """.formatted(input);
+        var response = send(base, "POST", thread(threadId) + "/runs/stream", body, session.jsonHeaders());
+        Files.writeString(evidence, response.body());
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        return response.headers().firstValue("content-location").orElseThrow();
+    }
+
+    private JsonNode authenticatedGet(URI base, Session session, String path) throws Exception {
+        var response = send(base, "GET", path, null, session.headers());
+        assertThat(response.statusCode()).as("GET %s", path).isEqualTo(200);
+        return json.readTree(response.body());
+    }
+
+    private static String thread(String threadId) {
+        return "/api/threads/" + threadId;
+    }
+
+    private static String artifact(String threadId, String filename) {
+        return thread(threadId) + "/artifacts/mnt/user-data/outputs/" + filename + ".txt";
+    }
+
+    private static String assertSdkOwner(Path data, String location, String tenant, String owner) throws Exception {
+        String url = "jdbc:sqlite:" + data.resolve("runtime/haifa-agent.sqlite").toUri() + "?mode=ro";
+        try (var connection = DriverManager.getConnection(url);
+                var query = connection.prepareStatement("""
+                        SELECT r.session_id, r.tenant_id, r.principal_id, r.principal_type,
+                            s.tenant_id, s.owner_principal_id, s.owner_principal_type
+                        FROM run r JOIN session s ON r.session_id = s.session_id WHERE r.run_id = ?
+                        """)) {
+            query.setString(1, location.substring(location.lastIndexOf('/') + 1));
+            try (var row = query.executeQuery()) {
+                assertThat(row.next()).isTrue();
+                assertThat(row.getString(2)).isEqualTo(tenant);
+                assertThat(row.getString(3)).isEqualTo(owner);
+                assertThat(row.getString(4)).isEqualTo("user");
+                assertThat(row.getString(5)).isEqualTo(tenant);
+                assertThat(row.getString(6)).isEqualTo(owner);
+                assertThat(row.getString(7)).isEqualTo("user");
+                return row.getString(1);
+            }
+        }
+    }
+
+    @Test
     void ordinaryUserCannotMutateGlobalConfiguration() throws Exception {
         DeerFlowBootstrapApi api = start(dataDirectory, ORIGIN);
         try {
@@ -368,7 +599,7 @@ class LocalAuthHttpTest {
 
     private HttpResponse<String> send(URI base, String method, String path, String body, Map<String, String> headers)
             throws Exception {
-        HttpRequest.Builder request = HttpRequest.newBuilder(base.resolve(path));
+        HttpRequest.Builder request = HttpRequest.newBuilder(base.resolve(path)).timeout(Duration.ofSeconds(30));
         if (headers != null) headers.forEach(request::header);
         if (body == null) request.method(method, HttpRequest.BodyPublishers.noBody());
         else request.method(method, HttpRequest.BodyPublishers.ofString(body));
@@ -394,9 +625,12 @@ class LocalAuthHttpTest {
         }
 
         static Session from(HttpResponse<String> response) throws Exception {
+            return from(response, new ObjectMapper().readTree(response.body()).get("id").asText());
+        }
+
+        static Session from(HttpResponse<String> response, String id) {
             String access = value(cookie(response, "access_token"));
             String csrf = value(cookie(response, "csrf_token"));
-            String id = new ObjectMapper().readTree(response.body()).get("id").asText();
             return new Session(id, access, csrf);
         }
 

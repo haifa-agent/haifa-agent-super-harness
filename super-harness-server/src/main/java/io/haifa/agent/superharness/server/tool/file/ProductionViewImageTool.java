@@ -1,8 +1,10 @@
 package io.haifa.agent.superharness.server.tool.file;
 
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import io.haifa.agent.superharness.server.auth.ThreadOwners;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
@@ -34,7 +36,6 @@ public final class ProductionViewImageTool
         implements JavaTool<ProductionViewImageTool.Input, ProductionViewImageTool.Output> {
 
     public static final int MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20971520 bytes (20 MiB)
-    private static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
 
     private static final Set<String> ALLOWED_ROOTS = Set.of(
             "/mnt/user-data/workspace",
@@ -58,6 +59,7 @@ public final class ProductionViewImageTool
                     .sideEffects(ToolSideEffect.FILE_READ)
                     .build();
 
+    private final SdkCaller caller;
     private final String threadId;
     private final PersistentProjectWorkspaceService bindings;
     private final RestrictedWorkspaceService workspace;
@@ -66,6 +68,14 @@ public final class ProductionViewImageTool
             String threadId,
             PersistentProjectWorkspaceService bindings,
             RestrictedWorkspaceService workspace) {
+        this(threadId, bindings, workspace, SdkCaller.defaultPublicUser());
+    }
+
+    public ProductionViewImageTool(
+            String threadId,
+            PersistentProjectWorkspaceService bindings,
+            RestrictedWorkspaceService workspace, SdkCaller caller) {
+        this.caller = java.util.Objects.requireNonNull(caller, "caller");
         this.threadId = Objects.requireNonNull(threadId, "threadId");
         this.bindings = Objects.requireNonNull(bindings, "bindings");
         this.workspace = Objects.requireNonNull(workspace, "workspace");
@@ -92,8 +102,7 @@ public final class ProductionViewImageTool
     public Output invoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(context, "context");
-        if (!SDK_LOCAL_PRINCIPAL.equals(context.principal().principalId())
-                || !"user".equals(context.principal().principalType())) {
+        if (!AccountSdkIdentity.matches(caller, context)) {
             throw new IllegalArgumentException("view_image requires the local Thread owner");
         }
         context.cancellation().throwIfCancellationRequested();

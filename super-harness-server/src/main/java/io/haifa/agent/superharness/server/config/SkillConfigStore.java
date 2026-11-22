@@ -3,6 +3,9 @@ package io.haifa.agent.superharness.server.config;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.haifa.agent.sdk.api.SdkCaller;
+import io.haifa.agent.skill.api.SkillPackageReviewGrant;
+import io.haifa.agent.skill.api.SkillTrustSnapshot;
 import io.haifa.agent.skill.api.SkillAvailability;
 import io.haifa.agent.skill.api.SkillOrigin;
 import io.haifa.agent.skill.api.SkillParserMode;
@@ -396,8 +399,35 @@ public final class SkillConfigStore {
     }
 
     public SkillRunTools.Projection projection(SkillRunTools.Selection selection) {
+        return projection(selection, SdkCaller.defaultPublicUser());
+    }
+
+    public SkillRunTools.Projection projection(SkillRunTools.Selection selection, SdkCaller caller) {
         State current = state;
-        return currentReviewLoader(SkillRunTools.projection(current.packages(), current.enabled(), selection, current.trust()));
+        return currentReviewLoader(project(current.packages(), current.enabled(), selection, current.trust(), caller));
+    }
+
+    private SkillRunTools.Projection project(List<SkillRunTools.Package> packages, Map<String, Boolean> enabled,
+            SkillRunTools.Selection selection, SkillTrustSnapshot trust, SdkCaller caller) {
+        if (SdkCaller.defaultPublicUser().equals(caller)) {
+            return SkillRunTools.projection(packages, enabled, selection, trust);
+        }
+        List<SkillRunTools.Package> accountPackages = new ArrayList<>();
+        List<SkillPackageReviewGrant> accountGrants = new ArrayList<>();
+        for (SkillRunTools.Package pkg : packages) {
+            var rebound = custom.forCaller(pkg, caller);
+            accountPackages.add(rebound);
+            var descriptor = pkg.source().descriptor();
+            for (SkillPackageReviewGrant grant : trust.packageReviewGrants()) {
+                if (!grant.coordinate().source().equals(descriptor.reference())
+                        || !grant.coordinate().scope().equals(descriptor.scope())) continue;
+                var registration = rebound.source().discover(SkillReviewApprovals.discovery(caller))
+                        .registrations().getFirst();
+                accountGrants.add(SkillReviewApprovals.forCaller(grant, registration, caller));
+            }
+        }
+        return SkillRunTools.projection(accountPackages, enabled, selection,
+                SkillReviewApprovals.snapshot(accountGrants), caller);
     }
 
     /** Explicit operator withdrawal, distinct from the gallery's enable toggle. */
@@ -424,7 +454,7 @@ public final class SkillConfigStore {
             public io.haifa.agent.skill.api.SkillContent load(
                     io.haifa.agent.skill.api.FrozenSkillBinding binding,
                     io.haifa.agent.skill.api.SkillVisibilityContext visibility) {
-                requireReviewAuthority(binding, visibility);
+                requireReviewAuthority(projection.trust(), binding, visibility);
                 return projection.loader().load(binding, visibility);
             }
 
@@ -433,7 +463,7 @@ public final class SkillConfigStore {
                     io.haifa.agent.skill.api.FrozenSkillBinding binding,
                     io.haifa.agent.skill.api.SkillVisibilityContext visibility,
                     String resource) {
-                requireReviewAuthority(binding, visibility);
+                requireReviewAuthority(projection.trust(), binding, visibility);
                 return projection.loader().loadResourceBytes(binding, visibility, resource);
             }
         };
@@ -442,13 +472,21 @@ public final class SkillConfigStore {
     }
 
     private void requireReviewAuthority(
+            SkillTrustSnapshot projected,
             io.haifa.agent.skill.api.FrozenSkillBinding binding,
             io.haifa.agent.skill.api.SkillVisibilityContext visibility) {
         binding.packageReviewGrantId().ifPresent(id -> {
             var subject = new io.haifa.agent.skill.api.SkillTrustSubject(visibility.tenant(), visibility.principal(),
                     SkillReviewApprovals.PRODUCT, visibility.project().map(io.haifa.agent.core.reference.ProjectRef::projectId));
-            if (state.trust().packageReviewGrants().stream().noneMatch(grant -> grant.id().equals(id)
-                    && grant.matches(binding, subject, java.time.Instant.now()))) {
+            var now = java.time.Instant.now();
+            boolean callerAuthorized = projected.packageReviewGrants().stream().anyMatch(grant ->
+                    grant.id().equals(id) && grant.matches(binding, subject, now));
+            // Account projection retains the publication review ID and its exact package.
+            boolean publicationActive = state.trust().packageReviewGrants().stream().anyMatch(grant ->
+                    grant.id().equals(id) && grant.activeAt(now)
+                    && grant.coordinate().source().equals(binding.coordinate().source())
+                    && grant.packageDigest().equals(binding.resourceIndexDigest()));
+            if (!callerAuthorized || !publicationActive) {
                 throw new SecurityException("Skill package review authorization is unavailable or revoked");
             }
         });
@@ -459,6 +497,11 @@ public final class SkillConfigStore {
     }
 
     public SkillRunTools.Projection recoveryProjection(SkillRunTools.Selection selection, Map<String, String> versions) {
+        return recoveryProjection(selection, versions, SdkCaller.defaultPublicUser());
+    }
+
+    public SkillRunTools.Projection recoveryProjection(
+            SkillRunTools.Selection selection, Map<String, String> versions, SdkCaller caller) {
         State current = state;
         List<SkillRunTools.Package> restoredPackages = current.packages();
         if (!versions.isEmpty()) {
@@ -486,7 +529,7 @@ public final class SkillConfigStore {
         // Immutable package sources and the retained loader remain SDK inputs.
         Map<String, Boolean> original = new LinkedHashMap<>();
         current.packages().forEach(pkg -> original.put(pkg.name(), selection.admits(pkg.name())));
-        SkillRunTools.Projection restored = SkillRunTools.projection(restoredPackages, original, selection, current.trust());
+        SkillRunTools.Projection restored = project(restoredPackages, original, selection, current.trust(), caller);
         // Thread metadata records the actually admitted Skill names. An explicit empty list means
         // no Skill Tools were registered: adding them changes every frozen Tool's catalog digest.
         // Nonempty and legacy-unknown declarations retain the historical recovery registrations.

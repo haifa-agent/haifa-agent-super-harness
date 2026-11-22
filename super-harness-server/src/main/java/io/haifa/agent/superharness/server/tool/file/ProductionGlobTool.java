@@ -5,9 +5,11 @@ import io.haifa.agent.project.filesystem.FileMetadata;
 import io.haifa.agent.project.filesystem.FileType;
 import io.haifa.agent.project.filesystem.WorkspaceFileService;
 import io.haifa.agent.project.path.WorkspacePath;
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import io.haifa.agent.superharness.server.auth.ThreadOwners;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
@@ -32,7 +34,6 @@ import java.util.regex.Pattern;
 public final class ProductionGlobTool implements JavaTool<ProductionGlobTool.Input, ProductionGlobTool.Output> {
     private static final int DEFAULT_MAX_RESULTS = 200;
     private static final int MAX_MAX_RESULTS = 1000;
-    private static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
     private static final JavaToolSpec<Input, Output> SPEC =
             JavaToolSpec.builder("glob", Input.class, Output.class)
                     .title("Find paths by glob")
@@ -40,12 +41,19 @@ public final class ProductionGlobTool implements JavaTool<ProductionGlobTool.Inp
                     .sideEffects(ToolSideEffect.FILE_READ)
                     .build();
 
+    private final SdkCaller caller;
     private final String threadId;
     private final PersistentProjectWorkspaceService bindings;
     private final RestrictedWorkspaceService workspace;
 
     public ProductionGlobTool(
             String threadId, PersistentProjectWorkspaceService bindings, RestrictedWorkspaceService workspace) {
+        this(threadId, bindings, workspace, SdkCaller.defaultPublicUser());
+    }
+
+    public ProductionGlobTool(
+            String threadId, PersistentProjectWorkspaceService bindings, RestrictedWorkspaceService workspace, SdkCaller caller) {
+        this.caller = java.util.Objects.requireNonNull(caller, "caller");
         this.threadId = Objects.requireNonNull(threadId, "threadId");
         this.bindings = Objects.requireNonNull(bindings, "bindings");
         this.workspace = Objects.requireNonNull(workspace, "workspace");
@@ -60,8 +68,7 @@ public final class ProductionGlobTool implements JavaTool<ProductionGlobTool.Inp
     public Output invoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(context, "context");
-        if (!SDK_LOCAL_PRINCIPAL.equals(context.principal().principalId())
-                || !"user".equals(context.principal().principalType())) {
+        if (!AccountSdkIdentity.matches(caller, context)) {
             throw new IllegalArgumentException("glob requires the local Thread owner");
         }
         context.cancellation().throwIfCancellationRequested();

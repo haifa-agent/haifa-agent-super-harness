@@ -1,6 +1,7 @@
 package io.haifa.agent.superharness.server.tool.skill;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.sdk.tool.*;
 import io.haifa.agent.superharness.server.config.*;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
@@ -16,15 +17,21 @@ public final class ProductionReviewSkillPackageTool implements JavaTool<Producti
     private static final JavaToolSpec<Input, Output> SPEC = JavaToolSpec.builder("review_skill_package", Input.class, Output.class)
             .title("Review a skill package").description(ToolDescriptions.load("review_skill_package"))
             .sideEffects(ToolSideEffect.FILE_READ).build();
+    private final SdkCaller caller;
     private final SkillConfigStore store;
     private final SkillPackageScreening scanner;
     private final Function<String, Map<String, byte[]>> readThreadTarget;
     public ProductionReviewSkillPackageTool(SkillConfigStore store, SkillPackageScreening scanner, Function<String, Map<String, byte[]>> readThreadTarget) {
+        this(store, scanner, readThreadTarget, SdkCaller.defaultPublicUser());
+    }
+
+    public ProductionReviewSkillPackageTool(SkillConfigStore store, SkillPackageScreening scanner, Function<String, Map<String, byte[]>> readThreadTarget, SdkCaller caller) {
+        this.caller = java.util.Objects.requireNonNull(caller, "caller");
         this.store = store; this.scanner = scanner; this.readThreadTarget = readThreadTarget;
     }
     @Override public JavaToolSpec<Input, Output> spec() { return SPEC; }
     @Override public Output invoke(Input input, JavaToolContext context) {
-        ProductionSkillManageTool.requireOwner(context);
+        ProductionSkillManageTool.requireOwner(context, caller);
         try {
             String target = input.target();
             Map<String, byte[]> files;

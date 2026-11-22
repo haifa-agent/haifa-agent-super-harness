@@ -2,9 +2,11 @@ package io.haifa.agent.superharness.server.tool.clarification;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -34,7 +36,6 @@ import java.util.Optional;
  */
 public final class ProductionAskClarificationTool
         implements JavaTool<ProductionAskClarificationTool.Input, ProductionAskClarificationTool.Output> {
-    static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final JavaToolSpec<Input, Output> SPEC =
             JavaToolSpec.builder("ask_clarification", Input.class, Output.class)
@@ -43,7 +44,15 @@ public final class ProductionAskClarificationTool
                     .pure()
                     .build();
 
-    public ProductionAskClarificationTool() {}
+    private final SdkCaller caller;
+
+    public ProductionAskClarificationTool() {
+        this(SdkCaller.defaultPublicUser());
+    }
+
+    public ProductionAskClarificationTool(SdkCaller caller) {
+        this.caller = Objects.requireNonNull(caller, "caller");
+    }
 
     @Override
     public JavaToolSpec<Input, Output> spec() {
@@ -54,8 +63,7 @@ public final class ProductionAskClarificationTool
     public Output invoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(context, "context");
-        if (!SDK_LOCAL_PRINCIPAL.equals(context.principal().principalId())
-                || !"user".equals(context.principal().principalType())) {
+        if (!AccountSdkIdentity.matches(caller, context)) {
             throw new IllegalArgumentException("ask_clarification requires the local Thread owner");
         }
         context.cancellation().throwIfCancellationRequested();

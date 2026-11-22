@@ -1,9 +1,11 @@
 package io.haifa.agent.superharness.server.tool.file;
 
 import io.haifa.agent.artifact.Artifact;
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import io.haifa.agent.superharness.server.auth.ThreadOwners;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
 import io.haifa.agent.superharness.server.tool.clarification.ClarificationBoundaryRegistry;
@@ -29,7 +31,6 @@ import java.util.Optional;
  */
 public final class ProductionStrReplaceTool
         implements JavaTool<ProductionStrReplaceTool.Input, ProductionStrReplaceTool.Output> {
-    private static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
     private static final JavaToolSpec<Input, Output> SPEC =
             JavaToolSpec.builder("str_replace", Input.class, Output.class)
                     .title("Replace a substring in a workspace file")
@@ -37,6 +38,7 @@ public final class ProductionStrReplaceTool
                     .sideEffects(ToolSideEffect.FILE_WRITE)
                     .build();
 
+    private final SdkCaller caller;
     private final String threadId;
     private final String artifactProjectRef;
     private final PersistentProjectWorkspaceService bindings;
@@ -49,6 +51,16 @@ public final class ProductionStrReplaceTool
             PersistentProjectWorkspaceService bindings,
             RestrictedWorkspaceService workspace,
             FileToolSession readState) {
+        this(threadId, artifactProjectRef, bindings, workspace, readState, SdkCaller.defaultPublicUser());
+    }
+
+    public ProductionStrReplaceTool(
+            String threadId,
+            String artifactProjectRef,
+            PersistentProjectWorkspaceService bindings,
+            RestrictedWorkspaceService workspace,
+            FileToolSession readState, SdkCaller caller) {
+        this.caller = java.util.Objects.requireNonNull(caller, "caller");
         this.threadId = Objects.requireNonNull(threadId, "threadId");
         this.artifactProjectRef = Objects.requireNonNull(artifactProjectRef, "artifactProjectRef");
         this.bindings = Objects.requireNonNull(bindings, "bindings");
@@ -65,8 +77,7 @@ public final class ProductionStrReplaceTool
     public Output invoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(context, "context");
-        if (!SDK_LOCAL_PRINCIPAL.equals(context.principal().principalId())
-                || !"user".equals(context.principal().principalType())) {
+        if (!AccountSdkIdentity.matches(caller, context)) {
             throw new IllegalArgumentException("str_replace requires the local Thread owner");
         }
         context.cancellation().throwIfCancellationRequested();

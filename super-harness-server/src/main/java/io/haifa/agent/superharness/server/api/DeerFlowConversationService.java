@@ -10,7 +10,9 @@ import io.haifa.agent.project.changeset.FileChangeType;
 import io.haifa.agent.project.changeset.FileVersion;
 import io.haifa.agent.runtime.api.AgentPlanView;
 import io.haifa.agent.runtime.api.AgentRunEvent;
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.superharness.server.auth.AccessOwner;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import io.haifa.agent.superharness.server.auth.ThreadOwners;
 import io.haifa.agent.superharness.server.plan.PlanAuthoringResources;
 import io.haifa.agent.runtime.api.AgentRunSnapshot;
@@ -353,6 +355,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     /** Test-only host physical-execution seam; production always supplies no executor factory. */
     private final Path dataDirectoryRoot;
     private final Map<String, String> environment;
+    private final boolean bindNewThreadsToAccount;
 
     DeerFlowConversationService(ObjectMapper json,
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
@@ -402,6 +405,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         this.threadCatalog = new PersistentThreadCatalog(json, dataDirectory);
         this.dataDirectoryRoot = dataDirectory.toAbsolutePath().normalize();
         this.environment = environment != null ? Map.copyOf(environment) : System.getenv();
+        this.bindNewThreadsToAccount = AccountSdkIdentity.bindNewThreads(this.environment);
         this.foundation = new DurableHaifaFoundation(dataDirectory, continuationKey);
         for (PersistentThreadCatalog.Entry entry : threadCatalog.list()) {
             ThreadOwners.remember(entry.threadId(), entry.ownerId());
@@ -437,10 +441,19 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     interface SkillProjectionProvider {
         SkillRunTools.Projection forRun(JsonNode body);
 
+        default SkillRunTools.Projection forRun(JsonNode body, SdkCaller caller) {
+            return forRun(body);
+        }
+
         SkillRunTools.Projection forRecovery(SkillRunTools.Selection selection);
 
         default SkillRunTools.Projection forRecovery(SkillRunTools.Selection selection, Map<String, String> versions) {
             return forRecovery(selection);
+        }
+
+        default SkillRunTools.Projection forRecovery(
+                SkillRunTools.Selection selection, Map<String, String> versions, SdkCaller caller) {
+            return forRecovery(selection, versions);
         }
 
         static SkillProjectionProvider none() {
@@ -695,12 +708,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             metadata.put("deerflow_project_id", projectId);
         }
         String owner = AccessOwner.current();
-        ThreadRecord existing = threads.get(threadId);
-        if (existing != null && !owner.equals(existing.ownerId)) {
-            throw ConversationException.notFound("Thread not found");
-        }
         ThreadRecord record = threads.computeIfAbsent(
-                threadId, ignored -> new ThreadRecord(threadId, metadata, Instant.now(), owner));
+                threadId, ignored -> new ThreadRecord(threadId, metadata, Instant.now(), owner, bindNewThreadsToAccount));
+        if (!owner.equals(record.ownerId)) throw ConversationException.notFound("Thread not found");
         persistThread(record);
         return threadResponse(record);
     }
@@ -1795,7 +1805,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 : McpRunTools.Projection.empty();
         SkillRunTools.Projection skillProjection;
         try {
-            skillProjection = runInput == null ? skillProjections.forRun(body) : null;
+            skillProjection = runInput == null ? skillProjections.forRun(body, thread.sdkCaller) : null;
         } catch (IllegalArgumentException invalid) {
             throw ConversationException.invalid(invalid.getMessage());
         } catch (IllegalStateException unavailable) {
@@ -2509,7 +2519,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             }
             Optional<String> projectId = thread.runProjectId();
             HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection,
-                    skillProjections.forRecovery(thread.skillSelection(), thread.skillVersions()), restored,
+                    skillProjections.forRecovery(thread.skillSelection(), thread.skillVersions(), thread.sdkCaller), restored,
                     io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled(),
                     Boolean.TRUE.equals(planMode), projectId);
             boolean claimBinding = thread.modelBindingIdentity == null
@@ -2591,7 +2601,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 foundation, mcpProjection, skillProjection, agentPrompt, delegation, childRunCapacity, isPlanMode,
                 executionExecutorFactory, executionProviderConfig(thread), skillScriptConfig(thread, skillProjection),
                 parentWallTimeMillisForTests, null, thread.ownerId, thread.threadId, approvalMode(),
-                ApprovalPolicyConfig.requireWebReadApproval(environment)));
+                ApprovalPolicyConfig.requireWebReadApproval(environment), thread.sdkCaller));
     }
 
     /** Test-only: the exact bridge currently attached to a Thread, or null when none is. */
@@ -2872,12 +2882,12 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             if (!createIfMissing) {
                 throw new IllegalStateException("Scheduled Run thread is unavailable");
             }
-            ThreadRecord created = new ThreadRecord(threadId, Map.of(), Instant.now(), ownerId);
-            ThreadRecord prior = threads.putIfAbsent(threadId, created);
-            thread = prior != null ? prior : created;
-            if (prior == null) {
+            thread = threads.computeIfAbsent(
+                    threadId, ignored -> new ThreadRecord(threadId, Map.of(), Instant.now(), ownerId,
+                            bindNewThreadsToAccount));
+            if (ownerId.equals(thread.ownerId)) {
                 try {
-                    persistThread(created);
+                    persistThread(thread);
                 } catch (IOException persistenceFailure) {
                     ADMISSION_LOG.log(System.Logger.Level.WARNING,
                             "scheduled Run thread could not be persisted");
@@ -2906,7 +2916,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled(),
                 childRunCapacity, false, executionExecutorFactory, executionProviderConfig(thread), null,
                 parentWallTimeMillisForTests, null, thread.ownerId, thread.threadId, approvalMode(),
-                ApprovalPolicyConfig.requireWebReadApproval(environment)));
+                ApprovalPolicyConfig.requireWebReadApproval(environment), thread.sdkCaller));
     }
 
     static ScheduledRunStatus scheduledTerminal(AgentRunStatus status) {
@@ -2934,7 +2944,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     private List<? extends JavaTool<?, ?>> toolsForThread(ThreadRecord thread, AgentPromptContext agentPrompt,
             Optional<String> projectId) {
         return runToolsForThread.apply(
-                new ThreadToolScope(thread.threadId, projectId, thread.currentRunUploads, agentPrompt));
+                new ThreadToolScope(thread.threadId, projectId, thread.currentRunUploads, agentPrompt, thread.sdkCaller));
     }
 
     private static boolean validAgentMetadata(ThreadRecord thread) {
@@ -3053,7 +3063,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 Optional.ofNullable(thread.modelBindingIdentity),
                 thread.interactionDisplays,
                 thread.clarificationDisplays,
-                thread.ownerId));
+                thread.ownerId,
+                !thread.sdkCaller.equals(SdkCaller.defaultPublicUser())));
     }
 
     /**
@@ -6479,6 +6490,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     static final class ThreadRecord {
         private final String threadId;
         private final String ownerId;
+        private final SdkCaller sdkCaller;
         private final ReentrantLock lock = new ReentrantLock();
         private volatile Map<String, Object> metadata;
         private final Instant createdAt;
@@ -6501,13 +6513,12 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         private boolean admissionRecovered;
         private long nextMessageSequence = 1;
 
-        private ThreadRecord(String threadId, Map<String, Object> metadata, Instant now) {
-            this(threadId, metadata, now, AccessOwner.DEFAULT);
-        }
-
-        private ThreadRecord(String threadId, Map<String, Object> metadata, Instant now, String ownerId) {
+        private ThreadRecord(String threadId, Map<String, Object> metadata, Instant now, String ownerId,
+                boolean bindNewThreadsToAccount) {
             this.threadId = threadId;
             this.ownerId = ownerId == null || ownerId.isBlank() ? AccessOwner.DEFAULT : ownerId;
+            this.sdkCaller = bindNewThreadsToAccount && !AccessOwner.DEFAULT.equals(this.ownerId)
+                    ? AccountSdkIdentity.forOwner(this.ownerId) : SdkCaller.defaultPublicUser();
             this.metadata = Collections.unmodifiableMap(new LinkedHashMap<>(metadata));
             this.createdAt = now;
             this.updatedAt = now;
@@ -6518,6 +6529,9 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         private ThreadRecord(PersistentThreadCatalog.Entry entry) {
             this.threadId = entry.threadId();
             this.ownerId = entry.ownerId();
+            // Catalogs created before account binding keep the original SDK owner across restarts.
+            this.sdkCaller = entry.accountSdkIdentity()
+                    ? AccountSdkIdentity.forOwner(this.ownerId) : SdkCaller.defaultPublicUser();
             this.metadata = entry.metadata();
             this.createdAt = entry.createdAt();
             this.updatedAt = entry.updatedAt();
@@ -6819,15 +6833,20 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             Map<String, Object> message) {}
 
     record ThreadToolScope(String threadId, Optional<String> projectId, CurrentRunUploads currentRunUploads,
-            AgentPromptContext agentPrompt) {
+            AgentPromptContext agentPrompt, SdkCaller sdkCaller) {
         ThreadToolScope(String threadId, Optional<String> projectId, CurrentRunUploads currentRunUploads) {
             this(threadId, projectId, currentRunUploads, AgentPromptContext.defaults());
+        }
+        ThreadToolScope(String threadId, Optional<String> projectId, CurrentRunUploads currentRunUploads,
+                AgentPromptContext agentPrompt) {
+            this(threadId, projectId, currentRunUploads, agentPrompt, SdkCaller.defaultPublicUser());
         }
         ThreadToolScope {
             java.util.Objects.requireNonNull(threadId, "threadId");
             java.util.Objects.requireNonNull(projectId, "projectId");
             java.util.Objects.requireNonNull(currentRunUploads, "currentRunUploads");
             java.util.Objects.requireNonNull(agentPrompt, "agentPrompt");
+            java.util.Objects.requireNonNull(sdkCaller, "sdkCaller");
         }
 
         String artifactProjectRef() {
