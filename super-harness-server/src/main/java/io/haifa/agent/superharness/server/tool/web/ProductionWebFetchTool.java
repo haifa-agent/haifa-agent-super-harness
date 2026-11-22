@@ -3,9 +3,11 @@ package io.haifa.agent.superharness.server.tool.web;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import io.haifa.agent.credential.api.CredentialRequirement;
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
 import java.io.IOException;
 import java.net.URI;
@@ -33,18 +35,22 @@ import java.util.Objects;
  */
 public final class ProductionWebFetchTool
         implements JavaTool<ProductionWebFetchTool.Input, ProductionWebFetchTool.Output> {
-    static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
     private static final System.Logger LOG =
             System.getLogger("io.haifa.agent.superharness.server.tool.web");
     static final int MAX_CONTENT_CHARACTERS = 4096;
     static final String JINA_API_KEY_CREDENTIAL = "JINA_API_KEY";
     static final String DEEPSEEK_TOOL_API_KEY_CREDENTIAL = WebToolConfig.DEEPSEEK_TOOL_API_KEY_CREDENTIAL;
     static final String INVALID_URL_ERROR = "Error: URL must be an absolute http(s) URL";
+    private final SdkCaller caller;
     private final JavaToolSpec<Input, Output> spec;
 
     private final WebToolConfig config;
     private final HttpClient http;
     private final DeepSeekWebClient deepSeekClient;
+
+    public ProductionWebFetchTool(WebToolConfig config, SdkCaller caller) {
+        this(config, WebHttpClients.shared(config), new DeepSeekWebClient(config), caller);
+    }
 
     public ProductionWebFetchTool(WebToolConfig config) {
         this(config, WebHttpClients.shared(config), new DeepSeekWebClient(config));
@@ -62,6 +68,14 @@ public final class ProductionWebFetchTool
             WebToolConfig config,
             HttpClient http,
             DeepSeekWebClient deepSeekClient) {
+        this(config, http, deepSeekClient, SdkCaller.defaultPublicUser());
+    }
+
+    public ProductionWebFetchTool(
+            WebToolConfig config,
+            HttpClient http,
+            DeepSeekWebClient deepSeekClient, SdkCaller caller) {
+        this.caller = java.util.Objects.requireNonNull(caller, "caller");
         this.config = Objects.requireNonNull(config, "config");
         this.http = Objects.requireNonNull(http, "http");
         this.deepSeekClient = Objects.requireNonNull(deepSeekClient, "deepSeekClient");
@@ -102,8 +116,7 @@ public final class ProductionWebFetchTool
     private Output doInvoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(context, "context");
-        if (!SDK_LOCAL_PRINCIPAL.equals(context.principal().principalId())
-                || !"user".equals(context.principal().principalType())) {
+        if (!AccountSdkIdentity.matches(caller, context)) {
             return refused("principal", input.url(), context,
                     "web_fetch requires the local Thread owner");
         }

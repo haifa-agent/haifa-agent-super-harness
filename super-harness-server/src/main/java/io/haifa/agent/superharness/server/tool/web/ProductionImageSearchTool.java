@@ -4,9 +4,11 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
 import java.time.Instant;
 import java.util.List;
@@ -24,20 +26,29 @@ import java.util.Optional;
  */
 public final class ProductionImageSearchTool
         implements JavaTool<ProductionImageSearchTool.Input, ProductionImageSearchTool.Output> {
-    static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
     static final String USAGE_HINT =
             "Use the 'image_url' values as reference images in image generation. Download them first if needed.";
     private static final ObjectMapper JSON = new ObjectMapper();
+    private final SdkCaller caller;
     private final JavaToolSpec<Input, Output> spec;
 
     private final WebToolConfig config;
     private final DuckDuckGoClient client;
+
+    public ProductionImageSearchTool(WebToolConfig config, SdkCaller caller) {
+        this(config, new DuckDuckGoClient(config), caller);
+    }
 
     public ProductionImageSearchTool(WebToolConfig config) {
         this(config, new DuckDuckGoClient(config));
     }
 
     public ProductionImageSearchTool(WebToolConfig config, DuckDuckGoClient client) {
+        this(config, client, SdkCaller.defaultPublicUser());
+    }
+
+    public ProductionImageSearchTool(WebToolConfig config, DuckDuckGoClient client, SdkCaller caller) {
+        this.caller = java.util.Objects.requireNonNull(caller, "caller");
         this.config = Objects.requireNonNull(config, "config");
         this.client = Objects.requireNonNull(client, "client");
         this.spec = JavaToolSpec.builder("image_search", Input.class, Output.class)
@@ -57,8 +68,7 @@ public final class ProductionImageSearchTool
     public Output invoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(context, "context");
-        if (!SDK_LOCAL_PRINCIPAL.equals(context.principal().principalId())
-                || !"user".equals(context.principal().principalType())) {
+        if (!AccountSdkIdentity.matches(caller, context)) {
             throw new IllegalArgumentException("image_search requires the local Thread owner");
         }
         context.cancellation().throwIfCancellationRequested();

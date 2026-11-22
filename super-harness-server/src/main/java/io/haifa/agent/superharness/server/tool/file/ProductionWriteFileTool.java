@@ -1,9 +1,11 @@
 package io.haifa.agent.superharness.server.tool.file;
 
 import io.haifa.agent.artifact.Artifact;
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import io.haifa.agent.superharness.server.auth.ThreadOwners;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
 import io.haifa.agent.superharness.server.tool.clarification.ClarificationBoundaryRegistry;
@@ -32,13 +34,13 @@ import java.util.Optional;
 public final class ProductionWriteFileTool
         implements JavaTool<ProductionWriteFileTool.Input, ProductionWriteFileTool.Output> {
     private static final int MAX_SINGLE_WRITE_BYTES = 80 * 1024;
-    private static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
     private static final JavaToolSpec<Input, Output> SPEC = JavaToolSpec.builder("write_file", Input.class, Output.class)
             .title("Write a workspace file")
             .description(ToolDescriptions.load("write_file"))
             .sideEffects(ToolSideEffect.FILE_WRITE)
             .build();
 
+    private final SdkCaller caller;
     private final String threadId;
     private final String artifactProjectRef;
     private final PersistentProjectWorkspaceService bindings;
@@ -51,6 +53,16 @@ public final class ProductionWriteFileTool
             PersistentProjectWorkspaceService bindings,
             RestrictedWorkspaceService workspace,
             FileToolSession readState) {
+        this(threadId, artifactProjectRef, bindings, workspace, readState, SdkCaller.defaultPublicUser());
+    }
+
+    public ProductionWriteFileTool(
+            String threadId,
+            String artifactProjectRef,
+            PersistentProjectWorkspaceService bindings,
+            RestrictedWorkspaceService workspace,
+            FileToolSession readState, SdkCaller caller) {
+        this.caller = java.util.Objects.requireNonNull(caller, "caller");
         this.threadId = Objects.requireNonNull(threadId, "threadId");
         this.artifactProjectRef = Objects.requireNonNull(artifactProjectRef, "artifactProjectRef");
         this.bindings = Objects.requireNonNull(bindings, "bindings");
@@ -67,8 +79,7 @@ public final class ProductionWriteFileTool
     public Output invoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(context, "context");
-        if (!SDK_LOCAL_PRINCIPAL.equals(context.principal().principalId())
-                || !"user".equals(context.principal().principalType())) {
+        if (!AccountSdkIdentity.matches(caller, context)) {
             throw new IllegalArgumentException("write_file requires the local Thread owner");
         }
         context.cancellation().throwIfCancellationRequested();

@@ -40,7 +40,6 @@ import io.haifa.agent.sdk.api.HaifaAgents;
 import io.haifa.agent.sdk.product.ChildAgentSpec;
 import io.haifa.agent.sdk.api.RunInputCommand;
 import io.haifa.agent.sdk.api.RunInputResult;
-import io.haifa.agent.sdk.api.SdkCallerProvider;
 import io.haifa.agent.sdk.contribution.CredentialPlatformContribution;
 import io.haifa.agent.sdk.contribution.ModelContribution;
 import io.haifa.agent.sdk.contribution.PolicyPlatformContribution;
@@ -332,6 +331,20 @@ public final class HaifaRunBridge implements AutoCloseable {
             ExecutionProviderConfig executionProvider, SkillScriptToolConfig skillScript,
             Long parentWallTimeMillisForTests, RestrictedWorkspaceService workspace, String ownerId, String threadId,
             ApprovalPolicyConfig.Mode approvalMode, boolean requireWebReadApproval) {
+        this(binding, tools, foundation, mcpProjection, skillProjection, agentContext, delegation, childRunCapacity,
+                isPlanMode, executionExecutorFactory, executionProvider, skillScript, parentWallTimeMillisForTests,
+                workspace, ownerId, threadId, approvalMode, requireWebReadApproval, SdkCaller.defaultPublicUser());
+    }
+
+    public HaifaRunBridge(ModelBinding binding, List<? extends JavaTool<?, ?>> tools,
+            DurableHaifaFoundation foundation, McpRunTools.Projection mcpProjection,
+            SkillRunTools.Projection skillProjection, AgentPromptContext agentContext,
+            SubagentRunConfiguration delegation, io.haifa.agent.runtime.api.ChildRunCapacity childRunCapacity,
+            boolean isPlanMode, Supplier<? extends ExecutorService> executionExecutorFactory,
+            ExecutionProviderConfig executionProvider, SkillScriptToolConfig skillScript,
+            Long parentWallTimeMillisForTests, RestrictedWorkspaceService workspace, String ownerId, String threadId,
+            ApprovalPolicyConfig.Mode approvalMode, boolean requireWebReadApproval, SdkCaller caller) {
+        java.util.Objects.requireNonNull(caller, "caller");
         java.util.Objects.requireNonNull(childRunCapacity, "childRunCapacity");
         this.approvalMode = approvalMode == null ? ApprovalPolicyConfig.DEFAULT_MODE : approvalMode;
         this.executionProviderKind = executionProvider == null ? ExecutionProvider.DISABLED : executionProvider.provider();
@@ -374,7 +387,7 @@ public final class HaifaRunBridge implements AutoCloseable {
                 new CredentialPlatformContribution(id -> Optional.ofNullable(System.getenv(id)));
         McpToolPlatforms.McpToolPlatform platform = mcpSpecs.isEmpty() ? null : McpToolPlatforms.connect(
                 mcpSpecs, new TenantRef(McpRunTools.TENANT_ID),
-                new PrincipalRef(AccessOwner.current(), McpRunTools.PRINCIPAL_TYPE),
+                new PrincipalRef(this.ownerId, McpRunTools.PRINCIPAL_TYPE),
                 toolCredentials.broker());
         try {
             this.mcpToolNames = platform == null ? Set.of() : Set.copyOf(platform.toolNames());
@@ -454,7 +467,7 @@ public final class HaifaRunBridge implements AutoCloseable {
                             skillProjection == null ? Set.of() : skillProjection.allowedSkills(), delegation,
                             parentWallTimeMillisForTests))
                     .metadata(new AgentMetadata("Super Harness local compatibility agent"))
-                    .callerProvider(SdkCallerProvider.defaultPublicUser())
+                    .callerProvider(() -> caller)
                     .model(models)
                     .persistence(foundation.persistence())
                     .conversation(foundation.conversation())
@@ -530,7 +543,6 @@ public final class HaifaRunBridge implements AutoCloseable {
             if (executionEnabled) {
                 // The SDK owns the execution assembly: one Broker/Sandbox/Policy/Runtime, the
                 // frozen assembly policy and the execution-aware Approval prompt.
-                SdkCaller caller = SdkCaller.defaultPublicUser();
                 if (executionProvider.provider() == ExecutionProvider.DOCKER_AIO) {
                     var dockerConfig = executionProvider.dockerConfiguration()
                             .orElseThrow(() -> new IllegalStateException("dockerConfiguration is missing for docker-aio provider"));
@@ -569,7 +581,6 @@ public final class HaifaRunBridge implements AutoCloseable {
                 // SH declares only the Thread workspace, the data root, the bun runtime, the product
                 // timeout bounds and the bounded business argument mapping. The frozen binding is
                 // the one the same skill Projection admitted, so no side channel re-derives bytes.
-                SdkCaller scriptCaller = SdkCaller.defaultPublicUser();
                 FrozenSkillBinding skillBinding = SkillScriptToolConfig.declaredBinding(skillProjection)
                         .orElseThrow();
                 skillScriptPlatform = SkillScriptPlatforms.trusted(
@@ -596,8 +607,8 @@ public final class HaifaRunBridge implements AutoCloseable {
                                 skillScript.maximumTimeout(),
                                 skillScript.maximumOutputBytes(),
                                 skillScript.maximumOutputLines()),
-                        scriptCaller.tenant(),
-                        scriptCaller.principal());
+                        caller.tenant(),
+                        caller.principal());
                 // The Agent takes ownership on a successful build; a failed build closes it below.
                 skillScriptPlatform.applyTo(builder);
             }

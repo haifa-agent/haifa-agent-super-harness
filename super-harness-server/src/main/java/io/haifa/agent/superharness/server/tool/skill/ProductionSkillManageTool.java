@@ -1,6 +1,8 @@
 package io.haifa.agent.superharness.server.tool.skill;
 
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.sdk.tool.*;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import io.haifa.agent.superharness.server.config.SkillConfigStore;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
 import io.haifa.agent.superharness.server.tool.clarification.ClarificationBoundaryRegistry;
@@ -14,6 +16,7 @@ public final class ProductionSkillManageTool implements JavaTool<ProductionSkill
     private static final JavaToolSpec<Input, Output> SPEC = JavaToolSpec.builder("skill_manage", Input.class, Output.class)
             .title("Manage custom skills").description(ToolDescriptions.load("skill_manage"))
             .sideEffects(ToolSideEffect.FILE_WRITE).build();
+    private final SdkCaller caller;
     private final SkillConfigStore store;
     private final String threadId;
     private final BooleanSupplier configAdmin;
@@ -21,21 +24,26 @@ public final class ProductionSkillManageTool implements JavaTool<ProductionSkill
         this(store, threadId, io.haifa.agent.superharness.server.auth.AccessOwner::admin);
     }
     public ProductionSkillManageTool(SkillConfigStore store, String threadId, BooleanSupplier configAdmin) {
+        this(store, threadId, configAdmin, SdkCaller.defaultPublicUser());
+    }
+
+    public ProductionSkillManageTool(SkillConfigStore store, String threadId, BooleanSupplier configAdmin, SdkCaller caller) {
+        this.caller = java.util.Objects.requireNonNull(caller, "caller");
         this.store = store;
         this.threadId = threadId;
         this.configAdmin = configAdmin == null ? io.haifa.agent.superharness.server.auth.AccessOwner::admin : configAdmin;
     }
     @Override public JavaToolSpec<Input, Output> spec() { return SPEC; }
 
-    static void requireOwner(JavaToolContext context) {
-        if (!"default-public-user".equals(context.principal().principalId()) || !"user".equals(context.principal().principalType())
+    static void requireOwner(JavaToolContext context, SdkCaller caller) {
+        if (!AccountSdkIdentity.matches(caller, context)
                 || context.sessionId().isEmpty()) throw new IllegalArgumentException("Skill tools require the local Thread owner");
         context.cancellation().throwIfCancellationRequested();
         if (!Instant.now().isBefore(context.deadline())) throw new IllegalStateException("Skill tool deadline expired");
     }
 
     @Override public Output invoke(Input input, JavaToolContext context) {
-        requireOwner(context);
+        requireOwner(context, caller);
         if (!configAdmin.getAsBoolean()) return new Output(false, "Error: Admin privileges are required.");
         if (ClarificationBoundaryRegistry.active(context.runId().value())) return new Output(false, ClarificationBoundaryRegistry.DISCARD_MESSAGE);
         try {

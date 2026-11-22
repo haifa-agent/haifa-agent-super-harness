@@ -1,5 +1,6 @@
 package io.haifa.agent.superharness.server.tool.agent;
 
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
@@ -19,6 +20,7 @@ public final class ProductionUpdateAgentTool
             .description(ToolDescriptions.load("update_agent"))
             .sideEffects(ToolSideEffect.FILE_WRITE)
             .build();
+    private final SdkCaller caller;
     private final String agentName;
     private final Function<Input, Output> write;
     private final BooleanSupplier configAdmin;
@@ -28,6 +30,11 @@ public final class ProductionUpdateAgentTool
     }
 
     public ProductionUpdateAgentTool(String agentName, Function<Input, Output> write, BooleanSupplier configAdmin) {
+        this(agentName, write, configAdmin, SdkCaller.defaultPublicUser());
+    }
+
+    public ProductionUpdateAgentTool(String agentName, Function<Input, Output> write, BooleanSupplier configAdmin, SdkCaller caller) {
+        this.caller = java.util.Objects.requireNonNull(caller, "caller");
         this.agentName = agentName;
         this.write = Objects.requireNonNull(write, "write");
         this.configAdmin = Objects.requireNonNull(configAdmin, "configAdmin");
@@ -41,7 +48,7 @@ public final class ProductionUpdateAgentTool
     @Override
     public Output invoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
-        ProductionSetupAgentTool.requireOwner(Objects.requireNonNull(context, "context"));
+        ProductionSetupAgentTool.requireOwner(Objects.requireNonNull(context, "context"), caller);
         if (!configAdmin.getAsBoolean()) return new Output(false, "Error: Admin privileges are required.");
         if (agentName == null || agentName.isBlank()) return new Output(false, "Error: no current custom agent_name");
         if (input.soul().isPresent() && input.soul().orElseThrow().isBlank()) {

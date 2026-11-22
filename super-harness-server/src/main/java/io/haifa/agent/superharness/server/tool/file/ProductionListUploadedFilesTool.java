@@ -9,9 +9,11 @@ import io.haifa.agent.project.filesystem.FileType;
 import io.haifa.agent.project.filesystem.WorkspaceFileService;
 import io.haifa.agent.project.path.ProjectPath;
 import io.haifa.agent.project.path.WorkspacePath;
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.sdk.tool.JavaTool;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.sdk.tool.JavaToolSpec;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import io.haifa.agent.superharness.server.auth.ThreadOwners;
 import io.haifa.agent.superharness.server.tool.ToolDescriptions;
 import io.haifa.agent.superharness.workspace.PersistentProjectWorkspaceService;
@@ -44,7 +46,6 @@ public final class ProductionListUploadedFilesTool
     private static final int DEFAULT_MAX_RESULTS = 20;
     private static final int MAX_MAX_RESULTS = 100;
     private static final int LIST_PAGE_SIZE = 500;
-    private static final String SDK_LOCAL_PRINCIPAL = "default-public-user";
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final JavaToolSpec<Input, Output> SPEC =
             JavaToolSpec.builder("list_uploaded_files", Input.class, Output.class)
@@ -53,6 +54,7 @@ public final class ProductionListUploadedFilesTool
                     .sideEffects(ToolSideEffect.FILE_READ)
                     .build();
 
+    private final SdkCaller caller;
     private final String threadId;
     private final PersistentProjectWorkspaceService bindings;
     private final RestrictedWorkspaceService workspace;
@@ -63,6 +65,15 @@ public final class ProductionListUploadedFilesTool
             PersistentProjectWorkspaceService bindings,
             RestrictedWorkspaceService workspace,
             CurrentRunUploads currentRunUploads) {
+        this(threadId, bindings, workspace, currentRunUploads, SdkCaller.defaultPublicUser());
+    }
+
+    public ProductionListUploadedFilesTool(
+            String threadId,
+            PersistentProjectWorkspaceService bindings,
+            RestrictedWorkspaceService workspace,
+            CurrentRunUploads currentRunUploads, SdkCaller caller) {
+        this.caller = java.util.Objects.requireNonNull(caller, "caller");
         this.threadId = Objects.requireNonNull(threadId, "threadId");
         this.bindings = Objects.requireNonNull(bindings, "bindings");
         this.workspace = Objects.requireNonNull(workspace, "workspace");
@@ -78,8 +89,7 @@ public final class ProductionListUploadedFilesTool
     public Output invoke(Input input, JavaToolContext context) {
         Objects.requireNonNull(input, "input");
         Objects.requireNonNull(context, "context");
-        if (!SDK_LOCAL_PRINCIPAL.equals(context.principal().principalId())
-                || !"user".equals(context.principal().principalType())) {
+        if (!AccountSdkIdentity.matches(caller, context)) {
             throw new IllegalArgumentException("list_uploaded_files requires the local Thread owner");
         }
         context.cancellation().throwIfCancellationRequested();

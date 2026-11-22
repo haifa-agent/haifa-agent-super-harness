@@ -47,7 +47,7 @@ public class DeepSeekWebToolsLiveTest {
                 new AgentRunId("live-test-run"),
                 Optional.empty(),
                 new ToolCallId("live-call-1"),
-                new TenantRef("test-tenant"),
+                new TenantRef("public"),
                 new PrincipalRef("default-public-user", "user"),
                 Instant.now().plusSeconds(30),
                 Optional.empty(),
