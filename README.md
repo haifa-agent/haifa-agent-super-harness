@@ -153,6 +153,18 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -LocalAuth -AllowSlot
 `HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS` 设为该槽位的前端 Origin。浏览器 Origin 只和这个允许列表比较。
 空 data-root 会打开初始化页。账号、口令和会话写在该 data-root 的 `auth/` 下，不写进 Runtime SQLite。
 
+### 账号会话的兼容回退
+
+本地登录模式下，新会话默认以登录账号绑定 Haifa SDK 身份。已有会话沿用其已保存的绑定。Gateway 进程变量
+`HAIFA_SUPER_HARNESS_ACCOUNT_SDK_BIND_NEW_THREADS` 接受 `true` 或 `false`，仅决定新建会话的绑定；
+`false` 下仍按原归属恢复已有的账号会话。长期记忆保持关闭。
+
+首次部署该能力前，先用 `codex/w13-account-identity-rollback` 的兼容构建
+`eac00996d9a4f50a50126b62f6cdd83f8002d826` 启动 Gateway，核对登录和既有会话后保留该 JAR。再部署默认开启绑定的版本。
+这两个构建都应保持该变量未设置，由构建默认值决定新建会话的绑定。需要回退时，使用该兼容 JAR，保留同一
+data-root 和 continuation 凭据引用。兼容构建默认关闭新建会话的账号绑定，原账号仍可读已绑定会话，其他账号仍不可读。
+未包含兼容逻辑的旧 JAR 无法读取账号绑定的新会话。
+
 ## 微信单聊
 
 管理员可以在网页的「设置 → 渠道」中打开微信配置，使用个人微信扫一扫并确认。页面随后会显示一次性 `/connect <code>`，将它发送到扫码打开的 ClawBot 对话，即可绑定当前网页账号。绑定成功后，在该单聊连续发送文本，回复会回到微信，同一绑定的两轮消息也可在网页同一个会话中查看。启动 Gateway 前确保已有可用的默认模型，并能出站访问微信 iLink。

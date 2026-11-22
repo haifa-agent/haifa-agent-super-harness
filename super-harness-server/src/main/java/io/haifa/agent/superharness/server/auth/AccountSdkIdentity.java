@@ -14,7 +14,7 @@ public final class AccountSdkIdentity {
     private AccountSdkIdentity() {}
 
     public static boolean bindNewThreads(Map<String, String> environment) {
-        return switch (environment.getOrDefault(BIND_NEW_THREADS, "false")) {
+        return switch (environment.getOrDefault(BIND_NEW_THREADS, "true")) {
             case "true" -> true;
             case "false" -> false;
             default -> throw new IllegalArgumentException(BIND_NEW_THREADS + " must be true or false");
