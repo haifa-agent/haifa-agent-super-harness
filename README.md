@@ -80,6 +80,8 @@ Super Harness 负责冻结 DeerFlow 协议映射、产品语义、UI/BFF、业�
 
 ## 定向测试与 SDK 版本选择
 
+涉及 W15 静态扫描的测试和门禁，先按 [AGENTS.md 的虚拟环境说明](AGENTS.md#w15-静态扫描的-python-虚拟环境) 配置并验证扫描器解释器。
+
 定向测试使用 `pwsh -NoProfile -File scripts/test-targeted.ps1 -Test <测试类>`，可加 `-Module`、`-LowMemory` 或 `-Slow`，匹配 0 个测试算失败。
 测试日志保存在 `local-tmp/test-targeted/`，入口输出 JSON 汇总，默认跳过标注为 `slow` 的用例。
 `main` 只消费 `0.1.6-SNAPSHOT`，工作包候选 SDK 由主控通过该 worktree 的 `local-tmp/sdk-selection.json` 指定，执行者不得自行换版或直接传 `-Dhaifa.version`。
