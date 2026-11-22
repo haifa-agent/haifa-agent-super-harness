@@ -155,11 +155,20 @@
           "frontend/tests/e2e/integrations.spec.ts",
           "frontend/tests/e2e/utils/mock-api.ts"
         ]
+      },
+      {
+        "id": "0010-end-browser-session-on-logout",
+        "file": "third-party/deerflow/patches/0010-end-browser-session-on-logout.patch",
+        "sha256": "865073ff21cccfe0a86c61ce9c38640d6b609fef2337266554e4aa7b4739c164",
+        "reason": "Replace the authenticated document on logout so that browser navigation and delayed query responses cannot carry the prior account memory into another sign-in.",
+        "affectedFiles": [
+          "frontend/src/core/auth/AuthProvider.tsx"
+        ]
       }
     ],
     "fileCount": 990,
-    "totalBytes": 21273743,
-    "contentInventorySha256": "b043e77e42ec579196bffc7b70a796c0686755c4418601209990cff9c869ba6f"
+    "totalBytes": 21272909,
+    "contentInventorySha256": "f48625be14e2b97df5f823629d523c1cc7a75a08861b404ac611f39b4c4deff8"
   },
   "build": {
     "node": ">=22",

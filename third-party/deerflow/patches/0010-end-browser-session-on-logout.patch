@@ -1,0 +1,55 @@
+diff --git a/frontend/src/core/auth/AuthProvider.tsx b/frontend/src/core/auth/AuthProvider.tsx
+index 959c965..2bc9846 100644
+--- a/frontend/src/core/auth/AuthProvider.tsx
++++ b/frontend/src/core/auth/AuthProvider.tsx
+@@ -95,18 +95,10 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
+   }, [staticMode, pathname, router]);
+
+   /**
+-   * Logout - call FastAPI logout endpoint and clear local state
+-   * Per RFC-001: Immediately clear local state, don't wait for server confirmation
+-   *
+-   * When the gateway is unreachable the fetch silently fails — the SPA
+-   * router.push("/") would leave the user on "/" still holding stale
+-   * React state and any in-flight SSE / fetch / query subscriptions.
+-   * We therefore fall back to a hard navigation (window.location.href),
+-   * which discards all client state the same way the legacy form-POST
+-   * logout used to.
++   * End the authenticated document when signing out. A client-side route
++   * change would preserve query caches and in-flight responses across logins.
+    */
+   const logout = useCallback(async () => {
+-    // Immediately clear local state to prevent UI flicker
+     setUser(null);
+
+     if (staticMode) {
+@@ -114,27 +106,16 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
+       return;
+     }
+
+-    let logoutFailed = false;
+     try {
+-      const res = await fetch("/api/v1/auth/logout", {
++      await fetch("/api/v1/auth/logout", {
+         method: "POST",
+         credentials: "include",
+       });
+-      if (!res.ok) logoutFailed = true;
+     } catch (err) {
+       console.error("Logout request failed:", err);
+-      logoutFailed = true;
+     }
+
+-    if (logoutFailed && typeof window !== "undefined") {
+-      // Hard navigation ensures every in-flight subscription is torn down,
+-      // matching the legacy form-POST logout behaviour during a gateway outage.
+-      window.location.href = "/";
+-      return;
+-    }
+-
+-    // Redirect to home page
+-    router.push("/");
++    window.location.replace("/");
+   }, [staticMode, router]);
+
+   /**
