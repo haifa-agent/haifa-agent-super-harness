@@ -355,6 +355,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     /** Test-only host physical-execution seam; production always supplies no executor factory. */
     private final Path dataDirectoryRoot;
     private final Map<String, String> environment;
+    private final boolean bindNewThreadsToAccount;
 
     DeerFlowConversationService(ObjectMapper json,
             Function<JsonNode, HaifaRunBridge.ModelBinding> runModelResolver,
@@ -404,6 +405,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         this.threadCatalog = new PersistentThreadCatalog(json, dataDirectory);
         this.dataDirectoryRoot = dataDirectory.toAbsolutePath().normalize();
         this.environment = environment != null ? Map.copyOf(environment) : System.getenv();
+        this.bindNewThreadsToAccount = AccountSdkIdentity.bindNewThreads(this.environment);
         this.foundation = new DurableHaifaFoundation(dataDirectory, continuationKey);
         for (PersistentThreadCatalog.Entry entry : threadCatalog.list()) {
             ThreadOwners.remember(entry.threadId(), entry.ownerId());
@@ -707,7 +709,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         }
         String owner = AccessOwner.current();
         ThreadRecord record = threads.computeIfAbsent(
-                threadId, ignored -> new ThreadRecord(threadId, metadata, Instant.now(), owner));
+                threadId, ignored -> new ThreadRecord(threadId, metadata, Instant.now(), owner, bindNewThreadsToAccount));
         if (!owner.equals(record.ownerId)) throw ConversationException.notFound("Thread not found");
         persistThread(record);
         return threadResponse(record);
@@ -2881,7 +2883,8 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 throw new IllegalStateException("Scheduled Run thread is unavailable");
             }
             thread = threads.computeIfAbsent(
-                    threadId, ignored -> new ThreadRecord(threadId, Map.of(), Instant.now(), ownerId));
+                    threadId, ignored -> new ThreadRecord(threadId, Map.of(), Instant.now(), ownerId,
+                            bindNewThreadsToAccount));
             if (ownerId.equals(thread.ownerId)) {
                 try {
                     persistThread(thread);
@@ -6510,15 +6513,12 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         private boolean admissionRecovered;
         private long nextMessageSequence = 1;
 
-        private ThreadRecord(String threadId, Map<String, Object> metadata, Instant now) {
-            this(threadId, metadata, now, AccessOwner.DEFAULT);
-        }
-
-        private ThreadRecord(String threadId, Map<String, Object> metadata, Instant now, String ownerId) {
+        private ThreadRecord(String threadId, Map<String, Object> metadata, Instant now, String ownerId,
+                boolean bindNewThreadsToAccount) {
             this.threadId = threadId;
             this.ownerId = ownerId == null || ownerId.isBlank() ? AccessOwner.DEFAULT : ownerId;
-            this.sdkCaller = AccessOwner.DEFAULT.equals(this.ownerId)
-                    ? SdkCaller.defaultPublicUser() : AccountSdkIdentity.forOwner(this.ownerId);
+            this.sdkCaller = bindNewThreadsToAccount && !AccessOwner.DEFAULT.equals(this.ownerId)
+                    ? AccountSdkIdentity.forOwner(this.ownerId) : SdkCaller.defaultPublicUser();
             this.metadata = Collections.unmodifiableMap(new LinkedHashMap<>(metadata));
             this.createdAt = now;
             this.updatedAt = now;

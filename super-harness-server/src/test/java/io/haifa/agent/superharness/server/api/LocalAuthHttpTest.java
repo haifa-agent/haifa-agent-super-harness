@@ -12,6 +12,7 @@ import io.haifa.agent.core.session.AgentSessionId;
 import io.haifa.agent.core.tool.ToolCallId;
 import io.haifa.agent.sdk.tool.JavaToolContext;
 import io.haifa.agent.superharness.server.auth.AccessOwner;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import io.haifa.agent.superharness.server.auth.LocalAuthService;
 import io.haifa.agent.superharness.server.config.LocalServerConfiguration;
 import io.haifa.agent.superharness.server.run.PersistentThreadCatalog;
@@ -244,7 +245,10 @@ class LocalAuthHttpTest {
     void accountRunsAndToolsStayIsolatedWhileLegacyApprovalAndHistorySurviveRestart() throws Exception {
         Path data = GatewayFixture.dataDirectory();
         Path evidence = GatewayFixture.evidenceDirectory();
-        Map<String, String> environment = Map.of(LocalAuthService.ENABLED, "1");
+        Map<String, String> environment = Map.of(LocalAuthService.ENABLED, "1",
+                AccountSdkIdentity.BIND_NEW_THREADS, "true");
+        Map<String, String> rollbackEnvironment = Map.of(LocalAuthService.ENABLED, "1",
+                AccountSdkIdentity.BIND_NEW_THREADS, "false");
         int gatewayPort = Integer.getInteger("w13.gatewayPort", 0);
         String legacy = "legacy-account-thread";
         String aliceThread = "alice-account-thread";
@@ -338,12 +342,29 @@ class LocalAuthHttpTest {
                 assertThat(provider.calls).hasValue(8);
             }
 
-            try (var gateway = GatewayFixture.production(data, gatewayPort, environment, evidence)) {
-                assertThat(authenticatedGet(gateway.base, login(gateway.base, "alice@example.com"), aliceLocation)
+            String rollbackLocation;
+            try (var gateway = GatewayFixture.production(data, gatewayPort, rollbackEnvironment, evidence)) {
+                URI base = gateway.base;
+                Session rollbackAlice = login(base, "alice@example.com");
+                Session rollbackBob = login(base, "bob@example.com");
+                assertThat(authenticatedGet(base, rollbackAlice, aliceLocation)
                         .path("status").asText()).isEqualTo("success");
-                assertThat(authenticatedGet(gateway.base, login(gateway.base, "bob@example.com"), bobLocation)
+                assertThat(authenticatedGet(base, rollbackBob, bobLocation)
                         .path("status").asText()).isEqualTo("success");
+                assertThat(authenticatedGet(base, rollbackAlice, thread(aliceThread) + "/state").toString())
+                        .contains("completed turn 6");
+                assertThat(send(base, "GET", thread(aliceThread) + "/state", null, rollbackBob.headers()).statusCode())
+                        .isEqualTo(404);
+                assertThat(send(base, "GET", thread(bobThread) + "/state", null, rollbackAlice.headers()).statusCode())
+                        .isEqualTo(404);
+                String rollbackThread = "new-thread-in-rollback";
+                assertThat(send(base, "POST", "/api/threads",
+                        "{\"thread_id\":\"new-thread-in-rollback\"}", rollbackAlice.jsonHeaders()).statusCode())
+                        .isEqualTo(200);
+                rollbackLocation = run(base, rollbackAlice, rollbackThread, "rollback creates public SDK session",
+                        evidence.resolve("rollback-new-thread.sse"));
             }
+            assertSdkOwner(data, rollbackLocation, "public", "default-public-user");
             String legacySession = assertSdkOwner(data, legacyLocation, "public", "default-public-user");
             assertThat(assertSdkOwner(data, continued, "public", "default-public-user")).isEqualTo(legacySession);
             assertThat(assertSdkOwner(data, aliceLocation, "super-harness", alice.userId))
