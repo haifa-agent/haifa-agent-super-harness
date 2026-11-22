@@ -692,7 +692,7 @@ public class DeerFlowViewImageIntegrationTest {
                 new AgentRunId("run-view-" + threadId),
                 Optional.of(new AgentSessionId("session-view-" + threadId)),
                 new ToolCallId("tool-call-view-1"),
-                new TenantRef("default"),
+                new TenantRef("public"),
                 new PrincipalRef("default-public-user", "user"),
                 Instant.now().plusSeconds(60),
                 Optional.empty(),

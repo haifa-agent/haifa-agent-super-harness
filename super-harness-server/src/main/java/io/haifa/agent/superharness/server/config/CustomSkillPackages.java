@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.skill.api.SkillAvailability;
 import io.haifa.agent.skill.api.SkillOrigin;
 import io.haifa.agent.skill.api.SkillParserMode;
@@ -94,9 +95,30 @@ final class CustomSkillPackages {
     }
 
     private static SkillSourceDescriptor descriptor(String name, String revision) {
-        var caller = io.haifa.agent.sdk.api.SdkCaller.defaultPublicUser();
+        return descriptor(name, revision, SdkCaller.defaultPublicUser());
+    }
+
+    private static SkillSourceDescriptor descriptor(String name, String revision, SdkCaller caller) {
         return new SkillSourceDescriptor(new SkillSourceRef("user-" + name, "sha256:" + revision),
                 SkillScopeRef.user(caller.tenant(), caller.principal()), SkillOrigin.IMPORTED, 200, SkillParserMode.COMPATIBLE, true, false);
+    }
+
+    SkillRunTools.Package forCaller(SkillRunTools.Package pkg, SdkCaller caller) {
+        if (!"user-installed".equals(pkg.sourceName())) return pkg;
+        try {
+            var original = pkg.source().discover(SkillReviewApprovals.discovery()).registrations().getFirst();
+            var source = new InMemorySkillSource(descriptor(pkg.name(), pkg.sourceSha(), caller), parser,
+                    SkillAvailability.ENABLED, Map.of(pkg.name(), files(pkg.name(), pkg.sourceSha())));
+            var scoped = source.discover(SkillReviewApprovals.discovery(caller)).registrations().getFirst();
+            if (!original.packageIndex().digest().equals(scoped.packageIndex().digest())) {
+                throw new IllegalStateException("Published custom Skill bytes changed");
+            }
+            return new SkillRunTools.Package(pkg.name(), pkg.description(), pkg.category(), pkg.license(),
+                    pkg.sourceName(), pkg.sourceSha(), pkg.version(), pkg.contentHash(), pkg.active(),
+                    pkg.enabledByDefault(), source);
+        } catch (IOException | java.util.NoSuchElementException unavailable) {
+            throw new IllegalStateException("Published custom Skill is unavailable for account projection", unavailable);
+        }
     }
 
     Map<String, byte[]> current(ObjectNode config, String name) throws IOException {

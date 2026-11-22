@@ -439,10 +439,19 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
     interface SkillProjectionProvider {
         SkillRunTools.Projection forRun(JsonNode body);
 
+        default SkillRunTools.Projection forRun(JsonNode body, SdkCaller caller) {
+            return forRun(body);
+        }
+
         SkillRunTools.Projection forRecovery(SkillRunTools.Selection selection);
 
         default SkillRunTools.Projection forRecovery(SkillRunTools.Selection selection, Map<String, String> versions) {
             return forRecovery(selection);
+        }
+
+        default SkillRunTools.Projection forRecovery(
+                SkillRunTools.Selection selection, Map<String, String> versions, SdkCaller caller) {
+            return forRecovery(selection, versions);
         }
 
         static SkillProjectionProvider none() {
@@ -1794,7 +1803,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
                 : McpRunTools.Projection.empty();
         SkillRunTools.Projection skillProjection;
         try {
-            skillProjection = runInput == null ? skillProjections.forRun(body) : null;
+            skillProjection = runInput == null ? skillProjections.forRun(body, thread.sdkCaller) : null;
         } catch (IllegalArgumentException invalid) {
             throw ConversationException.invalid(invalid.getMessage());
         } catch (IllegalStateException unavailable) {
@@ -2508,7 +2517,7 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             }
             Optional<String> projectId = thread.runProjectId();
             HaifaRunBridge bridge = newBridge(binding, thread, mcpProjection,
-                    skillProjections.forRecovery(thread.skillSelection(), thread.skillVersions()), restored,
+                    skillProjections.forRecovery(thread.skillSelection(), thread.skillVersions(), thread.sdkCaller), restored,
                     io.haifa.agent.superharness.server.config.SubagentRunConfiguration.disabled(),
                     Boolean.TRUE.equals(planMode), projectId);
             boolean claimBinding = thread.modelBindingIdentity == null

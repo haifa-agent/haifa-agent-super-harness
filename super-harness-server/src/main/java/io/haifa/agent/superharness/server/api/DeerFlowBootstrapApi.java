@@ -250,6 +250,12 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                             }
 
                             @Override
+                            public SkillRunTools.Projection forRun(
+                                    JsonNode body, io.haifa.agent.sdk.api.SdkCaller caller) {
+                                return skillStore.projection(configurationApi.resolveSkillSelection(body), caller);
+                            }
+
+                            @Override
                             public SkillRunTools.Projection forRecovery(SkillRunTools.Selection selection) {
                                 return skillStore.recoveryProjection(selection);
                             }
@@ -257,6 +263,12 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                             @Override
                             public SkillRunTools.Projection forRecovery(SkillRunTools.Selection selection, Map<String, String> versions) {
                                 return skillStore.recoveryProjection(selection, versions);
+                            }
+
+                            @Override
+                            public SkillRunTools.Projection forRecovery(SkillRunTools.Selection selection,
+                                    Map<String, String> versions, io.haifa.agent.sdk.api.SdkCaller caller) {
+                                return skillStore.recoveryProjection(selection, versions, caller);
                             }
                         },
                 new DeerFlowUploadContext(toolWorkspace),
@@ -395,7 +407,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
             HaifaRunBridge.promptSignatureFor(
                     promptReadyTools(configured, projects, toolWorkspace, nextScope, configuration, skills,
                             skillScreening, localAuth, environment),
-                    skills.projection(selectedSkills), nextAgent);
+                    skills.projection(selectedSkills, scope.sdkCaller()), nextAgent);
         };
         java.util.function.BooleanSupplier configAdmin = () -> localAuth == null
                 || localAuth.allowsGlobalConfigMutation(

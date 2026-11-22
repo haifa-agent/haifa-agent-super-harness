@@ -15,13 +15,15 @@ final class SkillReviewApprovals {
     private SkillReviewApprovals() {}
 
     static SkillDiscoveryContext discovery() {
-        var caller = SdkCaller.defaultPublicUser();
+        return discovery(SdkCaller.defaultPublicUser());
+    }
+
+    static SkillDiscoveryContext discovery(SdkCaller caller) {
         return new SkillDiscoveryContext(new SkillVisibilityContext(caller.tenant(), caller.principal(),
                 Optional.empty(), false, java.util.Set.of(SkillScope.USER, SkillScope.PRODUCT)));
     }
 
-    static SkillTrustSubject subject() {
-        var caller = SdkCaller.defaultPublicUser();
+    static SkillTrustSubject subject(SdkCaller caller) {
         return new SkillTrustSubject(caller.tenant(), caller.principal(), PRODUCT, Optional.empty());
     }
 
@@ -78,5 +80,19 @@ final class SkillReviewApprovals {
     static SkillTrustSnapshot snapshot(List<SkillPackageReviewGrant> grants) {
         String digest = SkillPackageFiles.hash(grants.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
         return new SkillTrustSnapshot("sha256:" + digest, grants, List.of());
+    }
+
+    /** Maps the review of these exact published bytes to the SDK's account-scoped grant. */
+    static SkillPackageReviewGrant forCaller(
+            SkillPackageReviewGrant approved, SkillRegistration registration, SdkCaller caller) {
+        if (!approved.packageDigest().equals(registration.packageIndex().digest())
+                || !approved.coordinate().source().equals(registration.coordinate().source())) {
+            throw new IllegalStateException("Skill account projection does not match the reviewed package");
+        }
+        return new SkillPackageReviewGrant(approved.id(), approved.schemaVersion(), approved.version(),
+                caller.tenant(), caller.principal(), approved.productId(), approved.scope(), approved.projectRef(),
+                registration.coordinate(), registration.registrationDigest(), registration.packageIndex().digest(),
+                approved.issuedAt(), approved.expiresAt(), approved.revokedAt(), approved.state(),
+                approved.reviewerRef(), approved.reviewSourceRef(), approved.reasonCode());
     }
 }

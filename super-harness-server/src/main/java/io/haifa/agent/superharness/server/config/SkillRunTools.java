@@ -3,6 +3,7 @@ package io.haifa.agent.superharness.server.config;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.haifa.agent.core.reference.PrincipalRef;
 import io.haifa.agent.core.reference.TenantRef;
+import io.haifa.agent.sdk.api.SdkCaller;
 import io.haifa.agent.skill.api.SkillCatalog;
 import io.haifa.agent.skill.api.SkillContentLoader;
 import io.haifa.agent.skill.api.SkillDiscoveryContext;
@@ -107,6 +108,11 @@ public final class SkillRunTools {
 
     static Projection projection(List<Package> packages, Map<String, Boolean> enabled, Selection selection,
             io.haifa.agent.skill.api.SkillTrustSnapshot trust) {
+        return projection(packages, enabled, selection, trust, SdkCaller.defaultPublicUser());
+    }
+
+    static Projection projection(List<Package> packages, Map<String, Boolean> enabled, Selection selection,
+            io.haifa.agent.skill.api.SkillTrustSnapshot trust, SdkCaller caller) {
         List<Package> selected = packages.stream()
                 .filter(Package::active)
                 .filter(pkg -> enabled.getOrDefault(pkg.name(), pkg.enabledByDefault()))
@@ -117,7 +123,7 @@ public final class SkillRunTools {
         // Retain every immutable published version in the loader. A persisted SDK Run
         // already holds its frozen binding, even when a later catalog is empty.
         List<SkillSource> retainedSources = packages.stream().map(Package::source).toList();
-        SkillDiscoveryContext discovery = SkillReviewApprovals.discovery();
+        SkillDiscoveryContext discovery = SkillReviewApprovals.discovery(caller);
         // LocalDirectorySkillSource records the exact immutable package location
         // during discover(). A retained source absent from today's catalog still
         // needs that index when a persisted Run validates its frozen binding.
@@ -128,7 +134,7 @@ public final class SkillRunTools {
         }
         SkillCatalog catalog = new SkillCatalogBuilder(currentSources,
                 new SkillResolutionPolicy("super-harness-bundled-skills", List.of(SkillScope.USER, SkillScope.PRODUCT), false),
-                trust, SkillReviewApprovals.subject(), java.time.Clock.systemUTC())
+                trust, SkillReviewApprovals.subject(caller), java.time.Clock.systemUTC())
                 .build(discovery);
         if (catalog.snapshot().bindings().size() != selected.size()) {
             throw new IllegalStateException("enabled Skill catalog is incomplete or ambiguous: " + catalog.snapshot().diagnostics());

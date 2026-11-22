@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.haifa.agent.superharness.server.auth.AccountSdkIdentity;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -170,6 +171,39 @@ class SkillPackageManagementTest {
         assertThatThrownBy(() -> projection.loader().load(binding, owner)).isInstanceOf(SecurityException.class).hasMessageContaining("revoked");
         assertThatThrownBy(() -> store.recoveryProjection(SkillRunTools.Selection.of(java.util.Set.of("sample-helper"))))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("incomplete");
+    }
+
+    @Test void publishedSkillUsesSeparateAccountBindingsAndRevocationStillStopsItsBytes() throws Exception {
+        var store = store();
+        byte[] script = "print('example')\n".getBytes(StandardCharsets.UTF_8);
+        store.install(SkillPackageFiles.export("sample-helper", Map.of(
+                "SKILL.md", markdown("Published instructions"), "scripts/helper.py", script)), null);
+        var alice = AccountSdkIdentity.forOwner("alice-test");
+        var bob = AccountSdkIdentity.forOwner("bob-test");
+        var selection = SkillRunTools.Selection.of(java.util.Set.of("sample-helper"));
+        var aliceProjection = store.projection(selection, alice);
+        var bobProjection = store.projection(selection, bob);
+        var aliceBinding = aliceProjection.catalog().snapshot().bindings().getFirst();
+        var bobBinding = bobProjection.catalog().snapshot().bindings().getFirst();
+        assertThat(aliceBinding.coordinate().scope().owner()).contains(alice.principal());
+        assertThat(bobBinding.coordinate().scope().owner()).contains(bob.principal());
+        assertThat(aliceBinding.resourceIndexDigest()).isEqualTo(bobBinding.resourceIndexDigest());
+        var aliceVisibility = SkillReviewApprovals.discovery(alice).visibility();
+        var bobVisibility = SkillReviewApprovals.discovery(bob).visibility();
+        assertThat(aliceProjection.loader().loadResourceBytes(aliceBinding, aliceVisibility, "scripts/helper.py")
+                .orElseThrow()).containsExactly(script);
+        assertThat(bobProjection.loader().load(bobBinding, bobVisibility).instructions())
+                .contains("Published instructions");
+        assertThatThrownBy(() -> aliceProjection.loader().load(aliceBinding, bobVisibility))
+                .isInstanceOf(SecurityException.class);
+        var pkg = aliceProjection.selectedPackages().getFirst();
+        var recovered = store.recoveryProjection(selection,
+                Map.of(pkg.name(), pkg.source().descriptor().reference().sourceId() + "@" + pkg.version()), alice);
+        assertThat(recovered.loader().load(aliceBinding, aliceVisibility).instructions())
+                .contains("Published instructions");
+        store.revokePackageReview("sample-helper");
+        assertThatThrownBy(() -> recovered.loader().loadResourceBytes(aliceBinding, aliceVisibility, "scripts/helper.py"))
+                .isInstanceOf(SecurityException.class).hasMessageContaining("revoked");
     }
 
     @Test void creatorRequiresExactScreenBeforeEnablingAndKeepsItsCompleteResources() throws Exception {
