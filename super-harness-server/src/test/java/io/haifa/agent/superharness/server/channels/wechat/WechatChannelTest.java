@@ -11,11 +11,14 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.haifa.agent.superharness.server.config.ChannelConnectionStore;
 import java.net.http.HttpTimeoutException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -38,7 +41,7 @@ class WechatChannelTest {
                             .put("qrcode_img_content", "https://weixin.qq.com/test");
                 }
                 case 2 -> {
-                    assertTrue(timeout.toSeconds() < 30, "Keep the call within the frontend proxy deadline");
+                    assertEquals(Duration.ofSeconds(35), timeout);
                     throw new HttpTimeoutException("iLink long poll idle");
                 }
                 case 3 -> json.createObjectNode().put("status", "need_verifycode");
@@ -69,6 +72,80 @@ class WechatChannelTest {
         assertEquals("wechat", confirmed.path("provider").path("provider").asText());
         assertTrue(confirmed.findValues("bot_token").isEmpty());
         assertEquals(4, operations.size());
+    }
+
+    @Test
+    void webTimeoutKeepsTheInFlightWechatPollAndAppliesItsResultOnce() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch confirmedByWechat = new CountDownLatch(1);
+        AtomicInteger upstreamPolls = new AtomicInteger();
+        AtomicInteger activations = new AtomicInteger();
+        WechatTransport transport = (origin, path, query, body, token, timeout) -> {
+            if ("get_bot_qrcode".equals(path)) {
+                return json.createObjectNode().put("qrcode", "private-scan-id")
+                        .put("qrcode_img_content", "https://weixin.qq.com/test");
+            }
+            upstreamPolls.incrementAndGet();
+            started.countDown();
+            if (!confirmedByWechat.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("Test never released the upstream poll");
+            }
+            return json.createObjectNode().put("status", "confirmed")
+                    .put("bot_token", "fixture-bot-token").put("ilink_bot_id", "bot-a");
+        };
+        var login = new WechatQrLogin(json, transport, Duration.ofMillis(100));
+        String id = login.start("admin", null).path("id").asText();
+        try {
+            assertEquals("pending", login.poll("admin", id, "", ignored -> null).path("status").asText());
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            assertEquals("pending", login.poll("admin", id, "", ignored -> null).path("status").asText());
+            assertEquals(1, upstreamPolls.get());
+            confirmedByWechat.countDown();
+            Instant deadline = Instant.now().plusSeconds(3);
+            JsonNode result;
+            do {
+                result = login.poll("admin", id, "", runtime -> {
+                    activations.incrementAndGet();
+                    return json.createObjectNode().put("configured", true);
+                });
+            } while ("pending".equals(result.path("status").asText()) && Instant.now().isBefore(deadline));
+            assertEquals("confirmed", result.path("status").asText());
+            assertTrue(result.path("provider").path("configured").asBoolean());
+            assertEquals("confirmed", login.poll("admin", id, "", ignored -> {
+                throw new AssertionError("Confirmed QR activated again");
+            }).path("status").asText());
+            assertEquals(1, upstreamPolls.get());
+            assertEquals(1, activations.get());
+        } finally {
+            login.cancel("admin", id);
+        }
+    }
+
+    @Test
+    void cancellingAnInFlightQrInterruptsTheUpstreamPoll() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch interrupted = new CountDownLatch(1);
+        WechatTransport transport = (origin, path, query, body, token, timeout) -> {
+            if ("get_bot_qrcode".equals(path)) {
+                return json.createObjectNode().put("qrcode", "private-scan-id")
+                        .put("qrcode_img_content", "https://weixin.qq.com/test");
+            }
+            started.countDown();
+            try {
+                Thread.sleep(Duration.ofSeconds(5));
+                throw new AssertionError("Cancel never interrupted the upstream poll");
+            } catch (InterruptedException cancelled) {
+                interrupted.countDown();
+                throw cancelled;
+            }
+        };
+        var login = new WechatQrLogin(json, transport, Duration.ofMillis(100));
+        String id = login.start("admin", null).path("id").asText();
+        assertEquals("pending", login.poll("admin", id, "", ignored -> null).path("status").asText());
+        assertTrue(started.await(2, TimeUnit.SECONDS));
+        assertTrue(login.cancel("admin", id));
+        assertTrue(interrupted.await(2, TimeUnit.SECONDS));
+        assertNull(login.poll("admin", id, "", ignored -> null));
     }
 
     @Test
