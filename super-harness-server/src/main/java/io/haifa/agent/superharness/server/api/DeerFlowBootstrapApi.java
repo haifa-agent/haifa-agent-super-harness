@@ -19,6 +19,9 @@ import io.haifa.agent.superharness.server.channels.feishu.FeishuTransport;
 import io.haifa.agent.superharness.server.channels.feishu.ImmediateFeishuTransport;
 import io.haifa.agent.superharness.server.channels.feishu.InProcessFeishuAgentBridge;
 import io.haifa.agent.superharness.server.channels.feishu.LarkSdkFeishuTransport;
+import io.haifa.agent.superharness.server.channels.wechat.WechatChannelWorker;
+import io.haifa.agent.superharness.server.channels.wechat.WechatQrLogin;
+import io.haifa.agent.superharness.server.channels.wechat.WechatTransport;
 import io.haifa.agent.superharness.server.config.ChannelConnectionStore;
 import io.haifa.agent.superharness.server.config.ChannelRuntimeConfigStore;
 import io.haifa.agent.superharness.server.config.LocalServerConfiguration;
@@ -106,6 +109,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
     private final DeerFlowMcpApi mcpApi;
     private final DeerFlowChannelsApi channelsApi;
     private final FeishuChannelWorker feishuWorker;
+    private final WechatChannelWorker wechatWorker;
     private final DeerFlowSkillsApi skillsApi;
     private final DeerFlowLarkIntegrationsApi larkIntegrationsApi;
     private final DeerFlowWorkspaceApi workspaceApi;
@@ -329,8 +333,21 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
                 transportFactory,
                 lark,
                 environment == null ? null : environment.get(FeishuChannelWorker.PUBLIC_WEB_URL_ENV));
+        WechatTransport wechatTransport = testRunModelResolver == null ? WechatTransport.http(objectMapper) : null;
+        this.wechatWorker = wechatTransport == null ? null : new WechatChannelWorker(
+                objectMapper, wechatTransport, channelConnectionStore, dataDirectory,
+                (owner, thread, text) -> {
+                    var result = feishuAgentBridge.runTurn(owner, thread, Map.of("channel", "wechat"), text);
+                    if (result.pending() != null) {
+                        return "这条对话需要确认，请在 Super Harness 网页打开会话处理。";
+                    }
+                    String reply = result.assistantText();
+                    return reply == null || reply.isBlank() ? "本轮没有文本回复，请在网页查看会话。" : reply;
+                });
         this.channelsApi = new DeerFlowChannelsApi(
-                objectMapper, channelRuntimeStore, channelConnectionStore, feishuWorker);
+                objectMapper, channelRuntimeStore, channelConnectionStore, feishuWorker,
+                true, true, wechatWorker,
+                wechatTransport == null ? null : new WechatQrLogin(objectMapper, wechatTransport));
         this.workspaceApi = new DeerFlowWorkspaceApi(
                 objectMapper, dataDirectory.resolve("workspace"), threadRunApi.conversations()::hasThread);
         this.skillsApi = new DeerFlowSkillsApi(objectMapper, skillStore, workspaceApi);
@@ -867,6 +884,7 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         // Reopen Feishu WS when runtime-config.json still has credentials (DeerFlow ChannelService
         // merges runtime config at startup). Call after HTTP bind and after test transport overrides.
         channelsApi.restorePersistedFeishuWorker();
+        channelsApi.restorePersistedWechatWorker();
         // A disabled scheduler stays inert; an enabled one starts its single daemon worker.
         scheduler.start();
     }
@@ -927,6 +945,9 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         }
         try {
             feishuWorker.close();
+            if (wechatWorker != null) {
+                wechatWorker.close();
+            }
         } catch (RuntimeException ignored) {
             // Best-effort worker stop before tearing down the HTTP server.
         }

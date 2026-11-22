@@ -153,6 +153,10 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -LocalAuth -AllowSlot
 `HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS` 设为该槽位的前端 Origin。浏览器 Origin 只和这个允许列表比较。
 空 data-root 会打开初始化页。账号、口令和会话写在该 data-root 的 `auth/` 下，不写进 Runtime SQLite。
 
+## 微信单聊
+
+管理员可以在网页的「设置 → 渠道」中打开微信配置，使用个人微信扫一扫并确认。页面随后会显示一次性 `/connect <code>`，将它发送到扫码打开的 ClawBot 对话，即可绑定当前网页账号。绑定成功后，在该单聊连续发送文本，回复会回到微信，同一绑定的两轮消息也可在网页同一个会话中查看。启动 Gateway 前确保已有可用的默认模型，并能出站访问微信 iLink。
+
 ## 默认 Web 工具的环境代理
 
 在启动 Gateway 的同一 PowerShell 会话配置进程级变量，然后启动或重启 Gateway，优先使用产品键：

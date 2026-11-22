@@ -336,7 +336,9 @@ public final class InProcessFeishuAgentBridge implements FeishuAgentBridge {
                 metadata.set(entry.getKey(), json.valueToTree(entry.getValue()));
             }
         }
-        metadata.put("channel", "feishu");
+        if (!metadata.hasNonNull("channel")) {
+            metadata.put("channel", "feishu");
+        }
         try {
             threads.createThread(body);
         } catch (DeerFlowConversationService.ConversationException rejected) {
