@@ -11,6 +11,8 @@ import io.haifa.agent.superharness.server.auth.LocalAuthService;
 import io.haifa.agent.superharness.server.channels.feishu.FeishuChannelWorker;
 import io.haifa.agent.superharness.server.channels.feishu.FeishuOpenDomain;
 import io.haifa.agent.superharness.server.channels.feishu.FeishuTransport;
+import io.haifa.agent.superharness.server.channels.wechat.WechatChannelWorker;
+import io.haifa.agent.superharness.server.channels.wechat.WechatQrLogin;
 import io.haifa.agent.superharness.server.config.ChannelConnectionStore;
 import io.haifa.agent.superharness.server.config.ChannelRuntimeConfigStore;
 import java.io.ByteArrayOutputStream;
@@ -23,11 +25,11 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Frozen DeerFlow IM channel connections REST projection (Feishu-only L1b).
+ * Frozen DeerFlow IM channel connections REST projection.
  *
  * <p>Wire shape mirrors {@code deer-flow/.../channel_connections.py} and
  * {@code frontend/src/core/channels/api.ts}. Runtime credentials and bindings live under the
- * Gateway data-root; POST/DELETE runtime-config starts/stops the Feishu WS worker.</p>
+ * Gateway data-root; POST/DELETE runtime-config controls the associated worker.</p>
  */
 final class DeerFlowChannelsApi implements HttpHandler {
     private static final System.Logger LOG = System.getLogger(DeerFlowChannelsApi.class.getName());
@@ -41,6 +43,10 @@ final class DeerFlowChannelsApi implements HttpHandler {
     private static final Pattern PROVIDER_RUNTIME =
             Pattern.compile("^/api/channels/([^/]+)/runtime-config$");
 
+    private static final String WECHAT_QR = "/api/channels/wechat/qr-login";
+    private static final Pattern WECHAT_QR_SESSION =
+            Pattern.compile("^" + WECHAT_QR + "/([a-f0-9-]+)(/poll)?$");
+
     private static final Map<String, ProviderMeta> PROVIDERS = Map.of(
             "feishu",
             new ProviderMeta(
@@ -50,12 +56,18 @@ final class DeerFlowChannelsApi implements HttpHandler {
                             new CredentialField("app_id", "App ID", "text", true),
                             new CredentialField("app_secret", "App secret", "password", true),
                             new CredentialField("domain", "Open Platform domain", "text", false)),
-                    List.of("app_id", "app_secret")));
+                    List.of("app_id", "app_secret")),
+            "wechat", new ProviderMeta(
+                    "WeChat", "binding_code",
+                    List.of(new CredentialField("bot_token", "Bot token", "password", true)),
+                    List.of("bot_token")));
 
     private final ObjectMapper json;
     private final ChannelRuntimeConfigStore runtimeStore;
     private final ChannelConnectionStore connectionStore;
     private final FeishuChannelWorker feishuWorker;
+    private final WechatChannelWorker wechatWorker;
+    private final WechatQrLogin wechatQr;
     private final boolean channelConnectionsEnabled;
     private final boolean feishuEnabled;
 
@@ -90,7 +102,22 @@ final class DeerFlowChannelsApi implements HttpHandler {
             FeishuChannelWorker feishuWorker,
             boolean channelConnectionsEnabled,
             boolean feishuEnabled) {
+        this(json, runtimeStore, connectionStore, feishuWorker, channelConnectionsEnabled, feishuEnabled,
+                null, null);
+    }
+
+    DeerFlowChannelsApi(
+            ObjectMapper json,
+            ChannelRuntimeConfigStore runtimeStore,
+            ChannelConnectionStore connectionStore,
+            FeishuChannelWorker feishuWorker,
+            boolean channelConnectionsEnabled,
+            boolean feishuEnabled,
+            WechatChannelWorker wechatWorker,
+            WechatQrLogin wechatQr) {
         this.json = json;
+        this.wechatWorker = wechatWorker;
+        this.wechatQr = wechatQr;
         this.runtimeStore = runtimeStore;
         this.connectionStore = connectionStore;
         this.feishuWorker = feishuWorker;
@@ -141,6 +168,18 @@ final class DeerFlowChannelsApi implements HttpHandler {
         }
     }
 
+    void restorePersistedWechatWorker() {
+        ObjectNode runtime = effectiveRuntime("wechat");
+        if (channelConnectionsEnabled && providerEnabled("wechat")
+                && runtimeConfigured("wechat", PROVIDERS.get("wechat"), runtime)) {
+            try {
+                wechatWorker.start(runtime);
+            } catch (IllegalArgumentException invalid) {
+                LOG.log(System.Logger.Level.WARNING, "Persisted WeChat channel configuration is invalid");
+            }
+        }
+    }
+
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         try {
@@ -156,6 +195,10 @@ final class DeerFlowChannelsApi implements HttpHandler {
             }
             if ("/api/channels/connections".equals(path) && "GET".equals(method)) {
                 send(exchange, 200, connectionsResponse());
+                return;
+            }
+            if (wechatQr != null && (WECHAT_QR.equals(path) || path.startsWith(WECHAT_QR + "/"))) {
+                wechatQr(exchange, path, method);
                 return;
             }
             Matcher connection = CONNECTION_PATH.matcher(path);
@@ -188,6 +231,61 @@ final class DeerFlowChannelsApi implements HttpHandler {
         } catch (Exception exception) {
             send(exchange, 500, Map.of("detail", "Channel connection operation failed"));
         }
+    }
+
+    private void wechatQr(HttpExchange exchange, String path, String method)
+            throws IOException, InterruptedException {
+        requireAdmin();
+        requireFeatureEnabled();
+        String owner = AccessOwner.current();
+        if (WECHAT_QR.equals(path) && "POST".equals(method)) {
+            ObjectNode session = wechatQr.start(owner, effectiveRuntime("wechat"));
+            send(exchange, 200, session);
+            return;
+        }
+        Matcher session = WECHAT_QR_SESSION.matcher(path);
+        if (session.matches()) {
+            String id = session.group(1);
+            if (session.group(2) != null && "POST".equals(method)) {
+                byte[] raw = readBounded(exchange.getRequestBody());
+                String pin = raw.length == 0 ? "" : parseObject(raw).path("verify_code").asText("");
+                if (!pin.isEmpty() && !pin.matches("[0-9]{1,16}")) {
+                    throw new ChannelsException(422, "Invalid WeChat verification code");
+                }
+                ObjectNode result = wechatQr.poll(owner, id, pin, runtime -> {
+                    activateWechat(runtime);
+                    return providerResponse("wechat", PROVIDERS.get("wechat"), newestOwnerConnection("wechat"));
+                });
+                if (result != null) {
+                    send(exchange, 200, result);
+                    return;
+                }
+            }
+            if (session.group(2) == null && "DELETE".equals(method) && wechatQr.cancel(owner, id)) {
+                exchange.getResponseHeaders().set("Cache-Control", "no-store");
+                exchange.sendResponseHeaders(204, -1);
+                exchange.close();
+                return;
+            }
+        }
+        throw new ChannelsException(404, "WeChat QR session not found");
+    }
+
+    private void activateWechat(ObjectNode runtime) {
+        ObjectNode previous = effectiveRuntime("wechat");
+        if (previous != null) {
+            String previousId = previous.path("bot_id").asText();
+            String botId = runtime.path("bot_id").asText();
+            boolean sameBot = previousId.isEmpty() || botId.isEmpty()
+                    ? previous.path("bot_token").asText().equals(runtime.path("bot_token").asText())
+                    : previousId.equals(botId);
+            if (!sameBot) {
+                wechatWorker.stop();
+                connectionStore.disconnectProviderConnections("wechat");
+            }
+        }
+        runtimeStore.setProviderConfig("wechat", runtime);
+        wechatWorker.start(runtime);
     }
 
     private ObjectNode providersResponse() {
@@ -330,7 +428,19 @@ final class DeerFlowChannelsApi implements HttpHandler {
                         "Failed to start Feishu channel. Check the values and try again.");
             }
         }
-        runtimeStore.setProviderConfig(provider, runtime);
+        if ("wechat".equals(provider)) {
+            synchronized (wechatQr) {
+                wechatQr.invalidate();
+                ObjectNode current = effectiveRuntime(provider);
+                if (current != null && current.path("bot_token").asText().equals(runtime.path("bot_token").asText())) {
+                    activateWechat(current);
+                } else {
+                    activateWechat(runtime);
+                }
+            }
+        } else {
+            runtimeStore.setProviderConfig(provider, runtime);
+        }
         send(exchange, 200, providerResponse(provider, meta, newestOwnerConnection(provider)));
     }
 
@@ -344,8 +454,17 @@ final class DeerFlowChannelsApi implements HttpHandler {
         if ("feishu".equals(provider) && feishuWorker != null) {
             feishuWorker.stop();
         }
-        connectionStore.disconnectProviderConnections(provider);
-        runtimeStore.setProviderDisconnected(provider);
+        if ("wechat".equals(provider)) {
+            synchronized (wechatQr) {
+                wechatQr.invalidate();
+                wechatWorker.stop();
+                connectionStore.disconnectProviderConnections(provider);
+                runtimeStore.setProviderDisconnected(provider);
+            }
+        } else {
+            connectionStore.disconnectProviderConnections(provider);
+            runtimeStore.setProviderDisconnected(provider);
+        }
         send(exchange, 200, providerResponse(provider, meta, null));
     }
 
@@ -364,7 +483,7 @@ final class DeerFlowChannelsApi implements HttpHandler {
             }
         } else if (connection != null) {
             connectionStatus = connection.path("status").asText("not_connected");
-        } else if (!LocalAuthService.sessionAuthActive() && configured) {
+        } else if ("feishu".equals(provider) && !LocalAuthService.sessionAuthActive() && configured) {
             // Auth-disabled local mode: configured running channel needs no per-user binding.
             connectionStatus = "connected";
         } else {
@@ -386,6 +505,8 @@ final class DeerFlowChannelsApi implements HttpHandler {
         if ("feishu".equals(provider)) {
             Boolean online = enabled && configured && feishuWorker != null ? feishuWorker.online() : Boolean.FALSE;
             response.put("runtime_online", online);
+        } else if ("wechat".equals(provider)) {
+            response.put("runtime_online", enabled && configured && wechatWorker.online());
         }
         ArrayNode fields = response.putArray("credential_fields");
         for (CredentialField field : meta.fields) {
@@ -439,7 +560,11 @@ final class DeerFlowChannelsApi implements HttpHandler {
     }
 
     private boolean providerEnabled(String provider) {
-        return "feishu".equals(provider) && feishuEnabled;
+        return switch (provider) {
+            case "feishu" -> feishuEnabled;
+            case "wechat" -> wechatWorker != null && wechatQr != null;
+            default -> false;
+        };
     }
 
     private ProviderMeta requireProvider(String provider) {
@@ -487,7 +612,10 @@ final class DeerFlowChannelsApi implements HttpHandler {
     }
 
     private ObjectNode readObject(HttpExchange exchange) throws IOException {
-        byte[] payload = readBounded(exchange.getRequestBody());
+        return parseObject(readBounded(exchange.getRequestBody()));
+    }
+
+    private ObjectNode parseObject(byte[] payload) {
         JsonNode node;
         try {
             node = json.readTree(payload);
