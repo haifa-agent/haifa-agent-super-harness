@@ -166,6 +166,72 @@ class LocalAuthHttpTest {
     }
 
     @Test
+    void adminCanRetireOnlyTemporaryUsersAndTheirSessionsStopWorking() throws Exception {
+        String accounts = "/api/v1/auth/admin/temporary-users";
+        String me = "/api/v1/auth/me";
+        String login = "/api/v1/auth/login/local";
+        Map<String, String> headers = Map.of("Content-Type", "application/json", "Origin", ORIGIN);
+        String adminCredentials = json.writeValueAsString(Map.of("email", "admin@example.com", "password", PHRASE));
+        String permanentCredentials = json.writeValueAsString(Map.of("email", "permanent@example.com", "password", PHRASE));
+        String temporaryCredentials = json.writeValueAsString(Map.of("email", "temp@example.com", "password", PHRASE));
+        String newPhrase = PHRASE + "-rotated";
+        Session admin;
+        Session ordinary;
+        String temporaryId;
+        Session temporary;
+        try (var api = start(dataDirectory, ORIGIN)) {
+            URI base = base(api);
+            admin = Session.from(send(base, "POST", "/api/v1/auth/initialize", adminCredentials, headers));
+            ordinary = Session.from(send(base, "POST", "/api/v1/auth/register", permanentCredentials, headers));
+            Files.writeString(dataDirectory.resolve("auth/local.json"), "{\"allow_registration\":false}");
+            assertThat(send(base, "POST", "/api/v1/auth/register", temporaryCredentials, headers).statusCode()).isEqualTo(403);
+            assertThat(send(base, "POST", accounts, temporaryCredentials, headers).statusCode()).isEqualTo(401);
+            assertThat(send(base, "POST", accounts, temporaryCredentials, ordinary.jsonHeaders()).statusCode()).isEqualTo(403);
+            assertThat(send(base, "POST", accounts, temporaryCredentials, Map.of("Cookie", admin.cookieHeader(),
+                    "Content-Type", "application/json")).statusCode()).isEqualTo(403);
+
+            HttpResponse<String> created = send(base, "POST", accounts, temporaryCredentials, admin.jsonHeaders());
+            assertThat(created.statusCode()).isEqualTo(201);
+            assertThat(created.headers().allValues("Set-Cookie")).isEmpty();
+            JsonNode account = json.readTree(created.body());
+            assertThat(account.get("system_role").asText()).isEqualTo("user");
+            temporaryId = account.get("id").asText();
+            assertThat(send(base, "POST", accounts, temporaryCredentials, admin.jsonHeaders()).statusCode()).isEqualTo(400);
+            HttpResponse<String> loggedIn = send(base, "POST", login, temporaryCredentials, headers);
+            assertThat(loggedIn.statusCode()).isEqualTo(200);
+            Session beforeRotation = Session.from(loggedIn, temporaryId);
+            HttpResponse<String> rotated = send(base, "POST", "/api/v1/auth/change-password",
+                    json.writeValueAsString(Map.of("current_password", PHRASE, "new_password", newPhrase)),
+                    beforeRotation.jsonHeaders());
+            assertThat(rotated.statusCode()).isEqualTo(200);
+            temporary = Session.from(rotated);
+        }
+        try (var api = start(dataDirectory, ORIGIN)) {
+            URI base = base(api);
+            String target = accounts + "/" + temporaryId;
+            assertThat(json.readTree(send(base, "GET", me, null, temporary.headers()).body()).get("id").asText())
+                    .isEqualTo(temporaryId);
+            assertThat(send(base, "DELETE", target, null, temporary.headers()).statusCode()).isEqualTo(403);
+            assertThat(send(base, "DELETE", target, null, Map.of("Cookie", admin.cookieHeader())).statusCode()).isEqualTo(403);
+            assertThat(send(base, "DELETE", accounts + "/" + admin.userId, null, admin.headers()).statusCode()).isEqualTo(404);
+            assertThat(send(base, "DELETE", accounts + "/" + ordinary.userId, null, admin.headers()).statusCode()).isEqualTo(404);
+            assertThat(send(base, "DELETE", target, null, admin.headers()).statusCode()).isEqualTo(204);
+            assertThat(send(base, "DELETE", target, null, admin.headers()).statusCode()).isEqualTo(404);
+            assertThat(send(base, "GET", me, null, temporary.headers()).statusCode()).isEqualTo(401);
+            String revokedCredentials = json.writeValueAsString(Map.of("email", "temp@example.com", "password", newPhrase));
+            assertThat(send(base, "POST", login, revokedCredentials, headers).statusCode()).isEqualTo(401);
+
+            HttpResponse<String> replacement = send(base, "POST", accounts, temporaryCredentials, admin.jsonHeaders());
+            assertThat(replacement.statusCode()).isEqualTo(201);
+            assertThat(json.readTree(replacement.body()).get("id").asText()).isNotEqualTo(temporaryId);
+            assertThat(send(base, "GET", me, null, temporary.headers()).statusCode()).isEqualTo(401);
+            assertThat(send(base, "GET", me, null, ordinary.headers()).statusCode()).isEqualTo(200);
+            assertThat(json.readTree(send(base, "GET", "/api/v1/auth/setup-status", null, null).body())
+                    .get("registration_enabled").asBoolean()).isFalse();
+        }
+    }
+
+    @Test
     void savedOwnerGatesThreadRunAndProjectAndSurvivesRestart() throws Exception {
         DeerFlowBootstrapApi api = start(dataDirectory, ORIGIN);
         Session admin;

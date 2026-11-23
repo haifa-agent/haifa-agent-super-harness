@@ -155,6 +155,17 @@ pwsh -NoProfile -File scripts/start-main-super-harness.ps1 -LocalAuth -AllowSlot
 `HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS` 设为该槽位的前端 Origin。浏览器 Origin 只和这个允许列表比较。
 空 data-root 会打开初始化页。账号、口令和会话写在该 data-root 的 `auth/` 下，不写进 Runtime SQLite。
 
+### 管理临时验收账号
+
+启用本地登录后，管理员可用自己的登录 Cookie 和匹配的 `X-CSRF-Token` 调用以下管理 API。公开注册可保持关闭。
+
+| 操作 | 请求 | 成功响应 |
+| --- | --- | --- |
+| 创建临时普通账号 | `POST /api/v1/auth/admin/temporary-users`，JSON 正文包含 `email` 和 `password` | HTTP 201 返回 `id`、`email`、`system_role=user`。临时用户通过正常登录页登录，管理员继续使用原会话。 |
+| 回收临时普通账号 | `DELETE /api/v1/auth/admin/temporary-users/{id}` | HTTP 204，后续请求中的该用户会话失效，同邮箱重新创建会分配新的账号 ID。 |
+
+匿名请求返回 401，普通账号或缺失 CSRF 的写请求返回 403。回收既有正式账号、管理员或不存在的 ID 均返回 404。测试结束时先用临时账号清理创建的会话和记忆，再按创建时返回的 ID 回收账号。降级到旧版前也应先回收所有临时账号。旧版重写账号文件时会丢弃临时标记，重新升级后这些账号将按正式账号保护。
+
 ### 账号会话的兼容回退
 
 本地登录模式下，新会话默认以登录账号绑定 Haifa SDK 身份。已有会话沿用其已保存的绑定。Gateway 进程变量
