@@ -39,6 +39,7 @@ public final class LocalAuthService {
     public static final String ENABLED = "HAIFA_SUPER_HARNESS_LOCAL_AUTH";
     public static final String ALLOWED_ORIGINS = "HAIFA_SUPER_HARNESS_AUTH_ALLOWED_ORIGINS";
     public static final String ORIGIN_DENIED = "Cross-site auth request denied.";
+    private static final String TEMPORARY_USERS = "/api/v1/auth/admin/temporary-users";
     private static final Duration TOKEN_TTL = Duration.ofDays(7);
     private static final int MAX_FAILURES = 5;
     private static final Duration LOCKOUT = Duration.ofSeconds(300);
@@ -117,6 +118,8 @@ public final class LocalAuthService {
         javalin.post("/api/v1/auth/register", this::register);
         javalin.post("/api/v1/auth/initialize", this::initialize);
         javalin.post("/api/v1/auth/change-password", this::changePassword);
+        javalin.post(TEMPORARY_USERS, this::createTemporaryUser);
+        javalin.delete(TEMPORARY_USERS + "/{id}", this::retireTemporaryUser);
         javalin.get("/api/v1/auth/me", this::me);
         javalin.get("/api/v1/auth/setup-status", this::setupStatus);
         javalin.get("/api/v1/auth/providers", ctx -> ctx.json(Map.of("providers", List.of())));
@@ -181,6 +184,33 @@ public final class LocalAuthService {
             error(ctx, 403, "registration_disabled", "Registration is disabled");
             return;
         }
+        createOrdinaryUser(ctx, false);
+    }
+
+    private boolean requireAdministrator(Context ctx) {
+        User caller = ctx.attribute("localUser");
+        if (caller != null && "admin".equals(caller.systemRole)) return true;
+        error(ctx, 403, "admin_required", "Administrator access required");
+        return false;
+    }
+
+    private void createTemporaryUser(Context ctx) throws Exception {
+        if (requireAdministrator(ctx)) createOrdinaryUser(ctx, true);
+    }
+
+    private synchronized void retireTemporaryUser(Context ctx) throws IOException {
+        if (!requireAdministrator(ctx)) return;
+        String id = ctx.pathParam("id");
+        List<User> remaining = new ArrayList<>(loadUsers());
+        if (!remaining.removeIf(user -> user.id.equals(id) && user.temporary && "user".equals(user.systemRole))) {
+            error(ctx, 404, "temporary_user_not_found", "Temporary user not found");
+            return;
+        }
+        save(remaining);
+        ctx.status(204);
+    }
+
+    private void createOrdinaryUser(Context ctx, boolean temporary) throws Exception {
         JsonNode body = body(ctx);
         String email = normalizeEmail(text(body, "email"));
         String password = text(body, "password");
@@ -195,9 +225,13 @@ public final class LocalAuthService {
                 return;
             }
             User user = new User(java.util.UUID.randomUUID().toString(), email, hashPassword(password),
-                    "user", false, 1);
+                    "user", false, 1, temporary);
             save(append(loadUsers(), user));
-            issue(ctx, user, truthy(text(body, "remember_me")), 201);
+            if (temporary) {
+                ctx.status(201).json(Map.of("id", user.id, "email", user.email, "system_role", user.systemRole));
+            } else {
+                issue(ctx, user, truthy(text(body, "remember_me")), 201);
+            }
         }
     }
 
@@ -220,7 +254,7 @@ public final class LocalAuthService {
                 return;
             }
             User user = new User(java.util.UUID.randomUUID().toString(), email, hashPassword(password),
-                    "admin", false, 1);
+                    "admin", false, 1, false);
             save(append(loadUsers(), user));
             issue(ctx, user, truthy(text(body, "remember_me")), 201);
         }
@@ -247,7 +281,7 @@ public final class LocalAuthService {
             for (User user : users) {
                 if (user.id.equals(current.id)) {
                     updated = new User(user.id, user.email, hashPassword(next), user.systemRole,
-                            user.needsSetup, user.tokenVersion + 1);
+                            user.needsSetup, user.tokenVersion + 1, user.temporary);
                     nextUsers.add(updated);
                 } else {
                     nextUsers.add(user);
@@ -423,7 +457,8 @@ public final class LocalAuthService {
                     item.path("password_hash").asText(),
                     item.path("system_role").asText(),
                     item.path("needs_setup").asBoolean(false),
-                    item.path("token_version").asInt(1)));
+                    item.path("token_version").asInt(1),
+                    item.path("temporary").isBoolean() && item.path("temporary").booleanValue()));
         }
         return List.copyOf(users);
     }
@@ -439,6 +474,7 @@ public final class LocalAuthService {
             item.put("system_role", user.systemRole);
             item.put("needs_setup", user.needsSetup);
             item.put("token_version", user.tokenVersion);
+            if (user.temporary) item.put("temporary", true);
         }
         writeAtomic(usersFile, json.writerWithDefaultPrettyPrinter().writeValueAsBytes(root));
     }
@@ -716,7 +752,7 @@ public final class LocalAuthService {
     }
 
     private record User(String id, String email, String passwordHash, String systemRole, boolean needsSetup,
-            int tokenVersion) {}
+            int tokenVersion, boolean temporary) {}
 
     private record Claims(String subject, int version) {}
 
