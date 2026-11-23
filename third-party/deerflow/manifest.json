@@ -155,11 +155,32 @@
           "frontend/tests/e2e/integrations.spec.ts",
           "frontend/tests/e2e/utils/mock-api.ts"
         ]
+      },
+      {
+        "id": "0010-end-browser-session-on-logout",
+        "file": "third-party/deerflow/patches/0010-end-browser-session-on-logout.patch",
+        "sha256": "865073ff21cccfe0a86c61ce9c38640d6b609fef2337266554e4aa7b4739c164",
+        "reason": "Replace the authenticated document on logout so that browser navigation and delayed query responses cannot carry the prior account memory into another sign-in.",
+        "affectedFiles": [
+          "frontend/src/core/auth/AuthProvider.tsx"
+        ]
+      },
+      {
+        "id": "0011-isolate-memory-across-tabs",
+        "file": "third-party/deerflow/patches/0011-isolate-memory-across-tabs.patch",
+        "sha256": "83cdaf956a24f12717476d91956fdc18b7f26f5bd29fc9116a997ac8de59162c",
+        "reason": "Revalidate the shared browser session on account changes and keep memory queries, late responses, and editor state scoped to their authenticated account.",
+        "affectedFiles": [
+          "frontend/src/app/(auth)/login/page.tsx",
+          "frontend/src/components/workspace/settings/memory-settings-page.tsx",
+          "frontend/src/core/auth/AuthProvider.tsx",
+          "frontend/src/core/memory/hooks.ts"
+        ]
       }
     ],
     "fileCount": 990,
-    "totalBytes": 21273743,
-    "contentInventorySha256": "b043e77e42ec579196bffc7b70a796c0686755c4418601209990cff9c869ba6f"
+    "totalBytes": 21274988,
+    "contentInventorySha256": "488d4a05125b49b7ba267859b9153ff6ca90928eecd0e71dacf6c108dda546dc"
   },
   "build": {
     "node": ">=22",

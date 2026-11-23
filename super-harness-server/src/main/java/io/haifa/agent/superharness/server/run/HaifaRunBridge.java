@@ -474,6 +474,7 @@ public final class HaifaRunBridge implements AutoCloseable {
                     .tools(registeredTools)
                     .policy(new PolicyPlatformContribution(
                             ApprovalPolicyPresets.rules(approvalMode), new DefaultPolicyDecisionService()));
+            foundation.accountMemory(caller).ifPresent(builder::memory);
             if (this.workspace != null && this.threadId != null) {
                 builder.modelImageResolver(new SuperHarnessModelImageResolver(this.workspace, this.ownerId, this.threadId));
             }

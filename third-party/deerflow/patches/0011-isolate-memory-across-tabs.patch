@@ -1,0 +1,336 @@
+diff --git a/frontend/src/app/(auth)/login/page.tsx b/frontend/src/app/(auth)/login/page.tsx
+index de392b1..bceb594 100644
+--- a/frontend/src/app/(auth)/login/page.tsx
++++ b/frontend/src/app/(auth)/login/page.tsx
+@@ -9,7 +9,7 @@ import { RememberSessionOption } from "@/components/auth/remember-session-option
+ import { Button } from "@/components/ui/button";
+ import { FlickeringGrid } from "@/components/ui/flickering-grid";
+ import { Input } from "@/components/ui/input";
+-import { useAuth } from "@/core/auth/AuthProvider";
++import { notifySessionChange, useAuth } from "@/core/auth/AuthProvider";
+ import { resolveAuthNextPath } from "@/core/auth/next-path";
+ import {
+   loadRememberLoginPreference,
+@@ -188,6 +188,7 @@ export default function LoginPage() {
+         return;
+       }
+
++      notifySessionChange("login");
+       saveRememberLoginPreference({ email, rememberMe });
+
+       // Both login and register set a cookie — redirect to workspace
+diff --git a/frontend/src/components/workspace/settings/memory-settings-page.tsx b/frontend/src/components/workspace/settings/memory-settings-page.tsx
+index 982090f..3fd9198 100644
+--- a/frontend/src/components/workspace/settings/memory-settings-page.tsx
++++ b/frontend/src/components/workspace/settings/memory-settings-page.tsx
+@@ -8,7 +8,7 @@ import {
+   UploadIcon,
+ } from "lucide-react";
+ import Link from "next/link";
+-import { useDeferredValue, useId, useRef, useState } from "react";
++import { useDeferredValue, useEffect, useId, useRef, useState } from "react";
+ import { toast } from "sonner";
+
+ import { Button } from "@/components/ui/button";
+@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
+ import { Textarea } from "@/components/ui/textarea";
+ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+ import { createMarkdownLinkComponent } from "@/components/workspace/messages/markdown-link";
++import { useAuth } from "@/core/auth/AuthProvider";
+ import { useI18n } from "@/core/i18n/hooks";
+ import { exportMemory } from "@/core/memory/api";
+ import {
+@@ -278,6 +279,17 @@ function upperFirst(str: string) {
+ }
+
+ export function MemorySettingsPage() {
++  const { user, isLoading } = useAuth();
++  if (!user) return null;
++  return <AccountMemorySettings key={user.id} checkingSession={isLoading} />;
++}
++
++function AccountMemorySettings({ checkingSession }: { checkingSession: boolean }) {
++  const active = useRef(false);
++  useEffect(() => {
++    active.current = !checkingSession;
++    return () => { active.current = false; };
++  }, [checkingSession]);
+   const { t } = useI18n();
+   const { memory, isLoading, error } = useMemory();
+   const clearMemory = useClearMemory();
+@@ -393,6 +405,7 @@ export function MemorySettingsPage() {
+     try {
+       setIsExporting(true);
+       const exportedMemory = await exportMemory();
++      if (!active.current) return;
+       const fileName = `deerflow-memory-${(exportedMemory.lastUpdated || new Date().toISOString()).replace(/[:.]/g, "-")}.json`;
+       const blob = new Blob([JSON.stringify(exportedMemory, null, 2)], {
+         type: "application/json",
+@@ -535,6 +548,8 @@ export function MemorySettingsPage() {
+   const isFactFormPending =
+     createMemoryFact.isPending || updateMemoryFact.isPending;
+
++  if (checkingSession) return null;
++
+   return (
+     <>
+       <SettingsSection
+diff --git a/frontend/src/core/auth/AuthProvider.tsx b/frontend/src/core/auth/AuthProvider.tsx
+index 2bc9846..0133c06 100644
+--- a/frontend/src/core/auth/AuthProvider.tsx
++++ b/frontend/src/core/auth/AuthProvider.tsx
+@@ -14,6 +14,16 @@ import { isStaticWebsiteOnly } from "../static-mode";
+
+ import { type User, buildLoginUrl } from "./types";
+
++const SESSION_CHANGE = "deerflow-session-change";
++
++export function notifySessionChange(change: "logout" | "login") {
++  try {
++    localStorage.setItem(SESSION_CHANGE, `${change}:${Date.now()}:${Math.random()}`);
++  } catch {
++    // Tabs also revalidate with the gateway when they become visible.
++  }
++}
++
+ // Re-export for consumers
+ export type { User };
+
+@@ -47,10 +57,12 @@ interface AuthProviderProps {
+ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
+   const [user, setUser] = useState<User | null>(initialUser);
+   const [isLoading, setIsLoading] = useState(false);
++  const [peerSessionChanged, setPeerSessionChanged] = useState(false);
+   const router = useRouter();
+   const pathname = usePathname();
+   const staticMode = isStaticWebsiteOnly();
+
++  const authRequest = React.useRef(0);
+   const isAuthenticated = user !== null;
+
+   /**
+@@ -59,7 +71,9 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
+    * so consumers don't reach into React internals.
+    */
+   const applyUser = useCallback((next: User | null) => {
++    authRequest.current++;
+     setUser(next);
++    setIsLoading(false);
+   }, []);
+
+   /**
+@@ -69,28 +83,32 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
+   const refreshUser = useCallback(async () => {
+     if (staticMode) return;
+
++    const request = ++authRequest.current;
+     try {
+       setIsLoading(true);
+       const res = await fetch("/api/v1/auth/me", {
+         credentials: "include",
++        cache: "no-store",
+       });
++      if (request !== authRequest.current) return;
+
+       if (res.ok) {
+         const data = await res.json();
+-        setUser(data);
+-      } else if (res.status === 401) {
++        if (request === authRequest.current) setUser(data);
++      } else {
+         // Session expired or invalid
+         setUser(null);
+         // Redirect to login if on a protected route
+-        if (pathname?.startsWith("/workspace")) {
++        if (res.status === 401 && pathname?.startsWith("/workspace")) {
+           router.push(buildLoginUrl(pathname));
+         }
+       }
+     } catch (err) {
++      if (request !== authRequest.current) return;
+       console.error("Failed to refresh user:", err);
+       setUser(null);
+     } finally {
+-      setIsLoading(false);
++      if (request === authRequest.current) setIsLoading(false);
+     }
+   }, [staticMode, pathname, router]);
+
+@@ -99,13 +117,14 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
+    * change would preserve query caches and in-flight responses across logins.
+    */
+   const logout = useCallback(async () => {
+-    setUser(null);
++    applyUser(null);
+
+     if (staticMode) {
+       router.push("/");
+       return;
+     }
+
++    notifySessionChange("logout");
+     try {
+       await fetch("/api/v1/auth/logout", {
+         method: "POST",
+@@ -116,30 +135,27 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
+     }
+
+     window.location.replace("/");
+-  }, [staticMode, router]);
+-
+-  /**
+-   * Handle visibility change - refresh user when tab becomes visible again.
+-   * Throttled to at most once per 60 s to avoid spamming the backend on rapid tab switches.
+-   */
+-  const lastCheckRef = React.useRef(0);
++  }, [applyUser, staticMode, router]);
+
+   useEffect(() => {
+-    if (staticMode) return;
++    if (staticMode || !pathname?.startsWith("/workspace")) return;
+
+-    const handleVisibilityChange = () => {
+-      if (document.visibilityState !== "visible" || user === null) return;
+-      const now = Date.now();
+-      if (now - lastCheckRef.current < 60_000) return;
+-      lastCheckRef.current = now;
+-      void refreshUser();
++    const onSessionChange = (event: StorageEvent) => {
++      if (event.key !== SESSION_CHANGE) return;
++      setPeerSessionChanged(true);
++      applyUser(null);
++      if (event.newValue?.startsWith("login:")) void refreshUser();
+     };
+-
+-    document.addEventListener("visibilitychange", handleVisibilityChange);
++    const onVisibility = () => {
++      if (document.visibilityState === "visible") void refreshUser();
++    };
++    window.addEventListener("storage", onSessionChange);
++    document.addEventListener("visibilitychange", onVisibility);
+     return () => {
+-      document.removeEventListener("visibilitychange", handleVisibilityChange);
++      window.removeEventListener("storage", onSessionChange);
++      document.removeEventListener("visibilitychange", onVisibility);
+     };
+-  }, [staticMode, user, refreshUser]);
++  }, [applyUser, pathname, refreshUser, staticMode]);
+
+   const value: AuthContextType = {
+     user,
+@@ -150,7 +166,14 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
+     applyUser,
+   };
+
+-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
++  // During a peer sign-out, mounting workspace consumers with no account
++  // would issue protected requests and redirect this tab away from its page.
++  const pauseWorkspace = peerSessionChanged && !user && pathname?.startsWith("/workspace");
++  return (
++    <AuthContext.Provider value={value}>
++      {pauseWorkspace ? null : children}
++    </AuthContext.Provider>
++  );
+ }
+
+ /**
+diff --git a/frontend/src/core/memory/hooks.ts b/frontend/src/core/memory/hooks.ts
+index 36836ca..706d0a7 100644
+--- a/frontend/src/core/memory/hooks.ts
++++ b/frontend/src/core/memory/hooks.ts
+@@ -1,5 +1,7 @@
+ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
++import { useAuth } from "@/core/auth/AuthProvider";
++
+ import {
+   clearMemory,
+   createMemoryFact,
+@@ -14,9 +16,17 @@ import type {
+   UserMemory,
+ } from "./types";
+
++function useMemoryQueryKey() {
++  const { user } = useAuth();
++  return ["memory", user?.id] as const;
++}
++
+ export function useMemory() {
++  const queryKey = useMemoryQueryKey();
+   const { data, isLoading, error } = useQuery({
+-    queryKey: ["memory"],
++    queryKey,
++    enabled: Boolean(queryKey[1]),
++    refetchOnWindowFocus: false,
+     queryFn: () => loadMemory(),
+   });
+   return { memory: data ?? null, isLoading, error };
+@@ -24,50 +34,55 @@ export function useMemory() {
+
+ export function useClearMemory() {
+   const queryClient = useQueryClient();
++  const queryKey = useMemoryQueryKey();
+
+   return useMutation({
+     mutationFn: () => clearMemory(),
+     onSuccess: (memory) => {
+-      queryClient.setQueryData<UserMemory>(["memory"], memory);
++      queryClient.setQueryData<UserMemory>(queryKey, memory);
+     },
+   });
+ }
+
+ export function useDeleteMemoryFact() {
+   const queryClient = useQueryClient();
++  const queryKey = useMemoryQueryKey();
+
+   return useMutation({
+     mutationFn: (factId: string) => deleteMemoryFact(factId),
+     onSuccess: (memory) => {
+-      queryClient.setQueryData<UserMemory>(["memory"], memory);
++      queryClient.setQueryData<UserMemory>(queryKey, memory);
+     },
+   });
+ }
+
+ export function useImportMemory() {
+   const queryClient = useQueryClient();
++  const queryKey = useMemoryQueryKey();
+
+   return useMutation({
+     mutationFn: (memory: UserMemory) => importMemory(memory),
+     onSuccess: (memory) => {
+-      queryClient.setQueryData<UserMemory>(["memory"], memory);
++      queryClient.setQueryData<UserMemory>(queryKey, memory);
+     },
+   });
+ }
+
+ export function useCreateMemoryFact() {
+   const queryClient = useQueryClient();
++  const queryKey = useMemoryQueryKey();
+
+   return useMutation({
+     mutationFn: (input: MemoryFactInput) => createMemoryFact(input),
+     onSuccess: (memory) => {
+-      queryClient.setQueryData<UserMemory>(["memory"], memory);
++      queryClient.setQueryData<UserMemory>(queryKey, memory);
+     },
+   });
+ }
+
+ export function useUpdateMemoryFact() {
+   const queryClient = useQueryClient();
++  const queryKey = useMemoryQueryKey();
+
+   return useMutation({
+     mutationFn: ({
+@@ -78,7 +93,7 @@ export function useUpdateMemoryFact() {
+       input: MemoryFactPatchInput;
+     }) => updateMemoryFact(factId, input),
+     onSuccess: (memory) => {
+-      queryClient.setQueryData<UserMemory>(["memory"], memory);
++      queryClient.setQueryData<UserMemory>(queryKey, memory);
+     },
+   });
+ }

@@ -375,6 +375,145 @@ class LocalAuthHttpTest {
         }
     }
 
+    @Test
+    void signedInMemoryUsesOnlyTheOwnersCurrentFactsAcrossNewRunsAndRestart() throws Exception {
+        Path data = GatewayFixture.dataDirectory();
+        Path evidence = GatewayFixture.evidenceDirectory();
+        String key = "HAIFA_SUPER_HARNESS_MEMORY_ENABLED";
+        Map<String, String> enabled = Map.of(LocalAuthService.ENABLED, "1", key, "true");
+        Map<String, String> disabled = Map.of(LocalAuthService.ENABLED, "1");
+        var prompts = new java.util.concurrent.ConcurrentHashMap<String, JsonNode>();
+        try (var provider = new ControlledProvider(evidence, true, (request, call) -> {
+            for (JsonNode message : request.path("messages")) {
+                if (message.path("role").asText().equals("user")) {
+                    JsonNode content = message.path("content");
+                    String text = content.isArray() ? content.path(0).path("text").asText() : content.asText();
+                    text.lines().filter(line -> line.startsWith("report-clue-"))
+                            .findFirst().ifPresent(clue -> prompts.put(clue, request.deepCopy()));
+                }
+            }
+            return ControlledProvider.stop("memory-" + call, "memory-provider", "Report checked.");
+        })) {
+            String factId;
+            String bobId;
+            String earlierThread;
+            try (var gateway = GatewayFixture.production(data, 0, enabled, evidence)) {
+                URI base = gateway.base;
+                String account = "{\"email\":\"%s\",\"password\":\"%s\"}";
+                assertThat(send(base, "POST", "/api/v1/auth/initialize",
+                        account.formatted("memory-a@example.com", PHRASE),
+                        Map.of("Content-Type", "application/json")).statusCode()).isEqualTo(201);
+                assertThat(send(base, "POST", "/api/v1/auth/register",
+                        account.formatted("memory-b@example.com", PHRASE),
+                        Map.of("Content-Type", "application/json")).statusCode()).isEqualTo(201);
+                Session alice = login(base, "memory-a@example.com");
+                Session bob = login(base, "memory-b@example.com");
+                assertThat(alice.userId).isNotEqualTo(bob.userId);
+                String config = """
+                        {"config":{"name":"identity-model","display_name":"Memory model","provider":"openai-compatible",
+                        "model":"memory-provider","base_url":"http://127.0.0.1:%d/v1","enabled":true,
+                        "supports_vision":false,"context_window":32768,"max_tokens":1024,"api_key":"controlled-key"},
+                        "expected_revision":null}
+                        """.formatted(provider.port());
+                assertThat(send(base, "PUT", "/api/managed-models", config, alice.jsonHeaders()).statusCode())
+                        .isEqualTo(200);
+                assertThat(send(base, "GET", "/api/memory", null, Map.of()).statusCode()).isEqualTo(401);
+                JsonNode aliceSaved = memory(base, alice, "POST", "/api/memory/facts", fact("report-clue ALPHA746"));
+                JsonNode bobSaved = memory(base, bob, "POST", "/api/memory/facts", fact("report-clue BOB278"));
+                JsonNode aliceFact = aliceSaved.path("facts").get(0);
+                factId = aliceFact.path("id").asText();
+                bobId = bobSaved.path("facts").get(0).path("id").asText();
+                assertThat(aliceFact.path("source").asText()).isEqualTo("manual");
+                assertThat(bobId).isNotEqualTo(factId);
+                earlierThread = memoryRun(base, alice, "report-clue-a-before", prompts, evidence)
+                        .toString();
+                assertThat(earlierThread).contains("[memory " + factId + "@1]", "ALPHA746").doesNotContain("BOB278");
+                assertThat(memoryRun(base, bob, "report-clue-b-before", prompts, evidence).toString())
+                        .contains("[memory " + bobId + "@1]", "BOB278").doesNotContain("ALPHA746", factId);
+                assertThat(memory(base, bob, "GET", "/api/memory/export", null).toString())
+                        .contains(bobId).doesNotContain(factId, "ALPHA746");
+                for (String method : java.util.List.of("PATCH", "DELETE")) {
+                    String input = method.equals("PATCH") ? "{\"content\":\"foreign\"}" : null;
+                    var denied = send(base, method, "/api/memory/facts/" + factId, input, bob.jsonHeaders());
+                    var missing = send(base, method, "/api/memory/facts/absent-memory-id", input, bob.jsonHeaders());
+                    assertThat(denied.statusCode()).isEqualTo(404);
+                    assertThat(denied.body()).isEqualTo(missing.body());
+                }
+                assertThat(send(base, "PATCH", "/api/memory/facts/" + factId,
+                        "{\"content\":\"invalid mutation\",\"confidence\":0.9}", alice.jsonHeaders()).statusCode())
+                        .isEqualTo(422);
+                assertThat(memory(base, alice, "GET", "/api/memory", null)).isEqualTo(aliceSaved);
+                JsonNode corrected = memory(base, alice, "PATCH", "/api/memory/facts/" + factId,
+                        fact("report-clue CORRECT935"));
+                assertThat(corrected.path("facts").get(0).path("id").asText()).isEqualTo(factId);
+                assertThat(memory(base, alice, "GET", "/api/memory/export", null)).isEqualTo(corrected);
+                assertThat(memoryRun(base, alice, "report-clue-a-corrected", prompts, evidence).toString())
+                        .contains("[memory " + factId + "@2]", "CORRECT935").doesNotContain("ALPHA746", "BOB278");
+                assertThat(send(base, "POST", "/api/memory/import", "{}", alice.jsonHeaders()).statusCode())
+                        .isEqualTo(501);
+            }
+
+            try (var gateway = GatewayFixture.production(data, 0, disabled, evidence)) {
+                URI base = gateway.base;
+                Session alice = login(base, "memory-a@example.com");
+                assertThat(send(base, "GET", "/api/memory", null, alice.headers()).statusCode()).isEqualTo(404);
+                assertThat(memoryRun(base, alice, "report-clue-disabled", prompts, evidence).toString())
+                        .doesNotContain("[memory ", "CORRECT935");
+            }
+            try (var gateway = GatewayFixture.production(data, 0, enabled, evidence)) {
+                URI base = gateway.base;
+                Session alice = login(base, "memory-a@example.com");
+                Session bob = login(base, "memory-b@example.com");
+                assertThat(memory(base, alice, "GET", "/api/memory", null).toString()).contains(factId, "CORRECT935");
+                assertThat(memory(base, alice, "DELETE", "/api/memory/facts/" + factId, null).path("facts").isEmpty())
+                        .isTrue();
+                assertThat(memoryRun(base, alice, "report-clue-a-deleted", prompts, evidence).toString())
+                        .doesNotContain("[memory ", "ALPHA746", "CORRECT935", "BOB278");
+                assertThat(memory(base, alice, "GET", "/api/memory/export", null).path("facts").isEmpty()).isTrue();
+                memory(base, alice, "POST", "/api/memory/facts", fact("report-clue CLEAR371"));
+                memory(base, alice, "POST", "/api/memory/facts", fact("report-clue CLEAR608"));
+                assertThat(memory(base, alice, "DELETE", "/api/memory", null).path("facts").isEmpty()).isTrue();
+                assertThat(memory(base, bob, "GET", "/api/memory", null).toString()).contains(bobId, "BOB278");
+            }
+            try (var gateway = GatewayFixture.production(data, 0, enabled, evidence)) {
+                URI base = gateway.base;
+                Session alice = login(base, "memory-a@example.com");
+                Session bob = login(base, "memory-b@example.com");
+                assertThat(memory(base, alice, "GET", "/api/memory", null).path("facts").isEmpty()).isTrue();
+                assertThat(authenticatedGet(base, alice, thread("report-clue-a-before") + "/state").toString())
+                        .contains("report-clue-a-before", "Report checked.");
+                assertThat(memoryRun(base, alice, "report-clue-a-restart", prompts, evidence).toString())
+                        .doesNotContain("[memory ", "ALPHA746", "CORRECT935", "CLEAR371", "CLEAR608", "BOB278");
+                assertThat(memoryRun(base, bob, "report-clue-b-restart", prompts, evidence).toString())
+                        .contains("[memory " + bobId + "@1]", "BOB278").doesNotContain("CORRECT935");
+            }
+            System.out.println("W13_MEMORY_HTTP_EVIDENCE evidence=" + evidence.toAbsolutePath());
+        }
+    }
+
+    private JsonNode memoryRun(URI base, Session account, String clue, Map<String, JsonNode> prompts, Path evidence)
+            throws Exception {
+        assertThat(send(base, "POST", "/api/threads", "{\"thread_id\":\"%s\"}".formatted(clue),
+                account.jsonHeaders()).statusCode()).isEqualTo(200);
+        String location = run(base, account, clue, clue, evidence.resolve(clue + ".sse"));
+        assertThat(authenticatedGet(base, account, location).path("status").asText()).isEqualTo("success");
+        JsonNode prompt = prompts.get(clue);
+        assertThat(prompt).as("Provider request for %s", clue).isNotNull();
+        Files.writeString(evidence.resolve(clue + "-provider.json"), prompt.toPrettyString());
+        return prompt;
+    }
+
+    private JsonNode memory(URI base, Session session, String method, String path, String body) throws Exception {
+        var response = send(base, method, path, body, session.jsonHeaders());
+        assertThat(response.statusCode()).as("%s %s: %s", method, path, response.body()).isEqualTo(200);
+        assertThat(response.headers().firstValue("cache-control")).contains("no-store");
+        return json.readTree(response.body());
+    }
+
+    private static String fact(String content) {
+        return "{\"content\":\"%s\",\"category\":\"context\",\"confidence\":0.8}".formatted(content);
+    }
+
     private Session login(URI base, String email) throws Exception {
         HttpResponse<String> response = send(base, "POST", "/api/v1/auth/login/local",
                 "username=" + URLEncoder.encode(email, StandardCharsets.UTF_8)

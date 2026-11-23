@@ -1018,6 +1018,10 @@ public final class DeerFlowBootstrapApi implements AutoCloseable {
         }
         registerExactGet("/api/features", FeaturesResponse.defaults());
 
+        if (localAuth != null) {
+            threadRunApi.conversations().memories().ifPresent(memory ->
+                    bindPrefix(DeerFlowMemoryApi.PATH, new DeerFlowMemoryApi(objectMapper, memory)));
+        }
         bindPrefix("/api/models", configurationApi);
         bindPrefix("/api/managed-models", configurationApi, true);
         bindPrefix("/api/agents", configurationApi, true);

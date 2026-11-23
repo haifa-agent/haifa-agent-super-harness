@@ -406,7 +406,11 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
         this.dataDirectoryRoot = dataDirectory.toAbsolutePath().normalize();
         this.environment = environment != null ? Map.copyOf(environment) : System.getenv();
         this.bindNewThreadsToAccount = AccountSdkIdentity.bindNewThreads(this.environment);
-        this.foundation = new DurableHaifaFoundation(dataDirectory, continuationKey);
+        boolean memoryEnabled = "true".equals(this.environment.get(DurableHaifaFoundation.MEMORY_ENABLED))
+                && "1".equals(this.environment.get(
+                        io.haifa.agent.superharness.server.auth.LocalAuthService.ENABLED))
+                && bindNewThreadsToAccount;
+        this.foundation = new DurableHaifaFoundation(dataDirectory, continuationKey, memoryEnabled);
         for (PersistentThreadCatalog.Entry entry : threadCatalog.list()) {
             ThreadOwners.remember(entry.threadId(), entry.ownerId());
             threads.put(entry.threadId(), new ThreadRecord(entry));
@@ -2999,6 +3003,10 @@ public class DeerFlowConversationService implements AutoCloseable, ScheduledRunL
             bridge.close();
             throw failure;
         }
+    }
+
+    Optional<io.haifa.agent.memory.api.MemoryService> memories() {
+        return foundation.memories();
     }
 
     private void restoreSession(ThreadRecord thread) {
