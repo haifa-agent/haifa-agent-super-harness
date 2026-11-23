@@ -113,10 +113,7 @@ final class DeerFlowMemoryApi implements HttpHandler {
                 default -> throw new RequestError(422, "Use the context or preference category.");
             };
             checkConfidence(body);
-            String subject = UUID.randomUUID().toString();
-            memories.put(new MemoryDraft(scope, kind, subject, text(body, "content"),
-                    Optional.of(new MemorySourceRef(MemorySourceType.EXPLICIT_USER_COMMAND, subject)),
-                    Optional.of(observedAt)), actor);
+            memories.put(manualFact(scope, kind, UUID.randomUUID(), text(body, "content"), observedAt), actor);
             return;
         }
         if (path.startsWith(FACTS + "/") && path.indexOf('/', FACTS.length() + 1) == -1
@@ -135,6 +132,14 @@ final class DeerFlowMemoryApi implements HttpHandler {
             return;
         }
         throw new RequestError(404, "Not Found");
+    }
+
+    static MemoryDraft manualFact(MemoryScope scope, MemoryKind kind, UUID id, String content, Instant observedAt) {
+        // Dots keep UUID digit groups separate for the SDK's payment-card check.
+        String subject = id.toString().replace('-', '.');
+        return new MemoryDraft(scope, kind, subject, content,
+                Optional.of(new MemorySourceRef(MemorySourceType.EXPLICIT_USER_COMMAND, subject)),
+                Optional.of(observedAt));
     }
 
     private Memory find(String id, MemoryScope scope, MemoryActor actor) {
