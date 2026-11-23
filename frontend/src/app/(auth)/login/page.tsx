@@ -9,7 +9,7 @@ import { RememberSessionOption } from "@/components/auth/remember-session-option
 import { Button } from "@/components/ui/button";
 import { FlickeringGrid } from "@/components/ui/flickering-grid";
 import { Input } from "@/components/ui/input";
-import { useAuth } from "@/core/auth/AuthProvider";
+import { notifySessionChange, useAuth } from "@/core/auth/AuthProvider";
 import { resolveAuthNextPath } from "@/core/auth/next-path";
 import {
   loadRememberLoginPreference,
@@ -188,6 +188,7 @@ export default function LoginPage() {
         return;
       }
 
+      notifySessionChange("login");
       saveRememberLoginPreference({ email, rememberMe });
 
       // Both login and register set a cookie — redirect to workspace

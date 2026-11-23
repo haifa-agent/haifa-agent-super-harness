@@ -164,11 +164,23 @@
         "affectedFiles": [
           "frontend/src/core/auth/AuthProvider.tsx"
         ]
+      },
+      {
+        "id": "0011-isolate-memory-across-tabs",
+        "file": "third-party/deerflow/patches/0011-isolate-memory-across-tabs.patch",
+        "sha256": "83cdaf956a24f12717476d91956fdc18b7f26f5bd29fc9116a997ac8de59162c",
+        "reason": "Revalidate the shared browser session on account changes and keep memory queries, late responses, and editor state scoped to their authenticated account.",
+        "affectedFiles": [
+          "frontend/src/app/(auth)/login/page.tsx",
+          "frontend/src/components/workspace/settings/memory-settings-page.tsx",
+          "frontend/src/core/auth/AuthProvider.tsx",
+          "frontend/src/core/memory/hooks.ts"
+        ]
       }
     ],
     "fileCount": 990,
-    "totalBytes": 21272909,
-    "contentInventorySha256": "f48625be14e2b97df5f823629d523c1cc7a75a08861b404ac611f39b4c4deff8"
+    "totalBytes": 21274988,
+    "contentInventorySha256": "488d4a05125b49b7ba267859b9153ff6ca90928eecd0e71dacf6c108dda546dc"
   },
   "build": {
     "node": ">=22",

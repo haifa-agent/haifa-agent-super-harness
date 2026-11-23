@@ -87,6 +87,10 @@ account's fact after switch. The existing logout request and home destination
 are preserved. Local two-account browser acceptance covers the held response
 and back navigation.
 
+Patch `0011-isolate-memory-across-tabs.patch` notifies retained workspace tabs
+of account changes. The gateway confirms the active identity before the memory
+panel renders. Reads and mutation results use account-specific query keys.
+
 Do not follow DeerFlow `main`. An update requires an explicit new approved
 commit, a fresh archive import, license review, manifest/hash regeneration,
 patch-state review, and the relevant frontend checks. Never refresh the

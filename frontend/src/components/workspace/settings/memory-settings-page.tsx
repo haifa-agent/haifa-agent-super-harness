@@ -8,7 +8,7 @@ import {
   UploadIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useDeferredValue, useId, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { createMarkdownLinkComponent } from "@/components/workspace/messages/markdown-link";
+import { useAuth } from "@/core/auth/AuthProvider";
 import { useI18n } from "@/core/i18n/hooks";
 import { exportMemory } from "@/core/memory/api";
 import {
@@ -278,6 +279,17 @@ function upperFirst(str: string) {
 }
 
 export function MemorySettingsPage() {
+  const { user, isLoading } = useAuth();
+  if (!user) return null;
+  return <AccountMemorySettings key={user.id} checkingSession={isLoading} />;
+}
+
+function AccountMemorySettings({ checkingSession }: { checkingSession: boolean }) {
+  const active = useRef(false);
+  useEffect(() => {
+    active.current = !checkingSession;
+    return () => { active.current = false; };
+  }, [checkingSession]);
   const { t } = useI18n();
   const { memory, isLoading, error } = useMemory();
   const clearMemory = useClearMemory();
@@ -393,6 +405,7 @@ export function MemorySettingsPage() {
     try {
       setIsExporting(true);
       const exportedMemory = await exportMemory();
+      if (!active.current) return;
       const fileName = `deerflow-memory-${(exportedMemory.lastUpdated || new Date().toISOString()).replace(/[:.]/g, "-")}.json`;
       const blob = new Blob([JSON.stringify(exportedMemory, null, 2)], {
         type: "application/json",
@@ -534,6 +547,8 @@ export function MemorySettingsPage() {
 
   const isFactFormPending =
     createMemoryFact.isPending || updateMemoryFact.isPending;
+
+  if (checkingSession) return null;
 
   return (
     <>

@@ -14,6 +14,16 @@ import { isStaticWebsiteOnly } from "../static-mode";
 
 import { type User, buildLoginUrl } from "./types";
 
+const SESSION_CHANGE = "deerflow-session-change";
+
+export function notifySessionChange(change: "logout" | "login") {
+  try {
+    localStorage.setItem(SESSION_CHANGE, `${change}:${Date.now()}:${Math.random()}`);
+  } catch {
+    // Tabs also revalidate with the gateway when they become visible.
+  }
+}
+
 // Re-export for consumers
 export type { User };
 
@@ -47,10 +57,12 @@ interface AuthProviderProps {
 export function AuthProvider({ children, initialUser }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(initialUser);
   const [isLoading, setIsLoading] = useState(false);
+  const [peerSessionChanged, setPeerSessionChanged] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
   const staticMode = isStaticWebsiteOnly();
 
+  const authRequest = React.useRef(0);
   const isAuthenticated = user !== null;
 
   /**
@@ -59,7 +71,9 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
    * so consumers don't reach into React internals.
    */
   const applyUser = useCallback((next: User | null) => {
+    authRequest.current++;
     setUser(next);
+    setIsLoading(false);
   }, []);
 
   /**
@@ -69,28 +83,32 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
   const refreshUser = useCallback(async () => {
     if (staticMode) return;
 
+    const request = ++authRequest.current;
     try {
       setIsLoading(true);
       const res = await fetch("/api/v1/auth/me", {
         credentials: "include",
+        cache: "no-store",
       });
+      if (request !== authRequest.current) return;
 
       if (res.ok) {
         const data = await res.json();
-        setUser(data);
-      } else if (res.status === 401) {
+        if (request === authRequest.current) setUser(data);
+      } else {
         // Session expired or invalid
         setUser(null);
         // Redirect to login if on a protected route
-        if (pathname?.startsWith("/workspace")) {
+        if (res.status === 401 && pathname?.startsWith("/workspace")) {
           router.push(buildLoginUrl(pathname));
         }
       }
     } catch (err) {
+      if (request !== authRequest.current) return;
       console.error("Failed to refresh user:", err);
       setUser(null);
     } finally {
-      setIsLoading(false);
+      if (request === authRequest.current) setIsLoading(false);
     }
   }, [staticMode, pathname, router]);
 
@@ -99,13 +117,14 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
    * change would preserve query caches and in-flight responses across logins.
    */
   const logout = useCallback(async () => {
-    setUser(null);
+    applyUser(null);
 
     if (staticMode) {
       router.push("/");
       return;
     }
 
+    notifySessionChange("logout");
     try {
       await fetch("/api/v1/auth/logout", {
         method: "POST",
@@ -116,30 +135,27 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
     }
 
     window.location.replace("/");
-  }, [staticMode, router]);
-
-  /**
-   * Handle visibility change - refresh user when tab becomes visible again.
-   * Throttled to at most once per 60 s to avoid spamming the backend on rapid tab switches.
-   */
-  const lastCheckRef = React.useRef(0);
+  }, [applyUser, staticMode, router]);
 
   useEffect(() => {
-    if (staticMode) return;
+    if (staticMode || !pathname?.startsWith("/workspace")) return;
 
-    const handleVisibilityChange = () => {
-      if (document.visibilityState !== "visible" || user === null) return;
-      const now = Date.now();
-      if (now - lastCheckRef.current < 60_000) return;
-      lastCheckRef.current = now;
-      void refreshUser();
+    const onSessionChange = (event: StorageEvent) => {
+      if (event.key !== SESSION_CHANGE) return;
+      setPeerSessionChanged(true);
+      applyUser(null);
+      if (event.newValue?.startsWith("login:")) void refreshUser();
     };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void refreshUser();
+    };
+    window.addEventListener("storage", onSessionChange);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("storage", onSessionChange);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [staticMode, user, refreshUser]);
+  }, [applyUser, pathname, refreshUser, staticMode]);
 
   const value: AuthContextType = {
     user,
@@ -150,7 +166,14 @@ export function AuthProvider({ children, initialUser }: AuthProviderProps) {
     applyUser,
   };
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  // During a peer sign-out, mounting workspace consumers with no account
+  // would issue protected requests and redirect this tab away from its page.
+  const pauseWorkspace = peerSessionChanged && !user && pathname?.startsWith("/workspace");
+  return (
+    <AuthContext.Provider value={value}>
+      {pauseWorkspace ? null : children}
+    </AuthContext.Provider>
+  );
 }
 
 /**
